@@ -1,0 +1,50 @@
+site_name: OMOP Embeddings
+site_description: Embedding extension for the OMOP Graph project, providing tools to generate and manage concept embeddings for the OMOP Common Data Model.
+site_url: https://AustralianCancerDataNetwork.github.io/omop-emb
+repo_url: https://github.com/AustralianCancerDataNetwork/omop-emb
+repo_name: omop-emb
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: light-blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: numpy
+            show_root_heading: true
+            show_source: false
+  - table-reader
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - attr_list
+  - tables

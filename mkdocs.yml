@@ -43,7 +43,6 @@ plugins:
             docstring_style: numpy
             show_root_heading: true
             show_source: false
-  - table-reader
 
 markdown_extensions:
   - admonition

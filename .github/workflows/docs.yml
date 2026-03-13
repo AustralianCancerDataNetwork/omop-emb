@@ -14,15 +14,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 1. Set up Python
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install MkDocs
-        run: |
-            pip install mkdocs mkdocs-material mkdocstrings-python mkdocs-mermaid2-plugin
-            pip install -e .
+      # 2. Install uv
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true # Speeds up future runs
 
+      # 3. Install your package and docs dependencies using uv
+      - name: Install dependencies
+        run: |
+          uv pip install --system mkdocs mkdocs-material mkdocstrings-python mkdocs-mermaid2-plugin
+          uv pip install --system -e .
+
+      # 4. Deploy
       - name: Deploy to GitHub Pages
         run: |
           mkdocs gh-deploy --force

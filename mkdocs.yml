@@ -29,6 +29,9 @@ theme:
 
 nav:
   - Home: index.md
+  - Getting Started:
+      - Installation: usage/installation.md
+      - "CLI Reference": usage/cli.md
 
 plugins:
   - search

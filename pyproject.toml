@@ -55,8 +55,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/omop_emb"]
 
-
 [tool.uv.sources]
-omop-llm = { path = "../omop-llm", editable = true }
+omop-llm = { git = "ssh://git@github.com:AustralianCancerDataNetwork/omop-llm.git", branch = "main" }
 
 

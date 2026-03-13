@@ -1,4 +1,4 @@
-# omop-emb
+# OMOP Embeddings
 
 `omop-emb` is an optional package to super-charge `omop-graph` and provide additional graph reasoning tools for information retrieval and RAG-based knowledge extraction.
 

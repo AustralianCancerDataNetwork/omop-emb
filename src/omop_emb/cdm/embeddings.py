@@ -1,9 +1,11 @@
 from sqlalchemy import Index, Integer, String, select, ForeignKey, text, Engine, inspect
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, mapped_column, Mapped
 from pgvector.sqlalchemy import Vector
 from orm_loader.helpers import Base
 from typing import Type
 import re
+from numpy import ndarray
 
 from omop_alchemy.cdm.model.vocabulary.concept import Concept
 
@@ -142,3 +144,34 @@ def get_save_model_name(model_name: str) -> str:
     sanitized = re.sub(r'[^\w]+', '_', name)
     sanitized = re.sub(r'_+', '_', sanitized).strip('_')
     return sanitized
+
+def add_embeddings_to_registered_table(
+    concept_ids: tuple[int, ...],
+    embeddings: ndarray,
+    session: Session,
+    model: str | type[EmbeddingBase],
+):
+    
+    assert session.bind is not None, "No engine assigned to session. Unexpected"
+    assert session.bind.dialect.name == "postgresql", "Only postgres dialect supported for now."
+    # TODO: Support other dialects
+
+    if isinstance(model, str):
+        model = get_embedding_model(model)
+
+    insert_values = [
+        {
+            model.concept_id.key: cid,
+            model.embedding.key: emb.tolist(),
+        }
+        for cid, emb in zip(concept_ids, embeddings)
+    ]
+
+    stmt = insert(model).values(insert_values)
+    upsert_stmt = stmt.on_conflict_do_update(
+        index_elements=[model.concept_id.key], 
+        set_={model.embedding.key: stmt.excluded.embedding}
+    )
+
+    session.execute(upsert_stmt)
+    session.commit()

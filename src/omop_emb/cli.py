@@ -16,7 +16,8 @@ import typer
 from omop_emb.cdm.embeddings import (
     initialize_embedding_tables, 
     register_new_model, 
-    get_embedding_model
+    get_embedding_model,
+    add_embeddings_to_registered_table
 )
 
 app = typer.Typer()
@@ -111,25 +112,13 @@ def add_embeddings(
             concept_names = [row.concept_name for row in row_chunk]
             embeddings = embedding_client.embeddings(concept_names)
             
-            insert_values = [
-                {
-                    EmbModelType.concept_id.key: cid,
-                    EmbModelType.embedding.key: emb.tolist(),
-                }
-                for cid, emb in zip(concept_ids, embeddings)
-            ]
-
-            # Define the upsert
-            stmt = insert(EmbModelType).values(insert_values)
-            upsert_stmt = stmt.on_conflict_do_update(
-                index_elements=[EmbModelType.concept_id.key], 
-                set_={EmbModelType.embedding.key: stmt.excluded.embedding}
+            add_embeddings_to_registered_table(
+                session=writer,
+                concept_ids=tuple(concept_ids),
+                embeddings=embeddings,
+                model=EmbModelType
             )
-
-            # Execute on the WRITER
-            writer.execute(upsert_stmt)
-            writer.commit()
-            pbar.update(len(insert_values))
+            pbar.update(len(concept_ids))
     pbar.close()
     logger.info("Completed embedding generation and storage.")
     

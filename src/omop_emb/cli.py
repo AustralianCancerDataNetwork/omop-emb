@@ -39,6 +39,18 @@ def add_embeddings(
     model: Annotated[str, typer.Option(
         "--model", "-m",
         help="Name of the embedding model to use for generating concept embeddings (e.g., 'text-embedding-3-small'). If not provided, embeddings will not be generated.")] = "text-embedding-3-small",
+    index_method: Annotated[str, typer.Option(
+        "--index-method",
+        help="Vector index backend to use for new embedding tables. Options: auto, diskann, hnsw, ivfflat, none. Defaults to OMOP_EMB_INDEX_METHOD or auto."
+    )] = "auto",
+    standard_only: Annotated[bool, typer.Option(
+        "--standard-only",
+        help="If set, only generate embeddings for OMOP standard concepts (standard_concept = 'S')."
+    )] = False,
+    vocabularies: Annotated[Optional[list[str]], typer.Option(
+        "--vocabulary",
+        help="Optional vocabulary filter. Repeat the option to embed concepts only from specific OMOP vocabularies."
+    )] = None,
     num_embeddings: Annotated[Optional[int], typer.Option(
         "--num-embeddings", "-n",
         help="If set, limits the number of concepts for which embeddings are generated. Useful for testing and development to speed up the embedding generation step.")] = None,
@@ -57,7 +69,10 @@ def add_embeddings(
     initialize_embedding_tables(engine)
 
     if engine.dialect.name != 'postgresql':
-        logger.warning(f"Embedding generation is currently only supported for PostgreSQL with pgvectorscale. Detected dialect: {engine.dialect.name}. Skipping embedding generation.")
+        logger.warning(
+            "Embedding generation is currently only supported for PostgreSQL "
+            f"with pgvector or pgvectorscale. Detected dialect: {engine.dialect.name}. Skipping embedding generation."
+        )
         return
     
     # Prepare the database for storing embeddings
@@ -72,6 +87,7 @@ def add_embeddings(
         engine=engine,
         model_name=model,
         dimensions=embedding_client.embedding_dim,
+        index_method=index_method,
     )
     EmbModelType = get_embedding_model(model)
 
@@ -94,10 +110,23 @@ def add_embeddings(
         ))
     )
 
+    if standard_only:
+        select_concept_query = select_concept_query.where(Concept.standard_concept == "S")
+        total_concepts_query = total_concepts_query.where(Concept.standard_concept == "S")
+
+    if vocabularies:
+        select_concept_query = select_concept_query.where(Concept.vocabulary_id.in_(vocabularies))
+        total_concepts_query = total_concepts_query.where(Concept.vocabulary_id.in_(vocabularies))
+
     if num_embeddings is not None:
         select_concept_query = select_concept_query.limit(num_embeddings)
 
-    logger.info(f"Generating and storing embeddings for concepts. Using batch_size {batch_size}")
+    logger.info(
+        "Generating and storing embeddings for concepts. Using batch_size %s (standard_only=%s, vocabularies=%s)",
+        batch_size,
+        standard_only,
+        vocabularies,
+    )
     with Session(engine) as reader, Session(engine) as writer:
         result = reader.execute(select_concept_query)
         total_concepts = reader.execute(total_concepts_query).scalar()

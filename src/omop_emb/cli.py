@@ -90,33 +90,25 @@ def add_embeddings(
         index_method=index_method,
     )
     EmbModelType = get_embedding_model(model)
+    missing_embedding_clause = ~sa.exists(
+        sa.select(sa.literal(1))
+        .select_from(EmbModelType)
+        .where(EmbModelType.concept_id == Concept.concept_id)
+    )
 
     select_concept_query = (
         sa.select(
             Concept.concept_id,
             Concept.concept_name,
         )
-        .where(Concept.concept_id.notin_(
-            sa.select(EmbModelType.concept_id)
-        ))
-    )
-
-    total_concepts_query = (
-        sa.select(
-            sa.func.count()
-        ).select_from(Concept)
-        .where(Concept.concept_id.notin_(
-            sa.select(EmbModelType.concept_id)
-        ))
+        .where(missing_embedding_clause)
     )
 
     if standard_only:
         select_concept_query = select_concept_query.where(Concept.standard_concept == "S")
-        total_concepts_query = total_concepts_query.where(Concept.standard_concept == "S")
 
     if vocabularies:
         select_concept_query = select_concept_query.where(Concept.vocabulary_id.in_(vocabularies))
-        total_concepts_query = total_concepts_query.where(Concept.vocabulary_id.in_(vocabularies))
 
     if num_embeddings is not None:
         select_concept_query = select_concept_query.limit(num_embeddings)
@@ -128,17 +120,19 @@ def add_embeddings(
         vocabularies,
     )
     with Session(engine) as reader, Session(engine) as writer:
+        pbar = tqdm(
+            total=num_embeddings,
+            desc="Processing concept embeddings",
+            unit="concept",
+            dynamic_ncols=True,
+        )
+        pbar.set_postfix_str("querying")
         result = reader.execute(select_concept_query)
-        total_concepts = reader.execute(total_concepts_query).scalar()
-        if num_embeddings is not None:
-            assert isinstance(total_concepts, int), " Expected total_concepts to be an integer"
-            total_concepts = min(total_concepts, num_embeddings)
-
-        logger.info(f"Total concepts to process: {total_concepts}")
-        pbar = tqdm(total=total_concepts, desc="Processing concept embeddings")
+        processed_concepts = 0
         for row_chunk in result.partitions(batch_size):
             concept_ids = [row.concept_id for row in row_chunk]
             concept_names = [row.concept_name for row in row_chunk]
+            pbar.set_postfix_str(f"embedding batch={len(concept_ids)}")
             embeddings = embedding_client.embeddings(concept_names)
             
             add_embeddings_to_registered_table(
@@ -147,7 +141,11 @@ def add_embeddings(
                 embeddings=embeddings,
                 model=EmbModelType
             )
+            processed_concepts += len(concept_ids)
             pbar.update(len(concept_ids))
+        if pbar.total is not None and pbar.total != processed_concepts:
+            pbar.total = processed_concepts
+            pbar.refresh()
     pbar.close()
     logger.info("Completed embedding generation and storage.")
     

@@ -104,11 +104,20 @@ def add_embeddings(
         .where(missing_embedding_clause)
     )
 
+    total_concepts_query = (
+        sa.select(
+            sa.func.count()
+        ).select_from(Concept)
+        .where(missing_embedding_clause)
+    )
+
     if standard_only:
         select_concept_query = select_concept_query.where(Concept.standard_concept == "S")
+        total_concepts_query = total_concepts_query.where(Concept.standard_concept == "S")
 
     if vocabularies:
         select_concept_query = select_concept_query.where(Concept.vocabulary_id.in_(vocabularies))
+        total_concepts_query = total_concepts_query.where(Concept.vocabulary_id.in_(vocabularies))
 
     if num_embeddings is not None:
         select_concept_query = select_concept_query.limit(num_embeddings)
@@ -120,8 +129,14 @@ def add_embeddings(
         vocabularies,
     )
     with Session(engine) as reader, Session(engine) as writer:
+        total_concepts = reader.execute(total_concepts_query).scalar()
+        if num_embeddings is not None:
+            assert isinstance(total_concepts, int), " Expected total_concepts to be an integer"
+            total_concepts = min(total_concepts, num_embeddings)
+
+        logger.info(f"Total concepts to process: {total_concepts}")
         pbar = tqdm(
-            total=num_embeddings,
+            total=total_concepts,
             desc="Processing concept embeddings",
             unit="concept",
             dynamic_ncols=True,

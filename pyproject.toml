@@ -36,6 +36,7 @@ dependencies = [
     "sqlalchemy>=2.0.45",
     "typing-extensions>=4.15.0",
     "omop-llm",
+    "pgvector"
 ]
 
 [dependency-groups]

@@ -61,3 +61,20 @@ omop-emb = "omop_emb.cli:app"
 
 [tool.uv.sources]
 omop-llm = { git = "https://github.com/AustralianCancerDataNetwork/omop-llm.git", branch = "main" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*", "Check*"]
+python_functions = ["test_*"]
+addopts = [
+    "-rf", 
+    "-rx", 
+    "--disable-pytest-warnings"
+]
+# Live logging (CLI) configuration
+log_cli = true
+log_cli_level = "DEBUG"
+log_cli_format = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+log_level = "INFO"
+log_format = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"

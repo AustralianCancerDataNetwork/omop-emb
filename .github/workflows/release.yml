@@ -1,0 +1,64 @@
+name: Release
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run Tests
+        run: uv run pytest
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    concurrency: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Semantic Release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          extra_plugins: |
+            @semantic-release/changelog
+            @semantic-release/git
+            @semantic-release/exec
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- OPTIONAL: PyPI DEPLOYMENT VIA UV ---
+      - name: Install uv
+        if: steps.semantic.outputs.new_release_published == 'true'
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build and Publish to PyPI
+        if: steps.semantic.outputs.new_release_published == 'true' && secrets.PYPI_TOKEN != ''
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          uv build
+          uv publish
+
+      - name: Trigger Docs Update
+        if: steps.semantic.outputs.new_release_published == 'true'
+        run: gh workflow run docs.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

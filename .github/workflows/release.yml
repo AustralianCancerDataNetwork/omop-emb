@@ -26,6 +26,14 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     concurrency: release
+    permissions:
+      id-token: write
+      contents: write
+    
+    environment:
+      name: pypi
+      url: https://pypi.org/p/omop-emb
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,17 +52,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Publish to PyPI (optional)
+      - name: Install uv
         if: steps.semantic.outputs.new_release_published == 'true'
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build and Publish to PyPI
+        if: steps.semantic.outputs.new_release_published == 'true'
         run: |
-          if [ -z "$UV_PUBLISH_TOKEN" ]; then
-            echo "PYPI_TOKEN secret is not set. Skipping PyPI deployment."
-          else
-            uv build
-            uv publish
-          fi
+          uv build
+          uv publish
 
       - name: Trigger Docs Update
         if: steps.semantic.outputs.new_release_published == 'true'

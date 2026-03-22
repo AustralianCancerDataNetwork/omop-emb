@@ -1,6 +1,8 @@
 # Embedding Generation CLI
 
-This tool generates vector embeddings for OMOP CDM concepts and stores them in a PostgreSQL database using `pgvectorscale`. It specifically targets concepts that do not yet have embeddings and processes them in batches.
+This tool generates vector embeddings for OMOP CDM concepts and stores them in the configured embedding backend.
+
+At present, the production CLI path is PostgreSQL-oriented and stores embeddings in Postgres/pgvector-backed model tables. It specifically targets concepts that do not yet have embeddings and processes them in batches.
 
 !!! note "Supported Models"
 
@@ -9,9 +11,20 @@ This tool generates vector embeddings for OMOP CDM concepts and stores them in a
 
 ## Prerequisites
 
+- **Installation**: install the PostgreSQL backend dependencies:
+
+  ```bash
+  pip install "omop-emb[postgres]"
+  ```
+
 - **Database**: Postgres implementation of OMOP CDM. See [`omop-graph` documentation](reference-missing) for information how to setup.
 - **Environment**: `OMOP_DATABASE_URL` must be exported or existing in the .env file  (e.g., `postgresql://user:pass@localhost:5432/omop`).
 - **Connectivity**: Access to an OpenAI-compatible embeddings endpoint. *Currently only Ollama supported*.
+
+!!! note "Backend Scope"
+
+    `omop-emb` now defines a backend abstraction layer for both PostgreSQL and FAISS-style storage.
+    The current `add-embeddings` CLI still targets the PostgreSQL backend path.
 
 ---
 

@@ -1,0 +1,92 @@
+# Backend Selection
+
+`omop-emb` now has a backend abstraction layer so embedding storage and
+retrieval can be selected explicitly instead of being inferred implicitly from
+whatever happens to be installed.
+
+## Supported backend names
+
+The current backend factory recognizes:
+
+- `postgres`
+- `faiss`
+
+The default backend name is currently `postgres`.
+
+## Runtime selection
+
+The intended pattern is:
+
+1. choose the backend at install time with package extras
+2. choose the backend again at runtime explicitly
+
+Examples:
+
+```bash
+export OMOP_EMB_BACKEND=postgres
+export OMOP_EMB_BACKEND=faiss
+```
+
+You can also pass the backend name directly in Python.
+
+## Python factory
+
+The backend factory lives in `omop_emb.backends`:
+
+```python
+from omop_emb.backends import get_embedding_backend
+
+backend = get_embedding_backend("postgres")
+backend = get_embedding_backend("faiss")
+backend = get_embedding_backend()  # falls back to OMOP_EMB_BACKEND or the package default
+```
+
+The factory currently exposes:
+
+- `get_embedding_backend(...)`
+- `normalize_backend_name(...)`
+- `DEFAULT_BACKEND`
+- `SUPPORTED_BACKENDS`
+
+## Why explicit selection is preferred
+
+Explicit backend selection improves clarity in a multi-backend world:
+
+- users can see which backend they intended to use
+- missing optional dependencies fail clearly
+- the system avoids silent fallback between incompatible storage implementations
+
+This is especially important when embeddings affect retrieval behavior, because
+silent fallback can make users think semantic retrieval is active when it is
+not.
+
+## Dependency errors
+
+If a backend is requested but its optional dependencies are missing, the
+factory raises an explicit backend dependency error rather than falling back to
+another backend.
+
+This is the intended behavior.
+
+Examples of the error classes exposed by the backend layer:
+
+- `EmbeddingBackendDependencyError`
+- `UnknownEmbeddingBackendError`
+- `EmbeddingBackendConfigurationError`
+
+## Current scope
+
+At the moment:
+
+- the backend abstraction and backend factory exist
+- PostgreSQL and FAISS backend classes exist
+- the production CLI path still targets the PostgreSQL embedding workflow
+- PostgreSQL-specific embedding dependencies are optional, but a database
+  backend is still required for OMOP access and model registration
+- model registration is intended to remain shared and database-backed even when
+  FAISS is used for vector storage and retrieval
+- database backends other than PostgreSQL have not yet been tested
+
+So this page documents the selection model and Python interface shape now, even
+before every runtime path has been migrated to delegate through the backend
+factory.

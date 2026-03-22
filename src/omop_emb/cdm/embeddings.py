@@ -10,6 +10,7 @@ from pgvector.sqlalchemy import Vector
 from orm_loader.helpers import Base
 
 from omop_alchemy.cdm.model.vocabulary.concept import Concept
+from omop_emb.registry import ModelRegistry, ensure_model_registry_schema
 
 import logging
 logger = logging.getLogger(__name__)
@@ -20,14 +21,6 @@ IndexMethodOrAuto = Literal["auto", "diskann", "hnsw", "ivfflat", "none"]
 SUPPORTED_INDEX_METHODS = {"auto", "diskann", "hnsw", "ivfflat", "none"}
 DEFAULT_INDEX_METHOD = "auto"
 PGVECTOR_INDEX_MAX_DIMENSIONS = 2000
-
-class ModelRegistry(Base):
-    __tablename__ = "model_registry"
-    
-    name = mapped_column(String, primary_key=True)  # e.g., "nomic-embed-text-v1.5"
-    dimensions = mapped_column(Integer, nullable=False) # e.g., 768
-    table_name = mapped_column(String, unique=True, nullable=False) # e.g., "emb_nomic_v1_5"
-    index_method = mapped_column(String, nullable=False, default="hnsw")
 
 class EmbeddingBase(Base):
     __abstract__ = True
@@ -111,27 +104,6 @@ def _resolve_index_method(
         )
 
     return requested
-
-
-def _ensure_model_registry_schema(engine: Engine) -> None:
-    Base.metadata.create_all(engine, tables=[ModelRegistry.__table__])  # type: ignore[arg-type]
-
-    inspector = inspect(engine)
-    columns = {column["name"] for column in inspector.get_columns(ModelRegistry.__tablename__)}
-    if "index_method" in columns:
-        return
-
-    with engine.begin() as conn:
-        legacy_default = "diskann" if _has_extension_connection(conn, "vectorscale") else "hnsw"
-        # Existing rows were historically created with DiskANN only.
-        conn.execute(text("ALTER TABLE model_registry ADD COLUMN index_method VARCHAR"))
-        conn.execute(
-            text("UPDATE model_registry SET index_method = :legacy_default WHERE index_method IS NULL"),
-            {"legacy_default": legacy_default},
-        )
-        conn.execute(text("ALTER TABLE model_registry ALTER COLUMN index_method SET NOT NULL"))
-        conn.execute(text("ALTER TABLE model_registry ALTER COLUMN index_method SET DEFAULT 'hnsw'"))
-
 
 def _heal_legacy_index_method(session: Session, model_entry: ModelRegistry) -> None:
     if model_entry.index_method != "diskann":
@@ -218,7 +190,7 @@ def initialize_embedding_tables(engine: Engine):
     Call this once when your app/script starts!
     """
     print("Initializing embedding models from registry...")
-    _ensure_model_registry_schema(engine)
+    ensure_model_registry_schema(engine)
 
     with Session(engine, expire_on_commit=False) as session:
         session.execute(text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;"))
@@ -241,17 +213,20 @@ def _create_embedding_class_dynamic(
     """
     metadata = Base.metadata
     index_method = _normalize_index_method(registry_entry.index_method)
-    index = _get_index(registry_entry.table_name, index_method if index_method != "auto" else "hnsw")
+    index = _get_index(
+        registry_entry.storage_identifier,
+        index_method if index_method != "auto" else "hnsw",
+    )
     table_args: list[object] = []
     if index is not None:
         table_args.append(index)
     table_args.append({"extend_existing": True})
 
     class_type =type(
-        f"Embedding_{registry_entry.table_name}",
+        f"Embedding_{registry_entry.storage_identifier}",
         (EmbeddingBase,),
         {
-            "__tablename__": registry_entry.table_name,
+            "__tablename__": registry_entry.storage_identifier,
             "embedding": mapped_column(Vector(registry_entry.dimensions)),
             "__table_args__": tuple(table_args)
         }
@@ -265,10 +240,13 @@ def _create_embedding_class_dynamic(
     # Make sure the index exists (sometimes create_all doesn't handle custom indexes well)
     with engine.connect() as conn:
         inspector = inspect(conn)
-        existing_indexes = [idx['name'] for idx in inspector.get_indexes(registry_entry.table_name)]
+        existing_indexes = [idx['name'] for idx in inspector.get_indexes(registry_entry.storage_identifier)]
         
-        create_index_sql = _create_index_sql(registry_entry.table_name, index_method if index_method != "auto" else "hnsw")
-        if f"idx_{registry_entry.table_name}" not in existing_indexes and create_index_sql is not None:
+        create_index_sql = _create_index_sql(
+            registry_entry.storage_identifier,
+            index_method if index_method != "auto" else "hnsw",
+        )
+        if f"idx_{registry_entry.storage_identifier}" not in existing_indexes and create_index_sql is not None:
             conn.execute(text(create_index_sql))
             conn.commit()
 
@@ -290,7 +268,7 @@ def register_new_model(
     RUNTIME HOOK: Registers a BRAND NEW model (DB + Cache).
     Use this when you onboard a new embedding model.
     """
-    _ensure_model_registry_schema(engine)
+    ensure_model_registry_schema(engine)
 
     # 1. Check if already exists
     try:
@@ -314,8 +292,9 @@ def register_new_model(
     new_entry = ModelRegistry(
         name=model_name,
         dimensions=dimensions,
-        table_name=table_name,
+        storage_identifier=table_name,
         index_method=resolved_index_method,
+        backend_name="postgres",
     )
 
     with Session(engine, expire_on_commit=False) as session:

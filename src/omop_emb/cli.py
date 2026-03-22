@@ -20,6 +20,11 @@ from omop_emb.cdm.embeddings import (
     add_embeddings_to_registered_table
 )
 
+from omop_emb.queries import (
+    q_get_concepts_without_embedding,
+    q_count_missing_concepts
+)
+
 app = typer.Typer()
 logger = get_logger(__name__)
 
@@ -74,40 +79,16 @@ def add_embeddings(
         dimensions=embedding_client.embedding_dim,
     )
     EmbModelType = get_embedding_model(model)
-
-    select_concept_query = (
-        sa.select(
-            Concept.concept_id,
-            Concept.concept_name,
-        )
-        .where(Concept.concept_id.notin_(
-            sa.select(EmbModelType.concept_id)
-        ))
-    )
-
-    total_concepts_query = (
-        sa.select(
-            sa.func.count()
-        ).select_from(Concept)
-        .where(Concept.concept_id.notin_(
-            sa.select(EmbModelType.concept_id)
-        ))
-    )
-
-    if num_embeddings is not None:
-        select_concept_query = select_concept_query.limit(num_embeddings)
-
+    
+    
     logger.info(f"Generating and storing embeddings for concepts. Using batch_size {batch_size}")
     with Session(engine) as reader, Session(engine) as writer:
-        result = reader.execute(select_concept_query)
-        total_concepts = reader.execute(total_concepts_query).scalar()
-        if num_embeddings is not None:
-            assert isinstance(total_concepts, int), " Expected total_concepts to be an integer"
-            total_concepts = min(total_concepts, num_embeddings)
+        concepts_without_embeddings = reader.execute(q_get_concepts_without_embedding(embedding_table=EmbModelType, limit=num_embeddings))
+        num_concepts_without_embeddings = reader.execute(q_count_missing_concepts(embedding_table=EmbModelType)).scalar() if num_embeddings is None else num_embeddings
 
-        logger.info(f"Total concepts to process: {total_concepts}")
-        pbar = tqdm(total=total_concepts, desc="Processing concept embeddings")
-        for row_chunk in result.partitions(batch_size):
+        logger.info(f"Total concepts to process: {num_concepts_without_embeddings}")
+        pbar = tqdm(total=num_concepts_without_embeddings, desc="Processing concept embeddings")
+        for row_chunk in concepts_without_embeddings.partitions(batch_size):
             concept_ids = [row.concept_id for row in row_chunk]
             concept_names = [row.concept_name for row in row_chunk]
             embeddings = embedding_client.embeddings(concept_names)

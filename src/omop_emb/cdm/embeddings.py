@@ -39,7 +39,7 @@ def initialize_embedding_tables(engine: Engine):
     Call this once when your app/script starts!
     """
     print("Initializing embedding models from registry...")
-
+    ModelRegistry.__table__.create(engine, checkfirst=True)  # type: ignore
     query_add_embedding_column = text("CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE;")
     with Session(engine) as session:
         session.execute(query_add_embedding_column)
@@ -48,7 +48,6 @@ def initialize_embedding_tables(engine: Engine):
 
     for model_entry in existing_models:
         if model_entry.name not in _MODEL_CACHE:
-            # Create the class and cache it
             _create_embedding_class_dynamic(engine, model_entry)
 
 def _create_embedding_class_dynamic(
@@ -66,21 +65,18 @@ def _create_embedding_class_dynamic(
             "__tablename__": registry_entry.table_name,
             "embedding": mapped_column(Vector(registry_entry.dimensions)),
             "__table_args__": (
-                # Define the DiskANN index for pgvectorscale
                 Index(
                     f"idx_{registry_entry.table_name}",
                     "embedding",
-                    postgresql_using="diskann",
+                    postgresql_using="diskann",  # Define the DiskANN index for pgvectorscale
                     postgresql_ops={"embedding": "vector_cosine_ops"} # or vector_l2_ops
                 ),
                 {"extend_existing": True}
             )
         }
     )
-    # Add to cache
-    _MODEL_CACHE[registry_entry.name] = class_type
 
-    # Create (if not exists)
+    _MODEL_CACHE[registry_entry.name] = class_type
     metadata.create_all(engine, tables=[class_type.__table__])  # type: ignore
 
     # Make sure the index exists (sometimes create_all doesn't handle custom indexes well)
@@ -89,7 +85,6 @@ def _create_embedding_class_dynamic(
         existing_indexes = [idx['name'] for idx in inspector.get_indexes(registry_entry.table_name)]
         
         if f"idx_{registry_entry.table_name}" not in existing_indexes:
-            # Manually trigger the index creation if it's missing
             conn.execute(text(f"""
                 CREATE INDEX IF NOT EXISTS idx_{registry_entry.table_name} 
                 ON {registry_entry.table_name} 
@@ -105,14 +100,12 @@ def register_new_model(engine: Engine, model_name: str, dimensions: int) -> Type
     RUNTIME HOOK: Registers a BRAND NEW model (DB + Cache).
     Use this when you onboard a new embedding model.
     """
-    # 1. Check if already exists
     try:
         existing = get_embedding_model(model_name)
         return existing
     except KeyError:
-        pass  # Not found, proceed to create
+        pass
     
-    # 2. Add to Database Registry
     safe_name = get_save_model_name(model_name)
     table_name = f"emb_{safe_name}"
     

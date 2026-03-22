@@ -1,6 +1,6 @@
 from typing import Optional, Tuple, Type
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.sql import Select
 
 from omop_alchemy.cdm.model.vocabulary import Concept
@@ -37,3 +37,34 @@ def q_embedding_cosine_similarity(
     # Limit the number of results return to the top N most similar concepts
     stmt = stmt.limit(limit)
     return stmt
+
+
+def q_get_concepts_without_embedding(
+    embedding_table: Type[EmbeddingBase],
+    limit: Optional[int] = None
+) -> Select:
+    """Query to get concepts using NOT EXISTS to avoid joining large tables."""
+    
+    subq = select(1).where(embedding_table.concept_id == Concept.concept_id)
+    
+    query = (
+        select(Concept.concept_id, Concept.concept_name)
+        .where(~subq.exists())
+    )
+
+    if limit is not None:
+        query = query.limit(limit)
+    return query
+
+def q_count_missing_concepts(
+    embedding_table: Type[EmbeddingBase]
+) -> Select:
+    """Query to calculate the total count of missing concepts using NOT EXISTS."""
+    
+    subq = select(1).where(embedding_table.concept_id == Concept.concept_id)
+    
+    return (
+        select(func.count())
+        .select_from(Concept)
+        .where(~subq.exists())
+    )

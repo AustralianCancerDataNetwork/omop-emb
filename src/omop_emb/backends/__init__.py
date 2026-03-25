@@ -13,8 +13,6 @@ from .errors import (
     UnknownEmbeddingBackendError,
 )
 from .factory import (
-    DEFAULT_BACKEND,
-    SUPPORTED_BACKENDS,
     get_embedding_backend,
     normalize_backend_name,
 )
@@ -30,12 +28,10 @@ __all__ = [
     "EmbeddingBackendDependencyError",
     "EmbeddingBackendError",
     "UnknownEmbeddingBackendError",
-    "DEFAULT_BACKEND",
-    "SUPPORTED_BACKENDS",
     "get_embedding_backend",
     "normalize_backend_name",
     "FaissEmbeddingBackend",
-    "PostgresEmbeddingBackend",
+    "PGVectorEmbeddingBackend",
 ]
 
 
@@ -44,8 +40,8 @@ def __getattr__(name: str):
         from .faiss import FaissEmbeddingBackend
 
         return FaissEmbeddingBackend
-    if name == "PostgresEmbeddingBackend":
-        from .postgres import PostgresEmbeddingBackend
+    if name == "PGVectorEmbeddingBackend":
+        from .pgvector import PGVectorEmbeddingBackend
 
-        return PostgresEmbeddingBackend
+        return PGVectorEmbeddingBackend
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

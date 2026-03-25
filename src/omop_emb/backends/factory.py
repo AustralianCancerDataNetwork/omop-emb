@@ -4,34 +4,34 @@ import os
 from typing import Optional
 
 from .base import EmbeddingBackend
+from .config import BackendType, IndexType
 from .errors import (
     EmbeddingBackendConfigurationError,
     EmbeddingBackendDependencyError,
     UnknownEmbeddingBackendError,
 )
 
-
-DEFAULT_BACKEND = "postgres"
-SUPPORTED_BACKENDS = ("postgres", "faiss")
-
-
-def normalize_backend_name(backend_name: Optional[str]) -> str:
+def normalize_backend_name(backend_name: Optional[str]) -> BackendType:
     """
     Normalize an embedding backend name from an explicit argument or env var.
 
     Resolution order:
     1. explicit ``backend_name``
     2. ``OMOP_EMB_BACKEND``
-    3. ``DEFAULT_BACKEND``
     """
 
-    resolved = (backend_name or os.getenv("OMOP_EMB_BACKEND") or DEFAULT_BACKEND).strip().lower()
-    if resolved not in SUPPORTED_BACKENDS:
-        raise UnknownEmbeddingBackendError(
-            f"Unknown embedding backend {resolved!r}. "
-            f"Expected one of {SUPPORTED_BACKENDS}."
-        )
-    return resolved
+    backend_name = backend_name or os.getenv("OMOP_EMB_BACKEND")
+    if backend_name is None:
+        raise AttributeError("No embedding backend specified. Provide an explicit backend_name or set the OMOP_EMB_BACKEND environment variable.")
+    else:
+        try:
+            backend_type = BackendType(backend_name)
+        except ValueError:
+            raise UnknownEmbeddingBackendError(
+                f"Unknown embedding backend {backend_name!r}. "
+                f"Expected one of {[member.value for member in BackendType]}."
+            )
+        return backend_type
 
 
 def get_embedding_backend(
@@ -48,23 +48,23 @@ def get_embedding_backend(
 
     resolved = normalize_backend_name(backend_name)
 
-    if resolved == "postgres":
+    if resolved == BackendType.PGVECTOR:
         try:
-            from .postgres import PostgresEmbeddingBackend
+            from .pgvector import PGVectorEmbeddingBackend
         except ImportError as exc:
             raise EmbeddingBackendDependencyError(
-                "Postgres embedding backend requested but its dependencies are not "
-                "available. Install the package with the PostgreSQL embedding extras."
+                "PGVector embedding backend requested but its dependencies are not "
+                "available. Install the package using `pip install omop-emb[pgvector]`."
             ) from exc
-        return PostgresEmbeddingBackend()
+        return PGVectorEmbeddingBackend()
 
-    if resolved == "faiss":
+    if resolved == BackendType.FAISS:
         try:
             from .faiss import FaissEmbeddingBackend
         except ImportError as exc:
             raise EmbeddingBackendDependencyError(
                 "FAISS embedding backend requested but its dependencies are not "
-                "available. Install the package with the FAISS embedding extras."
+                "available. Install the package with the FAISS extra using `pip install omop-emb[faiss]` or omop-emb[faiss-gpu]."
             ) from exc
         return FaissEmbeddingBackend(base_dir=faiss_base_dir)
 

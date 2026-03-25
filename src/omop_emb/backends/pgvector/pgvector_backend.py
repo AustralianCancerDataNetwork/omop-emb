@@ -1,27 +1,24 @@
 from __future__ import annotations
 
-from typing import Mapping, Optional, Sequence
+from typing import Mapping, Optional, Sequence, Type
 
 from numpy import ndarray
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
-from omop_emb.cdm.embeddings import (
-    _MODEL_CACHE,
-    _resolve_index_method,
-    add_embeddings_to_registered_table,
-    initialize_embedding_tables,
-    register_new_model,
-)
-from omop_emb.queries import (
+from .pgvector_sql import (
     q_embedding_cosine_similarity,
     q_embedding_nearest_concepts,
     q_embedding_vectors_by_concept_ids,
+    initialise_pg_embedding_tables,
+    PGVectorConceptIDEmbeddingTable,
+    create_pg_embedding_table,
+    add_embeddings_to_registered_table,
 )
-from omop_emb.registry import ModelRegistry
+from ..registry import ModelRegistry
+from ..config import BackendType
 
-from .errors import EmbeddingBackendConfigurationError
-from .base import (
+from ..base import (
     EmbeddingBackend,
     EmbeddingBackendCapabilities,
     EmbeddingConceptFilter,
@@ -30,10 +27,9 @@ from .base import (
     NearestConceptMatch,
 )
 
-
-class PostgresEmbeddingBackend(EmbeddingBackend):
+class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]):
     """
-    PostgreSQL/pgvector-backed embedding backend.
+    pgvector-backed embedding backend for postgresql databases.
 
     This class is intentionally a thin structural layer over the existing
     ``omop_emb`` implementation. It is not wired into the current accessor or
@@ -42,8 +38,8 @@ class PostgresEmbeddingBackend(EmbeddingBackend):
     """
 
     @property
-    def backend_name(self) -> str:
-        return "postgres"
+    def backend_type(self) -> BackendType:
+        return BackendType.PGVECTOR
 
     @property
     def capabilities(self) -> EmbeddingBackendCapabilities:
@@ -60,93 +56,10 @@ class PostgresEmbeddingBackend(EmbeddingBackend):
         )
 
     def initialise_store(self, engine: Engine) -> None:
-        initialize_embedding_tables(engine)
+        return initialise_pg_embedding_tables(engine, model_cache=self.model_cache)
 
-    def list_registered_models(self, session: Session) -> Sequence[EmbeddingModelRecord]:
-        return tuple(
-            self._record_from_registry_row(row)
-            for row in session.scalars(
-                select(ModelRegistry).where(ModelRegistry.backend_name == self.backend_name)
-            ).all()
-        )
-
-    def get_registered_model(
-        self,
-        session: Session,
-        model_name: str,
-    ) -> Optional[EmbeddingModelRecord]:
-        row = session.scalar(
-            select(ModelRegistry).where(
-                ModelRegistry.name == model_name,
-                ModelRegistry.backend_name == self.backend_name,
-            )
-        )
-        if row is None:
-            return None
-        return self._record_from_registry_row(row)
-
-    def register_model(
-        self,
-        engine: Engine,
-        model_name: str,
-        dimensions: int,
-        *,
-        index_config: Optional[EmbeddingIndexConfig] = None,
-        metadata: Optional[Mapping[str, object]] = None,
-    ) -> EmbeddingModelRecord:
-        with Session(engine, expire_on_commit=False) as session:
-            existing_row = session.scalar(
-                select(ModelRegistry).where(ModelRegistry.name == model_name)
-            )
-            if existing_row is not None:
-                if existing_row.backend_name != self.backend_name:
-                    raise EmbeddingBackendConfigurationError(
-                        f"Model '{model_name}' is already registered for backend "
-                        f"'{existing_row.backend_name}', not '{self.backend_name}'."
-                    )
-                if existing_row.dimensions != dimensions:
-                    raise EmbeddingBackendConfigurationError(
-                        f"Model '{model_name}' is already registered with dimensions "
-                        f"{existing_row.dimensions}, not {dimensions}."
-                    )
-                if index_config is not None:
-                    requested_index_method = _resolve_index_method(
-                        session,
-                        dimensions=dimensions,
-                        index_method=index_config.index_type,
-                    )
-                    session.commit()
-                    if existing_row.index_method != requested_index_method:
-                        raise EmbeddingBackendConfigurationError(
-                            f"Model '{model_name}' is already registered with "
-                            f"index_method='{existing_row.index_method}', not "
-                            f"'{requested_index_method}'. Reuse the existing model "
-                            "configuration or register a new model name."
-                        )
-                return self._record_from_registry_row(existing_row)
-
-        dynamic_model = register_new_model(
-            engine=engine,
-            model_name=model_name,
-            dimensions=dimensions,
-            index_method=index_config.index_type if index_config is not None else None,
-        )
-        storage_identifier = dynamic_model.__tablename__
-        return EmbeddingModelRecord(
-            model_name=model_name,
-            dimensions=dimensions,
-            backend_name=self.backend_name,
-            storage_identifier=storage_identifier,
-            index_config=index_config,
-            metadata=dict(metadata or {}),
-        )
-
-    def has_any_embeddings(self, session: Session, model_name: str) -> bool:
-        embedding_table = self._get_embedding_table(
-            session=session,
-            model_name=model_name,
-        )
-        return session.query(embedding_table.concept_id).limit(1).first() is not None
+    def _create_storage_table(self, engine: Engine, entry: ModelRegistry) -> Type[PGVectorConceptIDEmbeddingTable]:
+        return create_pg_embedding_table(engine=engine, model_registry_entry=entry)
 
     def upsert_embeddings(
         self,
@@ -162,11 +75,16 @@ class PostgresEmbeddingBackend(EmbeddingBackend):
             f"and embedding dimensionality ({embeddings.shape[0]})"
         )
 
+        registered_table = self._get_embedding_table(
+            session=session,
+            model_name=model_name,
+        )
+
         add_embeddings_to_registered_table(
             session=session,
             concept_ids=concept_id_tuple,
             embeddings=embeddings,
-            model=model_name,
+            model=registered_table,
         )
 
     def get_embeddings_by_concept_ids(
@@ -254,34 +172,15 @@ class PostgresEmbeddingBackend(EmbeddingBackend):
         # required for the current PostgreSQL backend.
         return None
 
-    def _get_embedding_table(
-        self,
-        session: Session,
-        model_name: str,
-    ):
-        embedding_table = _MODEL_CACHE.get(model_name)
-        if embedding_table is not None:
-            return embedding_table
-
-        bind = session.get_bind()
-        if bind is None:
-            raise RuntimeError("Session is not bound to an engine.")
-
-        initialize_embedding_tables(bind)
-        embedding_table = _MODEL_CACHE.get(model_name)
-        if embedding_table is None:
-            raise ValueError(f"Embedding model '{model_name}' not found in cache.")
-        return embedding_table
-
     def _record_from_registry_row(self, row: ModelRegistry) -> EmbeddingModelRecord:
         return EmbeddingModelRecord(
-            model_name=row.name,
+            model_name=row.model_name,
             dimensions=row.dimensions,
-            backend_name=row.backend_name,
+            backend_name=row.backend_type,
             storage_identifier=row.storage_identifier,
             index_config=EmbeddingIndexConfig(
-                index_type=row.index_method,
+                index_type=row.index_type,
                 distance_metric="cosine",
             ),
-            metadata={},
+            metadata=self._coerce_registry_metadata(row.details),
         )

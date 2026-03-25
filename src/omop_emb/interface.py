@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from .backends import EmbeddingBackend, EmbeddingConceptFilter, get_embedding_backend
 
 
-class EmbeddingAccessor:
+class EmbeddingInterface:
     """
     Compatibility adapter over the backend selection layer.
 
@@ -46,7 +46,7 @@ class EmbeddingAccessor:
         Historically this returned a PostgreSQL table name. Under the backend
         abstraction it returns the backend-specific storage identifier.
         """
-        record = self._backend.get_registered_model(session=session, model_name=model_name)
+        record = self.backend.get_registered_model(session=session, model_name=model_name)
         return record.storage_identifier if record is not None else None
 
     def is_model_registered(
@@ -54,7 +54,7 @@ class EmbeddingAccessor:
         session: Session,
         model_name: str,
     ) -> bool:
-        return self._backend.is_model_registered(session=session, model_name=model_name)
+        return self.backend.is_model_registered(session=session, model_name=model_name)
 
     def get_similarities(
         self,
@@ -63,7 +63,7 @@ class EmbeddingAccessor:
         text_embedding: Sequence[float],
         concept_ids: Optional[Tuple[int, ...]] = None,
     ):
-        return self._backend.get_similarities(
+        return self.backend.get_similarities(
             session=session,
             model_name=embedding_model_name,
             query_embedding=text_embedding,
@@ -75,7 +75,7 @@ class EmbeddingAccessor:
         session: Session,
         embedding_model_name: str,
     ) -> bool:
-        return self._backend.has_any_embeddings(
+        return self.backend.has_any_embeddings(
             session=session,
             model_name=embedding_model_name,
         )
@@ -97,7 +97,7 @@ class EmbeddingAccessor:
             vocabularies=vocabularies,
             require_standard=require_standard,
         )
-        return self._backend.get_nearest_concepts(
+        return self.backend.get_nearest_concepts(
             session=session,
             model_name=embedding_model_name,
             query_embedding=text_embedding,
@@ -111,7 +111,7 @@ class EmbeddingAccessor:
         embedding_model_name: str,
         concept_ids: Tuple[int, ...],
     ) -> dict[int, list[float]]:
-        rows = self._backend.get_embeddings_by_concept_ids(
+        rows = self.backend.get_embeddings_by_concept_ids(
             session=session,
             model_name=embedding_model_name,
             concept_ids=concept_ids,
@@ -126,7 +126,7 @@ class EmbeddingAccessor:
         Legacy name preserved for compatibility.
         """
 
-        return self._backend.initialise_store(engine)
+        return self.backend.initialise_store(engine)
 
     def add_to_db(
         self,
@@ -141,7 +141,7 @@ class EmbeddingAccessor:
             f"dimensionality ({embeddings.shape[0]})"
         )
 
-        return self._backend.upsert_embeddings(
+        return self.backend.upsert_embeddings(
             session=session,
             model_name=model,
             concept_ids=concept_ids,

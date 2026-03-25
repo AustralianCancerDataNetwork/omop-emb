@@ -3,18 +3,19 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence, cast
 
 import numpy as np
 from numpy import ndarray
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, delete, insert, select
 from sqlalchemy.orm import Session
 
 from omop_alchemy.cdm.model.vocabulary import Concept
-from omop_emb.registry import ModelRegistry, ensure_model_registry_schema
+from omop_emb.backends.registry import ModelRegistry, ensure_model_registry_schema
 
-from .errors import EmbeddingBackendConfigurationError
-from .base import (
+from ..errors import EmbeddingBackendConfigurationError
+from .faiss_sql import get_or_create_mapping_model, mapping_table_name_for_model
+from ..base import (
     EmbeddingBackend,
     EmbeddingBackendCapabilities,
     EmbeddingConceptFilter,
@@ -83,7 +84,7 @@ class FaissEmbeddingBackend(EmbeddingBackend):
         return tuple(
             self._record_from_registry_row(row)
             for row in session.scalars(
-                select(ModelRegistry).where(ModelRegistry.backend_name == self.backend_name)
+                select(ModelRegistry).where(ModelRegistry.backend_type == self.backend_name)
             ).all()
         )
 
@@ -94,8 +95,8 @@ class FaissEmbeddingBackend(EmbeddingBackend):
     ) -> Optional[EmbeddingModelRecord]:
         row = session.scalar(
             select(ModelRegistry).where(
-                ModelRegistry.name == model_name,
-                ModelRegistry.backend_name == self.backend_name,
+                ModelRegistry.model_name == model_name,
+                ModelRegistry.backend_type == self.backend_name,
             )
         )
         if row is None:
@@ -115,30 +116,39 @@ class FaissEmbeddingBackend(EmbeddingBackend):
         safe_name = self._safe_model_name(model_name)
         model_dir = self.base_dir / safe_name
         model_dir.mkdir(parents=True, exist_ok=True)
+        mapping_table_name = mapping_table_name_for_model(model_name)
+        get_or_create_mapping_model(engine, model_name)
         resolved_index_type = self._index_type_for_config(index_config)
+        merged_metadata = {
+            "index_file_path": str(self._index_path(model_name)),
+            "mapping_table_name": mapping_table_name,
+            **dict(metadata or {}),
+        }
 
         with Session(engine, expire_on_commit=False) as session:
             existing_row = session.scalar(
-                select(ModelRegistry).where(ModelRegistry.name == model_name)
+                select(ModelRegistry).where(ModelRegistry.model_name == model_name)
             )
             if existing_row is not None:
-                if existing_row.backend_name != self.backend_name:
+                if existing_row.backend_type != self.backend_name:
                     raise EmbeddingBackendConfigurationError(
                         f"Model '{model_name}' is already registered for backend "
-                        f"'{existing_row.backend_name}', not '{self.backend_name}'."
+                        f"'{existing_row.backend_type}', not '{self.backend_name}'."
                     )
                 if existing_row.dimensions != dimensions:
                     raise EmbeddingBackendConfigurationError(
                         f"Model '{model_name}' is already registered with dimensions "
                         f"{existing_row.dimensions}, not {dimensions}."
                     )
-                if existing_row.index_method != resolved_index_type:
+                if existing_row.index_type != resolved_index_type:
                     raise EmbeddingBackendConfigurationError(
                         f"Model '{model_name}' is already registered with "
-                        f"index_method='{existing_row.index_method}', not "
+                        f"index_method='{existing_row.index_type}', not "
                         f"'{resolved_index_type}'. Reuse the existing model "
                         "configuration or register a new model name."
                     )
+                existing_row.details = {**self._coerce_registry_metadata(existing_row.details), **merged_metadata}
+                session.commit()
                 return self._record_from_registry_row(existing_row)
 
             new_row = ModelRegistry(
@@ -147,6 +157,7 @@ class FaissEmbeddingBackend(EmbeddingBackend):
                 storage_identifier=str(model_dir),
                 index_method=resolved_index_type,
                 backend_name=self.backend_name,
+                details=merged_metadata,
             )
             session.add(new_row)
             session.commit()
@@ -154,7 +165,7 @@ class FaissEmbeddingBackend(EmbeddingBackend):
 
     def has_any_embeddings(self, session: Session, model_name: str) -> bool:
         model_record = self._require_registered_model(session, model_name)
-        concept_ids, _ = self._load_embeddings(model_record)
+        concept_ids, _ = self._load_embeddings(session, model_record)
         return concept_ids.size > 0
 
     def upsert_embeddings(
@@ -179,7 +190,7 @@ class FaissEmbeddingBackend(EmbeddingBackend):
                 f"expected {model_record.dimensions}, got {embeddings.shape[1]}."
             )
 
-        existing_ids, existing_embeddings = self._load_embeddings(model_record)
+        existing_ids, existing_embeddings = self._load_embeddings(session, model_record)
         merged: dict[int, np.ndarray] = {}
         for cid, emb in zip(existing_ids.tolist(), existing_embeddings):
             merged[int(cid)] = emb.astype(np.float32, copy=False)
@@ -193,7 +204,8 @@ class FaissEmbeddingBackend(EmbeddingBackend):
             sorted_ids = np.empty((0,), dtype=np.int64)
             matrix = np.empty((0, model_record.dimensions), dtype=np.float32)
 
-        self._write_embeddings(model_record, sorted_ids, matrix)
+        self._write_embeddings(model_record, matrix)
+        self._sync_mapping_table(session, model_name, sorted_ids)
         self._rebuild_index(model_record, matrix)
 
     def get_embeddings_by_concept_ids(
@@ -206,15 +218,22 @@ class FaissEmbeddingBackend(EmbeddingBackend):
             return {}
 
         model_record = self._require_registered_model(session, model_name)
-        indexed_ids, matrix = self._load_embeddings(model_record)
-        if indexed_ids.size == 0:
+        matrix = self._load_embedding_matrix(model_record)
+        if matrix.shape[0] == 0:
             return {}
-        id_to_row = {int(cid): idx for idx, cid in enumerate(indexed_ids.tolist())}
+
+        mapping_table = cast(Any, self._get_mapping_table(session, model_name))
+        mapping_rows = session.execute(
+            select(mapping_table.concept_id, mapping_table.index_position).where(
+                mapping_table.concept_id.in_(tuple(int(cid) for cid in concept_ids))
+            )
+        ).all()
+
         result: dict[int, Sequence[float]] = {}
-        for concept_id in concept_ids:
-            row_idx = id_to_row.get(int(concept_id))
-            if row_idx is not None:
-                result[int(concept_id)] = matrix[row_idx].astype(float).tolist()
+        for row in mapping_rows:
+            row_idx = int(row.index_position)
+            if 0 <= row_idx < matrix.shape[0]:
+                result[int(row.concept_id)] = matrix[row_idx].astype(float).tolist()
         return result
 
     def get_similarities(
@@ -226,7 +245,7 @@ class FaissEmbeddingBackend(EmbeddingBackend):
         concept_ids: Optional[Sequence[int]] = None,
     ) -> Mapping[int, float]:
         model_record = self._require_registered_model(session, model_name)
-        indexed_ids, matrix = self._load_embeddings(model_record)
+        indexed_ids, matrix = self._load_embeddings(session, model_record)
         if indexed_ids.size == 0:
             return {}
 
@@ -259,18 +278,26 @@ class FaissEmbeddingBackend(EmbeddingBackend):
     ) -> Sequence[NearestConceptMatch]:
         concept_filter = concept_filter or EmbeddingConceptFilter()
         model_record = self._require_registered_model(session, model_name)
-        indexed_ids, matrix = self._load_embeddings(model_record)
+        indexed_ids, matrix = self._load_embeddings(session, model_record)
         if indexed_ids.size == 0:
             return ()
 
         query = np.asarray(query_embedding, dtype=np.float32).reshape(1, -1)
 
         if self._filter_is_empty(concept_filter):
-            matched_ids, matched_scores = self._search_faiss(
+            matched_positions, matched_scores = self._search_faiss(
                 model_record=model_record,
                 query=query,
                 limit=limit,
             )
+            matched_ids_with_scores = self._lookup_concept_ids_by_positions(
+                session=session,
+                model_name=model_name,
+                positions=matched_positions,
+                scores=matched_scores,
+            )
+            matched_ids = [concept_id for concept_id, _ in matched_ids_with_scores]
+            matched_scores = [score for _, score in matched_ids_with_scores]
         else:
             eligible_ids = self._get_filtered_concept_ids(session, concept_filter)
             if not eligible_ids:
@@ -317,7 +344,7 @@ class FaissEmbeddingBackend(EmbeddingBackend):
 
     def refresh_model_index(self, session: Session, model_name: str) -> None:
         model_record = self._require_registered_model(session, model_name)
-        _, matrix = self._load_embeddings(model_record)
+        matrix = self._load_embedding_matrix(model_record)
         self._rebuild_index(model_record, matrix)
 
     def _require_faiss(self):
@@ -354,42 +381,71 @@ class FaissEmbeddingBackend(EmbeddingBackend):
 
     def _record_from_registry_row(self, row: ModelRegistry) -> EmbeddingModelRecord:
         return EmbeddingModelRecord(
-            model_name=row.name,
+            model_name=row.model_name,
             dimensions=row.dimensions,
-            backend_name=row.backend_name,
+            backend_name=row.backend_type,
             storage_identifier=row.storage_identifier,
             index_config=EmbeddingIndexConfig(
-                index_type=row.index_method,
+                index_type=row.index_type,
                 distance_metric="cosine",
             ),
-            metadata={},
+            metadata=self._coerce_registry_metadata(row.details),
         )
 
-    def _load_embeddings(self, model_record: EmbeddingModelRecord) -> tuple[np.ndarray, np.ndarray]:
-        concept_ids_path = self._concept_ids_path(model_record.model_name)
+    def _load_embedding_matrix(self, model_record: EmbeddingModelRecord) -> np.ndarray:
         embeddings_path = self._embeddings_path(model_record.model_name)
-        if not concept_ids_path.exists() or not embeddings_path.exists():
+        if not embeddings_path.exists():
+            return np.empty((0, model_record.dimensions), dtype=np.float32)
+
+        embeddings = np.load(embeddings_path).astype(np.float32, copy=False)
+        if embeddings.ndim != 2:
+            raise ValueError(f"Stored embeddings for model '{model_record.model_name}' are not a 2D matrix.")
+        return embeddings
+
+    def _load_embeddings(self, session: Session, model_record: EmbeddingModelRecord) -> tuple[np.ndarray, np.ndarray]:
+        matrix = self._load_embedding_matrix(model_record)
+        if matrix.shape[0] == 0:
             return (
                 np.empty((0,), dtype=np.int64),
                 np.empty((0, model_record.dimensions), dtype=np.float32),
             )
 
-        concept_ids = np.load(concept_ids_path)
-        embeddings = np.load(embeddings_path).astype(np.float32, copy=False)
-        if embeddings.ndim != 2:
-            raise ValueError(f"Stored embeddings for model '{model_name}' are not a 2D matrix.")
-        return concept_ids.astype(np.int64, copy=False), embeddings
+        mapping_table = cast(Any, self._get_mapping_table(session, model_record.model_name))
+        mapping_rows = session.execute(
+            select(mapping_table.concept_id, mapping_table.index_position).order_by(mapping_table.index_position)
+        ).all()
+
+        concept_ids = np.asarray([int(row.concept_id) for row in mapping_rows], dtype=np.int64)
+        return concept_ids, matrix
 
     def _write_embeddings(
         self,
         model_record: EmbeddingModelRecord,
-        concept_ids: np.ndarray,
         embeddings: np.ndarray,
     ) -> None:
         model_dir = self._model_dir(model_record.model_name)
         model_dir.mkdir(parents=True, exist_ok=True)
-        np.save(self._concept_ids_path(model_record.model_name), concept_ids)
         np.save(self._embeddings_path(model_record.model_name), embeddings.astype(np.float32, copy=False))
+
+    def _sync_mapping_table(
+        self,
+        session: Session,
+        model_name: str,
+        concept_ids: np.ndarray,
+    ) -> None:
+        mapping_table = cast(Any, self._get_mapping_table(session, model_name))
+        session.execute(delete(mapping_table))
+        if concept_ids.size == 0:
+            return
+
+        rows = [
+            {
+                "concept_id": int(concept_id),
+                "index_position": int(index_position),
+            }
+            for index_position, concept_id in enumerate(concept_ids.tolist())
+        ]
+        session.execute(insert(mapping_table), rows)
 
     def _rebuild_index(
         self,
@@ -428,8 +484,8 @@ class FaissEmbeddingBackend(EmbeddingBackend):
         limit: int,
     ) -> tuple[list[int], list[float]]:
         faiss = self._require_faiss()
-        concept_ids, matrix = self._load_embeddings(model_record)
-        if concept_ids.size == 0:
+        matrix = self._load_embedding_matrix(model_record)
+        if matrix.shape[0] == 0:
             return [], []
 
         index_path = self._index_path(model_record.model_name)
@@ -438,15 +494,46 @@ class FaissEmbeddingBackend(EmbeddingBackend):
 
         index = faiss.read_index(str(index_path))
         normalized_query = self._normalize_matrix(query.astype(np.float32, copy=False))
-        distances, indices = index.search(normalized_query, min(limit, concept_ids.shape[0]))
-        matched_ids: list[int] = []
+        distances, indices = index.search(normalized_query, min(limit, matrix.shape[0]))
+        matched_positions: list[int] = []
         matched_scores: list[float] = []
         for idx, score in zip(indices[0].tolist(), distances[0].tolist()):
             if idx < 0:
                 continue
-            matched_ids.append(int(concept_ids[idx]))
+            matched_positions.append(int(idx))
             matched_scores.append(float(score))
-        return matched_ids, matched_scores
+        return matched_positions, matched_scores
+
+    def _lookup_concept_ids_by_positions(
+        self,
+        *,
+        session: Session,
+        model_name: str,
+        positions: Sequence[int],
+        scores: Sequence[float],
+    ) -> list[tuple[int, float]]:
+        if not positions:
+            return []
+
+        mapping_table = cast(Any, self._get_mapping_table(session, model_name))
+        rows = session.execute(
+            select(mapping_table.concept_id, mapping_table.index_position).where(
+                mapping_table.index_position.in_(tuple(int(pos) for pos in positions))
+            )
+        ).all()
+        concept_by_position = {int(row.index_position): int(row.concept_id) for row in rows}
+        return [
+            (concept_by_position[pos], float(score))
+            for pos, score in zip(positions, scores)
+            if pos in concept_by_position
+        ]
+
+    def _get_mapping_table(self, session: Session, model_name: str):
+        bind = session.get_bind()
+        if bind is None:
+            raise RuntimeError("Session is not bound to an engine.")
+        assert isinstance(bind, Engine), f"Expected session bind to be an Engine. Got {type(bind)}"
+        return get_or_create_mapping_model(bind, model_name)
 
     def _rank_subset(
         self,

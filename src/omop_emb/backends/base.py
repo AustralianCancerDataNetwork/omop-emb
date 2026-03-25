@@ -2,12 +2,45 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Mapping, Optional, Sequence
+from typing import Mapping, Optional, Sequence, Tuple, Type, TypeVar, Generic, Dict, Any, Callable
+import re
+from functools import wraps
 
 from numpy import ndarray
-from sqlalchemy import Engine
-from sqlalchemy.orm import Session
+from sqlalchemy import Engine, select, Integer, ForeignKey
+from sqlalchemy.orm import Session, mapped_column
 
+from omop_alchemy.cdm.model.vocabulary import Concept
+
+from .registry import ModelRegistry, ensure_model_registry_schema
+from .config import BackendType, BACKEND_SUPPORTED_INDICES, IndexType
+from .errors import EmbeddingBackendConfigurationError
+
+
+def require_registered_model(func: Callable) -> Callable:
+    @wraps(func)
+    def wrapper(self, session: Session, model_name: str, *args, **kwargs) -> Any:
+        record = self.get_registered_model(session, model_name)
+        
+        if record is None:
+            raise ValueError(
+                f"Embedding model '{model_name}' is not registered in the FAISS backend."
+            )
+        return func(self, session, model_name, record, *args, **kwargs)
+        
+    return wrapper
+
+class ConceptIDEmbeddingBase:
+    """Abstract Mixin to ensure consistent concept_id handling across backends."""
+    __tablename__: str
+
+    concept_id = mapped_column(
+        Integer, 
+        ForeignKey(Concept.concept_id, ondelete="CASCADE"), 
+        primary_key=True
+    )
+    
+T = TypeVar("T", bound=ConceptIDEmbeddingBase)
 
 @dataclass(frozen=True)
 class EmbeddingIndexConfig:
@@ -20,7 +53,7 @@ class EmbeddingIndexConfig:
     - non-ANN backends may ignore this entirely
     """
 
-    index_type: Optional[str] = None
+    index_type: IndexType
     distance_metric: str = "cosine"
     parameters: Mapping[str, object] = field(default_factory=dict)
 
@@ -96,7 +129,7 @@ class EmbeddingBackendCapabilities:
     requires_explicit_index_refresh: bool = False
 
 
-class EmbeddingBackend(ABC):
+class EmbeddingBackend(ABC, Generic[T]):
     """
     Abstract interface for swappable embedding storage and retrieval backends.
 
@@ -119,16 +152,34 @@ class EmbeddingBackend(ABC):
     to validate models, resolve concept metadata, and apply domain/vocabulary
     filters.
     """
+    def __init__(self):
+        super().__init__()
+        self._model_cache: dict[str, Type[T]] = {}
+
+    @property
+    def model_cache(self) -> Dict[str, Type[T]]:
+        """In-memory cache of dynamically generated ORM classes for embedding tables."""
+        return self._model_cache
 
     @property
     @abstractmethod
-    def backend_name(self) -> str:
-        """Stable identifier for this backend implementation."""
+    def backend_type(self) -> BackendType:
+        """General category of backend, used for index compatibility checks."""
 
     @property
+    def backend_name(self) -> str:
+        """Stable identifier for this backend implementation."""
+        return self.backend_type.value
+
+    @property
+    @abstractmethod
     def capabilities(self) -> EmbeddingBackendCapabilities:
         """Capability flags describing what this backend can do."""
-        return EmbeddingBackendCapabilities()
+
+    @property
+    def supports_indices(self) -> Tuple[IndexType, ...]:
+        """Index types supported by this backend, for validation at registration."""
+        return BACKEND_SUPPORTED_INDICES.get(self.backend_type, ())
 
     @abstractmethod
     def initialise_store(self, engine: Engine) -> None:
@@ -141,39 +192,107 @@ class EmbeddingBackend(ABC):
         - create directories or sidecar files
         """
 
-    @abstractmethod
     def list_registered_models(self, session: Session) -> Sequence[EmbeddingModelRecord]:
         """Return all embedding models known to this backend."""
+        return tuple(
+            self._record_from_registry_row(row)
+            for row in session.scalars(
+                select(ModelRegistry).where(ModelRegistry.backend_type == self.backend_name)
+            ).all()
+        )
 
-    @abstractmethod
     def get_registered_model(
         self,
         session: Session,
         model_name: str,
     ) -> Optional[EmbeddingModelRecord]:
         """Return metadata for one registered model, if present."""
+        row = session.scalar(
+            select(ModelRegistry).where(
+                ModelRegistry.model_name == model_name,
+                ModelRegistry.backend_type == self.backend_name,
+            )
+        )
+        if row is None:
+            return None
+        return self._record_from_registry_row(row)
 
     def is_model_registered(self, session: Session, model_name: str) -> bool:
         """Convenience wrapper over ``get_registered_model``."""
         return self.get_registered_model(session=session, model_name=model_name) is not None
 
     @abstractmethod
+    def _create_storage_table(self, engine: Engine, entry: ModelRegistry) -> Type[T]:
+        """Backend-specific logic to create the dynamic SQLAlchemy class."""
+
     def register_model(
         self,
         engine: Engine,
         model_name: str,
         dimensions: int,
         *,
-        index_config: Optional[EmbeddingIndexConfig] = None,
-        metadata: Optional[Mapping[str, object]] = None,
+        index_config: EmbeddingIndexConfig,
+        metadata: Mapping[str, object] = {},
     ) -> EmbeddingModelRecord:
         """
-        Register a new embedding model and provision backend storage for it.
+        Shared template method for model registration.
         """
+        self.initialise_store(engine)
+        with Session(engine, expire_on_commit=False) as session:
+            existing_row = session.scalar(
+                select(ModelRegistry).where(ModelRegistry.model_name == model_name)
+            )
+            if existing_row is not None:
+                if existing_row.backend_type != self.backend_name:
+                    raise EmbeddingBackendConfigurationError(
+                        f"Model '{model_name}' is already registered for backend "
+                        f"'{existing_row.backend_type}', not '{self.backend_name}'."
+                    )
+                if existing_row.dimensions != dimensions:
+                    raise EmbeddingBackendConfigurationError(
+                        f"Model '{model_name}' is already registered with dimensions "
+                        f"{existing_row.dimensions}, not {dimensions}."
+                    )
+                if existing_row.index_type != index_config.index_type:
+                    raise EmbeddingBackendConfigurationError(
+                        f"Model '{model_name}' is already registered with "
+                        f"index_method='{existing_row.index_type}', not "
+                        f"'{index_config.index_type}'. Reuse the existing model "
+                        "configuration or register a new model name."
+                    )
+                # TODO: Is that necessary? I mean we tried to register and it already exists.
+                #existing_row.details = {**self._coerce_registry_metadata(existing_row.details), **metadata}
+                #session.commit()
+                #return self._record_from_registry_row(existing_row)
+        
+        ensure_model_registry_schema(engine)
+        safe_name = self.safe_model_name(model_name)
+        
+        new_entry = ModelRegistry(
+            model_name=model_name,
+            dimensions=dimensions,
+            storage_identifier=safe_name,
+            index_type=index_config.index_type,
+            backend_name=self.backend_name,
+            metadata=metadata
+        )
 
-    @abstractmethod
-    def has_any_embeddings(self, session: Session, model_name: str) -> bool:
-        """Return True if any concept embeddings are stored for the model."""
+        with Session(engine, expire_on_commit=False) as session:
+            # Add logic here to check for existing records before adding
+            session.add(new_entry)
+            session.commit()
+        
+        dynamic_class = self._create_storage_table(engine, new_entry)
+        storage_identifier = dynamic_class.__tablename__
+        # TODO: Maybe using self._record_from_registry_row
+        return EmbeddingModelRecord(
+            model_name=model_name,
+            dimensions=dimensions,
+            backend_name=self.backend_name,
+            storage_identifier=storage_identifier,
+            index_config=index_config,
+            metadata=metadata,
+        )
 
     @abstractmethod
     def upsert_embeddings(
@@ -240,4 +359,56 @@ class EmbeddingBackend(ABC):
         PostgreSQL/pgvector backends may not need this. File-based or FAISS
         backends may choose to rebuild or compact a search index here.
         """
+        return None
+    
+    def has_any_embeddings(self, session: Session, model_name: str) -> bool:
+        embedding_table = self._get_embedding_table(
+            session=session,
+            model_name=model_name,
+        )
+        return session.query(embedding_table.concept_id).limit(1).first() is not None
+    
+    def _get_embedding_table(
+        self,
+        session: Session,
+        model_name: str,
+    ) -> Type[T]:
+        embedding_table = self.model_cache.get(model_name)
+        if embedding_table is not None:
+            return embedding_table
 
+        bind = session.get_bind()
+        if bind is None:
+            raise RuntimeError("Session is not bound to an engine.")
+        assert isinstance(bind, Engine), f"Expected session bind to be an Engine. Got {type(bind)}"
+        self.initialise_store(bind)  # Ensure tables are created and cache is populated
+        embedding_table = self.model_cache.get(model_name)
+        if embedding_table is None:
+            raise ValueError(f"Embedding model '{model_name}' not found in cache.")
+        return embedding_table 
+
+    @staticmethod
+    def _coerce_registry_metadata(value: object) -> Mapping[str, object]:
+        if isinstance(value, Mapping):
+            return dict(value)
+        return {}
+
+    @staticmethod
+    def _record_from_registry_row(row: ModelRegistry) -> EmbeddingModelRecord:
+        return EmbeddingModelRecord(
+            model_name=row.model_name,
+            dimensions=row.dimensions,
+            backend_name=row.backend_type,
+            storage_identifier=row.storage_identifier,
+            index_config=EmbeddingIndexConfig(
+                index_type=row.index_type,
+                distance_metric="cosine",
+            ),
+            metadata=EmbeddingBackend._coerce_registry_metadata(row.details),
+        )
+    @staticmethod
+    def safe_model_name(model_name: str) -> str:
+        name = model_name.lower()
+        sanitized = re.sub(r"[^\w]+", "_", name)
+        sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+        return sanitized

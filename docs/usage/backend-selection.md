@@ -8,8 +8,8 @@ whatever happens to be installed.
 
 The current backend factory recognizes:
 
-- `postgres`
-- `faiss`
+- `pgvector`: The [pgvector](https://github.com/pgvector/pgvector) extension to a standard postgres database to store embeddings directly in the database.
+- `faiss`: The [FAISS](https://github.com/facebookresearch/faiss) storage solution for on-disk storage.
 
 The default backend name is currently `postgres`.
 
@@ -38,17 +38,14 @@ from omop_emb.backends import get_embedding_backend
 
 backend = get_embedding_backend("postgres")
 backend = get_embedding_backend("faiss")
-backend = get_embedding_backend()  # falls back to OMOP_EMB_BACKEND or the package default
 ```
 
 The factory currently exposes:
 
 - `get_embedding_backend(...)`
 - `normalize_backend_name(...)`
-- `DEFAULT_BACKEND`
-- `SUPPORTED_BACKENDS`
 
-## Why explicit selection is preferred
+## Why explicit selection is necessary
 
 Explicit backend selection improves clarity in a multi-backend world:
 

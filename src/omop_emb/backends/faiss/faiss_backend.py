@@ -1,32 +1,35 @@
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence, cast, Type
+from typing import Any, Mapping, Optional, Sequence, Type, cast, Dict
 
 import numpy as np
 from numpy import ndarray
 from omop_emb.backends.config import BackendType
-from sqlalchemy import Engine, delete, insert, select
+from sqlalchemy import Engine, insert, select
 from sqlalchemy.orm import Session
 import logging
 from dataclasses import dataclass, field
+import h5py
 
 from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_emb.backends.registry import ModelRegistry
 
 from ..errors import EmbeddingBackendConfigurationError
 from .faiss_sql import (
-    FAISSConceptIDEmbeddingMapping, 
-    create_faiss_mapping_table, 
-    initialise_faiss_mapping_tables
+    FAISSConceptIDEmbeddingRegistry, 
+    create_faiss_embedding_registry_table, 
+    initialise_faiss_mapping_tables,
+    add_concept_ids_to_faiss_registry,
+    q_concept_ids_with_embeddings
 )
+from ..config import IndexType, MetricType
+from .storage_manager import EmbeddingStorageManager
 from ..base import (
     EmbeddingBackend,
     EmbeddingBackendCapabilities,
     EmbeddingConceptFilter,
-    EmbeddingIndexConfig,
     EmbeddingModelRecord,
     NearestConceptMatch,
     require_registered_model
@@ -67,14 +70,14 @@ class FaissMetadata:
         )
 
 
-class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingMapping]):
+class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     """
     File-based FAISS embedding backend.
 
     First-pass design
     -----------------
     - Registry is stored as JSON under a configurable base directory.
-    - Embeddings are stored as ``.npy`` files alongside a FAISS index.
+    - Embeddings are stored as an HDF5 matrix on disk alongside a FAISS index.
     - OMOP concept metadata and filter application still use SQLAlchemy.
     - Nearest-neighbor search uses FAISS when possible and falls back to
       in-memory cosine ranking for filtered subsets.
@@ -88,9 +91,6 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingMapping]):
     """
 
     DEFAULT_FAISS_DIR = ".omop_emb/faiss"
-    CONCEPT_IDS_FILE = "concept_ids.npy"
-    EMBEDDINGS_FILE = "embeddings.npy"
-    INDEX_FILE = "index.faiss"
 
     def __init__(self, base_dir: Optional[str | os.PathLike[str]] = None):
         self.base_dir = Path(
@@ -98,6 +98,8 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingMapping]):
             or os.getenv("OMOP_EMB_FAISS_DIR")
             or FaissEmbeddingBackend.DEFAULT_FAISS_DIR
         ).expanduser()
+
+        self.embedding_storage_managers: Dict[str, EmbeddingStorageManager] = {}
 
     @property
     def backend_type(self) -> BackendType:
@@ -121,8 +123,41 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingMapping]):
         self.base_dir.mkdir(parents=False, exist_ok=True)
         return initialise_faiss_mapping_tables(engine, model_cache=self.model_cache)
 
-    def _create_storage_table(self, engine: Engine, entry: ModelRegistry) -> Type[FAISSConceptIDEmbeddingMapping]:
-        return create_faiss_mapping_table(engine=engine, model_registry_entry=entry)
+    def _create_storage_table(self, engine: Engine, entry: ModelRegistry) -> Type[FAISSConceptIDEmbeddingRegistry]:
+        return create_faiss_embedding_registry_table(engine=engine, model_registry_entry=entry)
+    
+    def get_safe_model_dir(self, model_name: str) -> Path:
+        return self.base_dir / self.safe_model_name(model_name)
+    
+    def get_storage_manager(
+        self, 
+        model_name: str,
+        dimensions: int,
+        index_type: IndexType,
+    ) -> EmbeddingStorageManager:
+        self.register_storage_manager(
+            model_name=model_name,
+            dimensions=dimensions,
+            index_type=index_type,
+        )
+        return self.embedding_storage_managers[model_name]
+    
+    def register_storage_manager(
+        self,
+        model_name: str,
+        dimensions: int,
+        index_type: IndexType,
+    ) -> None:
+        """Registers a storage manager for the given model if not already registered. This ensures that the necessary on-disk structures are in place for the model's embeddings and index."""
+
+        if model_name not in self.embedding_storage_managers:
+            logger.info(f"Registering new storage manager for model '{model_name}' with dimensions={dimensions}, index_type={index_type}")
+            self.embedding_storage_managers[model_name] = EmbeddingStorageManager(
+                    self.get_safe_model_dir(model_name), 
+                    dimensions=dimensions,
+                    backend_type=self.backend_type,
+                    index_type=index_type,
+                )
 
     def register_model(
         self,
@@ -130,7 +165,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingMapping]):
         model_name: str,
         dimensions: int,
         *,
-        index_config: EmbeddingIndexConfig,
+        index_type: IndexType,
         metadata: Mapping[str, object] = {},
     ) -> EmbeddingModelRecord:
 
@@ -140,16 +175,18 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingMapping]):
         model_dir.mkdir(parents=False, exist_ok=True)
         logger.info(f"Created model directory: {model_dir}")
 
-        faiss_metadata = FaissMetadata(
-            index_file_path=str(self._index_path(model_name)),
-            metadata_bucket=dict(metadata),
-        )
+        # NOTE: not sure if still necessary as the manager takes care of it all.
+        #faiss_metadata = FaissMetadata(
+        #    index_file_path=str(self._index_path(model_name)),
+        #    metadata_bucket=dict(metadata),
+        #)
         return super().register_model(
             engine=engine,
             model_name=model_name,
             dimensions=dimensions,
-            index_config=index_config,
-            metadata=faiss_metadata.to_dict(),
+            index_type=index_type,
+            #metadata=faiss_metadata.to_dict(),
+            metadata=metadata
         )
 
     @require_registered_model
@@ -161,97 +198,35 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingMapping]):
         concept_ids: Sequence[int],
         embeddings: ndarray,
     ) -> None:
-        concept_id_array = np.asarray(tuple(concept_ids), dtype=np.int64)
-        if embeddings.ndim != 2:
-            raise ValueError(f"Expected a 2D embeddings array, got ndim={embeddings.ndim}.")
-        if concept_id_array.shape[0] != embeddings.shape[0]:
+        concept_id_tuple = tuple(concept_ids)
+        self.validate_embeddings_and_concept_ids(
+            concept_ids=concept_id_tuple,
+            embeddings=embeddings,
+            dimensions=model_record.dimensions,
+        )
+
+        # Try to add first before we damage the on-disk stuff
+        try:
+            add_concept_ids_to_faiss_registry(
+                concept_ids=concept_id_tuple,
+                session=session,
+                registered_table=self._get_embedding_table(session, model_name),
+            )
+        except Exception as e:
+            session.rollback()
             raise ValueError(
-                f"Mismatch between #concept_ids ({concept_id_array.shape[0]}) and "
-                f"#embeddings ({embeddings.shape[0]})."
-            )
-        if embeddings.shape[1] != model_record.dimensions:
-            raise ValueError(
-                f"Embedding dimension mismatch for model '{model_name}': "
-                f"expected {model_record.dimensions}, got {embeddings.shape[1]}."
-            )
-
-        existing_ids, existing_embeddings = self._load_embeddings(session, model_record)
-        merged: dict[int, np.ndarray] = {}
-        for cid, emb in zip(existing_ids.tolist(), existing_embeddings):
-            merged[int(cid)] = emb.astype(np.float32, copy=False)
-        for cid, emb in zip(concept_id_array.tolist(), embeddings):
-            merged[int(cid)] = np.asarray(emb, dtype=np.float32)
-
-        if merged:
-            sorted_ids = np.array(sorted(merged.keys()), dtype=np.int64)
-            matrix = np.vstack([merged[int(cid)] for cid in sorted_ids]).astype(np.float32)
-        else:
-            sorted_ids = np.empty((0,), dtype=np.int64)
-            matrix = np.empty((0, model_record.dimensions), dtype=np.float32)
-
-        self._write_embeddings(model_record, matrix)
-        self._sync_mapping_table(session, model_name, sorted_ids)
-        self._rebuild_index(model_record, matrix)
-
-    @require_registered_model
-    def get_embeddings_by_concept_ids(
-        self,
-        session: Session,
-        model_name: str,
-        model_record: EmbeddingModelRecord,
-        concept_ids: Sequence[int],
-    ) -> Mapping[int, Sequence[float]]:
-        if not concept_ids:
-            return {}
-        matrix = self._load_embedding_matrix(model_record)
-        if matrix.shape[0] == 0:
-            return {}
-
-        mapping_table = self._get_embedding_table(session, model_name)
-        mapping_rows = session.execute(
-            select(mapping_table.concept_id, mapping_table.index_position).where(
-                mapping_table.concept_id.in_(tuple(int(cid) for cid in concept_ids))
-            )
-        ).all()
-
-        result: dict[int, Sequence[float]] = {}
-        for row in mapping_rows:
-            row_idx = int(row.index_position)
-            if 0 <= row_idx < matrix.shape[0]:
-                result[int(row.concept_id)] = matrix[row_idx].astype(float).tolist()
-        return result
-
-    @require_registered_model
-    def get_similarities(
-        self,
-        session: Session,
-        model_name: str,
-        model_record: EmbeddingModelRecord,
-        query_embedding: Sequence[float],
-        *,
-        concept_ids: Optional[Sequence[int]] = None,
-    ) -> Mapping[int, float]:
-        indexed_ids, matrix = self._load_embeddings(session, model_record)
-        if indexed_ids.size == 0:
-            return {}
-
-        query = self._normalize_matrix(np.asarray(query_embedding, dtype=np.float32).reshape(1, -1))
-        if concept_ids is not None:
-            allowed = {int(cid) for cid in concept_ids}
-            rows = [idx for idx, cid in enumerate(indexed_ids.tolist()) if int(cid) in allowed]
-            if not rows:
-                return {}
-            selected_ids = indexed_ids[rows]
-            selected_matrix = matrix[rows]
-        else:
-            selected_ids = indexed_ids
-            selected_matrix = matrix
-
-        similarities = (self._normalize_matrix(selected_matrix) @ query.T).reshape(-1)
-        return {
-            int(cid): float(score)
-            for cid, score in zip(selected_ids.tolist(), similarities.tolist())
-        }
+                f"Failed to add concept IDs to FAISS registry for model '{model_name}'. This may be due to a mismatch between the provided concept_ids and the existing entries in the database, or a database constraint violation. Original error: {str(e)}"
+            ) from e
+        
+        storage_manager = self.get_storage_manager(
+            model_name=model_name,
+            dimensions=model_record.dimensions,
+            index_type=model_record.index_type,
+        )
+        storage_manager.append(
+            concept_ids=np.array(concept_id_tuple, dtype=np.int64),
+            embeddings=embeddings,
+        )
 
     @require_registered_model
     def get_nearest_concepts(
@@ -259,277 +234,82 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingMapping]):
         session: Session,
         model_name: str,
         model_record: EmbeddingModelRecord,
-        query_embedding: Sequence[float],
+        query_embedding: np.ndarray,
+        metric_type: MetricType,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: int = 10,
     ) -> Sequence[NearestConceptMatch]:
-        concept_filter = concept_filter or EmbeddingConceptFilter()
-        indexed_ids, matrix = self._load_embeddings(session, model_record)
-        if indexed_ids.size == 0:
+        
+        storage_manager = self.get_storage_manager(
+            model_name=model_name,
+            dimensions=model_record.dimensions,
+            index_type=model_record.index_type,
+        )
+
+        if storage_manager.get_count() == 0:
             return ()
 
-        query = np.asarray(query_embedding, dtype=np.float32).reshape(1, -1)
+        # Get 1xd query vector
+        # Otherwise the stuff below doesn't work anymore with the indexing.
+        assert query_embedding.shape[0] == 1, f"Expected query_embedding to have shape (1, dimension), got {query_embedding.shape}"
+        self.validate_embeddings(embeddings=query_embedding, dimensions=model_record.dimensions)
 
-        if self._filter_is_empty(concept_filter):
-            matched_positions, matched_scores = self._search_faiss(
-                model_record=model_record,
-                query=query,
-                limit=limit,
-            )
-            matched_ids_with_scores = self._lookup_concept_ids_by_positions(
-                session=session,
-                model_name=model_name,
-                positions=matched_positions,
-                scores=matched_scores,
-            )
-            matched_ids = [concept_id for concept_id, _ in matched_ids_with_scores]
-            matched_scores = [score for _, score in matched_ids_with_scores]
-        else:
-            eligible_ids = self._get_filtered_concept_ids(session, concept_filter)
-            if not eligible_ids:
-                return ()
-            matched_ids, matched_scores = self._rank_subset(
-                indexed_ids=indexed_ids,
-                matrix=matrix,
-                query=query,
-                eligible_ids=eligible_ids,
-                limit=limit,
-            )
+        q_permitted_concept_ids = q_concept_ids_with_embeddings(
+            embedding_table=self._get_embedding_table(session, model_name),
+            concept_filter=concept_filter,
+            limit=None
+        )
 
-        if not matched_ids:
-            return ()
-
-        concept_rows = session.execute(
-            select(
-                Concept.concept_id,
-                Concept.concept_name,
-                Concept.standard_concept,
-                Concept.invalid_reason,
-            ).where(Concept.concept_id.in_(tuple(matched_ids)))
-        ).all()
-        concept_by_id = {
-            int(row.concept_id): row
-            for row in concept_rows
+        permitted_concept_ids_storage = {
+            row.concept_id: row for row in session.execute(q_permitted_concept_ids) 
         }
 
-        results: list[NearestConceptMatch] = []
-        for concept_id, similarity in zip(matched_ids, matched_scores):
-            row = concept_by_id.get(int(concept_id))
+        if concept_filter is None:
+            # Easier to not do any filter if all are allowed
+            permitted_concept_ids = None
+        else:
+            permitted_concept_ids = np.array(list(permitted_concept_ids_storage.keys()), dtype=np.int64)
+
+        distances, concept_ids = storage_manager.search(
+            query_vector=query_embedding,
+            metric_type=metric_type,
+            k=limit,
+            subset_concept_ids=permitted_concept_ids
+        )
+        assert distances.shape == concept_ids.shape == (1, limit), f"Expected search results to have shape (1, {limit}), got {distances.shape} and {concept_ids.shape}"
+
+        matches = []
+        for concept_id, distance in zip(concept_ids[0], distances[0]):
+            if concept_id == -1:
+                continue  # FAISS returns -1 for empty results, we skip those
+            row = permitted_concept_ids_storage.get(concept_id)
             if row is None:
+                logger.warning(f"Concept ID {concept_id} returned by FAISS search but not found in permitted concept IDs. This indicates a mismatch between the FAISS index and the database registry. Skipping this result.")
                 continue
-            results.append(
-                NearestConceptMatch(
-                    concept_id=int(row.concept_id),
-                    concept_name=row.concept_name,
-                    similarity=float(similarity),
-                    is_standard=row.standard_concept in {"S", "C"},
-                    is_active=row.invalid_reason not in {"D", "U"},
-                )
-            )
-        return tuple(results)
+            matches.append(NearestConceptMatch(
+                concept_id=int(concept_id),
+                concept_name=row.concept_name,
+                similarity=float(1 - distance) if metric_type == MetricType.COSINE else float(distance),
+                is_standard=bool(row.is_standard),
+                is_active=bool(row.is_active),
+            ))
+        return tuple(matches)
 
     @require_registered_model
     def refresh_model_index(self, session: Session, model_name: str, model_record: EmbeddingModelRecord) -> None:
-        matrix = self._load_embedding_matrix(model_record)
-        self._rebuild_index(model_record, matrix)
-
-    def _require_faiss(self):
-        try:
-            import faiss  # type: ignore[import-not-found]
-        except ImportError as exc:
-            raise ImportError(
-                "FaissEmbeddingBackend requires the optional 'faiss' package. "
-                "Install faiss-cpu or faiss-gpu to use this backend."
-            ) from exc
-        return faiss
-
-    def _model_dir(self, model_name: str) -> Path:
-        return self.base_dir / self.safe_model_name(model_name)
-
-    def _concept_ids_path(self, model_name: str) -> Path:
-        return self._model_dir(model_name) / FaissEmbeddingBackend.CONCEPT_IDS_FILE
-
-    def _embeddings_path(self, model_name: str) -> Path:
-        return self._model_dir(model_name) / FaissEmbeddingBackend.EMBEDDINGS_FILE
-
-    def _index_path(self, model_name: str) -> Path:
-        return self._model_dir(model_name) / FaissEmbeddingBackend.INDEX_FILE
-
-    def _load_embedding_matrix(self, model_record: EmbeddingModelRecord) -> np.ndarray:
-        embeddings_path = self._embeddings_path(model_record.model_name)
-        if not embeddings_path.exists():
-            return np.empty((0, model_record.dimensions), dtype=np.float32)
-
-        embeddings = np.load(embeddings_path).astype(np.float32, copy=False)
-        if embeddings.ndim != 2:
-            raise ValueError(f"Stored embeddings for model '{model_record.model_name}' are not a 2D matrix.")
-        return embeddings
-
-    def _load_embeddings(self, session: Session, model_record: EmbeddingModelRecord) -> tuple[np.ndarray, np.ndarray]:
-        matrix = self._load_embedding_matrix(model_record)
-        if matrix.shape[0] == 0:
-            return (
-                np.empty((0,), dtype=np.int64),
-                np.empty((0, model_record.dimensions), dtype=np.float32),
-            )
-
-        mapping_table = self._get_embedding_table(session, model_record.model_name)
-        mapping_rows = session.execute(
-            select(mapping_table.concept_id, mapping_table.index_position).order_by(mapping_table.index_position)
-        ).all()
-
-        concept_ids = np.asarray([int(row.concept_id) for row in mapping_rows], dtype=np.int64)
-        return concept_ids, matrix
-
-    def _write_embeddings(
-        self,
-        model_record: EmbeddingModelRecord,
-        embeddings: np.ndarray,
-    ) -> None:
-        model_dir = self._model_dir(model_record.model_name)
-        model_dir.mkdir(parents=True, exist_ok=True)
-        np.save(self._embeddings_path(model_record.model_name), embeddings.astype(np.float32, copy=False))
-
-    def _sync_mapping_table(
-        self,
-        session: Session,
-        model_name: str,
-        concept_ids: np.ndarray,
-    ) -> None:
-        mapping_table = self._get_embedding_table(session, model_name)
-        session.execute(delete(mapping_table))
-        if concept_ids.size == 0:
-            return
-
-        rows = [
-            {
-                "concept_id": int(concept_id),
-                "index_position": int(index_position),
-            }
-            for index_position, concept_id in enumerate(concept_ids.tolist())
-        ]
-        session.execute(insert(mapping_table), rows)
-
-    def _rebuild_index(
-        self,
-        model_record: EmbeddingModelRecord,
-        embeddings: np.ndarray,
-    ) -> None:
-        faiss = self._require_faiss()
-        model_dir = self._model_dir(model_record.model_name)
-        model_dir.mkdir(parents=True, exist_ok=True)
-        index_path = self._index_path(model_record.model_name)
-
-        if embeddings.shape[0] == 0:
-            if index_path.exists():
-                index_path.unlink()
-            return
-
-        normalized = self._normalize_matrix(embeddings.astype(np.float32, copy=False))
-        index_type = (
-            model_record.index_config.index_type
-            if model_record.index_config is not None and model_record.index_config.index_type
-            else "IndexFlatIP"
-        )
-        index = self._create_faiss_index(
-            faiss=faiss,
-            index_type=index_type,
-            dimensions=model_record.dimensions,
-        )
-        index.add(normalized)
-        faiss.write_index(index, str(index_path))
-
-    def _search_faiss(
-        self,
-        *,
-        model_record: EmbeddingModelRecord,
-        query: np.ndarray,
-        limit: int,
-    ) -> tuple[list[int], list[float]]:
-        faiss = self._require_faiss()
-        matrix = self._load_embedding_matrix(model_record)
-        if matrix.shape[0] == 0:
-            return [], []
-
-        index_path = self._index_path(model_record.model_name)
-        if not index_path.exists():
-            self._rebuild_index(model_record, matrix)
-
-        index = faiss.read_index(str(index_path))
-        normalized_query = self._normalize_matrix(query.astype(np.float32, copy=False))
-        distances, indices = index.search(normalized_query, min(limit, matrix.shape[0]))
-        matched_positions: list[int] = []
-        matched_scores: list[float] = []
-        for idx, score in zip(indices[0].tolist(), distances[0].tolist()):
-            if idx < 0:
-                continue
-            matched_positions.append(int(idx))
-            matched_scores.append(float(score))
-        return matched_positions, matched_scores
-
-    def _lookup_concept_ids_by_positions(
-        self,
-        *,
-        session: Session,
-        model_name: str,
-        positions: Sequence[int],
-        scores: Sequence[float],
-    ) -> list[tuple[int, float]]:
-        if not positions:
-            return []
-
-        mapping_table = self._get_embedding_table(session, model_name)
-        rows = session.execute(
-            select(mapping_table.concept_id, mapping_table.index_position).where(
-                mapping_table.index_position.in_(tuple(int(pos) for pos in positions))
-            )
-        ).all()
-        concept_by_position = {int(row.index_position): int(row.concept_id) for row in rows}
-        return [
-            (concept_by_position[pos], float(score))
-            for pos, score in zip(positions, scores)
-            if pos in concept_by_position
-        ]
-
-    def _rank_subset(
-        self,
-        *,
-        indexed_ids: np.ndarray,
-        matrix: np.ndarray,
-        query: np.ndarray,
-        eligible_ids: Sequence[int],
-        limit: int,
-    ) -> tuple[list[int], list[float]]:
-        allowed = {int(cid) for cid in eligible_ids}
-        selected_rows = [idx for idx, cid in enumerate(indexed_ids.tolist()) if int(cid) in allowed]
-        if not selected_rows:
-            return [], []
-
-        selected_ids = indexed_ids[selected_rows]
-        selected_matrix = matrix[selected_rows]
-        scores = (self._normalize_matrix(selected_matrix) @ self._normalize_matrix(query).T).reshape(-1)
-        top_idx = np.argsort(scores)[::-1][:limit]
-        return (
-            [int(selected_ids[idx]) for idx in top_idx.tolist()],
-            [float(scores[idx]) for idx in top_idx.tolist()],
-        )
+        raise NotImplementedError("Explicit index refresh is not required for the FAISS backend as it updates the index on each upsert. This method is a no-op.")
+    
 
     def _get_filtered_concept_ids(
         self,
         session: Session,
         concept_filter: EmbeddingConceptFilter,
     ) -> tuple[int, ...]:
-        stmt = select(Concept.concept_id)
-        if concept_filter.concept_ids is not None:
-            stmt = stmt.where(Concept.concept_id.in_(concept_filter.concept_ids))
-        if concept_filter.domains is not None:
-            stmt = stmt.where(Concept.domain_id.in_(concept_filter.domains))
-        if concept_filter.vocabularies is not None:
-            stmt = stmt.where(Concept.vocabulary_id.in_(concept_filter.vocabularies))
-        if concept_filter.require_standard:
-            stmt = stmt.where(Concept.standard_concept.in_(["S", "C"]))
-        return tuple(int(row.concept_id) for row in session.execute(stmt))
+        query = select(Concept.concept_id)
+        if concept_filter is not None:
+            query = concept_filter.apply(query)
+        return tuple(int(row.concept_id) for row in session.execute(query))
 
     @staticmethod
     def _normalize_matrix(matrix: np.ndarray) -> np.ndarray:
@@ -548,15 +328,10 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingMapping]):
 
     @staticmethod
     def _create_faiss_index(*, faiss, index_type: str, dimensions: int):
+        index_type = str(getattr(index_type, "value", index_type))
         if index_type in {"IndexFlatIP", "flat", "flatip"}:
             return faiss.IndexFlatIP(dimensions)
         raise ValueError(
             f"Unsupported FAISS index_type={index_type!r} in first-pass backend. "
             "Currently supported: IndexFlatIP."
         )
-
-    @staticmethod
-    def _index_type_for_config(index_config: Optional[EmbeddingIndexConfig]) -> str:
-        if index_config is None or not index_config.index_type or index_config.index_type == "auto":
-            return "IndexFlatIP"
-        return index_config.index_type

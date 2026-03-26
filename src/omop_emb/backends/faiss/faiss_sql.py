@@ -1,101 +1,114 @@
 from __future__ import annotations
 
-from typing import Type, Optional
+from typing import Type, Optional, TYPE_CHECKING
 import logging
-from sqlalchemy import Integer, Engine, inspect, text, select
-from sqlalchemy.orm import Mapped, mapped_column, Session
+from sqlalchemy import  Engine, text, select, Select, case, literal
+from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import insert
 
 from orm_loader.helpers import Base
+from omop_alchemy.cdm.model.vocabulary import Concept
 
 from ..base import ConceptIDEmbeddingBase
-from ..config import BackendType, IndexType
+from ..config import BackendType
 from ..registry import ModelRegistry
+
+if TYPE_CHECKING:
+    # Circular Import - might require some better solution in the future
+    # Separate sql_utils.py?
+    from omop_emb.backends.base import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
 
 
-class FAISSConceptIDEmbeddingMapping(ConceptIDEmbeddingBase, Base):
-    """Mapping table between concept_ids and FAISS index positions."""
+class FAISSConceptIDEmbeddingRegistry(ConceptIDEmbeddingBase, Base):
+    """Registry table to track which concept_ids are present in the FAISS/H5 storage for a specific model."""
     __abstract__ = True
-    index_position: Mapped[int]
 
-def create_faiss_mapping_table(
+def create_faiss_embedding_registry_table(
     engine: Engine,
     model_registry_entry: ModelRegistry, 
-) -> Type[FAISSConceptIDEmbeddingMapping]:
+) -> Type[FAISSConceptIDEmbeddingRegistry]:
     """
-    Create or retrieve a SQLAlchemy ORM class for the mapping table of concept_ids to FAISS index positions.
-    The table name is derived from the model name to ensure uniqueness and traceability. 
+    Creates a dynamic SQLAlchemy ORM class that tracks which concept_ids 
+    are present in the FAISS/H5 storage for a specific model.
     """
-
     table_name = model_registry_entry.storage_identifier
 
     mapping_table = type(
         f"{BackendType.FAISS.value.capitalize()}_{table_name}",
-        (FAISSConceptIDEmbeddingMapping, ),
+        (FAISSConceptIDEmbeddingRegistry, ),
         {
             "__tablename__": table_name,
             "__table_args__": {"extend_existing": True},
-            "index_position": mapped_column(Integer, nullable=False, unique=True, index=True),
         },
     )
-    Base.metadata.create_all(mapping_table.metadata, tables=[mapping_table.__table__])  # type: ignore[arg-type]
-
-    with engine.connect() as conn:
-        inspector = inspect(conn)
-        existing_indexes = [idx['name'] for idx in inspector.get_indexes(model_registry_entry.storage_identifier)]
-        
-
-        create_index_sql = _create_index_sql(
-            model_registry_entry.storage_identifier,
-            IndexType(model_registry_entry.index_type),
-        )
-        if (
-            _index_from_storage_identifier(model_registry_entry.storage_identifier) not in existing_indexes and
-            create_index_sql is not None
-        ):
-            conn.execute(text(create_index_sql))
-            conn.commit()
-
+    
+    Base.metadata.create_all(engine, tables=[mapping_table.__table__])  # type: ignore[arg-type]
+    
     logger.debug(
-        f"Initialized {FAISSConceptIDEmbeddingMapping.__name__} table for model '{model_registry_entry.model_name}' with dimensions {model_registry_entry.dimensions} using index_method={model_registry_entry.index_type}",
+        f"Initialized {FAISSConceptIDEmbeddingRegistry.__name__} table for model '{model_registry_entry.model_name}'",
     )
 
     return mapping_table
 
 def initialise_faiss_mapping_tables(
     engine: Engine,
-    model_cache: dict[str, Type[FAISSConceptIDEmbeddingMapping]],
+    model_cache: dict[str, Type[FAISSConceptIDEmbeddingRegistry]],
 ) -> None:
     with Session(engine, expire_on_commit=False) as session:
         session.execute(text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;"))
         existing_models = session.scalars(select(ModelRegistry).where(ModelRegistry.backend_type == BackendType.FAISS.value)).all()
-        #for model_entry in existing_models:
-        #    _heal_legacy_index_method(session, model_entry)
         session.commit()
 
     for model_entry in existing_models:
         if model_entry.model_name not in model_cache:
             # Create the class and cache it
-            dynamic_table = create_faiss_mapping_table(engine=engine, model_registry_entry=model_entry)
+            dynamic_table = create_faiss_embedding_registry_table(engine=engine, model_registry_entry=model_entry)
             model_cache[model_entry.model_name] = dynamic_table
 
-def _index_from_storage_identifier(storage_identifier: str) -> str:
-    return "idx_" + storage_identifier
+def add_concept_ids_to_faiss_registry(
+    concept_ids: tuple[int, ...],
+    session: Session,
+    registered_table: type[FAISSConceptIDEmbeddingRegistry],
+):
+    r"""Adds the given concept_ids to the FAISS registry table for the specified model. This is used to keep track of which concept_ids are present in the FAISS/H5 storage, as we don't have direct access to the contents of the index like we do with a SQL database.
+    
+    Raises
+    ------
+    sqlalchemy.exc.IntegrityError
+        If there is an attempt to add a concept_id that already exists in the registry, which indicates a mismatch between the registry and the actual contents of the FAISS index. This is a safeguard as partial updates and overwrites are not yet supported.
+    """
 
-def _create_index_sql(table_name: str, index_type: IndexType) -> Optional[str]:
-    index_name = _index_from_storage_identifier(table_name)
-    if index_type == IndexType.HNSW:
-        return (
-            f"CREATE INDEX IF NOT EXISTS {index_name} "
-            f"ON {table_name} USING hnsw (embedding vector_cosine_ops) "
-            f"WITH (m = 16, ef_construction = 64);"
-        )
-    if index_type == IndexType.IVF_FLAT:
-        return (
-            f"CREATE INDEX IF NOT EXISTS {index_name} "
-            f"ON {table_name} USING ivfflat (embedding vector_cosine_ops) "
-            f"WITH (lists = 100);"
-        )
-    raise ValueError(f"Unsupported resolved index method: {index_type.value}")
+    assert session.bind is not None, "Session must be bound to an engine"
+    assert session.bind.dialect.name == "postgresql", "This function is only implemented for PostgreSQL databases"
 
+    stmt = insert(registered_table).values(list(concept_ids))
+    session.execute(stmt)
+    session.commit()
+
+def q_concept_ids_with_embeddings(
+    embedding_table: Type[FAISSConceptIDEmbeddingRegistry],
+    concept_filter: Optional[EmbeddingConceptFilter] = None,
+    limit: Optional[int] = None,
+) -> Select:
+    
+    stmt = (
+        select(
+            Concept.concept_id,
+            Concept.concept_name,
+            case(
+                (Concept.standard_concept.in_(["S", "C"]), literal(True)),
+                else_=literal(False),
+            ).label("is_standard"),
+            case(
+                (Concept.invalid_reason.in_(["D", "U"]), literal(False)),
+                else_=literal(True),
+            ).label("is_active"),
+        )
+        .join(embedding_table, Concept.concept_id == embedding_table.concept_id)
+    )
+
+    if concept_filter is not None:
+        stmt = concept_filter.apply(stmt)
+    return stmt.limit(limit)

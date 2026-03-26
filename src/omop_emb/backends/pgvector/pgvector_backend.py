@@ -5,9 +5,9 @@ from typing import Mapping, Optional, Sequence, Type
 from numpy import ndarray
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from .pgvector_sql import (
-    q_embedding_cosine_similarity,
     q_embedding_nearest_concepts,
     q_embedding_vectors_by_concept_ids,
     initialise_pg_embedding_tables,
@@ -16,15 +16,15 @@ from .pgvector_sql import (
     add_embeddings_to_registered_table,
 )
 from ..registry import ModelRegistry
-from ..config import BackendType
+from ..config import BackendType, MetricType
 
 from ..base import (
     EmbeddingBackend,
     EmbeddingBackendCapabilities,
     EmbeddingConceptFilter,
-    EmbeddingIndexConfig,
     EmbeddingModelRecord,
     NearestConceptMatch,
+    require_registered_model
 )
 
 class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]):
@@ -61,31 +61,40 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     def _create_storage_table(self, engine: Engine, entry: ModelRegistry) -> Type[PGVectorConceptIDEmbeddingTable]:
         return create_pg_embedding_table(engine=engine, model_registry_entry=entry)
 
+    @require_registered_model
     def upsert_embeddings(
         self,
         session: Session,
         model_name: str,
+        model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
         embeddings: ndarray,
     ) -> None:
         concept_id_tuple = tuple(concept_ids)
-        assert embeddings.ndim == 2, f"Expected 2 dimensions of embeddings. Got {embeddings.ndim}"
-        assert len(concept_id_tuple) == embeddings.shape[0], (
-            f"Mismatch between #concept_ids ({len(concept_id_tuple)}) "
-            f"and embedding dimensionality ({embeddings.shape[0]})"
+
+        self.validate_embeddings_and_concept_ids(
+            concept_ids=concept_id_tuple,
+            embeddings=embeddings,
+            dimensions=model_record.dimensions,
         )
 
-        registered_table = self._get_embedding_table(
+        table = self._get_embedding_table(
             session=session,
             model_name=model_name,
         )
 
-        add_embeddings_to_registered_table(
-            session=session,
-            concept_ids=concept_id_tuple,
-            embeddings=embeddings,
-            model=registered_table,
-        )
+        try:
+            add_embeddings_to_registered_table(
+                session=session,
+                concept_ids=concept_id_tuple,
+                embeddings=embeddings,
+                registered_table=table,
+            )
+        except IntegrityError as e:
+            session.rollback()
+            raise ValueError(
+                f"Failed to upsert embeddings for model '{model_name}'. This may be due to a mismatch between the provided concept_ids and the existing entries in the database. Original error: {str(e)}"
+            ) from e
 
     def get_embeddings_by_concept_ids(
         self,
@@ -110,34 +119,14 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
             for row in session.execute(query)
         }
 
-    def get_similarities(
-        self,
-        session: Session,
-        model_name: str,
-        query_embedding: Sequence[float],
-        *,
-        concept_ids: Optional[Sequence[int]] = None,
-    ) -> Mapping[int, float]:
-        embedding_table = self._get_embedding_table(
-            session=session,
-            model_name=model_name,
-        )
-        query = q_embedding_cosine_similarity(
-            embedding_table=embedding_table,
-            text_embedding=list(query_embedding),
-            concept_ids=tuple(concept_ids) if concept_ids is not None else None,
-        )
-        return {
-            int(row.concept_id): float(row.similarity)
-            for row in session.execute(query).all()
-        }
-
+    @require_registered_model
     def get_nearest_concepts(
         self,
         session: Session,
         model_name: str,
-        query_embedding: Sequence[float],
+        query_embedding: ndarray,
         *,
+        metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: int = 10,
     ) -> Sequence[NearestConceptMatch]:
@@ -145,16 +134,16 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
             session=session,
             model_name=model_name,
         )
-        concept_filter = concept_filter or EmbeddingConceptFilter()
+        concept_filter = concept_filter
+
+        assert query_embedding.shape[0] == 1, f"Expected query_embedding to have shape (1, dimension), got {query_embedding.shape}"
 
         query = q_embedding_nearest_concepts(
             embedding_table=embedding_table,
-            text_embedding=list(query_embedding),
-            concept_ids=concept_filter.concept_ids,
-            domains=concept_filter.domains,
-            vocabularies=concept_filter.vocabularies,
-            require_standard=concept_filter.require_standard,
+            text_embedding=query_embedding.tolist()[0],
+            concept_filter=concept_filter,
             limit=limit,
+            metric_type=metric_type
         )
         return tuple(
             NearestConceptMatch(
@@ -176,11 +165,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         return EmbeddingModelRecord(
             model_name=row.model_name,
             dimensions=row.dimensions,
-            backend_name=row.backend_type,
+            backend_type=row.backend_type,
             storage_identifier=row.storage_identifier,
-            index_config=EmbeddingIndexConfig(
-                index_type=row.index_type,
-                distance_metric="cosine",
-            ),
-            metadata=self._coerce_registry_metadata(row.details),
+            index_type=row.index_type,
+            metadata=self._coerce_registry_metadata(row.metadata),
         )

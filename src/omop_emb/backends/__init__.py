@@ -2,7 +2,6 @@ from .base import (
     EmbeddingBackend,
     EmbeddingBackendCapabilities,
     EmbeddingConceptFilter,
-    EmbeddingIndexConfig,
     EmbeddingModelRecord,
     NearestConceptMatch,
 )
@@ -21,7 +20,6 @@ __all__ = [
     "EmbeddingBackend",
     "EmbeddingBackendCapabilities",
     "EmbeddingConceptFilter",
-    "EmbeddingIndexConfig",
     "EmbeddingModelRecord",
     "NearestConceptMatch",
     "EmbeddingBackendConfigurationError",

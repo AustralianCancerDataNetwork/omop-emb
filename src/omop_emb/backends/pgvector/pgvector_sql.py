@@ -5,13 +5,18 @@ from pgvector.sqlalchemy import Vector
 from orm_loader.helpers import Base
 from omop_alchemy.cdm.model.vocabulary import Concept
 
-from typing import Type, Tuple, Optional
+from typing import Type, Tuple, Optional, TYPE_CHECKING
 import logging
 from numpy import ndarray
 
-from ..config import BackendType, IndexType
+from ..config import BackendType, IndexType, MetricType
 from ..registry import ModelRegistry
 from ..base import ConceptIDEmbeddingBase
+
+if TYPE_CHECKING:
+    # Circular Import - might require some better solution in the future
+    # Separate sql_utils.py?
+    from omop_emb.backends.base import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
 
@@ -83,91 +88,53 @@ def add_embeddings_to_registered_table(
     concept_ids: tuple[int, ...],
     embeddings: ndarray,
     session: Session,
-    model: type[PGVectorConceptIDEmbeddingTable],
+    registered_table: type[PGVectorConceptIDEmbeddingTable],
 ):
+    """Add embeddings to the storage table and update the registry to reflect the new concept_ids present in the index.
+    
+    Raises
+    ------
+    sqlalchemy.exc.IntegrityError
+        If there is duplicate concept_id entries in the input, or if any of the concept_ids violate database constraints.
+    """
     assert session.bind is not None, "No engine assigned to session. Unexpected"
     assert session.bind.dialect.name == "postgresql", "Only postgres dialect supported for now."
 
     insert_values = [
         {
-            model.concept_id.key: cid,
-            model.embedding.key: emb.tolist(),
+            registered_table.concept_id.key: cid,
+            registered_table.embedding.key: emb.tolist(),
         }
         for cid, emb in zip(concept_ids, embeddings)
     ]
 
-    stmt = insert(model).values(insert_values)
-    upsert_stmt = stmt.on_conflict_do_update(
-        index_elements=[model.concept_id.key], 
-        set_={model.embedding.key: stmt.excluded.embedding}
-    )
-
-    session.execute(upsert_stmt)
+    stmt = insert(registered_table).values(insert_values)
+    session.execute(stmt)
+    #upsert_stmt = stmt.on_conflict_do_update(
+    #    index_elements=[registered_table.concept_id.key], 
+    #    set_={registered_table.embedding.key: stmt.excluded.embedding}
+    #)
+    #session.execute(upsert_stmt)
     session.commit()
 
 
 def _create_index_sql(table_name: str, index_type: IndexType) -> Optional[str]:
-    index_name = _index_from_storage_identifier(table_name)
-    if index_type == IndexType.DISKANN:
-        return (
-            f"CREATE INDEX IF NOT EXISTS {index_name} "
-            f"ON {table_name} USING diskann (embedding vector_cosine_ops);"
-        )
-    if index_type == IndexType.HNSW:
-        return (
-            f"CREATE INDEX IF NOT EXISTS {index_name} "
-            f"ON {table_name} USING hnsw (embedding vector_cosine_ops) "
-            f"WITH (m = 16, ef_construction = 64);"
-        )
-    # TODO: Not sure how to implement exactly here
-    #if index_type == IndexType.FLAT:
-    #    return (
-    #        f"CREATE INDEX IF NOT EXISTS {index_name} "
-    #        f"ON {table_name} USING ivfflat (embedding vector_cosine_ops) "
-    #        f"WITH (lists = 100);"
-    #    )
-    raise ValueError(f"Unsupported resolved index method: {index_type.value}")
+    if index_type == IndexType.FLAT:
+        pass # No additional index needed for flat, as the vector column itself can be used for sequential scan
+    else:
+        raise ValueError(f"Unsupported resolved index method: {index_type.value}")
 
 def _index_from_storage_identifier(storage_identifier: str) -> str:
     return "idx_" + storage_identifier
 
-def q_embedding_cosine_similarity(
-    embedding_table: Type[PGVectorConceptIDEmbeddingTable],
-    text_embedding: list[float],
-    concept_ids: Optional[Tuple[int, ...]] = None,
-    limit: Optional[int] = None,
-):
-    
-    distance = embedding_table.embedding.cosine_distance(text_embedding)
-    stmt = (
-        select(
-            Concept.concept_id,
-            (1 - distance).label("similarity")
-        )
-        .join(embedding_table, Concept.concept_id == embedding_table.concept_id)  # type: ignore
-        .order_by(distance)
-    )
-
-    # 4. Add your optional where clause
-    if concept_ids:
-        stmt = stmt.where(Concept.concept_id.in_(concept_ids))
-        limit = len(concept_ids)
-
-    if limit is not None:
-        stmt = stmt.limit(limit)
-    return stmt
-
-
 def q_embedding_nearest_concepts(
     embedding_table: Type[PGVectorConceptIDEmbeddingTable],
     text_embedding: list[float],
-    concept_ids: Optional[Tuple[int, ...]] = None,
-    domains: Optional[Tuple[str, ...]] = None,
-    vocabularies: Optional[Tuple[str, ...]] = None,
-    require_standard: bool = False,
-    limit: int = 10,
+    metric_type: MetricType,
+    concept_filter: Optional[EmbeddingConceptFilter] = None,
+    limit: Optional[int] = None,
 ) -> Select:
-    distance = embedding_table.embedding.cosine_distance(text_embedding)
+    distance = get_distance(embedding_table, text_embedding, metric_type)
     stmt = (
         select(
             Concept.concept_id,
@@ -182,22 +149,12 @@ def q_embedding_nearest_concepts(
             ).label("is_active"),
             (1 - distance).label("similarity"),
         )
-        .join(embedding_table, Concept.concept_id == embedding_table.concept_id)  # type: ignore
+        .join(embedding_table, Concept.concept_id == embedding_table.concept_id)
         .order_by(distance)
     )
 
-    if concept_ids:
-        stmt = stmt.where(Concept.concept_id.in_(concept_ids))
-
-    if domains is not None:
-        stmt = stmt.where(Concept.domain_id.in_(domains))
-
-    if vocabularies is not None:
-        stmt = stmt.where(Concept.vocabulary_id.in_(vocabularies))
-
-    if require_standard:
-        stmt = stmt.where(Concept.standard_concept.in_(["S", "C"]))
-
+    if concept_filter is not None:
+        stmt = concept_filter.apply(stmt)
     return stmt.limit(limit)
 
 
@@ -212,3 +169,21 @@ def q_embedding_vectors_by_concept_ids(
         )
         .where(embedding_table.concept_id.in_(concept_ids))
     )
+
+def get_distance(
+    embedding_table: Type[PGVectorConceptIDEmbeddingTable],
+    text_embedding: list[float],
+    metric: MetricType,
+):
+    if metric == MetricType.COSINE:
+        return embedding_table.embedding.cosine_distance(text_embedding)
+    elif metric == MetricType.L2:
+        return embedding_table.embedding.l2_distance(text_embedding)
+    elif metric == MetricType.L1:
+        return embedding_table.embedding.l1_distance(text_embedding)
+    elif metric == MetricType.HAMMING:
+        return embedding_table.embedding.hamming_distance(text_embedding)
+    elif metric == MetricType.JACCARD:
+        return embedding_table.embedding.jaccard_distance(text_embedding)
+    else:
+        raise ValueError(f"Unsupported metric type: {metric.value}")

@@ -5,8 +5,12 @@ from sqlalchemy.orm import mapped_column, validates
 
 from orm_loader.helpers import Base
 
-from .config import BACKEND_SUPPORTED_INDICES, IndexType, BackendType
-
+from .config import (
+    is_index_type_supported_for_backend, 
+    get_supported_index_types_for_backend,
+    IndexType, 
+    BackendType
+)
 
 class ModelRegistry(Base):
     """
@@ -30,7 +34,7 @@ class ModelRegistry(Base):
     storage_identifier = mapped_column("table_name", String, unique=True, nullable=False)
     index_type = mapped_column(Enum(IndexType, native_enum=False), nullable=False)
     backend_type = mapped_column(Enum(BackendType, native_enum=False), nullable=False)
-    details = mapped_column("metadata", JSON, nullable=False, default=dict)
+    metadata = mapped_column(JSON, nullable=False, default=dict)
     created_at = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = mapped_column(
         DateTime(timezone=True),
@@ -41,13 +45,18 @@ class ModelRegistry(Base):
 
     @validates("index_type")
     def validate_index_for_backend(self, key, index_type):
-        supported = BACKEND_SUPPORTED_INDICES.get(self.backend_type, [])
-        if index_type not in supported:
+        if is_index_type_supported_for_backend(self.backend_type, index_type):
             raise ValueError(
                 f"Backend {self.backend_type} does not support {index_type}. "
-                f"Supported: {supported}"
+                f"Supported: {get_supported_index_types_for_backend(self.backend_type)}"
             )
         return index_type
+    
+    @validates("backend_type")
+    def validate_backend_type(self, key, backend_type):
+        if backend_type not in BackendType:
+            raise ValueError(f"Unsupported backend type: {backend_type}. Supported backends: {list(BackendType)}")
+        return backend_type
 
 
 def ensure_model_registry_schema(engine: Engine) -> None:

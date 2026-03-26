@@ -2,18 +2,18 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Mapping, Optional, Sequence, Tuple, Type, TypeVar, Generic, Dict, Any, Callable
+from typing import Mapping, Optional, Sequence, Union, Type, TypeVar, Generic, Dict, Any, Callable
 import re
 from functools import wraps
 
 from numpy import ndarray
-from sqlalchemy import Engine, select, Integer, ForeignKey
+from sqlalchemy import Engine, select, Integer, ForeignKey, func, Select
 from sqlalchemy.orm import Session, mapped_column
 
 from omop_alchemy.cdm.model.vocabulary import Concept
 
 from .registry import ModelRegistry, ensure_model_registry_schema
-from .config import BackendType, BACKEND_SUPPORTED_INDICES, IndexType
+from .config import BackendType, SUPPORTED_INDICES_AND_METRICS_PER_BACKEND, IndexType, MetricType
 from .errors import EmbeddingBackendConfigurationError
 
 
@@ -42,21 +42,6 @@ class ConceptIDEmbeddingBase:
     
 T = TypeVar("T", bound=ConceptIDEmbeddingBase)
 
-@dataclass(frozen=True)
-class EmbeddingIndexConfig:
-    """
-    Backend-neutral index configuration for an embedding model.
-
-    Backends may interpret these fields differently:
-    - pgvector may use ``index_type`` values such as ``hnsw`` or ``ivfflat``
-    - FAISS may use values such as ``IndexFlatIP`` or ``IndexIVFFlat``
-    - non-ANN backends may ignore this entirely
-    """
-
-    index_type: IndexType
-    distance_metric: str = "cosine"
-    parameters: Mapping[str, object] = field(default_factory=dict)
-
 
 @dataclass(frozen=True)
 class EmbeddingModelRecord:
@@ -70,9 +55,9 @@ class EmbeddingModelRecord:
 
     model_name: str
     dimensions: int
-    backend_name: str
+    backend_type: BackendType
+    index_type: IndexType
     storage_identifier: Optional[str] = None
-    index_config: Optional[EmbeddingIndexConfig] = None
     metadata: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -89,6 +74,21 @@ class EmbeddingConceptFilter:
     domains: Optional[tuple[str, ...]] = None
     vocabularies: Optional[tuple[str, ...]] = None
     require_standard: bool = False
+
+    def apply(self, query: Select) -> Select:
+        if self.concept_ids is not None:
+            query = query.where(Concept.concept_id.in_(self.concept_ids))
+
+        if self.domains is not None:
+            query = query.where(Concept.domain_id.in_(self.domains))
+
+        if self.vocabularies is not None:
+            query = query.where(Concept.vocabulary_id.in_(self.vocabularies))
+
+        if self.require_standard:
+            query = query.where(Concept.standard_concept.in_(["S", "C"]))
+
+        return query
 
 
 @dataclass(frozen=True)
@@ -176,11 +176,6 @@ class EmbeddingBackend(ABC, Generic[T]):
     def capabilities(self) -> EmbeddingBackendCapabilities:
         """Capability flags describing what this backend can do."""
 
-    @property
-    def supports_indices(self) -> Tuple[IndexType, ...]:
-        """Index types supported by this backend, for validation at registration."""
-        return BACKEND_SUPPORTED_INDICES.get(self.backend_type, ())
-
     @abstractmethod
     def initialise_store(self, engine: Engine) -> None:
         """
@@ -197,7 +192,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         return tuple(
             self._record_from_registry_row(row)
             for row in session.scalars(
-                select(ModelRegistry).where(ModelRegistry.backend_type == self.backend_name)
+                select(ModelRegistry).where(ModelRegistry.backend_type == self.backend_type)
             ).all()
         )
 
@@ -210,7 +205,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         row = session.scalar(
             select(ModelRegistry).where(
                 ModelRegistry.model_name == model_name,
-                ModelRegistry.backend_type == self.backend_name,
+                ModelRegistry.backend_type == self.backend_type,
             )
         )
         if row is None:
@@ -220,6 +215,62 @@ class EmbeddingBackend(ABC, Generic[T]):
     def is_model_registered(self, session: Session, model_name: str) -> bool:
         """Convenience wrapper over ``get_registered_model``."""
         return self.get_registered_model(session=session, model_name=model_name) is not None
+    
+    def get_concepts_without_embedding(
+        self,
+        session: Session,
+        model_name: str,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        limit: Optional[int] = None,
+    ) -> Mapping[int, str]:
+        """Return concept IDs and names for concepts that do not have embeddings."""
+        query = self.get_concepts_without_embedding_query(
+            session=session, 
+            model_name=model_name, 
+            concept_filter=concept_filter,
+            limit=limit
+        )
+        return {row.concept_id: row.concept_name for row in session.execute(query)}
+    
+    def get_concepts_without_embedding_query(
+        self,
+        session: Session,
+        model_name: str,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        limit: Optional[int] = None,
+    ) -> Select:
+        embedding_table = self._get_embedding_table(session=session, model_name=model_name)
+        subq = select(1).where(embedding_table.concept_id == Concept.concept_id)
+
+        query = (
+            select(Concept.concept_id, Concept.concept_name)
+            .where(~subq.exists())
+        )
+
+        if concept_filter is not None:
+            query = concept_filter.apply(query)
+
+        return query.limit(limit)
+    
+    def get_concepts_without_embedding_count(
+        self,
+        session: Session,
+        model_name: str,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+    ) -> int:
+        embedding_table = self._get_embedding_table(session=session, model_name=model_name)
+        subq = select(1).where(embedding_table.concept_id == Concept.concept_id)
+
+        query = (
+            select(func.count())
+            .select_from(Concept)
+            .where(~subq.exists())
+        )
+
+        if concept_filter is not None:
+            query = concept_filter.apply(query)
+
+        return session.scalar(query)  # type: ignore
 
     @abstractmethod
     def _create_storage_table(self, engine: Engine, entry: ModelRegistry) -> Type[T]:
@@ -231,7 +282,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         model_name: str,
         dimensions: int,
         *,
-        index_config: EmbeddingIndexConfig,
+        index_type: IndexType,
         metadata: Mapping[str, object] = {},
     ) -> EmbeddingModelRecord:
         """
@@ -243,25 +294,25 @@ class EmbeddingBackend(ABC, Generic[T]):
                 select(ModelRegistry).where(ModelRegistry.model_name == model_name)
             )
             if existing_row is not None:
-                if existing_row.backend_type != self.backend_name:
+                if existing_row.backend_type != self.backend_type:
                     raise EmbeddingBackendConfigurationError(
                         f"Model '{model_name}' is already registered for backend "
-                        f"'{existing_row.backend_type}', not '{self.backend_name}'."
+                        f"'{existing_row.backend_type}', not '{self.backend_type}'."
                     )
                 if existing_row.dimensions != dimensions:
                     raise EmbeddingBackendConfigurationError(
                         f"Model '{model_name}' is already registered with dimensions "
                         f"{existing_row.dimensions}, not {dimensions}."
                     )
-                if existing_row.index_type != index_config.index_type:
+                if existing_row.index_type != index_type:
                     raise EmbeddingBackendConfigurationError(
                         f"Model '{model_name}' is already registered with "
                         f"index_method='{existing_row.index_type}', not "
-                        f"'{index_config.index_type}'. Reuse the existing model "
+                        f"'{index_type}'. Reuse the existing model "
                         "configuration or register a new model name."
                     )
                 # TODO: Is that necessary? I mean we tried to register and it already exists.
-                #existing_row.details = {**self._coerce_registry_metadata(existing_row.details), **metadata}
+                #existing_row.metadata = {**self._coerce_registry_metadata(existing_row.metadata), **metadata}
                 #session.commit()
                 #return self._record_from_registry_row(existing_row)
         
@@ -272,8 +323,8 @@ class EmbeddingBackend(ABC, Generic[T]):
             model_name=model_name,
             dimensions=dimensions,
             storage_identifier=safe_name,
-            index_type=index_config.index_type,
-            backend_name=self.backend_name,
+            index_type=index_type,
+            backend_type=self.backend_type,
             metadata=metadata
         )
 
@@ -288,17 +339,19 @@ class EmbeddingBackend(ABC, Generic[T]):
         return EmbeddingModelRecord(
             model_name=model_name,
             dimensions=dimensions,
-            backend_name=self.backend_name,
+            backend_type=self.backend_type,
             storage_identifier=storage_identifier,
-            index_config=index_config,
+            index_type=index_type,
             metadata=metadata,
         )
 
     @abstractmethod
+    @require_registered_model
     def upsert_embeddings(
         self,
         session: Session,
         model_name: str,
+        model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
         embeddings: ndarray,
     ) -> None:
@@ -318,28 +371,14 @@ class EmbeddingBackend(ABC, Generic[T]):
     ) -> Mapping[int, Sequence[float]]:
         """Fetch stored embedding vectors keyed by concept ID."""
 
-    @abstractmethod
-    def get_similarities(
-        self,
-        session: Session,
-        model_name: str,
-        query_embedding: Sequence[float],
-        *,
-        concept_ids: Optional[Sequence[int]] = None,
-    ) -> Mapping[int, float]:
-        """
-        Return similarity scores between a query embedding and stored vectors.
-
-        This supports scorer-stage use cases where the candidate concept set is
-        already known and only the semantic score must be computed.
-        """
 
     @abstractmethod
     def get_nearest_concepts(
         self,
         session: Session,
         model_name: str,
-        query_embedding: Sequence[float],
+        query_embedding: ndarray,
+        metric_type: MetricType,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: int = 10,
@@ -394,17 +433,16 @@ class EmbeddingBackend(ABC, Generic[T]):
         return {}
 
     @staticmethod
-    def _record_from_registry_row(row: ModelRegistry) -> EmbeddingModelRecord:
+    def _record_from_registry_row(
+        row: ModelRegistry,
+    ) -> EmbeddingModelRecord:
         return EmbeddingModelRecord(
             model_name=row.model_name,
             dimensions=row.dimensions,
-            backend_name=row.backend_type,
+            backend_type=row.backend_type,
             storage_identifier=row.storage_identifier,
-            index_config=EmbeddingIndexConfig(
-                index_type=row.index_type,
-                distance_metric="cosine",
-            ),
-            metadata=EmbeddingBackend._coerce_registry_metadata(row.details),
+            index_type=row.index_type,
+            metadata=EmbeddingBackend._coerce_registry_metadata(row.metadata),
         )
     @staticmethod
     def safe_model_name(model_name: str) -> str:
@@ -412,3 +450,23 @@ class EmbeddingBackend(ABC, Generic[T]):
         sanitized = re.sub(r"[^\w]+", "_", name)
         sanitized = re.sub(r"_+", "_", sanitized).strip("_")
         return sanitized
+    
+    @staticmethod
+    def validate_embeddings(embeddings: ndarray, dimensions: int):
+        assert embeddings.ndim == 2, f"Expected 2D array of embeddings. Got {embeddings.ndim}."
+        assert embeddings.shape[1] == dimensions, (
+            f"Embedding dimensionality ({embeddings.shape[1]}) does not match "
+            f"model configuration ({dimensions})."
+        )
+
+    @staticmethod
+    def validate_embeddings_and_concept_ids(
+        embeddings: ndarray, 
+        concept_ids: Union[Sequence[int], ndarray],
+        dimensions: int
+    ):
+        EmbeddingBackend.validate_embeddings(embeddings, dimensions=dimensions)
+
+        assert len(concept_ids) == embeddings.shape[0], (
+            f"Number of concept IDs ({len(concept_ids)}) does not match number of embeddings ({embeddings.shape[0]})."
+        )

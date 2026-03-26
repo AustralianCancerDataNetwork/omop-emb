@@ -45,10 +45,12 @@ pgvector = [
 ]
 faiss = [
     "faiss-cpu>=1.8.0",
+    "h5py",
 ]
 all = [
     "pgvector",
     "faiss-cpu>=1.8.0",
+    "h5py"
 ]
 
 [dependency-groups]
@@ -61,7 +63,8 @@ dev = [
     "pytest-cov>=7.0.0",
     "rich>=14.2.0",
     "ruff>=0.14.10",
-    "omop-graph[emb]"
+    "omop-graph[emb]",
+    "h5py",
 ]
 
 [build-system]

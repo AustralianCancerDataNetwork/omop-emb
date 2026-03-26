@@ -76,3 +76,6 @@ packages = ["src/omop_emb"]
 
 [tool.uv.sources]
 omop-llm = { git = "https://github.com/AustralianCancerDataNetwork/omop-llm.git", branch = "main" }
+
+[project.scripts]
+omop-emb = "omop_emb.cli:app"

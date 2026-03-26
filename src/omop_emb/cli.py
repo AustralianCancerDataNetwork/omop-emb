@@ -13,7 +13,7 @@ from tqdm import tqdm
 import typer
 
 from omop_emb.backends import (
-    EmbeddingBackendConfigurationError,
+    EmbeddingConceptFilter,
 )
 from omop_emb.interface import EmbeddingInterface
 from omop_emb.backends.config import BackendType, IndexType
@@ -82,6 +82,11 @@ def add_embeddings(
             embedding_batch_size=batch_size
         ),
     )
+
+    concept_filter = EmbeddingConceptFilter(
+        require_standard=standard_only,
+        vocabularies=tuple(vocabularies) if vocabularies else None,
+    )
     
     # Ensure OMOP metadata tables exist, then initialize the embedding store.
     create_db(engine)
@@ -99,14 +104,12 @@ def add_embeddings(
         total_concepts = num_embeddings or interface.get_concepts_without_embedding_count(
             session=reader,
             model_name=model,
-            require_standard=standard_only,
-            vocabularies=vocabularies,
+            concept_filter=concept_filter,
         )
         concepts_without_embedding = interface.get_concepts_without_embedding_query(
             session=reader,
             model_name=model,
-            require_standard=standard_only,
-            vocabularies=vocabularies,
+            concept_filter=concept_filter,
             limit=num_embeddings,
         )
 

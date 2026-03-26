@@ -107,12 +107,40 @@ class EmbeddingInterface:
         domains: Optional[Tuple[str, ...]] = None,
         vocabularies: Optional[Tuple[str, ...]] = None,
         require_standard: bool = False,
-        limit: int = 10,
-    ) -> Mapping[int, float]:
+        k: int = 10,
+    ) -> Tuple[Mapping[int, float], ...]:
         
-        assert query_embedding.ndim == 2 and query_embedding.shape[0] == 1, (
-            f"Expected query_embedding to have shape (1, dimension), got {query_embedding.shape}"
-        )
+        """
+        Return nearest stored concepts for the query embedding.
+
+        Parameters
+        ----------
+        session : Session
+            SQLAlchemy session for any required relational access.
+        embedding_model_name : str
+            Name of the embedding model used to create the embeddings.
+        query_embedding : ndarray
+            The embedding vector to search with. Expected shape is (q, dimension)
+            where q is the number of query vectors and dimension is the size of the embedding space for the model.
+        metric_type : MetricType
+            The similarity or distance metric to use for nearest neighbor search. This should be compatible with the index type used by the model.
+        concept_ids : Optional[Tuple[int, ...]], optional
+            If provided, only consider these concept_ids as potential nearest neighbors.
+        domains : Optional[Tuple[str, ...]], optional
+            If provided, only consider concepts within these OMOP domains as potential nearest neighbors.
+        vocabularies : Optional[Tuple[str, ...]], optional
+            If provided, only consider concepts from these vocabularies as potential nearest neighbors.
+        require_standard : bool, optional
+            If True, only consider standard concepts as potential nearest neighbors. By default False.
+        k : int, optional
+            K nearest neighbors to return for each query vector. Default is 10.
+
+        Returns
+        -------
+        Tuple[Mapping[int, float], ...]
+            A tuple of dictionaries containing nearest concept matches for each query vector. The outer tuple corresponds to the query vectors in order, and each inner dictionary contains the nearest matches for that query vector, sorted by similarity. Returned shape is (q, k) where q is the number of query vectors and k is the number of nearest neighbors returned per query.
+        """
+        
 
         concept_filter = EmbeddingConceptFilter(
             concept_ids=concept_ids,
@@ -126,9 +154,9 @@ class EmbeddingInterface:
             query_embedding=query_embedding,
             concept_filter=concept_filter,
             metric_type=metric_type,
-            limit=limit
+            k=k
         )
-        return {match.concept_id: match.similarity for match in nearest_concepts}
+        return tuple({match_per_query.concept_id: match_per_query.similarity for match_per_query in match} for match in nearest_concepts)
 
     def get_embeddings_by_concept_ids(
         self,

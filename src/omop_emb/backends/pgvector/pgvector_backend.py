@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Mapping, Optional, Sequence, Type
+from typing import Mapping, Optional, Sequence, Type, Tuple
 
 from numpy import ndarray
+import itertools
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -124,37 +125,44 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         self,
         session: Session,
         model_name: str,
-        query_embedding: ndarray,
+        model_record: EmbeddingModelRecord,
+        query_embeddings: ndarray,
         *,
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-        limit: int = 10,
-    ) -> Sequence[NearestConceptMatch]:
+        k: int = 10,
+    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+        
         embedding_table = self._get_embedding_table(
             session=session,
             model_name=model_name,
         )
-        concept_filter = concept_filter
+        self.validate_embeddings(embeddings=query_embeddings, dimensions=model_record.dimensions)
 
-        assert query_embedding.shape[0] == 1, f"Expected query_embedding to have shape (1, dimension), got {query_embedding.shape}"
-
+        query_list = query_embeddings.tolist()
         query = q_embedding_nearest_concepts(
             embedding_table=embedding_table,
-            text_embedding=query_embedding.tolist()[0],
+            query_embeddings=query_list,
+            metric_type=metric_type,
             concept_filter=concept_filter,
-            limit=limit,
-            metric_type=metric_type
+            limit=k
         )
-        return tuple(
-            NearestConceptMatch(
-                concept_id=int(row.concept_id),
-                concept_name=row.concept_name,
-                similarity=float(row.similarity),
-                is_standard=bool(row.is_standard),
-                is_active=bool(row.is_active),
+
+        rows = session.execute(query).all()
+        results = [[] for _ in range(len(query_list))]
+
+        for row in rows:
+            results[row.q_id].append(
+                NearestConceptMatch(
+                    concept_id=int(row.concept_id),
+                    concept_name=row.concept_name,
+                    similarity=float(row.similarity),
+                    is_standard=bool(row.is_standard),
+                    is_active=bool(row.is_active),
+                )
             )
-            for row in session.execute(query).all()
-        )
+
+        return tuple(tuple(matches) for matches in results)
 
     def refresh_model_index(self, session: Session, model_name: str) -> None:
         # pgvector indexes update as rows are written, so no explicit refresh is

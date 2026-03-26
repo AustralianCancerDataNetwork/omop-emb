@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Mapping, Optional, Sequence, Union, Type, TypeVar, Generic, Dict, Any, Callable
+from typing import Mapping, Optional, Sequence, Union, Type, TypeVar, Generic, Dict, Any, Callable, Tuple
 import re
 from functools import wraps
 
@@ -381,14 +381,31 @@ class EmbeddingBackend(ABC, Generic[T]):
         metric_type: MetricType,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-        limit: int = 10,
-    ) -> Sequence[NearestConceptMatch]:
+        k: int = 10,
+    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         """
         Return nearest stored concepts for the query embedding.
 
-        Backends that cannot apply every filter inside the search engine should
-        still honor this contract by composing with OMOP SQL metadata and
-        post-filtering as needed.
+        Parameters
+        ----------
+        session : Session
+            SQLAlchemy session for any required relational access.
+        model_name : str
+            Name of the embedding model used to create the embeddings.
+        query_embedding : ndarray
+            The embedding vector to search with. Expected shape is (q, dimension)
+            where q is the number of query vectors and dimension is the size of the embedding space for the model.
+        metric_type : MetricType
+            The similarity or distance metric to use for nearest neighbor search. This should be compatible with the index type used by the model.
+        concept_filter : Optional[EmbeddingConceptFilter], optional
+            Optional constraints to apply when retrieving nearest concepts. This allows filtering by concept IDs, domains, vocabularies, or standard flags. By default, no additional filtering is applied.
+        k : int, optional
+            K nearest neighbors to return for each query vector. Default is 10.
+
+        Returns
+        -------
+        Tuple[Tuple[NearestConceptMatch, ...], ...]
+            A tuple of tuples containing nearest concept matches for each query vector. The outer tuple corresponds to the query vectors in order, and each inner tuple contains the nearest matches for that query vector, sorted by similarity. Returned shape is (q, k) where q is the number of query vectors and k is the number of nearest neighbors returned per query.
         """
 
     def refresh_model_index(self, session: Session, model_name: str) -> None:
@@ -453,6 +470,12 @@ class EmbeddingBackend(ABC, Generic[T]):
     
     @staticmethod
     def validate_embeddings(embeddings: ndarray, dimensions: int):
+        """Validate that the embeddings array has the correct shape and dimensionality.
+        Currently enforcing:
+        - 2D array (num_embeddings, embedding_dimension)
+        - embedding_dimension matches the model configuration
+        """
+
         assert embeddings.ndim == 2, f"Expected 2D array of embeddings. Got {embeddings.ndim}."
         assert embeddings.shape[1] == dimensions, (
             f"Embedding dimensionality ({embeddings.shape[1]}) does not match "

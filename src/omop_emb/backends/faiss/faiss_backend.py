@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence, Type, cast, Dict
+from typing import Any, Mapping, Optional, Sequence, Type, cast, Dict, Tuple 
 
 import numpy as np
 from numpy import ndarray
@@ -238,8 +238,8 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         metric_type: MetricType,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-        limit: int = 10,
-    ) -> Sequence[NearestConceptMatch]:
+        k: int = 10,
+    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         
         storage_manager = self.get_storage_manager(
             model_name=model_name,
@@ -250,11 +250,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         if storage_manager.get_count() == 0:
             return ()
 
-        # Get 1xd query vector
-        # Otherwise the stuff below doesn't work anymore with the indexing.
-        assert query_embedding.shape[0] == 1, f"Expected query_embedding to have shape (1, dimension), got {query_embedding.shape}"
         self.validate_embeddings(embeddings=query_embedding, dimensions=model_record.dimensions)
-
         q_permitted_concept_ids = q_concept_ids_with_embeddings(
             embedding_table=self._get_embedding_table(session, model_name),
             concept_filter=concept_filter,
@@ -274,26 +270,28 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         distances, concept_ids = storage_manager.search(
             query_vector=query_embedding,
             metric_type=metric_type,
-            k=limit,
+            k=k,
             subset_concept_ids=permitted_concept_ids
         )
-        assert distances.shape == concept_ids.shape == (1, limit), f"Expected search results to have shape (1, {limit}), got {distances.shape} and {concept_ids.shape}"
 
         matches = []
-        for concept_id, distance in zip(concept_ids[0], distances[0]):
-            if concept_id == -1:
-                continue  # FAISS returns -1 for empty results, we skip those
-            row = permitted_concept_ids_storage.get(concept_id)
-            if row is None:
-                logger.warning(f"Concept ID {concept_id} returned by FAISS search but not found in permitted concept IDs. This indicates a mismatch between the FAISS index and the database registry. Skipping this result.")
-                continue
-            matches.append(NearestConceptMatch(
-                concept_id=int(concept_id),
-                concept_name=row.concept_name,
-                similarity=float(1 - distance) if metric_type == MetricType.COSINE else float(distance),
-                is_standard=bool(row.is_standard),
-                is_active=bool(row.is_active),
-            ))
+        for concept_id_pery_query, distance_per_query in zip(concept_ids, distances):
+            matches_per_query = []
+            for concept_id, distance in zip(concept_id_pery_query, distance_per_query):
+                if concept_id == -1:
+                    continue  # FAISS returns -1 for empty results, we skip those
+                row = permitted_concept_ids_storage.get(concept_id)
+                if row is None:
+                    logger.warning(f"Concept ID {concept_id} returned by FAISS search but not found in permitted concept IDs. This indicates a mismatch between the FAISS index and the database registry. Skipping this result.")
+                    continue
+                matches_per_query.append(NearestConceptMatch(
+                    concept_id=int(concept_id),
+                    concept_name=row.concept_name,
+                    similarity=float(1 - distance) if metric_type == MetricType.COSINE else float(distance),
+                    is_standard=bool(row.is_standard),
+                    is_active=bool(row.is_active),
+                ))
+            matches.append(tuple(matches_per_query))
         return tuple(matches)
 
     @require_registered_model

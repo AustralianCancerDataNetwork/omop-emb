@@ -43,7 +43,7 @@ class EmbeddingStorageManager:
         self.embeddings_file = Path(file_dir) / self.EMBEDDINGS_FILE
         self.dimensions = dimensions
         self._init_embedding_storage_if_missing()
-        self._index_managers: Dict[IndexType, BaseIndexManager] = {}
+        self._index_managers: Dict[IndexType, Dict[MetricType, BaseIndexManager]] = {}
 
     @property
     def index_dir(self) -> Path:
@@ -55,36 +55,41 @@ class EmbeddingStorageManager:
         metric_type: MetricType
     ) -> BaseIndexManager:
         if index_type not in self._index_managers:
-            logger.info(f"Index manager for {index_type} not found in memory. Creating new one.")
-            self.create_index_manager(
+            self._index_managers[index_type] = {}
+
+        if metric_type not in self._index_managers[index_type]:
+            index_manager = self.create_index_manager(
                 index_type=index_type,
                 metric_type=metric_type
             )
-        index_manager = self._index_managers[index_type]
-        assert index_manager.metric == metric_type, f"Requested metric type {metric_type} does not match existing index manager's metric {index_manager.metric}. Currently only supporting one metric type per index type. Please create a new index manager for this metric type if you want to use it."
-        return index_manager
+            self._index_managers[index_type][metric_type] = index_manager
+        return self._index_managers[index_type][metric_type]
     
     def create_index_manager(
         self,
         index_type: IndexType,
         metric_type: MetricType,
         batch_size: int = 100_000
-    ):
+    ) -> BaseIndexManager:
         if index_type == IndexType.FLAT:
             index_manager_cls = FlatIndexManager
         else:
             raise ValueError(f"Unsupported index type {index_type} for FAISS backend. Only {IndexType.FLAT} is supported currently.")
         
-        self._index_managers[index_type] = index_manager_cls(
+        logger.info(f"Creating index manager for index_type={index_type}, metric_type={metric_type}")
+        index_manager = index_manager_cls(
             dimension=self.dimensions,
             metric=metric_type,
             index_dir=self.index_dir
         )
 
         # Now we also attempt to populate the index from storage
-        self._index_managers[index_type].populate_from_storage(
+        logger.info(f"Attempting to populate index manager for index_type={index_type}, metric_type={metric_type} from storage.")
+        index_manager.populate_from_storage(
             self.stream_concept_ids_and_embeddings(batch_size=batch_size)
         )
+        return index_manager
+
 
     def _init_embedding_storage_if_missing(self):
         """Creates the .h5 file with resizable datasets if it doesn't exist."""

@@ -153,10 +153,9 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         if model_name not in self.embedding_storage_managers:
             logger.info(f"Registering new storage manager for model '{model_name}' with dimensions={dimensions}, index_type={index_type}")
             self.embedding_storage_managers[model_name] = EmbeddingStorageManager(
-                    self.get_safe_model_dir(model_name), 
+                    file_dir=self.get_safe_model_dir(model_name), 
                     dimensions=dimensions,
                     backend_type=self.backend_type,
-                    index_type=index_type,
                 )
 
     def register_model(
@@ -197,6 +196,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
         embeddings: ndarray,
+        metric_type: Optional[MetricType] = None,
     ) -> None:
         concept_id_tuple = tuple(concept_ids)
         self.validate_embeddings_and_concept_ids(
@@ -226,6 +226,8 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         storage_manager.append(
             concept_ids=np.array(concept_id_tuple, dtype=np.int64),
             embeddings=embeddings,
+            index_type=model_record.index_type,
+            metric_type=metric_type
         )
 
     @require_registered_model
@@ -270,6 +272,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         distances, concept_ids = storage_manager.search(
             query_vector=query_embedding,
             metric_type=metric_type,
+            index_type=model_record.index_type,
             k=k,
             subset_concept_ids=permitted_concept_ids
         )

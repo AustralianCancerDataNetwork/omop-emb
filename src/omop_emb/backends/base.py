@@ -363,16 +363,19 @@ class EmbeddingBackend(ABC, Generic[T]):
         """
 
     @abstractmethod
+    @require_registered_model
     def get_embeddings_by_concept_ids(
         self,
         session: Session,
         model_name: str,
+        model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
     ) -> Mapping[int, Sequence[float]]:
         """Fetch stored embedding vectors keyed by concept ID."""
 
 
     @abstractmethod
+    @require_registered_model
     def get_nearest_concepts(
         self,
         session: Session,

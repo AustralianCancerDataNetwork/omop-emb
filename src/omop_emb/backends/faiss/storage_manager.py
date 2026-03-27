@@ -7,7 +7,7 @@ import h5py
 import numpy as np
 from pathlib import Path
 from contextlib import contextmanager
-from typing import cast, Generator, Tuple, Optional
+from typing import cast, Generator, Tuple, Optional, Mapping, Sequence
 import logging
 logger = logging.getLogger(__name__)
 
@@ -191,6 +191,34 @@ class EmbeddingStorageManager:
             k=k,
             subset_concept_ids=subset_concept_ids
         )
+    
+    def get_embeddings_by_concept_ids(self, concept_ids: np.ndarray) -> Mapping[int, Sequence[float]]:
+        self.validate_concept_ids(concept_ids)
+
+        with self.open_all(mode="r") as (emb_ds, cid_ds):
+            # Load into RAM - cheap for low numbers
+            all_ids = cid_ds[:]
+
+            # Sanity check if requested concept_ids actually exist in storage
+            difference = np.setdiff1d(concept_ids, all_ids)
+            if len(difference) > 0:
+                raise ValueError(f"The following concept_ids were requested but do not exist in storage: {difference}. Please check your input or storage contents.")
+            
+            mask = np.isin(all_ids, concept_ids)
+            row_indices = np.where(mask)[0]
+            
+            if len(row_indices) == 0:
+                return {}
+
+            # Sorting row_indices is highly recommended for faster HDF5 disk reads
+            row_indices = np.sort(row_indices)
+            fetched_embeddings = emb_ds[row_indices]
+            fetched_ids = all_ids[row_indices]
+
+            return {
+                int(cid): emb.tolist()
+                for cid, emb in zip(fetched_ids, fetched_embeddings)
+            }
 
 
     def get_embeddings(self) -> np.ndarray:
@@ -231,3 +259,7 @@ class EmbeddingStorageManager:
                 batch_ids = cid_ds[start:end]
                 
                 yield batch_ids, batch_embeddings
+
+    def validate_concept_ids(self, concept_ids: np.ndarray):
+        assert isinstance(concept_ids, np.ndarray), f"Expected concept_ids to be a numpy array, got {type(concept_ids)}"
+        assert concept_ids.ndim == 1, f"Expected concept_ids to be 1D, got {concept_ids.ndim}D"

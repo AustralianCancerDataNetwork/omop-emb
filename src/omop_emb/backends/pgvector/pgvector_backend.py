@@ -97,10 +97,12 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
                 f"Failed to upsert embeddings for model '{model_name}'. This may be due to a mismatch between the provided concept_ids and the existing entries in the database. Original error: {str(e)}"
             ) from e
 
+    @require_registered_model
     def get_embeddings_by_concept_ids(
         self,
         session: Session,
         model_name: str,
+        model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
     ) -> Mapping[int, Sequence[float]]:
         concept_id_tuple = tuple(concept_ids)
@@ -115,10 +117,18 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
             embedding_table=embedding_table,
             concept_ids=concept_id_tuple,
         )
-        return {
+
+        return_dict = {
             int(row.concept_id): list(row.embedding)
             for row in session.execute(query)
         }
+
+        missing_ids = set(concept_id_tuple) - set(return_dict.keys())
+        if missing_ids:
+            raise ValueError(
+                f"Requested concept IDs {missing_ids} not found in the database for model '{model_name}'."
+            )
+        return return_dict
 
     @require_registered_model
     def get_nearest_concepts(

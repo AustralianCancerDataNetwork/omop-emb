@@ -298,6 +298,28 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     def refresh_model_index(self, session: Session, model_name: str, model_record: EmbeddingModelRecord) -> None:
         raise NotImplementedError("Explicit index refresh is not required for the FAISS backend as it updates the index on each upsert. This method is a no-op.")
     
+    @require_registered_model
+    def get_embeddings_by_concept_ids(
+            self, 
+            session: Session, 
+            model_name: str, 
+            model_record: EmbeddingModelRecord,
+            concept_ids: Sequence[int]
+        ) -> Mapping[int, Sequence[float]]:
+        concept_id_tuple = tuple(concept_ids)
+        if not concept_id_tuple:
+            return {}
+        
+        concept_ids_np = np.array(concept_id_tuple, dtype=np.int64)
+
+        storage_manager = self.get_storage_manager(
+            model_name=model_name,
+            dimensions=model_record.dimensions,
+            index_type=model_record.index_type,
+        )
+
+        return storage_manager.get_embeddings_by_concept_ids(concept_ids=concept_ids_np)
+
 
     def _get_filtered_concept_ids(
         self,

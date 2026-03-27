@@ -11,22 +11,32 @@ from omop_emb.backends.config import IndexType, MetricType
 import logging
 logger = logging.getLogger(__name__)
 
+def logger_warning_partial_index_population(filepath: Path):
+    logger.warning(
+        "Current implementation does not guarantee that indices on disk are fully populated "
+        "or consistent with the raw embedding storage.\nIf you want to "
+        f"re-populate from storage, please delete the existing index file at `{filepath}` first.\n\n"
+    )
+
 class BaseIndexManager(abc.ABC):
     def __init__(
         self, 
         dimension: int, 
-        metric: MetricType,
-        index_dir: str | Path
+        metric_type: MetricType,
+        base_index_dir: str | Path
     ):
         self.dimension = dimension
-        self.metric = metric
-        self.index_dir = Path(index_dir)
+        self.metric_type = metric_type
+        self.base_dir = Path(base_index_dir)
+        self.index_dir = self.base_dir / ("index_" + self.supported_index_type.value)
 
-        logger.info(f"Initializing index manager with dimension={dimension}, metric={metric}, index_dir={index_dir}")
-        self.index_dir.mkdir(parents=True, exist_ok=True)
-        
-        self.requires_norm = (metric == MetricType.COSINE)
+        logger.info(f"Initializing index manager with dimension={dimension}, metric={metric_type.value}, index_type={self.supported_index_type.value}")
+        self.index_dir.mkdir(parents=False, exist_ok=True)
+
+        self.requires_norm = (metric_type == MetricType.COSINE)
         self._index = None
+        if self.has_index_on_disk():
+            self.load()
     
     @property
     def index(self) -> faiss.IndexIDMap:
@@ -36,11 +46,11 @@ class BaseIndexManager(abc.ABC):
         return self._index
     
     @property
-    def filepath(self) -> Path:
-        return self.index_dir / f"{self.supported_index_type.value}_{self.metric.value}_index.faiss"
+    def index_filepath(self) -> Path:
+        return self.index_dir / f"{self.supported_index_type.value}_{self.metric_type.value}_index.faiss"
     
     def has_index_on_disk(self) -> bool:
-        return self.filepath.exists()
+        return self.index_filepath.exists()
 
     @abc.abstractmethod
     def _create_index(self) -> faiss.Index:
@@ -107,28 +117,38 @@ class BaseIndexManager(abc.ABC):
 
     def save(self):
         """Saves the index to disk."""
-        faiss.write_index(self.index, str(self.filepath))
+        faiss.write_index(self.index, str(self.index_filepath))
 
     def load(self):
         """Loads an index from disk."""
-        self._index = faiss.read_index(str(self.filepath))
+        self._index = faiss.read_index(str(self.index_filepath))
 
-    def populate_from_storage(
+    def load_or_populate(self, data_stream: Generator[Tuple[np.ndarray, np.ndarray], None, None]):
+        """Loads the index from disk if it exists, otherwise populates it from the provided data stream."""
+        if self.has_index_on_disk():
+            logger.info(f"Index file found at {self.index_filepath}, loading index from disk.")
+            logger_warning_partial_index_population(self.index_filepath)
+            self.load()
+        else:
+            logger.info(f"No index file found at {self.index_filepath}, populating index from storage.")
+            self._populate_from_storage(data_stream)
+
+    def _populate_from_storage(
         self, 
         data_stream: Generator[Tuple[np.ndarray, np.ndarray], None, None]
     ):
-        """Loads embeddings and concept_ids from storage and populates the index."""
+        """Loads embeddings and concept_ids from storage and populates the index.
+        
+        Parameters
+        ----------
+        data_stream : Generator[Tuple[np.ndarray, np.ndarray], None, None]
+            A generator that yields batches of (concept_ids, embeddings) from the permanent embedding storage.
+        """
         if self.has_index_on_disk():
             # TODO: Support partial loading and streaming/extending if the 
             # local embedding storage was populated from a different indexmanager
             # NOTE: Could also delete the existing file and re-populate
-            logger.warning(
-                "Current implementation does not support populating existing indices from "
-                "storage for existing partially populated indices.\nIf you want to "
-                f"re-populate from storage, please delete the existing index file at `{self.filepath}` first.\n\n"
-                "YOU MAY NOW HAVE INCOMPLETE OR INCONSISTENT DATA IN YOUR INDEX IF YOU PROCEED WITHOUT "
-                "DELETING THE FILE FIRST, AS WE WILL NOT CHECK FOR CONSISTENCY BETWEEN THE INDEX AND THE STORAGE."
-            )
+            logger_warning_partial_index_population(self.index_filepath)
         else:
             logger.info(f"Populating {self.supported_index_type.value} from storage with data stream. This may take a while for large datasets...")
             for concept_ids, embeddings in data_stream:
@@ -149,18 +169,18 @@ class FlatIndexManager(BaseIndexManager):
     def __init__(
         self, 
         dimension: int, 
-        metric: MetricType,
-        index_dir: str | Path
+        metric_type: MetricType,
+        base_index_dir: str | Path
     ):
-        super().__init__(dimension, metric, index_dir)
+        super().__init__(dimension, metric_type, base_index_dir)
         
     def _create_index(self) -> faiss.Index:
-        if self.metric == MetricType.L2:
+        if self.metric_type == MetricType.L2:
             return faiss.IndexFlatL2(self.dimension)
-        elif self.metric == MetricType.COSINE:
+        elif self.metric_type == MetricType.COSINE:
             return faiss.IndexFlatIP(self.dimension)  # Inner Product for Cosine similarity after normalization
         else:
-            raise ValueError(f"Unsupported metric {self.metric} for Flat index.")
+            raise ValueError(f"Unsupported metric {self.metric_type} for Flat index.")
         
     def supported_index_type(self) -> IndexType:
         return IndexType.FLAT
@@ -182,11 +202,11 @@ class HNSWIndexManager(BaseIndexManager):
     def __init__(
         self, 
         dimension: int, 
-        metric: MetricType,
-        index_dir: str | Path,
+        metric_type: MetricType,
+        base_index_dir: str | Path,
         num_neighbors: int = 32
     ):
-        super().__init__(dimension, metric, index_dir)
+        super().__init__(dimension, metric_type, base_index_dir)
         self.num_neighbors = num_neighbors
         
     #def _create_index(self) -> faiss.Index:
@@ -205,11 +225,11 @@ class IVFIndexManager(BaseIndexManager):
     def __init__(
         self, 
         dimension: int, 
-        metric: MetricType,
-        index_dir: str | Path,
+        metric_type: MetricType,
+        base_index_dir: str | Path,
         num_clusters: int = 100
     ):
-        super().__init__(dimension, metric, index_dir)
+        super().__init__(dimension, metric_type, base_index_dir)
         self.num_clusters = num_clusters
         
     #def _create_index(self) -> faiss.Index:

@@ -27,7 +27,6 @@ class EmbeddingStorageManager:
     """
     DATASET_NAME_EMBEDDINGS = "embeddings"
     DATASET_NAME_CONCEPT_IDS = "concept_ids"
-    INDEX_DIR = "indices"
     EMBEDDINGS_FILE = "embeddings.h5"
     def __init__(
         self, 
@@ -40,14 +39,15 @@ class EmbeddingStorageManager:
         if backend_type != BackendType.FAISS:
             raise ValueError(f"EmbeddingStorageManager is designed for FAISS backend. Got {backend_type}.")
 
-        self.embeddings_file = Path(file_dir) / self.EMBEDDINGS_FILE
+        self.base_dir = Path(file_dir)
         self.dimensions = dimensions
         self._init_embedding_storage_if_missing()
         self._index_managers: Dict[IndexType, Dict[MetricType, BaseIndexManager]] = {}
 
     @property
-    def index_dir(self) -> Path:
-        return self.embeddings_file.parent / self.INDEX_DIR
+    def embeddings_filepath(self) -> Path:
+        return self.base_dir / self.EMBEDDINGS_FILE
+
     
     def get_index_manager(
         self, 
@@ -76,16 +76,13 @@ class EmbeddingStorageManager:
         else:
             raise ValueError(f"Unsupported index type {index_type} for FAISS backend. Only {IndexType.FLAT} is supported currently.")
         
-        logger.info(f"Creating index manager for index_type={index_type}, metric_type={metric_type}")
         index_manager = index_manager_cls(
             dimension=self.dimensions,
-            metric=metric_type,
-            index_dir=self.index_dir
+            metric_type=metric_type,
+            base_index_dir=self.base_dir
         )
 
-        # Now we also attempt to populate the index from storage
-        logger.info(f"Attempting to populate index manager for index_type={index_type}, metric_type={metric_type} from storage.")
-        index_manager.populate_from_storage(
+        index_manager.load_or_populate(
             self.stream_concept_ids_and_embeddings(batch_size=batch_size)
         )
         return index_manager
@@ -93,9 +90,9 @@ class EmbeddingStorageManager:
 
     def _init_embedding_storage_if_missing(self):
         """Creates the .h5 file with resizable datasets if it doesn't exist."""
-        if not self.embeddings_file.exists():
-            logger.info(f"Creating new HDF5 storage at {self.embeddings_file}")
-            with h5py.File(self.embeddings_file, 'w') as f:
+        if not self.embeddings_filepath.exists():
+            logger.info(f"Creating new HDF5 storage at {self.embeddings_filepath}")
+            with h5py.File(self.embeddings_filepath, 'w') as f:
                 # maxshape=(None, dim) is the magic that allows appending!
                 f.create_dataset(
                     self.DATASET_NAME_EMBEDDINGS, 
@@ -118,21 +115,21 @@ class EmbeddingStorageManager:
         Context manager that yields the embeddings dataset with static typing.
         Guarantees the file is closed after use.
         """
-        with h5py.File(self.embeddings_file, mode) as f:
+        with h5py.File(self.embeddings_filepath, mode) as f:
             embeddings: h5py.Dataset = cast(h5py.Dataset, f[self.DATASET_NAME_EMBEDDINGS])
             yield embeddings
 
     @contextmanager
     def open_concept_ids(self, mode: str) -> Generator[h5py.Dataset, None, None]:
         """Context manager for the concept_id dataset."""
-        with h5py.File(self.embeddings_file, mode) as f:
+        with h5py.File(self.embeddings_filepath, mode) as f:
             concept_ids: h5py.Dataset = cast(h5py.Dataset, f[self.DATASET_NAME_CONCEPT_IDS])
             yield concept_ids
 
     @contextmanager
     def open_all(self, mode: str) -> Generator[tuple[h5py.Dataset, h5py.Dataset], None, None]:
         """Context manager that yields both datasets together."""
-        with h5py.File(self.embeddings_file, mode) as f:
+        with h5py.File(self.embeddings_filepath, mode) as f:
             embeddings: h5py.Dataset = cast(h5py.Dataset, f[self.DATASET_NAME_EMBEDDINGS])
             concept_ids: h5py.Dataset = cast(h5py.Dataset, f[self.DATASET_NAME_CONCEPT_IDS])
             yield embeddings, concept_ids

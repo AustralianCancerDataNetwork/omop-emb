@@ -26,13 +26,12 @@ from .faiss_sql import (
 )
 from ..config import IndexType, MetricType
 from .storage_manager import EmbeddingStorageManager
-from ..base import (
-    EmbeddingBackend,
+from ..base import EmbeddingBackend, require_registered_model
+from ..embedding_utils import (
     EmbeddingBackendCapabilities,
     EmbeddingConceptFilter,
     EmbeddingModelRecord,
     NearestConceptMatch,
-    require_registered_model
 )
 
 logger = logging.getLogger(__name__)
@@ -93,12 +92,12 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     DEFAULT_FAISS_DIR = ".omop_emb/faiss"
 
     def __init__(self, base_dir: Optional[str | os.PathLike[str]] = None):
+        super().__init__()
         self.base_dir = Path(
             base_dir
             or os.getenv("OMOP_EMB_FAISS_DIR")
             or FaissEmbeddingBackend.DEFAULT_FAISS_DIR
         ).expanduser()
-
         self.embedding_storage_managers: Dict[str, EmbeddingStorageManager] = {}
 
     @property
@@ -120,7 +119,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         )
 
     def initialise_store(self, engine) -> None:
-        self.base_dir.mkdir(parents=False, exist_ok=True)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
         return initialise_faiss_mapping_tables(engine, model_cache=self.model_cache)
 
     def _create_storage_table(self, engine: Engine, entry: ModelRegistry) -> Type[FAISSConceptIDEmbeddingRegistry]:
@@ -236,7 +235,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         session: Session,
         model_name: str,
         model_record: EmbeddingModelRecord,
-        query_embedding: np.ndarray,
+        query_embeddings: np.ndarray,
         metric_type: MetricType,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
@@ -252,7 +251,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         if storage_manager.get_count() == 0:
             return ()
 
-        self.validate_embeddings(embeddings=query_embedding, dimensions=model_record.dimensions)
+        self.validate_embeddings(embeddings=query_embeddings, dimensions=model_record.dimensions)
         q_permitted_concept_ids = q_concept_ids_with_embeddings(
             embedding_table=self._get_embedding_table(session, model_name),
             concept_filter=concept_filter,
@@ -260,7 +259,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         )
 
         permitted_concept_ids_storage = {
-            row.concept_id: row for row in session.execute(q_permitted_concept_ids) 
+            row.concept_id: row for row in session.execute(q_permitted_concept_ids)
         }
 
         if concept_filter is None:
@@ -270,7 +269,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             permitted_concept_ids = np.array(list(permitted_concept_ids_storage.keys()), dtype=np.int64)
 
         distances, concept_ids = storage_manager.search(
-            query_vector=query_embedding,
+            query_vector=query_embeddings,
             metric_type=metric_type,
             index_type=model_record.index_type,
             k=k,

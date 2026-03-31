@@ -18,14 +18,12 @@ from .pgvector_sql import (
 )
 from ..registry import ModelRegistry
 from ..config import BackendType, MetricType
-
-from ..base import (
-    EmbeddingBackend,
+from ..base import EmbeddingBackend, require_registered_model
+from ..embedding_utils import (
     EmbeddingBackendCapabilities,
     EmbeddingConceptFilter,
     EmbeddingModelRecord,
     NearestConceptMatch,
-    require_registered_model
 )
 
 class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]):
@@ -186,5 +184,5 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
             backend_type=row.backend_type,
             storage_identifier=row.storage_identifier,
             index_type=row.index_type,
-            metadata=self._coerce_registry_metadata(row.metadata),
+            metadata=self._coerce_registry_metadata(row.details),
         )

@@ -34,14 +34,9 @@ class ModelRegistry(Base):
     storage_identifier = mapped_column("table_name", String, unique=True, nullable=False)
     index_type = mapped_column(Enum(IndexType, native_enum=False), nullable=False)
     backend_type = mapped_column(Enum(BackendType, native_enum=False), nullable=False)
-    metadata = mapped_column(JSON, nullable=False, default=dict)
+    details = mapped_column(JSON, nullable=True, default=dict)
     created_at = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
+    updated_at = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     @validates("index_type")
     def validate_index_for_backend(self, key, index_type):
@@ -82,10 +77,10 @@ def ensure_model_registry_schema(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE model_registry ALTER COLUMN backend_type SET NOT NULL"))
             conn.execute(text("ALTER TABLE model_registry ALTER COLUMN backend_type SET DEFAULT 'pgvector'"))
 
-        if "metadata" not in columns:
-            conn.execute(text("ALTER TABLE model_registry ADD COLUMN metadata JSON"))
-            conn.execute(text("UPDATE model_registry SET metadata = '{}' WHERE metadata IS NULL"))
-            conn.execute(text("ALTER TABLE model_registry ALTER COLUMN metadata SET NOT NULL"))
+        if "details" not in columns:
+            conn.execute(text("ALTER TABLE model_registry ADD COLUMN details JSON"))
+            conn.execute(text("UPDATE model_registry SET details = '{}' WHERE details IS NULL"))
+            conn.execute(text("ALTER TABLE model_registry ALTER COLUMN details SET NOT NULL"))
 
         if "created_at" not in columns:
             conn.execute(text("ALTER TABLE model_registry ADD COLUMN created_at TIMESTAMP"))

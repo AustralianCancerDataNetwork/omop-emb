@@ -1,6 +1,6 @@
 from sqlalchemy import select, case, literal, Select, text, Engine, inspect, Integer
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.sql import column, values
+from sqlalchemy.sql import column, values, cast
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.orm import mapped_column, Mapped, Session
 from pgvector.sqlalchemy import Vector
@@ -14,11 +14,7 @@ from numpy import ndarray
 from ..config import BackendType, IndexType, MetricType
 from ..registry import ModelRegistry
 from ..base import ConceptIDEmbeddingBase
-
-if TYPE_CHECKING:
-    # Circular Import - might require some better solution in the future
-    # Separate sql_utils.py?
-    from omop_emb.backends.base import EmbeddingConceptFilter
+from ..embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +33,7 @@ def create_pg_embedding_table(
     dimensions = model_registry_entry.dimensions
     
     table = type(
-        f"{BackendType.PGVECTOR.value.capitalize}_{table_name}",
+        f"{BackendType.PGVECTOR.value.upper()}_{table_name}",
         (PGVectorConceptIDEmbeddingTable,), # It already inherits from Base and ConceptIDBase
         {
             "__tablename__": table_name,
@@ -46,7 +42,7 @@ def create_pg_embedding_table(
             "__table_args__": {"extend_existing": True},
         }
     )
-    Base.metadata.create_all(table.metadata, tables=[table.__table__])  # type: ignore[arg-type]
+    Base.metadata.create_all(engine, tables=[table.__table__])  # type: ignore[arg-type]
 
     with engine.connect() as conn:
         inspector = inspect(conn)
@@ -170,7 +166,8 @@ def q_embedding_nearest_concepts(
         name="queries"
     ).data(query_data)
 
-    distance = get_distance(embedding_table, query_v.c.q_vec, metric_type)
+    query_vector_cast = cast(query_v.c.q_vec, Vector)
+    distance = get_distance(embedding_table, query_vector_cast, metric_type)
     similarity = get_similarity_from_distance(distance, metric_type)
 
     inner_stmt = (

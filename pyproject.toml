@@ -79,3 +79,19 @@ omop-llm = { git = "https://github.com/AustralianCancerDataNetwork/omop-llm.git"
 
 [project.scripts]
 omop-emb = "omop_emb.cli:app"
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+  "unit: Unit tests",
+  "faiss: FAISS backend tests",
+  "pgvector: pgvector backend tests",
+]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore:datetime\\.datetime\\.utcfromtimestamp\\(\\) is deprecated:DeprecationWarning:dateutil.tz.tz",
+    "ignore:builtin type .* has no __module__ attribute:DeprecationWarning",
+]

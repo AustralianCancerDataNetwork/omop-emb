@@ -1,8 +1,10 @@
 from .base import (
     EmbeddingBackend,
+)
+from .embedding_utils import (
+    EmbeddingModelRecord,
     EmbeddingBackendCapabilities,
     EmbeddingConceptFilter,
-    EmbeddingModelRecord,
     NearestConceptMatch,
 )
 from .errors import (

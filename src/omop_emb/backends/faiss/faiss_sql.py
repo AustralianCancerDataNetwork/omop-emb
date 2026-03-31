@@ -12,11 +12,7 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 from ..base import ConceptIDEmbeddingBase
 from ..config import BackendType
 from ..registry import ModelRegistry
-
-if TYPE_CHECKING:
-    # Circular Import - might require some better solution in the future
-    # Separate sql_utils.py?
-    from omop_emb.backends.base import EmbeddingConceptFilter
+from ..embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +32,7 @@ def create_faiss_embedding_registry_table(
     table_name = model_registry_entry.storage_identifier
 
     mapping_table = type(
-        f"{BackendType.FAISS.value.capitalize()}_{table_name}",
+        f"{BackendType.FAISS.value.upper()}_{table_name}",
         (FAISSConceptIDEmbeddingRegistry, ),
         {
             "__tablename__": table_name,
@@ -57,7 +53,6 @@ def initialise_faiss_mapping_tables(
     model_cache: dict[str, Type[FAISSConceptIDEmbeddingRegistry]],
 ) -> None:
     with Session(engine, expire_on_commit=False) as session:
-        session.execute(text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;"))
         existing_models = session.scalars(select(ModelRegistry).where(ModelRegistry.backend_type == BackendType.FAISS.value)).all()
         session.commit()
 
@@ -83,7 +78,7 @@ def add_concept_ids_to_faiss_registry(
     assert session.bind is not None, "Session must be bound to an engine"
     assert session.bind.dialect.name == "postgresql", "This function is only implemented for PostgreSQL databases"
 
-    stmt = insert(registered_table).values(list(concept_ids))
+    stmt = insert(registered_table).values(list({"concept_id": cid} for cid in concept_ids))
     session.execute(stmt)
     session.commit()
 

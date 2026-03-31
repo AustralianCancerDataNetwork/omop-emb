@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from typing import Mapping, Optional, Sequence, Union, Type, TypeVar, Generic, Dict, Any, Callable, Tuple
 import re
 from functools import wraps
@@ -15,7 +14,12 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 from .registry import ModelRegistry, ensure_model_registry_schema
 from .config import BackendType, SUPPORTED_INDICES_AND_METRICS_PER_BACKEND, IndexType, MetricType
 from .errors import EmbeddingBackendConfigurationError
-
+from .embedding_utils import (
+    EmbeddingModelRecord, 
+    EmbeddingConceptFilter, 
+    NearestConceptMatch, 
+    EmbeddingBackendCapabilities
+)
 
 def require_registered_model(func: Callable) -> Callable:
     @wraps(func)
@@ -43,90 +47,6 @@ class ConceptIDEmbeddingBase:
 T = TypeVar("T", bound=ConceptIDEmbeddingBase)
 
 
-@dataclass(frozen=True)
-class EmbeddingModelRecord:
-    """
-    Canonical description of a registered embedding model.
-
-    ``storage_identifier`` is intentionally backend-specific. For example:
-    - PostgreSQL backend: dynamic embedding table name
-    - FAISS backend: on-disk index path or logical collection name
-    """
-
-    model_name: str
-    dimensions: int
-    backend_type: BackendType
-    index_type: IndexType
-    storage_identifier: Optional[str] = None
-    metadata: Mapping[str, object] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class EmbeddingConceptFilter:
-    """
-    Constraints applied during embedding retrieval.
-
-    This mirrors the current OMOP grounding needs without importing
-    ``omop_graph`` or its search-constraint objects into ``omop_emb``.
-    """
-
-    concept_ids: Optional[tuple[int, ...]] = None
-    domains: Optional[tuple[str, ...]] = None
-    vocabularies: Optional[tuple[str, ...]] = None
-    require_standard: bool = False
-
-    def apply(self, query: Select) -> Select:
-        if self.concept_ids is not None:
-            query = query.where(Concept.concept_id.in_(self.concept_ids))
-
-        if self.domains is not None:
-            query = query.where(Concept.domain_id.in_(self.domains))
-
-        if self.vocabularies is not None:
-            query = query.where(Concept.vocabulary_id.in_(self.vocabularies))
-
-        if self.require_standard:
-            query = query.where(Concept.standard_concept.in_(["S", "C"]))
-
-        return query
-
-
-@dataclass(frozen=True)
-class NearestConceptMatch:
-    """
-    Backend-neutral nearest-neighbor payload returned to callers.
-
-    The current resolver layer in ``omop-graph`` needs these fields to build
-    ``LabelMatch`` objects and to explain whether a retrieved concept is
-    standard and active.
-    """
-
-    concept_id: int
-    concept_name: str
-    similarity: float
-    is_standard: bool
-    is_active: bool
-
-
-@dataclass(frozen=True)
-class EmbeddingBackendCapabilities:
-    """
-    Capability flags for a backend implementation.
-
-    These are not used by the current code yet, but they make backend
-    differences explicit. For example, a FAISS backend might support nearest
-    neighbor search but require explicit refreshes after bulk writes.
-    """
-
-    stores_embeddings: bool = True
-    supports_incremental_upsert: bool = True
-    supports_nearest_neighbor_search: bool = True
-    supports_server_side_similarity: bool = True
-    supports_filter_by_concept_ids: bool = True
-    supports_filter_by_domain: bool = True
-    supports_filter_by_vocabulary: bool = True
-    supports_filter_by_standard_flag: bool = True
-    requires_explicit_index_refresh: bool = False
 
 
 class EmbeddingBackend(ABC, Generic[T]):
@@ -312,7 +232,7 @@ class EmbeddingBackend(ABC, Generic[T]):
                         "configuration or register a new model name."
                     )
                 # TODO: Is that necessary? I mean we tried to register and it already exists.
-                #existing_row.metadata = {**self._coerce_registry_metadata(existing_row.metadata), **metadata}
+                #existing_row.details = {**self._coerce_registry_metadata(existing_row.details), **metadata}
                 #session.commit()
                 #return self._record_from_registry_row(existing_row)
         
@@ -325,7 +245,7 @@ class EmbeddingBackend(ABC, Generic[T]):
             storage_identifier=safe_name,
             index_type=index_type,
             backend_type=self.backend_type,
-            metadata=metadata
+            details=metadata
         )
 
         with Session(engine, expire_on_commit=False) as session:

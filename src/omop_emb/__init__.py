@@ -1,5 +1,11 @@
-from .service import EmbeddingService
+from .interface import EmbeddingInterface
+from .backends.config import BackendType, IndexType, MetricType
+from .backends.factory import get_embedding_backend
 
 __all__ = [
-    "EmbeddingService",
+    "EmbeddingInterface",
+    "BackendType",
+    "IndexType",
+    "MetricType",
+    "get_embedding_backend",
 ]

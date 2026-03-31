@@ -181,7 +181,8 @@ class FlatIndexManager(BaseIndexManager):
             return faiss.IndexFlatIP(self.dimension)  # Inner Product for Cosine similarity after normalization
         else:
             raise ValueError(f"Unsupported metric {self.metric_type} for Flat index.")
-        
+    
+    @property
     def supported_index_type(self) -> IndexType:
         return IndexType.FLAT
     
@@ -218,6 +219,7 @@ class HNSWIndexManager(BaseIndexManager):
     #    else:
     #        raise ValueError(f"Unsupported metric {self.metric} for HNSW index.")
         
+    @property
     def supported_index_type(self) -> IndexType:
         return IndexType.HNSW
     
@@ -240,6 +242,7 @@ class IVFIndexManager(BaseIndexManager):
     #        return faiss.IndexIVFFlat(quantizer, self.dimension, self.num_clusters, faiss.METRIC_INNER_PRODUCT)
     #    else:
     #        raise ValueError(f"Unsupported metric {self.metric} for IVF index.")
-        
+
+    @property 
     def supported_index_type(self) -> IndexType:
         return IndexType.IVF

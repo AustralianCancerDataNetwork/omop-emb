@@ -53,20 +53,6 @@ all = [
     "h5py"
 ]
 
-[project.optional-dependencies]
-pgvector = [
-    "pgvector",
-]
-faiss = [
-    "faiss-cpu>=1.8.0",
-    "h5py",
-]
-all = [
-    "pgvector",
-    "faiss-cpu>=1.8.0",
-    "h5py"
-]
-
 [dependency-groups]
 dev = [
     "faiss-cpu>=1.8.0",

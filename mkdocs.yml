@@ -1,4 +1,4 @@
-site_name: OMOP Embeddings
+site_name: omop-emb
 site_description: Embedding extension for the OMOP Graph project, providing tools to generate and manage concept embeddings for the OMOP Common Data Model.
 site_url: https://AustralianCancerDataNetwork.github.io/omop-emb
 repo_url: https://github.com/AustralianCancerDataNetwork/omop-emb

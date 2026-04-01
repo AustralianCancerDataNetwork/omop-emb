@@ -1,0 +1,17 @@
+# This workflow runs a linter on pull requests to ensure the right prefix is used for semantic-versioning
+name: "Lint PR"
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+
+jobs:
+  main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

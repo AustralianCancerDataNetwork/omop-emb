@@ -33,18 +33,20 @@ class EmbeddingInterface:
     - provide a reusable in-process cache for query-text embeddings
 
     """
-    embedding_client: LLMClient
+    embedding_client: Optional[LLMClient] = None
     backend: EmbeddingBackend = field(default_factory=get_embedding_backend)
 
 
     @property
-    def embedding_dim(self) -> int:
-        return self.embedding_client.embedding_dim
+    def embedding_dim(self) -> Optional[int]:
+        if self.embedding_client is not None:
+            return self.embedding_client.embedding_dim
+        return None
 
     @classmethod
     def from_backend_name(
         cls,
-        embedding_client: LLMClient,
+        embedding_client: Optional[LLMClient] = None,
         backend_name: Optional[str] = None,
         *,
         faiss_base_dir: Optional[str] = None,
@@ -95,14 +97,11 @@ class EmbeddingInterface:
     def get_nearest_concepts(
         self,
         session: Session,
-        embedding_model_name: str,
+        model_name: str,
         query_embedding: np.ndarray,
         *,
-        metric_type: MetricType = MetricType.COSINE,
-        concept_ids: Optional[Tuple[int, ...]] = None,
-        domains: Optional[Tuple[str, ...]] = None,
-        vocabularies: Optional[Tuple[str, ...]] = None,
-        require_standard: bool = False,
+        metric_type: MetricType,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = 10,
     ) -> Tuple[Mapping[int, float], ...]:
         
@@ -113,17 +112,15 @@ class EmbeddingInterface:
         ----------
         session : Session
             SQLAlchemy session for any required relational access.
-        embedding_model_name : str
+        model_name : str
             Name of the embedding model used to create the embeddings.
         query_embedding : ndarray
             The embedding vector to search with. Expected shape is (q, dimension)
             where q is the number of query vectors and dimension is the size of the embedding space for the model.
         metric_type : MetricType
-            The similarity or distance metric to use for nearest neighbor search. This should be compatible with the index type used by the model.
-        concept_ids : Optional[Tuple[int, ...]], optional
-            If provided, only consider these concept_ids as potential nearest neighbors.
-        domains : Optional[Tuple[str, ...]], optional
-            If provided, only consider concepts within these OMOP domains as potential nearest neighbors.
+            The similarity or distance metric to use for nearest neighbor search. This must be compatible with the index type used by the database.
+        concept_filter : Optional[EmbeddingConceptFilter], optional
+            A filter to specify which concepts to consider as potential nearest neighbors.
         vocabularies : Optional[Tuple[str, ...]], optional
             If provided, only consider concepts from these vocabularies as potential nearest neighbors.
         require_standard : bool, optional
@@ -136,17 +133,9 @@ class EmbeddingInterface:
         Tuple[Mapping[int, float], ...]
             A tuple of dictionaries containing nearest concept matches for each query vector. The outer tuple corresponds to the query vectors in order, and each inner dictionary contains the nearest matches for that query vector, sorted by similarity. Returned shape is (q, k) where q is the number of query vectors and k is the number of nearest neighbors returned per query.
         """
-        
-
-        concept_filter = EmbeddingConceptFilter(
-            concept_ids=concept_ids,
-            domains=domains,
-            vocabularies=vocabularies,
-            require_standard=require_standard,
-        )
         nearest_concepts = self.backend.get_nearest_concepts(
             session=session,
-            model_name=embedding_model_name,
+            model_name=model_name,
             query_embedding=query_embedding,
             concept_filter=concept_filter,
             metric_type=metric_type,
@@ -160,11 +149,8 @@ class EmbeddingInterface:
         embedding_model_name: str,
         query_texts: str | Tuple[str, ...] | List[str],
         *,
-        metric_type: MetricType = MetricType.COSINE,
-        concept_ids: Optional[Tuple[int, ...]] = None,
-        domains: Optional[Tuple[str, ...]] = None,
-        vocabularies: Optional[Tuple[str, ...]] = None,
-        require_standard: bool = False,
+        metric_type: MetricType,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = 10,
         batch_size: Optional[int] = None
     ) -> Tuple[Mapping[int, float], ...]:
@@ -182,14 +168,8 @@ class EmbeddingInterface:
             The text(s) to embed and search with. If a single string is provided, it will be embedded and searched as one query. If a tuple or list of strings is provided, each string will be embedded and searched separately, and the results will be returned in the same order as the input texts.
         metric_type : MetricType
             The similarity or distance metric to use for nearest neighbor search. This should be compatible with the index type used by the model.
-        concept_ids : Optional[Tuple[int, ...]], optional
-            If provided, only consider these concept_ids as potential nearest neighbors.
-        domains : Optional[Tuple[str, ...]], optional
-            If provided, only consider concepts within these OMOP domains as potential nearest neighbors.
-        vocabularies : Optional[Tuple[str, ...]], optional
-            If provided, only consider concepts from these vocabularies as potential nearest neighbors.
-        require_standard : bool, optional
-            If True, only consider standard concepts as potential nearest neighbors. By default False.
+        concept_filter : Optional[EmbeddingConceptFilter], optional
+            A filter to specify which concepts to consider as potential nearest neighbors.
         k : int, optional
             K nearest neighbors to return for each query vector. Default is 10.
         batch_size : Optional[int], optional
@@ -209,17 +189,12 @@ class EmbeddingInterface:
         query_embeddings = self.embed_texts(query_texts, batch_size=batch_size)
         return self.get_nearest_concepts(
             session=session,
-            embedding_model_name=embedding_model_name,
+            model_name=embedding_model_name,
             query_embedding=query_embeddings,
             metric_type=metric_type,
-            concept_ids=concept_ids,
-            domains=domains,
-            vocabularies=vocabularies,
-            require_standard=require_standard,
+            concept_filter=concept_filter,
             k=k,
         )
-
-        
 
     def get_embeddings_by_concept_ids(
         self,
@@ -298,7 +273,7 @@ class EmbeddingInterface:
     ) -> np.ndarray:
         client = embedding_client or self.embedding_client
         if client is None:
-            raise RuntimeError("No embedding client is configured for EmbeddingService.")
+            raise RuntimeError(f"No embedding client is configured for {self.__class__.__name__}.")
         return client.embeddings(texts, batch_size=batch_size)
 
     def upsert_concept_embeddings(

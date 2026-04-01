@@ -85,12 +85,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      #- name: Build and publish to PyPI
-      #  if: steps.semantic.outputs.new_release_published == 'true'
-      #  run: |
-      #    uv build
-      #    # uv uses the id-token permission for OIDC "Trusted Publishing"
-      #    uv publish
+      - name: Build and publish to PyPI
+        if: steps.semantic.outputs.new_release_published == 'true'
+        run: |
+          uv build
+          # uv uses the id-token permission for OIDC "Trusted Publishing"
+          uv publish
 
       - name: Trigger docs update
         if: steps.semantic.outputs.new_release_published == 'true'

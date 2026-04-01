@@ -39,10 +39,17 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 
 ### Command Options
 
+### Command Options
+
 | Option | Short | Type | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | **`--api-base`** | | `String` | **Required** | Base URL for the embedding API service. |
 | **`--api-key`** | | `String` | **Required** | API key for the embedding API provider. |
+| **`--index-type`** | | `IndexType` | `FLAT` | The storage index for the embeddings for retrieval. Currently supported: `FLAT`. |
 | **`--batch-size`** | `-b` | `Integer` | `100` | Number of concepts to process in each chunk. |
 | **`--model`** | `-m` | `String` | `text-embedding-3-small` | Name of the embedding model to use for generating vectors. |
+| **`--backend`** | | `Literal['pgvector', 'faiss']` | `None` | Embedding backend to use (can be replaced by `OMOP_EMB_BACKEND` env var). Requires the respective backend installed using `pip install omop-emb[pgvector or faiss]` |
+| **`--faiss-base-dir`** | | `String` | `None` | Optional base directory for FAISS backend storage. |
+| **`--standard-only`** | | `Boolean` | `False` | If set, only generate embeddings for OMOP standard concepts (`standard_concept = 'S'`). |
+| **`--vocabulary`** | | `List[String]` | `None` | Filter to embed concepts only from specific OMOP vocabularies. |
 | **`--num-embeddings`** | `-n` | `Integer` | `None` | Limit the number of concepts processed (useful for testing). |

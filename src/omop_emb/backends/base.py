@@ -13,7 +13,7 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 
 from .registry import ModelRegistry, ensure_model_registry_schema
 from .config import BackendType, SUPPORTED_INDICES_AND_METRICS_PER_BACKEND, IndexType, MetricType
-from .errors import EmbeddingBackendConfigurationError
+from .errors import ModelRegistrationConflictError
 from .embedding_utils import (
     EmbeddingModelRecord, 
     EmbeddingConceptFilter, 
@@ -45,9 +45,6 @@ class ConceptIDEmbeddingBase:
     )
     
 T = TypeVar("T", bound=ConceptIDEmbeddingBase)
-
-
-
 
 class EmbeddingBackend(ABC, Generic[T]):
     """
@@ -215,26 +212,32 @@ class EmbeddingBackend(ABC, Generic[T]):
             )
             if existing_row is not None:
                 if existing_row.backend_type != self.backend_type:
-                    raise EmbeddingBackendConfigurationError(
+                    raise ModelRegistrationConflictError(
                         f"Model '{model_name}' is already registered for backend "
-                        f"'{existing_row.backend_type}', not '{self.backend_type}'."
+                        f"'{existing_row.backend_type}', not '{self.backend_type}'.",
+                        conflict_field="backend_type"
                     )
                 if existing_row.dimensions != dimensions:
-                    raise EmbeddingBackendConfigurationError(
+                    raise ModelRegistrationConflictError(
                         f"Model '{model_name}' is already registered with dimensions "
-                        f"{existing_row.dimensions}, not {dimensions}."
+                        f"{existing_row.dimensions}, not {dimensions}.",
+                        conflict_field="dimensions"
                     )
                 if existing_row.index_type != index_type:
-                    raise EmbeddingBackendConfigurationError(
+                    raise ModelRegistrationConflictError(
                         f"Model '{model_name}' is already registered with "
                         f"index_method='{existing_row.index_type}', not "
                         f"'{index_type}'. Reuse the existing model "
-                        "configuration or register a new model name."
+                        "configuration or register a new model name.",
+                        conflict_field="index_type"
                     )
-                # TODO: Is that necessary? I mean we tried to register and it already exists.
-                #existing_row.details = {**self._coerce_registry_metadata(existing_row.details), **metadata}
-                #session.commit()
-                #return self._record_from_registry_row(existing_row)
+                if existing_row.details != metadata:
+                    raise ModelRegistrationConflictError(
+                        f"Model '{model_name}' is already registered with different "
+                        f"metadata. Reuse the existing model name or choose a new one.",
+                        conflict_field="metadata"
+                    )
+                return self._record_from_registry_row(existing_row)
         
         ensure_model_registry_schema(engine)
         safe_name = self.safe_model_name(model_name)
@@ -253,17 +256,9 @@ class EmbeddingBackend(ABC, Generic[T]):
             session.add(new_entry)
             session.commit()
         
-        dynamic_class = self._create_storage_table(engine, new_entry)
-        storage_identifier = dynamic_class.__tablename__
-        # TODO: Maybe using self._record_from_registry_row
-        return EmbeddingModelRecord(
-            model_name=model_name,
-            dimensions=dimensions,
-            backend_type=self.backend_type,
-            storage_identifier=storage_identifier,
-            index_type=index_type,
-            metadata=metadata,
-        )
+        dynamic_table = self._create_storage_table(engine, new_entry)
+        self.model_cache[model_name] = dynamic_table
+        return self._record_from_registry_row(new_entry)
 
     @abstractmethod
     @require_registered_model
@@ -276,10 +271,40 @@ class EmbeddingBackend(ABC, Generic[T]):
         embeddings: ndarray,
     ) -> None:
         """
-        Insert or update embeddings for the given concept IDs.
+        Insert or update vector embeddings for a collection of OMOP concept IDs.
 
-        Implementations may write directly to the serving index, write to a
-        durable store and refresh later, or do both.
+        This method handles the persistence of generated embeddings. Depending on the 
+        concrete backend implementation, this may involve staging data in a durable store for later indexing
+        and (optionally) writing to a high-performance vector index (FAISS), or updateing a relational dataabase 
+        table (like pgvector)
+
+        Parameters
+        ----------
+        session : sqlalchemy.orm.Session
+            The active database session used for transactional persistence and 
+            model metadata updates.
+        model_name : str
+            The unique identifier or name of the embedding model (e.g., 
+            'text-embedding-3-small').
+        model_record : EmbeddingModelRecord
+            A record object containing metadata, dimensions, and configuration 
+            specific to the embedding model being processed.
+        concept_ids : Sequence[int]
+            A sequence of OMOP standard concept IDs corresponding to the 
+            ordered rows in the embeddings array.
+        embeddings : numpy.ndarray
+            A 2D array of shape (n_concepts, n_dimensions) containing the 
+            generated vector representations.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        Implementations should ensure that the order of `concept_ids` strictly 
+        matches the row order of the `embeddings` matrix to prevent data 
+        misalignment.
         """
 
     @abstractmethod
@@ -382,7 +407,7 @@ class EmbeddingBackend(ABC, Generic[T]):
             backend_type=row.backend_type,
             storage_identifier=row.storage_identifier,
             index_type=row.index_type,
-            metadata=EmbeddingBackend._coerce_registry_metadata(row.metadata),
+            metadata=row.details,
         )
     @staticmethod
     def safe_model_name(model_name: str) -> str:

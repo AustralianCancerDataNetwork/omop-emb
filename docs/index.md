@@ -1,14 +1,16 @@
 # OMOP Embeddings
 
-`omop-emb` is an optional package to super-charge `omop-graph` and provide additional graph reasoning tools for information retrieval and RAG-based knowledge extraction.
+`omop-emb` is an optional package to super-charge [`omop-graph`](https://AustralianCancerDataNetwork.github.io/omop-graph) and provide additional graph reasoning tools for information retrieval and RAG-based knowledge extraction.
 
 The package currently supports:
 
 - dynamic embedding model registration
-- embedding population and lookup for OMOP concepts
-- a PostgreSQL/pgvector backend
-- an initial FAISS backend structure
-- [`omop-alchemy`](https://AustralianCancerDataNetwork.github.io/OMOP_Alchemy/) wrapper of new tables
+  - multiple embedding models can be stored in the respective backend
+- embedding and lookup for OMOP concepts
+- supports various backends with a PostgreSQL linker
+  - [pgvector](https://github.com/pgvector/pgvector): storage in the original OMOP database
+  - [FAISS](https://github.com/facebookresearch/faiss): efficient storage on disk for low-RAM applications 
+- Extension to [`omop-alchemy`](https://AustralianCancerDataNetwork.github.io/OMOP_Alchemy/) to support new tables
 - CLI scripts to add embeddings to an already existing OMOP CDM
 
 ## Installation
@@ -26,15 +28,13 @@ A plain `pip install omop-emb` installs only the shared core package.
 At runtime, backend choice should also be explicit. The intended direction is:
 
 - install-time choice via extras
-- runtime choice via config such as `OMOP_EMB_BACKEND=postgres` or `OMOP_EMB_BACKEND=faiss`
+- runtime choice via config such as `OMOP_EMB_BACKEND=postgres` or `OMOP_EMB_BACKEND=faiss` or passing it as an argument to the respective interface (e.g. see [CLI reference](usage/cli.md))
 
-Important caveats:
 
-- PostgreSQL-specific embedding dependencies are optional, but a relational
-  database backend is still required for OMOP access and model registration.
-- Even when using the FAISS backend for embedding retrieval, database-backed
-  OMOP metadata remains required.
-- Database backends other than PostgreSQL have not yet been tested.
+!!! info "Important caveats"
+
+  - `omop-emb` depends on an OMOP PostgreSQL database for storage of embeddings (pgvector) or to keep track of already embedded concepts.
+
 
 ## Documentation overview
 - [Installation](usage/installation.md)

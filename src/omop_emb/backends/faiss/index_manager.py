@@ -72,7 +72,7 @@ class BaseIndexManager(abc.ABC):
         """Forces correct datatype and handles Cosine normalization automatically."""
         self.validate_embedding_vector(vectors)
         # FAISS only accepts float32
-        vecs = vectors.astype('float32')
+        vecs = np.ascontiguousarray(vectors, dtype=np.float32)
         if self.requires_norm:
             faiss.normalize_L2(vecs)
             
@@ -113,6 +113,15 @@ class BaseIndexManager(abc.ABC):
         query = self._prepare_vectors(query_vector)
         params = self._create_search_parameters(subset_concept_ids)
         distances, concept_ids = self.index.search(query, k=k, params=params)  # type: ignore
+
+        if self.metric_type == MetricType.L2:
+            # https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances#metric_l2
+            distances = np.sqrt(distances)
+        elif self.metric_type == MetricType.COSINE:
+            # https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances#how-can-i-index-vectors-for-cosine-similarity
+            # Cosine returns similarity, not distance
+            distances = 1.0 - distances
+
         return distances, concept_ids
 
     def save(self):

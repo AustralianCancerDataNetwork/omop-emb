@@ -15,3 +15,8 @@ class EmbeddingBackendDependencyError(EmbeddingBackendError, ImportError):
 
 class EmbeddingBackendConfigurationError(EmbeddingBackendError):
     """Raised when backend selection or configuration is internally inconsistent."""
+
+class ModelRegistrationConflictError(Exception):
+    def __init__(self, message: str, conflict_field: str):
+        super().__init__(message)
+        self.conflict_field = conflict_field

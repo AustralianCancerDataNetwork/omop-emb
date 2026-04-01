@@ -32,6 +32,7 @@ from ..embedding_utils import (
     EmbeddingConceptFilter,
     EmbeddingModelRecord,
     NearestConceptMatch,
+    get_similarity_from_distance
 )
 
 logger = logging.getLogger(__name__)
@@ -197,6 +198,47 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         embeddings: ndarray,
         metric_type: Optional[MetricType] = None,
     ) -> None:
+        """
+        Insert or update vector embeddings for a collection of OMOP concept IDs.
+
+        This method presents an interface for persisting generated embeddings. 
+        The FAISS backend implementation stages the provided embeddings in an HDF5 file and updates the corresponding FAISS index on disk. 
+        Additionally, it ensures that the mapping between concept IDs and their positions in the FAISS index is maintained in a SQLAlchemy-managed registry table.
+
+        Parameters
+        ----------
+        session : sqlalchemy.orm.Session
+            The active database session used for transactional persistence and 
+            model metadata updates.
+        model_name : str
+            The unique identifier or name of the embedding model (e.g., 
+            'text-embedding-3-small').
+        model_record : EmbeddingModelRecord
+            A record object containing metadata, dimensions, and configuration 
+            specific to the embedding model being processed.
+        concept_ids : Sequence[int]
+            A sequence of OMOP standard concept IDs corresponding to the 
+            ordered rows in the embeddings array.
+        embeddings : numpy.ndarray
+            A 2D array of shape (n_concepts, n_dimensions) containing the 
+            generated vector representations.
+        metric_type : Optional[MetricType]
+            The similarity metric type (e.g., COSINE, EUCLIDEAN) that should be 
+            associated with the stored embeddings for accurate nearest neighbor 
+            search behavior. If None, the index will not be built and the raw
+            embeddings are only stored in the HDF5 file for later use.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        - Indices in FAISS are directly tied to a metric for optimisation. Providing
+        no metric_type means we won't be able to create the index and will only store the raw embeddings.
+        The index will be created upon :meth:`~FaissEmbeddingBackend.get_nearest_concepts`, where a `metric_type` is required.
+        """
+
         concept_id_tuple = tuple(concept_ids)
         self.validate_embeddings_and_concept_ids(
             concept_ids=concept_id_tuple,
@@ -280,8 +322,8 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         for concept_id_pery_query, distance_per_query in zip(concept_ids, distances):
             matches_per_query = []
             for concept_id, distance in zip(concept_id_pery_query, distance_per_query):
-                if concept_id == -1:
-                    continue  # FAISS returns -1 for empty results, we skip those
+                if concept_id == -1:  # Skip empty for k>total_concepts 
+                    continue
                 row = permitted_concept_ids_storage.get(concept_id)
                 if row is None:
                     logger.warning(f"Concept ID {concept_id} returned by FAISS search but not found in permitted concept IDs. This indicates a mismatch between the FAISS index and the database registry. Skipping this result.")
@@ -289,7 +331,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                 matches_per_query.append(NearestConceptMatch(
                     concept_id=int(concept_id),
                     concept_name=row.concept_name,
-                    similarity=float(1 - distance) if metric_type == MetricType.COSINE else float(distance),
+                    similarity=get_similarity_from_distance(distance, metric_type),
                     is_standard=bool(row.is_standard),
                     is_active=bool(row.is_active),
                 ))

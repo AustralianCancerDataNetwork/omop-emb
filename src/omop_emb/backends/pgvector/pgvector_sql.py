@@ -14,7 +14,7 @@ from numpy import ndarray
 from ..config import BackendType, IndexType, MetricType
 from ..registry import ModelRegistry
 from ..base import ConceptIDEmbeddingBase
-from ..embedding_utils import EmbeddingConceptFilter
+from ..embedding_utils import EmbeddingConceptFilter, get_similarity_from_distance
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +30,12 @@ def create_pg_embedding_table(
 ) -> Type[PGVectorConceptIDEmbeddingTable]: # Note the specific Type hint here
 
     table_name = model_registry_entry.storage_identifier
+    storage_name = f"{BackendType.PGVECTOR.value.upper()}_{table_name}"
+
     dimensions = model_registry_entry.dimensions
     
     table = type(
-        f"{BackendType.PGVECTOR.value.upper()}_{table_name}",
+        storage_name,
         (PGVectorConceptIDEmbeddingTable,), # It already inherits from Base and ConceptIDBase
         {
             "__tablename__": table_name,
@@ -247,29 +249,3 @@ def get_distance(
     else:
         raise ValueError(f"Unsupported metric type: {metric.value}")
     
-def get_similarity_from_distance(distance_col, metric: MetricType):
-    """
-    Helper to map various distance metrics to a 0.0 - 1.0 similarity score.
-    """
-    if metric == MetricType.COSINE:
-        return 1.0 - distance_col
-    
-    elif metric == MetricType.L2:
-        return 1.0 / (1.0 + distance_col)
-    
-    elif metric == MetricType.L1:
-        return 1.0 / (1.0 + distance_col)
-    
-    elif metric == MetricType.HAMMING:
-        # Hamming distance is the number of differing bits.
-        # To get similarity, we need to know total bits (dimensions)
-        # Assuming you want a normalized score: 1 - (dist / dim)
-        # Note: This requires passing 'dimensions' into the helper
-        raise NotImplementedError()
-        return 1.0 - (distance_col / dimensions) 
-        
-    elif metric == MetricType.JACCARD:
-        return 1.0 - distance_col
-        
-    else:
-        raise ValueError(f"Unsupported metric type: {metric.value}")

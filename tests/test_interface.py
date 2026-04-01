@@ -161,7 +161,7 @@ class TestInterface:
         query_embedding = np.zeros((1, EMBEDDING_DIM), dtype=np.float32)
         result = interface.get_nearest_concepts(
             session=session,
-            embedding_model_name=MODEL_NAME,
+            model_name=MODEL_NAME,
             query_embedding=query_embedding,
             metric_type=MetricType.COSINE,
             k=2,

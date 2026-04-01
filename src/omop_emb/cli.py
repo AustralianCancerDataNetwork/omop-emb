@@ -82,6 +82,8 @@ def add_embeddings(
             embedding_batch_size=batch_size
         ),
     )
+    embedding_dim = interface.embedding_dim
+    assert embedding_dim is not None, "Embedding dimensions could not be determined from the embedding client."
 
     concept_filter = EmbeddingConceptFilter(
         require_standard=standard_only,
@@ -98,7 +100,7 @@ def add_embeddings(
             session=reader,
             model_name=model,
             index_type=index_type,
-            dimensions=interface.embedding_dim
+            dimensions=embedding_dim
         )
 
         total_concepts = num_embeddings or interface.get_concepts_without_embedding_count(

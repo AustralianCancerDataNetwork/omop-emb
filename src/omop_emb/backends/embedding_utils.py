@@ -91,3 +91,31 @@ class EmbeddingBackendCapabilities:
     supports_filter_by_vocabulary: bool = True
     supports_filter_by_standard_flag: bool = True
     requires_explicit_index_refresh: bool = False
+
+
+def get_similarity_from_distance(distance_col, metric: MetricType):
+    """
+    Helper to map various distance metrics to a 0.0 - 1.0 similarity score.
+    """
+    if metric == MetricType.COSINE:
+        return 1.0 - distance_col
+
+    elif metric == MetricType.L2:
+        return 1.0 / (1.0 + distance_col)
+
+    elif metric == MetricType.L1:
+        return 1.0 / (1.0 + distance_col)
+
+    elif metric == MetricType.HAMMING:
+        # Hamming distance is the number of differing bits.
+        # To get similarity, we need to know total bits (dimensions)
+        # Assuming you want a normalized score: 1 - (dist / dim)
+        # Note: This requires passing 'dimensions' into the helper
+        raise NotImplementedError()
+        return 1.0 - (distance_col / dimensions)
+
+    elif metric == MetricType.JACCARD:
+        return 1.0 - distance_col
+
+    else:
+        raise ValueError(f"Unsupported metric type: {metric.value}")

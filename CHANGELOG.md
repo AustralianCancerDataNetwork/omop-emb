@@ -1,3 +1,10 @@
+## [0.2.1](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.2.0...v0.2.1) (2026-04-01)
+
+
+### Bug Fixes
+
+* trigger PyPI publish after OIDC config ([2fb4b40](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/2fb4b40c4d9221ceac1ae1f3a25f7059380b53bd))
+
 # [0.2.0](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.1.0...v0.2.0) (2026-04-01)
 
 

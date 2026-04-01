@@ -1,3 +1,10 @@
+## [0.2.3](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.2.2...v0.2.3) (2026-04-01)
+
+
+### Bug Fixes
+
+* redirect omop-llm dependency to pypi, adaptations to CI/CD ([03315a2](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/03315a26d507e9eb5caa54ffdbaa8a3aff740836))
+
 ## [0.2.2](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.2.1...v0.2.2) (2026-04-01)
 
 

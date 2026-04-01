@@ -91,9 +91,3 @@ jobs:
           uv build
           # uv uses the id-token permission for OIDC "Trusted Publishing"
           uv publish
-
-      - name: Trigger docs update
-        if: steps.semantic.outputs.new_release_published == 'true'
-        run: gh workflow run docs.yml
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

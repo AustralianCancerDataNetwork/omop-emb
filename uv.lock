@@ -1398,7 +1398,7 @@ wheels = [
 
 [[package]]
 name = "omop-emb"
-version = "0.1.0"
+version = "0.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
@@ -1445,7 +1445,7 @@ requires-dist = [
     { name = "h5py", marker = "extra == 'faiss'" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "omop-alchemy", specifier = ">=0.5.7" },
-    { name = "omop-llm", git = "https://github.com/AustralianCancerDataNetwork/omop-llm.git?branch=main" },
+    { name = "omop-llm", specifier = ">=0.1.1" },
     { name = "orm-loader", specifier = ">=0.3.15" },
     { name = "pgvector", marker = "extra == 'all'" },
     { name = "pgvector", marker = "extra == 'pgvector'" },
@@ -1471,13 +1471,17 @@ dev = [
 [[package]]
 name = "omop-llm"
 version = "0.1.1"
-source = { git = "https://github.com/AustralianCancerDataNetwork/omop-llm.git?branch=main#5ebdfb2ba088f2dda9cbd0c554c6f4a52fc119e5" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "instructor" },
     { name = "numpy" },
     { name = "openai" },
     { name = "prompt-spec" },
     { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8c/0f/c3436f8051acd522960cbbac975ae383c7b73da7d00636f477eb859e89dd/omop_llm-0.1.1.tar.gz", hash = "sha256:299381900e64f65f05bbad386cd8bb9e3a4e7ca876292796a402061bdd5ea88e", size = 9719, upload-time = "2026-04-01T03:27:55.012Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/53/e5/1311291e99850c05553e2daae888f9e29b7805981e87b436798d8364181c/omop_llm-0.1.1-py3-none-any.whl", hash = "sha256:bfa81f19cb1eacc02bafc06eb6fd6da85440ad71ca9bb5a2e613de1e4ec80584", size = 6348, upload-time = "2026-04-01T03:27:54.183Z" },
 ]
 
 [[package]]

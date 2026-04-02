@@ -1,3 +1,10 @@
+## [0.2.4](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.2.3...v0.2.4) (2026-04-02)
+
+
+### Bug Fixes
+
+* trigger release for latest main changes ([a188e0c](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/a188e0cdf2c33d4869fb84daaa6dc2a2408e2206))
+
 ## [0.2.3](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.2.2...v0.2.3) (2026-04-01)
 
 

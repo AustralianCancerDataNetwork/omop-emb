@@ -29,16 +29,14 @@ def create_pg_embedding_table(
     model_registry_entry: ModelRegistry, 
 ) -> Type[PGVectorConceptIDEmbeddingTable]: # Note the specific Type hint here
 
-    table_name = model_registry_entry.storage_identifier
-    storage_name = f"{BackendType.PGVECTOR.value.upper()}_{table_name}"
-
+    tablename = model_registry_entry.storage_identifier
     dimensions = model_registry_entry.dimensions
     
     table = type(
-        storage_name,
+        tablename,
         (PGVectorConceptIDEmbeddingTable,), # It already inherits from Base and ConceptIDBase
         {
-            "__tablename__": table_name,
+            "__tablename__": tablename,
             # We override the attribute with the specific dimension-aware column
             "embedding": mapped_column(Vector(dimensions), nullable=False, index=False),
             "__table_args__": {"extend_existing": True},
@@ -66,23 +64,6 @@ def create_pg_embedding_table(
     )
 
     return table
-
-def initialise_pg_embedding_tables(
-    engine: Engine,
-    model_cache: dict[str, Type[PGVectorConceptIDEmbeddingTable]],
-) -> None:
-    with Session(engine, expire_on_commit=False) as session:
-        session.execute(text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;"))
-        existing_models = session.scalars(select(ModelRegistry).where(ModelRegistry.backend_type == BackendType.PGVECTOR.value)).all()
-        #for model_entry in existing_models:
-        #    _heal_legacy_index_method(session, model_entry)
-        session.commit()
-
-    for model_entry in existing_models:
-        if model_entry.model_name not in model_cache:
-            # Create the class and cache it
-            dynamic_table = create_pg_embedding_table(engine=engine, model_registry_entry=model_entry)
-            model_cache[model_entry.model_name] = dynamic_table
 
 def add_embeddings_to_registered_table(
     concept_ids: tuple[int, ...],

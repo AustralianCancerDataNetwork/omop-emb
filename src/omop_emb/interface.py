@@ -100,7 +100,7 @@ class EmbeddingInterface:
         model_name: str,
         query_embedding: np.ndarray,
         *,
-        metric_type: MetricType,
+        metric_type: MetricType | str,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = 10,
     ) -> Tuple[Mapping[int, float], ...]:
@@ -117,7 +117,7 @@ class EmbeddingInterface:
         query_embedding : ndarray
             The embedding vector to search with. Expected shape is (q, dimension)
             where q is the number of query vectors and dimension is the size of the embedding space for the model.
-        metric_type : MetricType
+        metric_type : MetricType, str
             The similarity or distance metric to use for nearest neighbor search. This must be compatible with the index type used by the database.
         concept_filter : Optional[EmbeddingConceptFilter], optional
             A filter to specify which concepts to consider as potential nearest neighbors.
@@ -133,6 +133,9 @@ class EmbeddingInterface:
         Tuple[Mapping[int, float], ...]
             A tuple of dictionaries containing nearest concept matches for each query vector. The outer tuple corresponds to the query vectors in order, and each inner dictionary contains the nearest matches for that query vector, sorted by similarity. Returned shape is (q, k) where q is the number of query vectors and k is the number of nearest neighbors returned per query.
         """
+        if isinstance(metric_type, str):
+            metric_type = MetricType(metric_type)
+        assert isinstance(metric_type, MetricType), f"metric_type must be a MetricType enum or string. Got {type(metric_type)}"
         nearest_concepts = self.backend.get_nearest_concepts(
             session=session,
             model_name=model_name,

@@ -1,6 +1,10 @@
 from enum import StrEnum
 from typing import Dict, Tuple
 
+ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
+ENV_OMOP_EMB_FAISS_INDEX_DIR = "OMOP_EMB_FAISS_INDEX_DIR"
+
+
 class BackendType(StrEnum):
     """Enum for supported embedding backends."""
 

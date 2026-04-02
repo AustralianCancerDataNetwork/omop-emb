@@ -11,7 +11,6 @@ from sqlalchemy.exc import IntegrityError
 from .pgvector_sql import (
     q_embedding_nearest_concepts,
     q_embedding_vectors_by_concept_ids,
-    initialise_pg_embedding_tables,
     PGVectorConceptIDEmbeddingTable,
     create_pg_embedding_table,
     add_embeddings_to_registered_table,
@@ -53,9 +52,6 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
             supports_filter_by_standard_flag=True,
             requires_explicit_index_refresh=False,
         )
-
-    def initialise_store(self, engine: Engine) -> None:
-        return initialise_pg_embedding_tables(engine, model_cache=self.model_cache)
 
     def _create_storage_table(self, engine: Engine, entry: ModelRegistry) -> Type[PGVectorConceptIDEmbeddingTable]:
         return create_pg_embedding_table(engine=engine, model_registry_entry=entry)

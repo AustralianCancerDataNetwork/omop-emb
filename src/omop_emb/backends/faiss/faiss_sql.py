@@ -29,13 +29,13 @@ def create_faiss_embedding_registry_table(
     Creates a dynamic SQLAlchemy ORM class that tracks which concept_ids 
     are present in the FAISS/H5 storage for a specific model.
     """
-    table_name = model_registry_entry.storage_identifier
+    tablename = model_registry_entry.storage_identifier
 
     mapping_table = type(
-        f"{BackendType.FAISS.value.upper()}_{table_name}",
+        tablename,
         (FAISSConceptIDEmbeddingRegistry, ),
         {
-            "__tablename__": table_name,
+            "__tablename__": tablename,
             "__table_args__": {"extend_existing": True},
         },
     )

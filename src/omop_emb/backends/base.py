@@ -6,7 +6,7 @@ import re
 from functools import wraps
 
 from numpy import ndarray
-from sqlalchemy import Engine, select, Integer, ForeignKey, func, Select
+from sqlalchemy import Engine, select, Integer, ForeignKey, func, Select, text
 from sqlalchemy.orm import Session, mapped_column
 
 from omop_alchemy.cdm.model.vocabulary import Concept
@@ -93,7 +93,6 @@ class EmbeddingBackend(ABC, Generic[T]):
     def capabilities(self) -> EmbeddingBackendCapabilities:
         """Capability flags describing what this backend can do."""
 
-    @abstractmethod
     def initialise_store(self, engine: Engine) -> None:
         """
         Prepare any required storage structures.
@@ -103,6 +102,19 @@ class EmbeddingBackend(ABC, Generic[T]):
         - warm caches from a registry
         - create directories or sidecar files
         """
+
+        with Session(engine, expire_on_commit=False) as session:
+            session.execute(text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;"))
+            existing_models = session.scalars(select(ModelRegistry).where(ModelRegistry.backend_type == BackendType.PGVECTOR.value)).all()
+            #for model_entry in existing_models:
+            #    _heal_legacy_index_method(session, model_entry)
+            session.commit()
+
+        for model_entry in existing_models:
+            if model_entry.model_name not in self.model_cache:
+                # Create the class and cache it
+                dynamic_table = self._create_storage_table(engine=engine, entry=model_entry)
+                self.model_cache[model_entry.model_name] = dynamic_table
 
     def list_registered_models(self, session: Session) -> Sequence[EmbeddingModelRecord]:
         """Return all embedding models known to this backend."""
@@ -241,11 +253,12 @@ class EmbeddingBackend(ABC, Generic[T]):
         
         ensure_model_registry_schema(engine)
         safe_name = self.safe_model_name(model_name)
+        storage_name = self.storage_name(safe_model_name=safe_name)
         
         new_entry = ModelRegistry(
             model_name=model_name,
             dimensions=dimensions,
-            storage_identifier=safe_name,
+            storage_identifier=storage_name,
             index_type=index_type,
             backend_type=self.backend_type,
             details=metadata
@@ -415,6 +428,9 @@ class EmbeddingBackend(ABC, Generic[T]):
         sanitized = re.sub(r"[^\w]+", "_", name)
         sanitized = re.sub(r"_+", "_", sanitized).strip("_")
         return sanitized
+    
+    def storage_name(self, safe_model_name: str) -> str:
+        return f"{self.backend_name.lower()}_{safe_model_name}"
     
     @staticmethod
     def validate_embeddings(embeddings: ndarray, dimensions: int):

@@ -20,11 +20,10 @@ from ..errors import EmbeddingBackendConfigurationError
 from .faiss_sql import (
     FAISSConceptIDEmbeddingRegistry, 
     create_faiss_embedding_registry_table, 
-    initialise_faiss_mapping_tables,
     add_concept_ids_to_faiss_registry,
     q_concept_ids_with_embeddings
 )
-from ..config import IndexType, MetricType
+from ..config import IndexType, MetricType, ENV_OMOP_EMB_FAISS_INDEX_DIR
 from .storage_manager import EmbeddingStorageManager
 from ..base import EmbeddingBackend, require_registered_model
 from ..embedding_utils import (
@@ -96,7 +95,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         super().__init__()
         self.base_dir = Path(
             base_dir
-            or os.getenv("OMOP_EMB_FAISS_DIR")
+            or os.getenv(ENV_OMOP_EMB_FAISS_INDEX_DIR)
             or FaissEmbeddingBackend.DEFAULT_FAISS_DIR
         ).expanduser()
         self.embedding_storage_managers: Dict[str, EmbeddingStorageManager] = {}
@@ -121,7 +120,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
 
     def initialise_store(self, engine) -> None:
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        return initialise_faiss_mapping_tables(engine, model_cache=self.model_cache)
+        return super().initialise_store(engine)
 
     def _create_storage_table(self, engine: Engine, entry: ModelRegistry) -> Type[FAISSConceptIDEmbeddingRegistry]:
         return create_faiss_embedding_registry_table(engine=engine, model_registry_entry=entry)

@@ -4,7 +4,10 @@ import os
 from typing import Optional
 
 from .base import EmbeddingBackend
-from .config import BackendType, IndexType
+from .config import (
+    BackendType, 
+    ENV_OMOP_EMB_BACKEND,
+)
 from .errors import (
     EmbeddingBackendConfigurationError,
     EmbeddingBackendDependencyError,
@@ -17,12 +20,12 @@ def normalize_backend_name(backend_name: Optional[str]) -> BackendType:
 
     Resolution order:
     1. explicit ``backend_name``
-    2. ``OMOP_EMB_BACKEND``
+    2. ``OMOP_EMB_BACKEND`` environment variable
     """
 
-    backend_name = backend_name or os.getenv("OMOP_EMB_BACKEND")
+    backend_name = backend_name or os.getenv(ENV_OMOP_EMB_BACKEND)
     if backend_name is None:
-        raise AttributeError("No embedding backend specified. Provide an explicit backend_name or set the OMOP_EMB_BACKEND environment variable.")
+        raise AttributeError(f"No embedding backend specified. Provide an explicit backend_name or set the {ENV_OMOP_EMB_BACKEND} environment variable.")
     else:
         try:
             backend_type = BackendType(backend_name)

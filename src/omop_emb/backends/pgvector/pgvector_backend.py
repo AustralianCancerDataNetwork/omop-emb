@@ -3,8 +3,7 @@ from __future__ import annotations
 from typing import Mapping, Optional, Sequence, Type, Tuple
 
 from numpy import ndarray
-import itertools
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -55,6 +54,11 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
 
     def _create_storage_table(self, engine: Engine, entry: ModelRegistry) -> Type[PGVectorConceptIDEmbeddingTable]:
         return create_pg_embedding_table(engine=engine, model_registry_entry=entry)
+    
+    def initialise_store(self, engine: Engine) -> None:
+        with Session(engine, expire_on_commit=False) as session:
+            session.execute(text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;"))
+        return super().initialise_store(engine)
 
     @require_registered_model
     def upsert_embeddings(

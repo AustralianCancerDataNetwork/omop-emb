@@ -104,8 +104,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         """
 
         with Session(engine, expire_on_commit=False) as session:
-            session.execute(text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;"))
-            existing_models = session.scalars(select(ModelRegistry).where(ModelRegistry.backend_type == BackendType.PGVECTOR.value)).all()
+            existing_models = session.scalars(select(ModelRegistry).where(ModelRegistry.backend_type == self.backend_type)).all()
             #for model_entry in existing_models:
             #    _heal_legacy_index_method(session, model_entry)
             session.commit()

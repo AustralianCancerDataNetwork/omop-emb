@@ -58,6 +58,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     def initialise_store(self, engine: Engine) -> None:
         with Session(engine, expire_on_commit=False) as session:
             session.execute(text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;"))
+            session.commit()
         return super().initialise_store(engine)
 
     @require_registered_model

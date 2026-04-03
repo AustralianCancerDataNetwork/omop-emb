@@ -1,3 +1,11 @@
+## [0.2.5](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.2.4...v0.2.5) (2026-04-03)
+
+
+### Bug Fixes
+
+* commit pgvector extension ([5fd66b6](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/5fd66b6ba95907efd76d39ed7bebde34a9f08708))
+* list existing models correctly, create vector extension only for pgvector ([47618df](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/47618dfaa1e7400485d07fede548a590a617bc3e))
+
 ## [0.2.4](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.2.3...v0.2.4) (2026-04-02)
 
 

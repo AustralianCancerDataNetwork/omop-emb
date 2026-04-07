@@ -23,9 +23,9 @@ from omop_llm import LLMClient
 
 from omop_emb.backends.faiss import FaissEmbeddingBackend
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
-from omop_emb.backends.registry import ensure_model_registry_schema, ModelRegistry
+from omop_emb.backends.registry import ModelRegistryManager
 from omop_emb.interface import EmbeddingInterface
-from omop_emb.backends.config import IndexType
+from omop_emb.config import IndexType
 
 
 TEST_DB_NAME = os.getenv("TEST_DATABASE_NAME", "test_omop_emb")

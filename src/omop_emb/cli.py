@@ -16,7 +16,7 @@ from omop_emb.backends import (
     EmbeddingConceptFilter,
 )
 from omop_emb.interface import EmbeddingInterface
-from omop_emb.backends.config import BackendType, IndexType
+from omop_emb.config import BackendType, IndexType, MetricType
 
 app = typer.Typer()
 logger = get_logger(__name__)
@@ -61,6 +61,10 @@ def add_embeddings(
     num_embeddings: Annotated[Optional[int], typer.Option(
         "--num-embeddings", "-n",
         help="If set, limits the number of concepts for which embeddings are generated. Useful for testing and development to speed up the embedding generation step.")] = None,
+    metric_type: Annotated[Optional[MetricType], typer.Option(
+        "--metric-type",
+        help="Optional metric type to use when retrieving existing concept IDs from the index for FAISS backend. Required as a fallback to obtain concept IDs from index if retrieval from embedding storage fails."
+    )] = None,
 ):
     configure_logging()
     load_dotenv()
@@ -107,20 +111,22 @@ def add_embeddings(
             session=reader,
             model_name=model,
             concept_filter=concept_filter,
+            index_type=index_type,
+            metric_type=metric_type
         )
-        concepts_without_embedding = interface.get_concepts_without_embedding_query(
+        concepts_without_embedding = interface.get_concepts_without_embedding(
             session=reader,
             model_name=model,
             concept_filter=concept_filter,
             limit=num_embeddings,
+            index_type=index_type,
+            metric_type=metric_type
         )
 
         logger.info(f"Total concepts to process: {total_concepts}")
         with tqdm(total=total_concepts, desc="Processing", unit="concept") as pbar:
-            result = reader.execute(concepts_without_embedding)
-            
-            for row_chunk in result.partitions(batch_size):
-                batch_concepts = {row.concept_id: row.concept_name for row in row_chunk}
+            for row_chunk in concepts_without_embedding.partitions(batch_size):
+                batch_concepts = {row[0]: row[1] for row in row_chunk}
                 
                 interface.embed_and_upsert_concepts(
                     session=writer,
@@ -128,8 +134,9 @@ def add_embeddings(
                     concept_ids=tuple(batch_concepts.keys()),
                     concept_texts=tuple(batch_concepts.values()),
                     batch_size=batch_size,
+                    index_type=index_type
                 )
-                
+                    
                 pbar.update(len(batch_concepts))
 
     logger.info("Completed embedding generation and storage.")

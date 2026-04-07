@@ -11,8 +11,12 @@ from typing import cast, Generator, Tuple, Optional, Mapping, Sequence, Dict
 import logging
 logger = logging.getLogger(__name__)
 
-from omop_emb.backends.config import BackendType, IndexType, MetricType
+from omop_emb.config import BackendType, IndexType, MetricType
 from .index_manager import FlatIndexManager, BaseIndexManager
+
+class EmbeddingStorageError(Exception):
+    """Custom exception for errors related to the EmbeddingStorageManager."""
+    pass
 
 class EmbeddingStorageManager:
     """Storage manager for raw embeddings and concept_ids using HDF5 files for FAISS backend. 
@@ -152,7 +156,7 @@ class EmbeddingStorageManager:
         if len(unique) != len(concept_ids):
             raise ValueError("Duplicate concept_ids found in the input. Please ensure all concept_ids are unique to prevent data corruption.")
 
-        existing_concept_ids = self.get_concept_ids()
+        existing_concept_ids = self.get_concept_ids_np()
         if np.intersect1d(existing_concept_ids, concept_ids).size > 0:
             raise ValueError("Some concept_ids already exist in storage. Appending duplicate concept_ids would corrupt the data. Please ensure all concept_ids are unique and do not already exist in storage.")
 
@@ -246,10 +250,25 @@ class EmbeddingStorageManager:
         with self.open_embeddings(mode="r") as emb_ds:
             return emb_ds[:]
 
-    def get_concept_ids(self) -> np.ndarray:
+    def get_concept_ids_np(self) -> np.ndarray:
         """Loads all concept_ids into RAM. Use with care for large datasets."""
         with self.open_concept_ids(mode="r") as cid_ds:
             return cid_ds[:] 
+        
+    def get_concept_ids(self) -> Tuple[int, ...]:
+        """Returns all concept_ids as a tuple. Use with care for large datasets."""
+        return tuple(self.get_concept_ids_np().tolist())
+    
+    def get_concept_ids_from_index(self, index_type: IndexType, metric_type: MetricType) -> np.ndarray:
+        """Returns all concept_ids that are currently present in the FAISS index on disk for the specified index and metric type. This is used to determine which concept_ids have embeddings that are actually searchable in the index, as opposed to just being present in the raw storage.
+        
+        Notes
+        -----
+        Slower than get_concept_ids() as it may involve loading the index and extracting the IDs.
+
+        """
+        index_manager = self.get_index_manager(index_type=index_type, metric_type=metric_type)
+        return index_manager.get_concept_ids()
 
     def get_all(self) -> tuple[np.ndarray, np.ndarray]:
         """Loads everything into RAM. Use with care for large datasets."""

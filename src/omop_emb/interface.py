@@ -5,7 +5,7 @@ from typing import Iterable, Mapping, Optional, Sequence, Tuple, List
 
 import numpy as np
 from numpy import ndarray
-from sqlalchemy import Engine, Select
+from sqlalchemy import Engine, Result
 from sqlalchemy.orm import Session
 
 from omop_llm import LLMClient
@@ -16,7 +16,7 @@ from .backends import (
     EmbeddingModelRecord,
     get_embedding_backend,
 )
-from .backends.config import IndexType, MetricType
+from .config import IndexType, MetricType
 
 
 @dataclass
@@ -66,6 +66,7 @@ class EmbeddingInterface:
         self,
         session: Session,
         model_name: str,
+        index_type: IndexType,
     ) -> Optional[str]:
         """
         Legacy helper preserved for compatibility.
@@ -73,15 +74,16 @@ class EmbeddingInterface:
         Historically this returned a PostgreSQL table name. Under the backend
         abstraction it returns the backend-specific storage identifier.
         """
-        record = self.backend.get_registered_model(session=session, model_name=model_name)
+        record = self.backend.get_registered_model(session=session, model_name=model_name, index_type=index_type)
         return record.storage_identifier if record is not None else None
 
     def is_model_registered(
         self,
         session: Session,
         model_name: str,
+        index_type: IndexType,
     ) -> bool:
-        return self.backend.is_model_registered(session=session, model_name=model_name)
+        return self.backend.is_model_registered(session=session, model_name=model_name, index_type=index_type)
 
 
     def has_any_embeddings(
@@ -204,11 +206,13 @@ class EmbeddingInterface:
         session: Session,
         embedding_model_name: str,
         concept_ids: Tuple[int, ...],
+        index_type: IndexType,
     ) -> Mapping[int, Sequence[float]]:
         return self.backend.get_embeddings_by_concept_ids(
             session=session,
             model_name=embedding_model_name,
             concept_ids=concept_ids,
+            index_type=index_type,
         )
 
     def initialise_tables(self, engine: Engine):
@@ -222,6 +226,7 @@ class EmbeddingInterface:
         self,
         session: Session,
         concept_ids: Tuple[int, ...],
+        index_type: IndexType,
         embeddings: ndarray,
         model: str,
     ):
@@ -234,6 +239,7 @@ class EmbeddingInterface:
         return self.backend.upsert_embeddings(
             session=session,
             model_name=model,
+            index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
         )
@@ -255,6 +261,7 @@ class EmbeddingInterface:
         existing = self.backend.get_registered_model(
             session=session,
             model_name=model_name,
+            index_type=index_type,
         )
         if existing is not None:
             return existing
@@ -284,12 +291,14 @@ class EmbeddingInterface:
         *,
         session: Session,
         model_name: str,
+        index_type: IndexType,
         concept_ids: Sequence[int],
         embeddings: ndarray,
     ) -> None:
         self.backend.upsert_embeddings(
             session=session,
             model_name=model_name,
+            index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
         )
@@ -299,6 +308,7 @@ class EmbeddingInterface:
         *,
         session: Session,
         model_name: str,
+        index_type: IndexType,
         concept_ids: Sequence[int],
         concept_texts: Sequence[str],
         embedding_client: Optional[LLMClient] = None,
@@ -317,6 +327,7 @@ class EmbeddingInterface:
         self.upsert_concept_embeddings(
             session=session,
             model_name=model_name,
+            index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
         )
@@ -327,29 +338,36 @@ class EmbeddingInterface:
         *,
         session: Session,
         model_name: str,
+        index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: Optional[int] = None,
-    ) -> Mapping[int, str]:
+        metric_type: Optional[MetricType] = None,
+    ) -> Result:
+        """Get concepts that do not have embeddings for the specified model and index type, optionally filtered by the provided concept filter.
+        
+        Parameters
+        ----------
+        session : Session
+            SQLAlchemy session for database access.
+        model_name : str
+            Name of the embedding model to check against.
+        index_type : IndexType
+            The type of index used by the model, which may affect how we determine which concepts have embeddings.
+        concept_filter : Optional[EmbeddingConceptFilter], optional
+            An optional filter to apply when determining which concepts to return. This can be used to restrict the results to certain vocabularies or to standard concepts only.
+        limit : Optional[int], optional
+            An optional limit on the number of results to return. If not provided, all concepts without embeddings will be returned.
+        metric_type : Optional[MetricType], optional
+            The similarity or distance metric used by the model's index. This is required as a fallback to determine existing concept IDs from the index if we cannot retrieve them directly from storage for FAISS backend only.
+        """
+
         return self.backend.get_concepts_without_embedding(
             session=session,
             model_name=model_name,
+            index_type=index_type,
             concept_filter=concept_filter,
             limit=limit,
-        )
-    
-    def get_concepts_without_embedding_query(
-        self,
-        *,
-        session: Session,
-        model_name: str,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
-        limit: Optional[int] = None,
-    ) -> Select:
-        return self.backend.get_concepts_without_embedding_query(
-            session=session,
-            model_name=model_name,
-            concept_filter=concept_filter,
-            limit=limit,
+            metric_type=metric_type,
         )
     
     def get_concepts_without_embedding_count(
@@ -357,10 +375,30 @@ class EmbeddingInterface:
         *,
         session: Session,
         model_name: str,
+        index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
+        metric_type: Optional[MetricType] = None,
     ) -> int:
+        """Get count of concepts that do not have embeddings for the specified model and index type, optionally filtered by the provided concept filter.
+        
+        Parameters
+        ----------
+        session : Session
+            SQLAlchemy session for database access.
+        model_name : str
+            Name of the embedding model to check against.
+        index_type : IndexType
+            The type of index used by the model, which may affect how we determine which concepts have embeddings.
+        concept_filter : Optional[EmbeddingConceptFilter], optional
+            An optional filter to apply when determining which concepts to count. This can be used to restrict the count to certain vocabularies or to standard concepts only.
+        metric_type : Optional[MetricType], optional
+            The similarity or distance metric used by the model's index. This is required as a fallback to determine existing concept IDs from the index if we cannot retrieve them directly from storage for FAISS backend only.
+        """
+
         return self.backend.get_concepts_without_embedding_count(
             session=session,
             model_name=model_name,
             concept_filter=concept_filter,
+            index_type=index_type,
+            metric_type=metric_type,
         )

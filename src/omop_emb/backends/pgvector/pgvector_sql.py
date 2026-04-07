@@ -1,4 +1,4 @@
-from sqlalchemy import select, case, literal, Select, text, Engine, inspect, Integer
+from sqlalchemy import select, case, literal, Select, text, Engine, inspect, Integer, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.sql import column, values, cast
 from sqlalchemy.sql.elements import ColumnElement
@@ -11,10 +11,10 @@ from typing import Type, Tuple, Optional, TYPE_CHECKING, List, Union
 import logging
 from numpy import ndarray
 
-from ..config import BackendType, IndexType, MetricType
-from ..registry import ModelRegistry
-from ..base import ConceptIDEmbeddingBase
-from ..embedding_utils import EmbeddingConceptFilter, get_similarity_from_distance
+from ...config import IndexType, MetricType
+from ...model_registry import ModelRegistry
+from ..database_backend import ConceptIDEmbeddingBase
+from ...utils.embedding_utils import EmbeddingConceptFilter, get_similarity_from_distance
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +211,40 @@ def q_embedding_vectors_by_concept_ids(
         )
         .where(embedding_table.concept_id.in_(concept_ids))
     )
+
+def q_concepts_without_embeddings(
+    embedding_table: Type[PGVectorConceptIDEmbeddingTable],
+    concept_filter: Optional[EmbeddingConceptFilter] = None,
+    limit: Optional[int] = None,
+) -> Select:
+    subq = select(1).where(embedding_table.concept_id == Concept.concept_id)
+    query = (
+        select(Concept.concept_id, Concept.concept_name)
+        .where(~subq.exists())
+    )
+
+    if concept_filter is not None:
+        query = concept_filter.apply(query)
+
+    return query.limit(limit)
+
+def q_count_concepts_without_embeddings(
+    embedding_table: Type[PGVectorConceptIDEmbeddingTable],
+    concept_filter: Optional[EmbeddingConceptFilter] = None,
+) -> Select:
+    
+    subq = select(1).where(embedding_table.concept_id == Concept.concept_id)
+    query = (
+        select(func.count())
+        .select_from(Concept)
+        .where(~subq.exists())
+    )
+
+    if concept_filter is not None:
+        query = concept_filter.apply(query)
+
+    return query
+
 
 def get_distance(
     embedding_table: Type[PGVectorConceptIDEmbeddingTable],

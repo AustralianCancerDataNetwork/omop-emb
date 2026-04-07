@@ -3,28 +3,29 @@ from __future__ import annotations
 from typing import Mapping, Optional, Sequence, Type, Tuple
 
 from numpy import ndarray
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, text, Result
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from .pgvector_sql import (
     q_embedding_nearest_concepts,
     q_embedding_vectors_by_concept_ids,
+    q_concepts_without_embeddings,
+    q_count_concepts_without_embeddings,
     PGVectorConceptIDEmbeddingTable,
     create_pg_embedding_table,
     add_embeddings_to_registered_table,
 )
-from ..registry import ModelRegistry
-from ..config import BackendType, MetricType
-from ..base import EmbeddingBackend, require_registered_model
-from ..embedding_utils import (
-    EmbeddingBackendCapabilities,
+from ...model_registry import ModelRegistry, EmbeddingModelRecord
+from ...config import BackendType, MetricType, IndexType
+from ..base_backend import require_registered_model
+from ..database_backend import DatabaseEmbeddingBackend
+from ...utils.embedding_utils import (
     EmbeddingConceptFilter,
-    EmbeddingModelRecord,
     NearestConceptMatch,
 )
 
-class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]):
+class PGVectorEmbeddingBackend(DatabaseEmbeddingBackend[PGVectorConceptIDEmbeddingTable]):
     """
     pgvector-backed embedding backend for postgresql databases.
 
@@ -37,20 +38,6 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     @property
     def backend_type(self) -> BackendType:
         return BackendType.PGVECTOR
-
-    @property
-    def capabilities(self) -> EmbeddingBackendCapabilities:
-        return EmbeddingBackendCapabilities(
-            stores_embeddings=True,
-            supports_incremental_upsert=True,
-            supports_nearest_neighbor_search=True,
-            supports_server_side_similarity=True,
-            supports_filter_by_concept_ids=True,
-            supports_filter_by_domain=True,
-            supports_filter_by_vocabulary=True,
-            supports_filter_by_standard_flag=True,
-            requires_explicit_index_refresh=False,
-        )
 
     def _create_storage_table(self, engine: Engine, entry: ModelRegistry) -> Type[PGVectorConceptIDEmbeddingTable]:
         return create_pg_embedding_table(engine=engine, model_registry_entry=entry)
@@ -66,6 +53,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         self,
         session: Session,
         model_name: str,
+        index_type: IndexType,
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
         embeddings: ndarray,
@@ -101,6 +89,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         self,
         session: Session,
         model_name: str,
+        index_type: IndexType,
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
     ) -> Mapping[int, Sequence[float]]:
@@ -134,6 +123,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         self,
         session: Session,
         model_name: str,
+        index_type: IndexType,
         model_record: EmbeddingModelRecord,
         query_embeddings: ndarray,
         *,
@@ -172,18 +162,48 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
             )
 
         return tuple(tuple(matches) for matches in results)
-
-    def refresh_model_index(self, session: Session, model_name: str) -> None:
-        # pgvector indexes update as rows are written, so no explicit refresh is
-        # required for the current PostgreSQL backend.
-        return None
-
-    def _record_from_registry_row(self, row: ModelRegistry) -> EmbeddingModelRecord:
-        return EmbeddingModelRecord(
-            model_name=row.model_name,
-            dimensions=row.dimensions,
-            backend_type=row.backend_type,
-            storage_identifier=row.storage_identifier,
-            index_type=row.index_type,
-            metadata=self._coerce_registry_metadata(row.details),
+    
+    @require_registered_model
+    def get_concepts_without_embedding(
+        self,
+        session: Session,
+        model_name: str,
+        index_type: IndexType,
+        model_record: EmbeddingModelRecord,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        limit: Optional[int] = None,
+        metric_type: Optional[MetricType] = None,
+    ) -> Result:
+        """Return concept IDs and names for concepts that do not have embeddings."""
+        embedding_table = self._get_embedding_table(session=session, model_name=model_name)
+        query = q_concepts_without_embeddings(
+            embedding_table=embedding_table,
+            concept_filter=concept_filter,
+            limit=limit
         )
+        return session.execute(
+            query, 
+            execution_options={"stream_results": True}
+        )
+
+    @require_registered_model   
+    def get_concepts_without_embedding_count(
+        self,
+        session: Session,
+        model_name: str,
+        index_type: IndexType,
+        model_record: EmbeddingModelRecord,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        metric_type: Optional[MetricType] = None,
+    ) -> int:
+        embedding_table = self._get_embedding_table(session=session, model_name=model_name)
+        query = q_count_concepts_without_embeddings(
+            embedding_table=embedding_table,
+            concept_filter=concept_filter,
+        )
+        num_concepts = session.execute(query).scalar_one()
+        if num_concepts is None:
+            raise ValueError(
+                f"Failed to retrieve count of concepts without embeddings for model '{model_name}'."
+            )
+        return num_concepts

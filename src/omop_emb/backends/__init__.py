@@ -1,28 +1,26 @@
-from .base import (
-    EmbeddingBackend,
+from .base_backend import (
+    EmbeddingBackendBase,
 )
-from .embedding_utils import (
-    EmbeddingModelRecord,
-    EmbeddingBackendCapabilities,
+from ..utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,
 )
-from .errors import (
+from .database_backend import DatabaseEmbeddingBackend
+from ..utils.errors import (
     EmbeddingBackendConfigurationError,
     EmbeddingBackendDependencyError,
     EmbeddingBackendError,
     UnknownEmbeddingBackendError,
 )
-from .factory import (
+from ..utils.factory import (
     get_embedding_backend,
     normalize_backend_name,
 )
 
 __all__ = [
-    "EmbeddingBackend",
-    "EmbeddingBackendCapabilities",
+    "EmbeddingBackendBase",
+    "DatabaseEmbeddingBackend",
     "EmbeddingConceptFilter",
-    "EmbeddingModelRecord",
     "NearestConceptMatch",
     "EmbeddingBackendConfigurationError",
     "EmbeddingBackendDependencyError",

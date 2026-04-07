@@ -3,9 +3,9 @@
 import pytest
 import numpy as np
 
-from omop_emb.backends.config import IndexType, MetricType
-from omop_emb.backends.embedding_utils import EmbeddingConceptFilter
-from omop_emb.backends.errors import ModelRegistrationConflictError
+from omop_emb.config import IndexType, MetricType
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from omop_emb.utils.errors import ModelRegistrationConflictError
 from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM, TEST_CONCEPT_EMB
 
 

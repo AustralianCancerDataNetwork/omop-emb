@@ -6,8 +6,8 @@ from unittest.mock import Mock
 from sqlalchemy.orm import Session
 
 from omop_emb.interface import EmbeddingInterface
-from omop_emb.backends.config import IndexType, MetricType
-from omop_emb.backends.base import NearestConceptMatch
+from omop_emb.config import IndexType, MetricType
+from omop_emb.backends.base_backend import NearestConceptMatch
 from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM
 
 
@@ -50,7 +50,7 @@ class TestInterface:
     
     def test_is_model_registered(self, session, embedding_interface: EmbeddingInterface):
         """Test checking model registration status."""
-        assert not embedding_interface.is_model_registered(session, MODEL_NAME)
+        assert not embedding_interface.is_model_registered(session, MODEL_NAME, IndexType.FLAT)
         
         embedding_interface.ensure_model_registered(
             engine=session.bind,
@@ -60,7 +60,7 @@ class TestInterface:
             index_type=IndexType.FLAT,
         )
         
-        assert embedding_interface.is_model_registered(session, MODEL_NAME)
+        assert embedding_interface.is_model_registered(session, MODEL_NAME, IndexType.FLAT)
     
     def test_embed_texts(self, embedding_interface: EmbeddingInterface):
         """Test embedding generation."""
@@ -95,6 +95,7 @@ class TestInterface:
             model_name=MODEL_NAME,
             concept_ids=concept_ids,
             concept_texts=concept_texts,
+            index_type=IndexType.FLAT,
         )
         
         assert embeddings.shape == (2, EMBEDDING_DIM)
@@ -119,12 +120,14 @@ class TestInterface:
             model_name=MODEL_NAME,
             concept_ids=concept_ids,
             concept_texts=concept_texts,
+            index_type=IndexType.FLAT,
         )
         
         retrieved = embedding_interface.get_embeddings_by_concept_ids(
             session=session,
             embedding_model_name=MODEL_NAME,
             concept_ids=concept_ids,
+            index_type=IndexType.FLAT,
         )
         
         assert len(retrieved) == 2

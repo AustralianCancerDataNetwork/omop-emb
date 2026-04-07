@@ -7,7 +7,7 @@ import abc
 from pathlib import Path
 from typing import Optional, Generator, Tuple
 
-from omop_emb.backends.config import IndexType, MetricType
+from omop_emb.config import IndexType, MetricType
 import logging
 logger = logging.getLogger(__name__)
 
@@ -141,6 +141,16 @@ class BaseIndexManager(abc.ABC):
         else:
             logger.info(f"No index file found at {self.index_filepath}, populating index from storage.")
             self._populate_from_storage(data_stream)
+
+    def get_concept_ids(self) -> np.ndarray:
+        """Returns all concept IDs currently stored in the FAISS index."""
+        if not self.has_index_on_disk() and self._index is None:
+            return np.array([], dtype=np.int64)
+        try:
+            return faiss.vector_to_array(self.index.id_map)
+        except Exception as e:
+            logger.error(f"Failed to extract IDs from FAISS index: {e}")
+            raise
 
     def _populate_from_storage(
         self, 

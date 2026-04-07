@@ -1,12 +1,6 @@
 from .base import (
     EmbeddingBackend,
 )
-from .errors import (
-    EmbeddingBackendConfigurationError,
-    EmbeddingBackendDependencyError,
-    EmbeddingBackendError,
-    UnknownEmbeddingBackendError,
-)
 from .factory import (
     get_embedding_backend,
     normalize_backend_name,
@@ -14,10 +8,6 @@ from .factory import (
 
 __all__ = [
     "EmbeddingBackend",
-    "EmbeddingBackendConfigurationError",
-    "EmbeddingBackendDependencyError",
-    "EmbeddingBackendError",
-    "UnknownEmbeddingBackendError",
     "get_embedding_backend",
     "normalize_backend_name",
     "FaissEmbeddingBackend",

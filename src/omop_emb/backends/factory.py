@@ -8,7 +8,7 @@ from ..config import (
     BackendType, 
     ENV_OMOP_EMB_BACKEND,
 )
-from .errors import (
+from omop_emb.utils.errors import (
     EmbeddingBackendConfigurationError,
     EmbeddingBackendDependencyError,
     UnknownEmbeddingBackendError,

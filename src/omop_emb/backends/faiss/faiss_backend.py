@@ -15,7 +15,6 @@ import h5py
 from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_emb.backends.registry import ModelRegistry
 
-from ..errors import EmbeddingBackendConfigurationError
 from .faiss_sql import (
     FAISSConceptIDEmbeddingRegistry, 
     create_faiss_embedding_registry_table, 

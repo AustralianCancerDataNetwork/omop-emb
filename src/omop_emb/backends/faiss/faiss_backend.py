@@ -6,7 +6,6 @@ from typing import Any, Mapping, Optional, Sequence, Type, cast, Dict, Tuple
 
 import numpy as np
 from numpy import ndarray
-from omop_emb.backends.config import BackendType
 from sqlalchemy import Engine, insert, select
 from sqlalchemy.orm import Session
 import logging
@@ -23,7 +22,7 @@ from .faiss_sql import (
     add_concept_ids_to_faiss_registry,
     q_concept_ids_with_embeddings
 )
-from ..config import IndexType, MetricType, ENV_OMOP_EMB_FAISS_INDEX_DIR
+from omop_emb.config import BackendType, IndexType, MetricType, ENV_OMOP_EMB_FAISS_INDEX_DIR
 from .storage_manager import EmbeddingStorageManager
 from ..base import EmbeddingBackend, require_registered_model
 from ..embedding_utils import (

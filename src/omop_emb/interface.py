@@ -16,7 +16,7 @@ from .backends import (
     EmbeddingModelRecord,
     get_embedding_backend,
 )
-from .backends.config import IndexType, MetricType
+from .config import IndexType, MetricType
 
 
 @dataclass

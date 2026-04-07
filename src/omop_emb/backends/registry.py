@@ -5,7 +5,7 @@ from sqlalchemy.orm import mapped_column, validates
 
 from orm_loader.helpers import Base
 
-from .config import (
+from ..config import (
     is_index_type_supported_for_backend, 
     get_supported_index_types_for_backend,
     IndexType, 

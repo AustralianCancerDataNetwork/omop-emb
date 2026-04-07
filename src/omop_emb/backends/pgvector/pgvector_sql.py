@@ -11,7 +11,7 @@ from typing import Type, Tuple, Optional, TYPE_CHECKING, List, Union
 import logging
 from numpy import ndarray
 
-from ..config import BackendType, IndexType, MetricType
+from omop_emb.config import BackendType, IndexType, MetricType
 from ..registry import ModelRegistry
 from ..base import ConceptIDEmbeddingBase
 from ..embedding_utils import EmbeddingConceptFilter, get_similarity_from_distance

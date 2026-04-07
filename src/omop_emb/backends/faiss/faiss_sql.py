@@ -10,7 +10,7 @@ from orm_loader.helpers import Base
 from omop_alchemy.cdm.model.vocabulary import Concept
 
 from ..base import ConceptIDEmbeddingBase
-from ..config import BackendType
+from omop_emb.config import BackendType
 from ..registry import ModelRegistry
 from ..embedding_utils import EmbeddingConceptFilter
 

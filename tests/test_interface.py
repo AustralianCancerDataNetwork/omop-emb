@@ -6,7 +6,7 @@ from unittest.mock import Mock
 from sqlalchemy.orm import Session
 
 from omop_emb.interface import EmbeddingInterface
-from omop_emb.backends.config import IndexType, MetricType
+from omop_emb.config import IndexType, MetricType
 from omop_emb.backends.base import NearestConceptMatch
 from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM
 

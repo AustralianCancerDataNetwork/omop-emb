@@ -7,7 +7,7 @@ import abc
 from pathlib import Path
 from typing import Optional, Generator, Tuple
 
-from omop_emb.backends.config import IndexType, MetricType
+from omop_emb.config import IndexType, MetricType
 import logging
 logger = logging.getLogger(__name__)
 

@@ -1,6 +1,6 @@
 from .interface import EmbeddingInterface
 from .backends.base import EmbeddingConceptFilter
-from .backends.config import BackendType, IndexType, MetricType
+from .config import BackendType, IndexType, MetricType
 from .backends.factory import get_embedding_backend
 
 __all__ = [

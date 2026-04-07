@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, mapped_column
 from omop_alchemy.cdm.model.vocabulary import Concept
 
 from .registry import ModelRegistry, ensure_model_registry_schema
-from .config import BackendType, SUPPORTED_INDICES_AND_METRICS_PER_BACKEND, IndexType, MetricType
+from ..config import BackendType, IndexType, MetricType
 from .errors import ModelRegistrationConflictError
 from .embedding_utils import (
     EmbeddingModelRecord, 

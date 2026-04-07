@@ -4,7 +4,7 @@ from typing import Mapping, Optional, Sequence, Union, Type, TypeVar, Generic, D
 
 from sqlalchemy import Select
 from omop_alchemy.cdm.model.vocabulary import Concept
-from .config import BackendType, SUPPORTED_INDICES_AND_METRICS_PER_BACKEND, IndexType, MetricType 
+from ..config import BackendType, IndexType, MetricType 
 
 
 @dataclass(frozen=True)

@@ -4,7 +4,7 @@ import os
 from typing import Optional
 
 from .base import EmbeddingBackend
-from .config import (
+from ..config import (
     BackendType, 
     ENV_OMOP_EMB_BACKEND,
 )

@@ -16,7 +16,7 @@ from omop_emb.backends import (
     EmbeddingConceptFilter,
 )
 from omop_emb.interface import EmbeddingInterface
-from omop_emb.backends.config import BackendType, IndexType
+from omop_emb.config import IndexType
 
 app = typer.Typer()
 logger = get_logger(__name__)

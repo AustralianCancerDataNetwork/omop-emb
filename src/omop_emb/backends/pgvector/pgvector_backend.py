@@ -17,7 +17,7 @@ from .pgvector_sql import (
 from ..registry import ModelRegistry
 from omop_emb.config import BackendType, MetricType
 from ..base import EmbeddingBackend, require_registered_model
-from ..embedding_utils import (
+from omop_emb.utils.embedding_utils import (
     EmbeddingBackendCapabilities,
     EmbeddingConceptFilter,
     EmbeddingModelRecord,

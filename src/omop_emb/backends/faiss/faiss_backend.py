@@ -25,7 +25,7 @@ from .faiss_sql import (
 from omop_emb.config import BackendType, IndexType, MetricType, ENV_OMOP_EMB_FAISS_INDEX_DIR
 from .storage_manager import EmbeddingStorageManager
 from ..base import EmbeddingBackend, require_registered_model
-from ..embedding_utils import (
+from omop_emb.utils.embedding_utils import (
     EmbeddingBackendCapabilities,
     EmbeddingConceptFilter,
     EmbeddingModelRecord,

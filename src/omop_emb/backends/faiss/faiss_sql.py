@@ -12,7 +12,7 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 from ..base import ConceptIDEmbeddingBase
 from omop_emb.config import BackendType
 from ..registry import ModelRegistry
-from ..embedding_utils import EmbeddingConceptFilter
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
 

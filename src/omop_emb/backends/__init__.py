@@ -1,12 +1,6 @@
 from .base import (
     EmbeddingBackend,
 )
-from .embedding_utils import (
-    EmbeddingModelRecord,
-    EmbeddingBackendCapabilities,
-    EmbeddingConceptFilter,
-    NearestConceptMatch,
-)
 from .errors import (
     EmbeddingBackendConfigurationError,
     EmbeddingBackendDependencyError,
@@ -20,10 +14,6 @@ from .factory import (
 
 __all__ = [
     "EmbeddingBackend",
-    "EmbeddingBackendCapabilities",
-    "EmbeddingConceptFilter",
-    "EmbeddingModelRecord",
-    "NearestConceptMatch",
     "EmbeddingBackendConfigurationError",
     "EmbeddingBackendDependencyError",
     "EmbeddingBackendError",

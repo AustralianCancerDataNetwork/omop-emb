@@ -14,7 +14,7 @@ from numpy import ndarray
 from omop_emb.config import BackendType, IndexType, MetricType
 from ..registry import ModelRegistry
 from ..base import ConceptIDEmbeddingBase
-from ..embedding_utils import EmbeddingConceptFilter, get_similarity_from_distance
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, get_similarity_from_distance
 
 logger = logging.getLogger(__name__)
 

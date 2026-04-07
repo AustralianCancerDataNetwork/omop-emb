@@ -12,9 +12,11 @@ from omop_llm import LLMClient
 
 from .backends import (
     EmbeddingBackend,
+    get_embedding_backend,
+)
+from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     EmbeddingModelRecord,
-    get_embedding_backend,
 )
 from .config import IndexType, MetricType
 

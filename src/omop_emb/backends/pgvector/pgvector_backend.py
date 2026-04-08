@@ -78,8 +78,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
             dimensions=model_record.dimensions,
         )
 
-        table = self._get_embedding_table(
-            session=session,
+        table = self.get_embedding_table(
             model_name=model_name,
         )
 
@@ -108,8 +107,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         if not concept_id_tuple:
             return {}
 
-        embedding_table = self._get_embedding_table(
-            session=session,
+        embedding_table = self.get_embedding_table(
             model_name=model_name,
         )
         query = q_embedding_vectors_by_concept_ids(
@@ -142,8 +140,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         k: int = 10,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         
-        embedding_table = self._get_embedding_table(
-            session=session,
+        embedding_table = self.get_embedding_table(
             model_name=model_name,
         )
         self.validate_embeddings(embeddings=query_embeddings, dimensions=model_record.dimensions)

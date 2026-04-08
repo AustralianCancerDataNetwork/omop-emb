@@ -19,6 +19,9 @@ from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, get_similarit
 logger = logging.getLogger(__name__)
 
 
+_PGVECTOR_TABLE_CACHE: dict[str, type["PGVectorConceptIDEmbeddingTable"]] = {}
+
+
 class PGVectorConceptIDEmbeddingTable(ConceptIDEmbeddingBase, Base):
     """Abstract base for Postgres linter support."""
     __abstract__ = True
@@ -31,33 +34,28 @@ def create_pg_embedding_table(
 
     tablename = model_registry_entry.storage_identifier
     dimensions = model_registry_entry.dimensions
+
+    cached_table = _PGVECTOR_TABLE_CACHE.get(tablename)
+    if cached_table is not None:
+        Base.metadata.create_all(engine, tables=[cached_table.__table__])  # type: ignore[arg-type]
+        create_indices_for_embedding_table(engine, model_registry_entry)
+        return cached_table
     
     table = type(
-        tablename,
+        f"PGVectorConceptIDEmbeddingTable_{tablename}",
         (PGVectorConceptIDEmbeddingTable,), # It already inherits from Base and ConceptIDBase
         {
             "__tablename__": tablename,
             # We override the attribute with the specific dimension-aware column
             "embedding": mapped_column(Vector(dimensions), nullable=False, index=False),
             "__table_args__": {"extend_existing": True},
+            "__module__": __name__,
         }
     )
     Base.metadata.create_all(engine, tables=[table.__table__])  # type: ignore[arg-type]
+    _PGVECTOR_TABLE_CACHE[tablename] = table
 
-    with engine.connect() as conn:
-        inspector = inspect(conn)
-        existing_indexes = [idx['name'] for idx in inspector.get_indexes(model_registry_entry.storage_identifier)]
-        
-        create_index_sql = _create_index_sql(
-            model_registry_entry.storage_identifier,
-            IndexType(model_registry_entry.index_type),
-        )
-        if (
-            _index_from_storage_identifier(model_registry_entry.storage_identifier) not in existing_indexes and 
-            create_index_sql is not None
-        ):
-            conn.execute(text(create_index_sql))
-            conn.commit()
+    create_indices_for_embedding_table(engine, model_registry_entry)
 
     logger.debug(
         f"Initialized {PGVectorConceptIDEmbeddingTable.__name__} table for model '{model_registry_entry.model_name}' with dimensions {model_registry_entry.dimensions} using index_method={model_registry_entry.index_type}",
@@ -99,7 +97,21 @@ def add_embeddings_to_registered_table(
     session.commit()
 
 
-def _create_index_sql(table_name: str, index_type: IndexType) -> Optional[str]:
+def create_indices_for_embedding_table(engine: Engine, model_registry_entry: ModelRegistry) -> None:
+    with engine.connect() as conn:
+        inspector = inspect(conn)
+        existing_indexes = [idx['name'] for idx in inspector.get_indexes(model_registry_entry.storage_identifier)]
+        
+        if _index_from_storage_identifier(model_registry_entry.storage_identifier) not in existing_indexes:
+            query = q_create_index_sql(
+                model_registry_entry.storage_identifier,
+                IndexType(model_registry_entry.index_type),
+            )
+            if query is not None:
+                conn.execute(text(query))
+                conn.commit()
+
+def q_create_index_sql(table_name: str, index_type: IndexType) -> Optional[str]:
     if index_type == IndexType.FLAT:
         pass # No additional index needed for flat, as the vector column itself can be used for sequential scan
     else:

@@ -17,6 +17,9 @@ from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 logger = logging.getLogger(__name__)
 
 
+_FAISS_REGISTRY_TABLE_CACHE: dict[str, type["FAISSConceptIDEmbeddingRegistry"]] = {}
+
+
 class FAISSConceptIDEmbeddingRegistry(ConceptIDEmbeddingBase, Base):
     """Registry table to track which concept_ids are present in the FAISS/H5 storage for a specific model."""
     __abstract__ = True
@@ -31,36 +34,29 @@ def create_faiss_embedding_registry_table(
     """
     tablename = model_registry_entry.storage_identifier
 
+    cached_table = _FAISS_REGISTRY_TABLE_CACHE.get(tablename)
+    if cached_table is not None:
+        Base.metadata.create_all(engine, tables=[cached_table.__table__])  # type: ignore[arg-type]
+        return cached_table
+
     mapping_table = type(
-        tablename,
+        f"FAISSConceptIDEmbeddingRegistry_{tablename}",
         (FAISSConceptIDEmbeddingRegistry, ),
         {
             "__tablename__": tablename,
             "__table_args__": {"extend_existing": True},
+            "__module__": __name__,
         },
     )
     
     Base.metadata.create_all(engine, tables=[mapping_table.__table__])  # type: ignore[arg-type]
+    _FAISS_REGISTRY_TABLE_CACHE[tablename] = mapping_table
     
     logger.debug(
         f"Initialized {FAISSConceptIDEmbeddingRegistry.__name__} table for model '{model_registry_entry.model_name}'",
     )
 
     return mapping_table
-
-def initialise_faiss_mapping_tables(
-    engine: Engine,
-    model_cache: dict[str, Type[FAISSConceptIDEmbeddingRegistry]],
-) -> None:
-    with Session(engine, expire_on_commit=False) as session:
-        existing_models = session.scalars(select(ModelRegistry).where(ModelRegistry.backend_type == BackendType.FAISS.value)).all()
-        session.commit()
-
-    for model_entry in existing_models:
-        if model_entry.model_name not in model_cache:
-            # Create the class and cache it
-            dynamic_table = create_faiss_embedding_registry_table(engine=engine, model_registry_entry=model_entry)
-            model_cache[model_entry.model_name] = dynamic_table
 
 def add_concept_ids_to_faiss_registry(
     concept_ids: tuple[int, ...],

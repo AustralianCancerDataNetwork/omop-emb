@@ -248,7 +248,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             add_concept_ids_to_faiss_registry(
                 concept_ids=concept_id_tuple,
                 session=session,
-                registered_table=self._get_embedding_table(session, model_name),
+                registered_table=self.get_embedding_table(model_name),
             )
         except Exception as e:
             session.rollback()
@@ -292,7 +292,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
 
         self.validate_embeddings(embeddings=query_embeddings, dimensions=model_record.dimensions)
         q_permitted_concept_ids = q_concept_ids_with_embeddings(
-            embedding_table=self._get_embedding_table(session, model_name),
+            embedding_table=self.get_embedding_table(model_name),
             concept_filter=concept_filter,
             limit=None
         )

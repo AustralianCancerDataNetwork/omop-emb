@@ -339,16 +339,14 @@ class EmbeddingInterface:
             limit=limit,
         )
     
-    def get_concepts_without_embedding_query(
+    def q_get_concepts_without_embedding(
         self,
         *,
-        session: Session,
         model_name: str,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: Optional[int] = None,
     ) -> Select:
-        return self.backend.get_concepts_without_embedding_query(
-            session=session,
+        return self.backend.q_get_concepts_without_embedding(
             model_name=model_name,
             concept_filter=concept_filter,
             limit=limit,

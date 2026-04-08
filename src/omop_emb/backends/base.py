@@ -71,12 +71,12 @@ class EmbeddingBackend(ABC, Generic[T]):
     """
     def __init__(self):
         super().__init__()
-        self._model_cache: dict[str, Type[T]] = {}
+        self._embedding_table_cache: dict[str, Type[T]] = {}
 
     @property
-    def model_cache(self) -> Dict[str, Type[T]]:
+    def embedding_table_cache(self) -> Dict[str, Type[T]]:
         """In-memory cache of dynamically generated ORM classes for embedding tables."""
-        return self._model_cache
+        return self._embedding_table_cache
 
     @property
     @abstractmethod
@@ -110,10 +110,8 @@ class EmbeddingBackend(ABC, Generic[T]):
             session.commit()
 
         for model_entry in existing_models:
-            if model_entry.model_name not in self.model_cache:
-                # Create the class and cache it
-                dynamic_table = self._create_storage_table(engine=engine, entry=model_entry)
-                self.model_cache[model_entry.model_name] = dynamic_table
+            dynamic_table = self._create_storage_table(engine=engine, entry=model_entry)
+            self.embedding_table_cache[model_entry.model_name] = dynamic_table
 
     def list_registered_models(self, session: Session) -> Sequence[EmbeddingModelRecord]:
         """Return all embedding models known to this backend."""
@@ -152,22 +150,20 @@ class EmbeddingBackend(ABC, Generic[T]):
         limit: Optional[int] = None,
     ) -> Mapping[int, str]:
         """Return concept IDs and names for concepts that do not have embeddings."""
-        query = self.get_concepts_without_embedding_query(
-            session=session, 
+        query = self.q_get_concepts_without_embedding(
             model_name=model_name, 
             concept_filter=concept_filter,
             limit=limit
         )
         return {row.concept_id: row.concept_name for row in session.execute(query)}
     
-    def get_concepts_without_embedding_query(
+    def q_get_concepts_without_embedding(
         self,
-        session: Session,
         model_name: str,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: Optional[int] = None,
     ) -> Select:
-        embedding_table = self._get_embedding_table(session=session, model_name=model_name)
+        embedding_table = self.get_embedding_table(model_name=model_name)
         subq = select(1).where(embedding_table.concept_id == Concept.concept_id)
 
         query = (
@@ -186,7 +182,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         model_name: str,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
     ) -> int:
-        embedding_table = self._get_embedding_table(session=session, model_name=model_name)
+        embedding_table = self.get_embedding_table(model_name=model_name)
         subq = select(1).where(embedding_table.concept_id == Concept.concept_id)
 
         query = (
@@ -269,7 +265,7 @@ class EmbeddingBackend(ABC, Generic[T]):
             session.commit()
         
         dynamic_table = self._create_storage_table(engine, new_entry)
-        self.model_cache[model_name] = dynamic_table
+        self.embedding_table_cache[model_name] = dynamic_table
         return self._record_from_registry_row(new_entry)
 
     @abstractmethod
@@ -378,30 +374,38 @@ class EmbeddingBackend(ABC, Generic[T]):
         return None
     
     def has_any_embeddings(self, session: Session, model_name: str) -> bool:
-        embedding_table = self._get_embedding_table(
-            session=session,
+        embedding_table = self.get_embedding_table(
             model_name=model_name,
         )
         return session.query(embedding_table.concept_id).limit(1).first() is not None
     
-    def _get_embedding_table(
+    def get_embedding_table(
         self,
-        session: Session,
         model_name: str,
     ) -> Type[T]:
-        embedding_table = self.model_cache.get(model_name)
+        """Return dynamically created ORM class for the embedding table associated with the given model name.
+        This relies on the `initialise_store` method having been called to populate the `embedding_table_cache`. 
+        If the requested model name is not found in the cache, this indicates a logic error in the calling code (e.g., not initializing the store, or requesting a table for a model that hasn't been registered) rather than a user input error, so a ValueError is raised.
+        
+        Parameters
+        ----------
+        model_name : str
+            The name of the embedding model whose associated embedding table class is to be retrieved.
+        Returns
+        -------
+        Type[T]
+            The dynamically generated SQLAlchemy ORM class corresponding to the embedding table for the specified model.
+        
+        Raises
+        ------
+        ValueError
+            If the model name is not found in the embedding table cache, indicating that the store was not properly initialized or the model has not been registered.
+        """
+        embedding_table = self.embedding_table_cache.get(model_name)
         if embedding_table is not None:
             return embedding_table
-
-        bind = session.get_bind()
-        if bind is None:
-            raise RuntimeError("Session is not bound to an engine.")
-        assert isinstance(bind, Engine), f"Expected session bind to be an Engine. Got {type(bind)}"
-        self.initialise_store(bind)  # Ensure tables are created and cache is populated
-        embedding_table = self.model_cache.get(model_name)
-        if embedding_table is None:
-            raise ValueError(f"Embedding model '{model_name}' not found in cache.")
-        return embedding_table 
+        else:
+            raise ValueError(f"Model '{model_name}' not found in cache. Ensure the model is registered and the store is initialized.")
 
     @staticmethod
     def _coerce_registry_metadata(value: object) -> Mapping[str, object]:

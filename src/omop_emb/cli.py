@@ -12,9 +12,7 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 import typer
 
-from omop_emb.backends import (
-    EmbeddingConceptFilter,
-)
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.interface import EmbeddingInterface
 from omop_emb.config import IndexType
 
@@ -108,8 +106,7 @@ def add_embeddings(
             model_name=model,
             concept_filter=concept_filter,
         )
-        concepts_without_embedding = interface.get_concepts_without_embedding_query(
-            session=reader,
+        concepts_without_embedding = interface.q_get_concepts_without_embedding(
             model_name=model,
             concept_filter=concept_filter,
             limit=num_embeddings,

@@ -16,7 +16,7 @@ from .backends import (
 )
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.model_registry import EmbeddingModelRecord
-from .config import IndexType, MetricType
+from .config import BackendType, IndexType, MetricType
 
 
 @dataclass
@@ -47,7 +47,7 @@ class EmbeddingInterface:
     def from_backend_name(
         cls,
         embedding_client: Optional[LLMClient] = None,
-        backend_name: Optional[str] = None,
+        backend_name: Optional[str | BackendType] = None,
         storage_base_dir: Optional[str] = None,
         registry_db_name: Optional[str] = None,
     ) -> EmbeddingInterface:
@@ -119,7 +119,7 @@ class EmbeddingInterface:
         index_type: IndexType,
         query_embedding: np.ndarray,
         *,
-        metric_type: MetricType | str,
+        metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = 10,
     ) -> Tuple[Mapping[int, float], ...]:
@@ -138,7 +138,7 @@ class EmbeddingInterface:
         query_embedding : ndarray
             The embedding vector to search with. Expected shape is (q, dimension)
             where q is the number of query vectors and dimension is the size of the embedding space for the model.
-        metric_type : MetricType, str
+        metric_type : MetricType
             The similarity or distance metric to use for nearest neighbor search. This must be compatible with the index type used by the database.
         concept_filter : Optional[EmbeddingConceptFilter], optional
             A filter to specify which concepts to consider as potential nearest neighbors.
@@ -154,9 +154,10 @@ class EmbeddingInterface:
         Tuple[Mapping[int, float], ...]
             A tuple of dictionaries containing nearest concept matches for each query vector. The outer tuple corresponds to the query vectors in order, and each inner dictionary contains the nearest matches for that query vector, sorted by similarity. Returned shape is (q, k) where q is the number of query vectors and k is the number of nearest neighbors returned per query.
         """
-        if isinstance(metric_type, str):
-            metric_type = MetricType(metric_type)
-        assert isinstance(metric_type, MetricType), f"metric_type must be a MetricType enum or string. Got {type(metric_type)}"
+        if not isinstance(metric_type, MetricType):
+            raise TypeError(
+                f"metric_type must be MetricType, got {type(metric_type).__name__}."
+            )
         nearest_concepts = self.backend.get_nearest_concepts(
             session=session,
             model_name=model_name,

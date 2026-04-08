@@ -7,6 +7,7 @@ from .base import EmbeddingBackend
 from ..config import (
     BackendType, 
     ENV_OMOP_EMB_BACKEND,
+    parse_backend_type,
 )
 from omop_emb.utils.errors import (
     EmbeddingBackendConfigurationError,
@@ -14,7 +15,7 @@ from omop_emb.utils.errors import (
     UnknownEmbeddingBackendError,
 )
 
-def normalize_backend_name(backend_name: Optional[str]) -> BackendType:
+def normalize_backend_name(backend_name: Optional[str | BackendType]) -> BackendType:
     """
     Normalize an embedding backend name from an explicit argument or env var.
 
@@ -28,7 +29,7 @@ def normalize_backend_name(backend_name: Optional[str]) -> BackendType:
         raise AttributeError(f"No embedding backend specified. Provide an explicit backend_name or set the {ENV_OMOP_EMB_BACKEND} environment variable.")
     else:
         try:
-            backend_type = BackendType(backend_name)
+            backend_type = parse_backend_type(backend_name)
         except ValueError:
             raise UnknownEmbeddingBackendError(
                 f"Unknown embedding backend {backend_name!r}. "
@@ -38,7 +39,7 @@ def normalize_backend_name(backend_name: Optional[str]) -> BackendType:
 
 
 def get_embedding_backend(
-    backend_name: Optional[str] = None,
+    backend_name: Optional[str | BackendType] = None,
     storage_base_dir: Optional[str] = None,
     registry_db_name: Optional[str] = None,
 ) -> EmbeddingBackend:

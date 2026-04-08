@@ -31,9 +31,10 @@ def require_registered_model(func: Callable) -> Callable:
         
         if record is None:
             raise ValueError(
-                f"Embedding model '{model_name}' is not registered in the FAISS backend."
+                f"Embedding model '{model_name}' with index_type='{index_type.value}' is not registered in backend '{self.backend_type.value}'."
             )
-        return func(self, model_name, index_type, record, *args, **kwargs)
+        kwargs["_model_record"] = record
+        return func(self, model_name, index_type, *args, **kwargs)
         
     return wrapper
 
@@ -141,13 +142,7 @@ class EmbeddingBackend(ABC, Generic[T]):
             return
     
         for model_record in registered_models:
-            self.register_model(
-                engine=engine,
-                model_name=model_record.model_name,
-                dimensions=model_record.dimensions,
-                index_type=model_record.index_type,
-                metadata=model_record.metadata,
-            )
+            self._cache_model_record(engine=engine, model_record=model_record)
 
     def pre_initialise_store(self, engine: Engine) -> None:
         """Hook for any setup steps that need to happen before the model registry schema is created. For example, this is used by the PGVector backend to create the vector extension before the registry tables are created."""
@@ -243,7 +238,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         dimensions: int,
         *,
         index_type: IndexType,
-        metadata: Mapping[str, object] = {},
+        metadata: Optional[Mapping[str, object]] = None,
     ) -> EmbeddingModelRecord:
         """
         Shared template method for model registration.
@@ -253,7 +248,7 @@ class EmbeddingBackend(ABC, Generic[T]):
             dimensions=dimensions,
             backend_type=self.backend_type,
             index_type=index_type,
-            metadata=metadata,
+            metadata=metadata or {},
         )
         # Local caching
         self._cache_model_record(engine=engine, model_record=model_record)
@@ -265,11 +260,11 @@ class EmbeddingBackend(ABC, Generic[T]):
         self,
         model_name: str,
         index_type: IndexType,
-        model_record: EmbeddingModelRecord,
-        *
+        *,
         session: Session,
         concept_ids: Sequence[int],
         embeddings: ndarray,
+        _model_record: EmbeddingModelRecord,
     ) -> None:
         """
         Insert or update vector embeddings for a collection of OMOP concept IDs.
@@ -316,9 +311,10 @@ class EmbeddingBackend(ABC, Generic[T]):
         self,
         model_name: str,
         index_type: IndexType,
-        model_record: EmbeddingModelRecord,
+        *,
         session: Session,
         concept_ids: Sequence[int],
+        _model_record: EmbeddingModelRecord,
     ) -> Mapping[int, Sequence[float]]:
         """Fetch stored embedding vectors keyed by concept ID."""
 
@@ -329,13 +325,13 @@ class EmbeddingBackend(ABC, Generic[T]):
         self,
         model_name: str,
         index_type: IndexType,
-        model_record: EmbeddingModelRecord,
-        *
+        *,
         session: Session,
         query_embedding: ndarray,
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = 10,
+        _model_record: EmbeddingModelRecord,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         """
         Return nearest stored concepts for the query embedding.

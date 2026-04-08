@@ -49,17 +49,18 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         self,
         model_name: str,
         index_type: IndexType,
-        model_record: EmbeddingModelRecord,
+        *,
         session: Session,
         concept_ids: Sequence[int],
         embeddings: ndarray,
+        _model_record: EmbeddingModelRecord,
     ) -> None:
         concept_id_tuple = tuple(concept_ids)
 
         self.validate_embeddings_and_concept_ids(
             concept_ids=concept_id_tuple,
             embeddings=embeddings,
-            dimensions=model_record.dimensions,
+            dimensions=_model_record.dimensions,
         )
 
         table = self.get_embedding_table(
@@ -85,10 +86,12 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         self,
         model_name: str,
         index_type: IndexType,
-        model_record: EmbeddingModelRecord,
+        *,
         session: Session,
         concept_ids: Sequence[int],
+        _model_record: EmbeddingModelRecord,
     ) -> Mapping[int, Sequence[float]]:
+
         concept_id_tuple = tuple(concept_ids)
         if not concept_id_tuple:
             return {}
@@ -119,20 +122,19 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         self,
         model_name: str,
         index_type: IndexType,
-        model_record: EmbeddingModelRecord,
+        *,
         session: Session,
         query_embeddings: ndarray,
-        *,
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = 10,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
-        
+        _model_record: EmbeddingModelRecord,
+    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:           
         embedding_table = self.get_embedding_table(
             model_name=model_name,
             index_type=index_type,
         )
-        self.validate_embeddings(embeddings=query_embeddings, dimensions=model_record.dimensions)
+        self.validate_embeddings(embeddings=query_embeddings, dimensions=_model_record.dimensions)
 
         query_list = query_embeddings.tolist()
         query = q_embedding_nearest_concepts(

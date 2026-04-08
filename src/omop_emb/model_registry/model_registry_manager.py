@@ -66,7 +66,7 @@ class ModelRegistryManager:
         *,
         backend_type: BackendType,
         index_type: IndexType,
-        metadata: Mapping[str, object] = {},
+        metadata: Optional[Mapping[str, object]] = None,
     ) -> EmbeddingModelRecord:
         """
         Shared template method for model registration.
@@ -111,6 +111,8 @@ class ModelRegistryManager:
                         conflict_field="metadata"
                     )
                 return self._registry_entry_to_model_record(existing_row)
+
+            metadata = metadata or {}
 
         safe_name = self.safe_model_name(model_name)
         storage_name = self.storage_name(

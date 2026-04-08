@@ -93,14 +93,6 @@ def add_embeddings(
     interface.initialise_store(engine)
 
     with Session(engine) as reader, Session(engine) as writer:
-        interface.ensure_model_registered(
-            engine=engine,
-            session=reader,
-            model_name=model,
-            index_type=index_type,
-            dimensions=embedding_dim
-        )
-
         total_concepts = num_embeddings or interface.get_concepts_without_embedding_count(
             session=reader,
             model_name=model,

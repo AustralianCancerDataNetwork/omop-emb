@@ -17,7 +17,7 @@ class TestBackendConfig:
     
     def test_get_faiss_backend(self, tmp_path):
         """Test getting FAISS backend."""
-        backend = get_embedding_backend("faiss", faiss_base_dir=str(tmp_path))
+        backend = get_embedding_backend("faiss", storage_base_dir=str(tmp_path))
         assert backend.backend_type == BackendType.FAISS
     
     def test_faiss_supports_flat_index(self):

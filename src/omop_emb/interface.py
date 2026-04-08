@@ -14,10 +14,8 @@ from .backends import (
     EmbeddingBackend,
     get_embedding_backend,
 )
-from omop_emb.utils.embedding_utils import (
-    EmbeddingConceptFilter,
-    EmbeddingModelRecord,
-)
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from omop_emb.model_registry import EmbeddingModelRecord
 from .config import IndexType, MetricType
 
 
@@ -50,13 +48,14 @@ class EmbeddingInterface:
         cls,
         embedding_client: Optional[LLMClient] = None,
         backend_name: Optional[str] = None,
-        *,
-        faiss_base_dir: Optional[str] = None,
+        storage_base_dir: Optional[str] = None,
+        registry_db_name: Optional[str] = None,
     ) -> EmbeddingInterface:
         return cls(
             backend=get_embedding_backend(
                 backend_name=backend_name,
-                faiss_base_dir=faiss_base_dir,
+                storage_base_dir=storage_base_dir,
+                registry_db_name=registry_db_name,
             ),
             embedding_client=embedding_client,
         )
@@ -66,8 +65,8 @@ class EmbeddingInterface:
 
     def get_model_table_name(
         self,
-        session: Session,
         model_name: str,
+        index_type: IndexType,
     ) -> Optional[str]:
         """
         Legacy helper preserved for compatibility.
@@ -75,31 +74,49 @@ class EmbeddingInterface:
         Historically this returned a PostgreSQL table name. Under the backend
         abstraction it returns the backend-specific storage identifier.
         """
-        record = self.backend.get_registered_model(session=session, model_name=model_name)
+        record = self.backend.get_registered_model(model_name=model_name, index_type=index_type)
         return record.storage_identifier if record is not None else None
 
     def is_model_registered(
         self,
-        session: Session,
         model_name: str,
+        index_type: IndexType,
     ) -> bool:
-        return self.backend.is_model_registered(session=session, model_name=model_name)
+        return self.backend.is_model_registered(model_name=model_name, index_type=index_type)
 
+    def register_model(
+        self,
+        engine: Engine,
+        model_name: str,
+        dimensions: int,
+        index_type: IndexType,
+        metadata: Mapping[str, object] = {},
+    ) -> EmbeddingModelRecord:
+        return self.backend.register_model(
+            engine=engine,
+            model_name=model_name,
+            dimensions=dimensions,
+            index_type=index_type,
+            metadata=metadata,
+        )
 
     def has_any_embeddings(
         self,
         session: Session,
         embedding_model_name: str,
+        index_type: IndexType,
     ) -> bool:
         return self.backend.has_any_embeddings(
             session=session,
             model_name=embedding_model_name,
+            index_type=index_type,
         )
 
     def get_nearest_concepts(
         self,
         session: Session,
         model_name: str,
+        index_type: IndexType,
         query_embedding: np.ndarray,
         *,
         metric_type: MetricType | str,
@@ -116,6 +133,8 @@ class EmbeddingInterface:
             SQLAlchemy session for any required relational access.
         model_name : str
             Name of the embedding model used to create the embeddings.
+        index_type : IndexType
+            The type of vector index used to store the embeddings.
         query_embedding : ndarray
             The embedding vector to search with. Expected shape is (q, dimension)
             where q is the number of query vectors and dimension is the size of the embedding space for the model.
@@ -141,6 +160,7 @@ class EmbeddingInterface:
         nearest_concepts = self.backend.get_nearest_concepts(
             session=session,
             model_name=model_name,
+            index_type=index_type,
             query_embedding=query_embedding,
             concept_filter=concept_filter,
             metric_type=metric_type,
@@ -152,6 +172,7 @@ class EmbeddingInterface:
         self,
         session: Session,
         embedding_model_name: str,
+        index_type: IndexType,
         query_texts: str | Tuple[str, ...] | List[str],
         *,
         metric_type: MetricType,
@@ -169,6 +190,8 @@ class EmbeddingInterface:
             SQLAlchemy session for any required relational access.
         embedding_model_name : str
             Name of the embedding model used to create the embeddings.
+        index_type : IndexType
+            The type of vector index used to store the embeddings.
         query_texts : str | Tuple[str, ...] | List[str]
             The text(s) to embed and search with. If a single string is provided, it will be embedded and searched as one query. If a tuple or list of strings is provided, each string will be embedded and searched separately, and the results will be returned in the same order as the input texts.
         metric_type : MetricType
@@ -195,6 +218,7 @@ class EmbeddingInterface:
         return self.get_nearest_concepts(
             session=session,
             model_name=embedding_model_name,
+            index_type=index_type,
             query_embedding=query_embeddings,
             metric_type=metric_type,
             concept_filter=concept_filter,
@@ -205,11 +229,13 @@ class EmbeddingInterface:
         self,
         session: Session,
         embedding_model_name: str,
+        index_type: IndexType,
         concept_ids: Tuple[int, ...],
     ) -> Mapping[int, Sequence[float]]:
         return self.backend.get_embeddings_by_concept_ids(
             session=session,
             model_name=embedding_model_name,
+            index_type=index_type,
             concept_ids=concept_ids,
         )
 
@@ -223,6 +249,7 @@ class EmbeddingInterface:
     def add_to_db(
         self,
         session: Session,
+        index_type: IndexType,
         concept_ids: Tuple[int, ...],
         embeddings: ndarray,
         model: str,
@@ -236,38 +263,10 @@ class EmbeddingInterface:
         return self.backend.upsert_embeddings(
             session=session,
             model_name=model,
+            index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
         )
-    
-    def ensure_model_registered(
-        self,
-        *,
-        engine: Engine,
-        session: Session,
-        model_name: str,
-        dimensions: int,
-        index_type: IndexType,
-        metadata: Mapping[str, object] = {},
-    ) -> EmbeddingModelRecord:
-        """
-        Ensure the embedding model exists in the selected backend.
-        """
-
-        existing = self.backend.get_registered_model(
-            session=session,
-            model_name=model_name,
-        )
-        if existing is not None:
-            return existing
-        else:
-            return self.backend.register_model(
-                engine=engine,
-                model_name=model_name,
-                dimensions=dimensions,
-                index_type=index_type,
-                metadata=metadata,
-            )
 
     def embed_texts(
         self,
@@ -286,12 +285,14 @@ class EmbeddingInterface:
         *,
         session: Session,
         model_name: str,
+        index_type: IndexType,
         concept_ids: Sequence[int],
         embeddings: ndarray,
     ) -> None:
         self.backend.upsert_embeddings(
             session=session,
             model_name=model_name,
+            index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
         )
@@ -301,6 +302,7 @@ class EmbeddingInterface:
         *,
         session: Session,
         model_name: str,
+        index_type: IndexType,
         concept_ids: Sequence[int],
         concept_texts: Sequence[str],
         embedding_client: Optional[LLMClient] = None,
@@ -319,6 +321,7 @@ class EmbeddingInterface:
         self.upsert_concept_embeddings(
             session=session,
             model_name=model_name,
+            index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
         )
@@ -329,12 +332,14 @@ class EmbeddingInterface:
         *,
         session: Session,
         model_name: str,
+        index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: Optional[int] = None,
     ) -> Mapping[int, str]:
         return self.backend.get_concepts_without_embedding(
             session=session,
             model_name=model_name,
+            index_type=index_type,
             concept_filter=concept_filter,
             limit=limit,
         )
@@ -343,11 +348,13 @@ class EmbeddingInterface:
         self,
         *,
         model_name: str,
+        index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: Optional[int] = None,
     ) -> Select:
         return self.backend.q_get_concepts_without_embedding(
             model_name=model_name,
+            index_type=index_type,
             concept_filter=concept_filter,
             limit=limit,
         )
@@ -357,10 +364,12 @@ class EmbeddingInterface:
         *,
         session: Session,
         model_name: str,
+        index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
     ) -> int:
         return self.backend.get_concepts_without_embedding_count(
             session=session,
             model_name=model_name,
+            index_type=index_type,
             concept_filter=concept_filter,
         )

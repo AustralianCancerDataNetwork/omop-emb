@@ -39,8 +39,8 @@ def normalize_backend_name(backend_name: Optional[str]) -> BackendType:
 
 def get_embedding_backend(
     backend_name: Optional[str] = None,
-    *,
-    faiss_base_dir: Optional[str] = None,
+    storage_base_dir: Optional[str] = None,
+    registry_db_name: Optional[str] = None,
 ) -> EmbeddingBackend:
     """
     Construct an embedding backend implementation by name.
@@ -59,7 +59,7 @@ def get_embedding_backend(
                 "PGVector embedding backend requested but its dependencies are not "
                 "available. Install the package using `pip install omop-emb[pgvector]`."
             ) from exc
-        return PGVectorEmbeddingBackend()
+        return PGVectorEmbeddingBackend(storage_base_dir=storage_base_dir, registry_db_name=registry_db_name)
 
     if resolved == BackendType.FAISS:
         try:
@@ -69,7 +69,7 @@ def get_embedding_backend(
                 "FAISS embedding backend requested but its dependencies are not "
                 "available. Install the package with the FAISS extra using `pip install omop-emb[faiss]` or omop-emb[faiss-gpu]."
             ) from exc
-        return FaissEmbeddingBackend(base_dir=faiss_base_dir)
+        return FaissEmbeddingBackend(storage_base_dir=storage_base_dir, registry_db_name=registry_db_name)
 
     raise EmbeddingBackendConfigurationError(
         f"Backend factory reached an unexpected state for backend={resolved!r}."

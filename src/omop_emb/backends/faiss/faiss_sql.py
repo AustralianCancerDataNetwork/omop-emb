@@ -9,9 +9,8 @@ from sqlalchemy.dialects.postgresql import insert
 from orm_loader.helpers import Base
 from omop_alchemy.cdm.model.vocabulary import Concept
 
+from omop_emb.model_registry import EmbeddingModelRecord
 from ..base import ConceptIDEmbeddingBase
-from omop_emb.config import BackendType
-from ..registry import ModelRegistry
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
@@ -26,13 +25,13 @@ class FAISSConceptIDEmbeddingRegistry(ConceptIDEmbeddingBase, Base):
 
 def create_faiss_embedding_registry_table(
     engine: Engine,
-    model_registry_entry: ModelRegistry, 
+    model_record: EmbeddingModelRecord, 
 ) -> Type[FAISSConceptIDEmbeddingRegistry]:
     """
     Creates a dynamic SQLAlchemy ORM class that tracks which concept_ids 
     are present in the FAISS/H5 storage for a specific model.
     """
-    tablename = model_registry_entry.storage_identifier
+    tablename = model_record.storage_identifier
 
     cached_table = _FAISS_REGISTRY_TABLE_CACHE.get(tablename)
     if cached_table is not None:
@@ -53,7 +52,7 @@ def create_faiss_embedding_registry_table(
     _FAISS_REGISTRY_TABLE_CACHE[tablename] = mapping_table
     
     logger.debug(
-        f"Initialized {FAISSConceptIDEmbeddingRegistry.__name__} table for model '{model_registry_entry.model_name}'",
+        f"Initialized {FAISSConceptIDEmbeddingRegistry.__name__} table for model '{model_record.model_name}'",
     )
 
     return mapping_table

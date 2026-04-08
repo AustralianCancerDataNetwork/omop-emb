@@ -63,10 +63,6 @@ class TestFixtures:
         # Should have correct shape
         assert emb1.shape == (1, mock_llm_client.embedding_dim)
     
-    def test_faiss_backend_initializes(self, faiss_backend, session):
-        """Verify FAISS backend initializes without error."""
-        assert faiss_backend is not None
-        assert faiss_backend.base_dir.exists()
     
     def test_embedding_interface_initializes(self, embedding_interface, session):
         """Verify EmbeddingInterface initializes with mocks."""

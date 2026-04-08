@@ -12,7 +12,7 @@ import logging
 from numpy import ndarray
 
 from omop_emb.config import BackendType, IndexType, MetricType
-from ..registry import ModelRegistry
+from omop_emb.model_registry import EmbeddingModelRecord
 from ..base import ConceptIDEmbeddingBase
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, get_similarity_from_distance
 
@@ -29,24 +29,23 @@ class PGVectorConceptIDEmbeddingTable(ConceptIDEmbeddingBase, Base):
 
 def create_pg_embedding_table(
     engine: Engine,
-    model_registry_entry: ModelRegistry, 
+    model_record: EmbeddingModelRecord,
 ) -> Type[PGVectorConceptIDEmbeddingTable]: # Note the specific Type hint here
 
-    tablename = model_registry_entry.storage_identifier
-    dimensions = model_registry_entry.dimensions
+    tablename = model_record.storage_identifier
+    dimensions = model_record.dimensions
 
     cached_table = _PGVECTOR_TABLE_CACHE.get(tablename)
     if cached_table is not None:
         Base.metadata.create_all(engine, tables=[cached_table.__table__])  # type: ignore[arg-type]
-        create_indices_for_embedding_table(engine, model_registry_entry)
+        create_indices_for_embedding_table(engine, model_record)
         return cached_table
     
     table = type(
         f"PGVectorConceptIDEmbeddingTable_{tablename}",
-        (PGVectorConceptIDEmbeddingTable,), # It already inherits from Base and ConceptIDBase
+        (PGVectorConceptIDEmbeddingTable,),
         {
             "__tablename__": tablename,
-            # We override the attribute with the specific dimension-aware column
             "embedding": mapped_column(Vector(dimensions), nullable=False, index=False),
             "__table_args__": {"extend_existing": True},
             "__module__": __name__,
@@ -55,10 +54,10 @@ def create_pg_embedding_table(
     Base.metadata.create_all(engine, tables=[table.__table__])  # type: ignore[arg-type]
     _PGVECTOR_TABLE_CACHE[tablename] = table
 
-    create_indices_for_embedding_table(engine, model_registry_entry)
+    create_indices_for_embedding_table(engine, model_record)
 
     logger.debug(
-        f"Initialized {PGVectorConceptIDEmbeddingTable.__name__} table for model '{model_registry_entry.model_name}' with dimensions {model_registry_entry.dimensions} using index_method={model_registry_entry.index_type}",
+        f"Initialized {PGVectorConceptIDEmbeddingTable.__name__} table for model '{model_record.model_name}' with dimensions {model_record.dimensions} using index_method={model_record.index_type}",
     )
 
     return table
@@ -97,15 +96,15 @@ def add_embeddings_to_registered_table(
     session.commit()
 
 
-def create_indices_for_embedding_table(engine: Engine, model_registry_entry: ModelRegistry) -> None:
+def create_indices_for_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) -> None:
     with engine.connect() as conn:
         inspector = inspect(conn)
-        existing_indexes = [idx['name'] for idx in inspector.get_indexes(model_registry_entry.storage_identifier)]
+        existing_indexes = [idx['name'] for idx in inspector.get_indexes(model_record.storage_identifier)]
         
-        if _index_from_storage_identifier(model_registry_entry.storage_identifier) not in existing_indexes:
+        if _index_from_storage_identifier(model_record.storage_identifier) not in existing_indexes:
             query = q_create_index_sql(
-                model_registry_entry.storage_identifier,
-                IndexType(model_registry_entry.index_type),
+                model_record.storage_identifier,
+               model_record.index_type,
             )
             if query is not None:
                 conn.execute(text(query))

@@ -43,10 +43,9 @@ def add_embeddings(
         "--backend",
         help="Embedding backend to use. Can be replaced by the `OMOP_EMB_BACKEND` environment variable."
     )] = None,
-
-    faiss_base_dir: Annotated[Optional[str], typer.Option(
-        "--faiss-base-dir",
-        help="Optional base directory for FAISS backend storage."
+    storage_base_dir: Annotated[Optional[str], typer.Option(
+        "--storage-base-dir",
+        help="Optional base directory for embedding backend storage. Reverts to `OMOP_EMB_BASE_STORAGE_DIR` environment variable if not provided, or defaults to $HOME/.omop_emb/ if neither is set. "
     )] = None,
     standard_only: Annotated[bool, typer.Option(
         "--standard-only",
@@ -72,7 +71,7 @@ def add_embeddings(
 
     interface = EmbeddingInterface.from_backend_name(
         backend_name=backend_name,
-        faiss_base_dir=faiss_base_dir,
+        storage_base_dir=storage_base_dir,
         embedding_client=LLMClient(
             model=model,
             api_base=api_base,
@@ -97,11 +96,13 @@ def add_embeddings(
             session=reader,
             model_name=model,
             concept_filter=concept_filter,
+            index_type=index_type
         )
         concepts_without_embedding = interface.q_get_concepts_without_embedding(
             model_name=model,
             concept_filter=concept_filter,
             limit=num_embeddings,
+            index_type=index_type
         )
 
         logger.info(f"Total concepts to process: {total_concepts}")
@@ -117,6 +118,7 @@ def add_embeddings(
                     concept_ids=tuple(batch_concepts.keys()),
                     concept_texts=tuple(batch_concepts.values()),
                     batch_size=batch_size,
+                    index_type=index_type
                 )
                 
                 pbar.update(len(batch_concepts))

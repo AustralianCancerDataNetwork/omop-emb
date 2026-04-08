@@ -139,27 +139,19 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         Parameters
         ----------
         model_name : str
-            The unique identifier or name of the embedding model (e.g., 
-            'text-embedding-3-small').
+            Registered name of the embedding model.
         index_type : IndexType
-            The type of vector index used to store the embeddings.
-        model_record : EmbeddingModelRecord
-            A record object containing metadata, dimensions, and configuration 
-            specific to the embedding model being processed.
+            Storage index type used for this model's embeddings.
         session : sqlalchemy.orm.Session
-            The active database session used for transactional persistence and 
-            model metadata updates.
+            SQLAlchemy session bound to the OMOP CDM database.
         concept_ids : Sequence[int]
-            A sequence of OMOP standard concept IDs corresponding to the 
-            ordered rows in the embeddings array.
+            Concept IDs aligned with the rows of ``embeddings``.
         embeddings : numpy.ndarray
-            A 2D array of shape (n_concepts, n_dimensions) containing the 
-            generated vector representations.
+            Embedding matrix of shape ``(n_concepts, D)``.
+        _model_record : EmbeddingModelRecord
+            Internal registered-model record injected by ``@require_registered_model``.
         metric_type : Optional[MetricType]
-            The similarity metric type (e.g., COSINE, EUCLIDEAN) that should be 
-            associated with the stored embeddings for accurate nearest neighbor 
-            search behavior. If None, the index will not be built and the raw
-            embeddings are only stored in the HDF5 file for later use.
+            Optional metric used when creating/updating the FAISS index.
 
         Returns
         -------

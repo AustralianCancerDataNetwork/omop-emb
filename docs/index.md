@@ -5,11 +5,12 @@
 The package currently supports:
 
 - dynamic embedding model registration
-  - multiple embedding models can be stored in the respective backend
+  - model metadata is stored locally in SQLite (`metadata.db`)
+  - multiple embedding models can be tracked per backend and index type
 - embedding and lookup for OMOP concepts
-- supports various backends with a PostgreSQL linker
+- supports various storage backends
   - [pgvector](https://github.com/pgvector/pgvector): storage in the original OMOP database
-  - [FAISS](https://github.com/facebookresearch/faiss): efficient storage on disk for low-RAM applications 
+  - [FAISS](https://github.com/facebookresearch/faiss): on-disk vector storage and index files
 - Extension to [`omop-alchemy`](https://AustralianCancerDataNetwork.github.io/OMOP_Alchemy/) to support new tables
 - CLI scripts to add embeddings to an already existing OMOP CDM
 
@@ -18,7 +19,7 @@ The package currently supports:
 Install the backend you actually want to use:
 
 ```bash
-pip install "omop-emb[postgres]"
+pip install "omop-emb[pgvector]"
 pip install "omop-emb[faiss]"
 pip install "omop-emb[all]"
 ```
@@ -28,12 +29,19 @@ A plain `pip install omop-emb` installs only the shared core package.
 At runtime, backend choice should also be explicit. The intended direction is:
 
 - install-time choice via extras
-- runtime choice via config such as `OMOP_EMB_BACKEND=postgres` or `OMOP_EMB_BACKEND=faiss` or passing it as an argument to the respective interface (e.g. see [CLI reference](usage/cli.md))
+- runtime choice via config such as `OMOP_EMB_BACKEND=pgvector` or `OMOP_EMB_BACKEND=faiss` or passing it as an argument to the respective interface (e.g. see [CLI reference](usage/cli.md))
+
+Recommended runtime environment variables:
+
+- `OMOP_EMB_BACKEND` (`pgvector` or `faiss`)
+- `OMOP_EMB_BASE_STORAGE_DIR` (base directory for local metadata and FAISS artifacts)
+- `OMOP_DATABASE_URL` (OMOP CDM database URL)
 
 
 !!! info "Important caveats"
 
-  - `omop-emb` depends on an OMOP PostgreSQL database for storage of embeddings (pgvector) or to keep track of already embedded concepts.
+  - `omop-emb` depends on OMOP CDM database access for concept metadata and filtering.
+  - Current operational and test coverage is PostgreSQL-focused.
 
 
 ## Documentation overview

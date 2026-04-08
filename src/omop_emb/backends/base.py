@@ -126,12 +126,26 @@ class EmbeddingBackend(ABC, Generic[T]):
     
     @abstractmethod
     def _create_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> Type[T]:
-        """Backend-specific logic to create the dynamic SQLAlchemy class."""
+        """
+        Backend-specific logic to create the dynamic SQLAlchemy class.
+
+        Parameters
+        ----------
+        engine : Engine
+            SQLAlchemy engine for OMOP CDM database storage.
+        model_record : EmbeddingModelRecord
+            Registered model metadata used to build backend storage.
+        """
 
     def initialise_store(self, engine: Engine) -> None:
         """
         Initialise the model registry and populate the embedding table cache for existing models.
         Can extend it to include any backend-specific setup steps (e.g., creating extensions, staging directories) as needed.
+
+        Parameters
+        ----------
+        engine : Engine
+            SQLAlchemy engine for OMOP CDM database storage.
         """
         self.pre_initialise_store(engine)
 
@@ -145,7 +159,14 @@ class EmbeddingBackend(ABC, Generic[T]):
             self._cache_model_record(engine=engine, model_record=model_record)
 
     def pre_initialise_store(self, engine: Engine) -> None:
-        """Hook for any setup steps that need to happen before the model registry schema is created. For example, this is used by the PGVector backend to create the vector extension before the registry tables are created."""
+        """
+        Hook for setup steps that run before store initialization.
+
+        Parameters
+        ----------
+        engine : Engine
+            SQLAlchemy engine for OMOP CDM database storage.
+        """
         pass
 
     def get_registered_model(
@@ -242,6 +263,19 @@ class EmbeddingBackend(ABC, Generic[T]):
     ) -> EmbeddingModelRecord:
         """
         Shared template method for model registration.
+
+        Parameters
+        ----------
+        engine : Engine
+            SQLAlchemy engine for OMOP CDM database storage.
+        model_name : str
+            Registered name of the embedding model.
+        dimensions : int
+            Embedding dimensionality $D$ for this model.
+        index_type : IndexType
+            Storage index type used for this model's embeddings.
+        metadata : Optional[Mapping[str, object]]
+            Optional metadata persisted with the model registration.
         """
         model_record = self.embedding_model_registry.register_model(
             model_name=model_name,
@@ -277,22 +311,17 @@ class EmbeddingBackend(ABC, Generic[T]):
         Parameters
         ----------
         model_name : str
-            The unique identifier or name of the embedding model (e.g., 
-            'text-embedding-3-small').
+            Registered name of the embedding model.
         index_type : IndexType
-            The type of vector index used to store the embeddings.
-        model_record : EmbeddingModelRecord
-            A record object containing metadata, dimensions, and configuration 
-            specific to the embedding model being processed.
+            Storage index type used for this model's embeddings.
         session : sqlalchemy.orm.Session
-            The active database session used for transactional persistence and 
-            model metadata updates.
+            SQLAlchemy session bound to the OMOP CDM database.
         concept_ids : Sequence[int]
-            A sequence of OMOP standard concept IDs corresponding to the 
-            ordered rows in the embeddings array.
+            Concept IDs aligned with the rows of ``embeddings``.
         embeddings : numpy.ndarray
-            A 2D array of shape (n_concepts, n_dimensions) containing the 
-            generated vector representations.
+            Embedding matrix of shape ``(n_concepts, D)``.
+        _model_record : EmbeddingModelRecord
+            Internal registered-model record injected by ``@require_registered_model``.
 
         Returns
         -------
@@ -339,23 +368,21 @@ class EmbeddingBackend(ABC, Generic[T]):
         Parameters
         ----------
         model_name : str
-            Name of the embedding model used to create the embeddings.
+            Registered name of the embedding model.
         index_type : IndexType
-            The type of vector index used to store the embeddings.
-        model_record : EmbeddingModelRecord
-            A record object containing metadata, dimensions, and configuration 
-            specific to the embedding model being queried. Obtained through the decorator's requirement for a registered model.
+            Storage index type used for this model's embeddings.
         session : Session
-            SQLAlchemy session for any required relational access.
+            SQLAlchemy session bound to the OMOP CDM database.
         query_embedding : ndarray
-            The embedding vector to search with. Expected shape is (q, dimension)
-            where q is the number of query vectors and dimension is the size of the embedding space for the model.
+            Query embedding matrix of shape ``(Q, D)``.
         metric_type : MetricType
-            The similarity or distance metric to use for nearest neighbor search. This should be compatible with the index type used by the model.
+            Similarity or distance metric for nearest-neighbor search.
         concept_filter : Optional[EmbeddingConceptFilter], optional
-            Optional constraints to apply when retrieving nearest concepts. This allows filtering by concept IDs, domains, vocabularies, or standard flags. By default, no additional filtering is applied.
+            Optional filter restricting which OMOP concepts are considered.
         k : int, optional
-            K nearest neighbors to return for each query vector. Default is 10.
+            Number of nearest matches to return per query.
+        _model_record : EmbeddingModelRecord
+            Internal registered-model record injected by ``@require_registered_model``.
 
         Returns
         -------

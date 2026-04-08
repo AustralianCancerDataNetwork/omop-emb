@@ -1,26 +1,40 @@
 # omop-emb
 Embedding layer for OMOP CDM.
 
+`omop-emb` now separates model metadata from embedding storage:
+
+- model metadata is stored locally in SQLite (`metadata.db`)
+- embedding vectors are stored by the selected backend (`pgvector` or `faiss`)
+- OMOP concept metadata remains in the OMOP CDM database
+
 ## Installation
 
 `omop-emb` now exposes backend-specific optional dependencies so installation
 can match the embedding backend you actually intend to use.
 
 ```bash
-pip install "omop-emb[postgres]"
+pip install "omop-emb[pgvector]"
 pip install "omop-emb[faiss]"
 pip install "omop-emb[all]"
 ```
 
 Notes:
 
-- `postgres` installs the PostgreSQL/pgvector dependencies.
+- `pgvector` installs the PostgreSQL/pgvector dependencies.
 - `faiss` installs the FAISS-based backend dependencies. This currently only includes CPU support
 - `all` installs both backend stacks for development or mixed environments.
 - A plain `pip install omop-emb` installs the shared core package only.
-- PostgreSQL-specific embedding dependencies are now optional, but `omop-emb`
-  still requires some database backend for OMOP access and model registration.
+- PostgreSQL-specific embedding dependencies are optional, but `omop-emb`
+  still requires OMOP CDM database access.
 - Non-PostgreSQL database backends have not yet been tested.
+
+## Runtime Configuration
+
+Common environment variables:
+
+- `OMOP_EMB_BACKEND`: backend name (`pgvector` or `faiss`) used by the backend factory.
+- `OMOP_EMB_BASE_STORAGE_DIR`: local base directory for `omop-emb` artifacts, including local metadata (`metadata.db`) and FAISS files.
+- `OMOP_DATABASE_URL`: SQLAlchemy URL for the OMOP CDM database.
 
 Extended documentation can be found [here](https://AustralianCancerDataNetwork.github.io/omop-emb).
 

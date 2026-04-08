@@ -18,7 +18,7 @@ requires database-backed OMOP access and model registration.
 ## PostgreSQL backend
 
 ```bash
-pip install "omop-emb[postgres]"
+pip install "omop-emb[pgvector]"
 ```
 
 Use this when you want the current pgvector/PostgreSQL-backed embedding store
@@ -33,7 +33,7 @@ pip install "omop-emb[faiss]"
 Use this when you want the FAISS backend dependencies available.
 
 Even in this case, a database backend is still required for OMOP concept
-metadata and model registration.
+metadata access.
 
 ## Everything
 
@@ -52,11 +52,15 @@ install-time.
 Examples:
 
 ```bash
-export OMOP_EMB_BACKEND=postgres
+export OMOP_EMB_BACKEND=pgvector
 export OMOP_EMB_BACKEND=faiss
+export OMOP_EMB_BASE_STORAGE_DIR=$HOME/.omop_emb
 ```
 
 That avoids silent fallback between backend implementations.
+
+`OMOP_EMB_BASE_STORAGE_DIR` controls where `omop-emb` stores local metadata
+(`metadata.db`) and file-based backend artifacts (such as FAISS files).
 
 ## Current database support caveat
 

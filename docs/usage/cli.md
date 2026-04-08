@@ -19,7 +19,7 @@ At present, the production CLI path is PostgreSQL-oriented and stores embeddings
   pip install "omop-emb[faiss]"
   ```
 
-- **Database**: Postgres implementation of OMOP CDM. See [`omop-graph` documentation](reference-missing) for information how to setup.
+- **Database**: PostgreSQL implementation of OMOP CDM. See [`omop-graph` documentation](reference-missing) for information how to setup.
 - **Environment**: `OMOP_DATABASE_URL` must be exported or present in `.env`  (e.g., `postgresql://user:pass@localhost:5432/omop`).
 - **Backend config**: set `OMOP_EMB_BACKEND` (`pgvector` or `faiss`) and optionally `OMOP_EMB_BASE_STORAGE_DIR`.
 - **Connectivity**: Access to an OpenAI-compatible embeddings endpoint. *Currently only Ollama supported*.

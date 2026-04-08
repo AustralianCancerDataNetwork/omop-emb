@@ -8,7 +8,7 @@ whatever happens to be installed.
 
 The current backend factory recognizes:
 
-- `pgvector`: The [pgvector](https://github.com/pgvector/pgvector) extension to a standard postgres database to store embeddings directly in the database.
+- `pgvector`: The [pgvector](https://github.com/pgvector/pgvector) extension to a standard PostgreSQL database to store embeddings directly in the database.
 - `faiss`: The [FAISS](https://github.com/facebookresearch/faiss) storage solution for on-disk storage.
 
 There is no implicit default backend name. You must pass one explicitly or set

@@ -40,11 +40,11 @@ Extended documentation can be found [here](https://AustralianCancerDataNetwork.g
 
 # Project Roadmap
 
-- [x] Interface for postgres storage of vectors
+- [x] Interface for PostgreSQL storage of vectors
 - [x] Interface for FAISS storage of embeddings
-- [ ] Extensive unit testing
-    - [ ] Backend testing
-    - [ ] Corruption and restoration of DB testing
+- [x] Extensive unit testing
+    - [x] Backend testing
+    - [x] Corruption and restoration of DB testing
 - [ ] Support non-Flat indices for each backend
 - [ ] `faiss` GPU support
 - [ ] [`pgvectorscale`](https://github.com/timescale/pgvectorscale) support

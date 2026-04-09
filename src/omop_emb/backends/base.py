@@ -102,6 +102,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         - warm caches from a registry
         - create directories or sidecar files
         """
+        ensure_model_registry_schema(engine)
 
         with Session(engine, expire_on_commit=False) as session:
             existing_models = session.scalars(select(ModelRegistry).where(ModelRegistry.backend_type == self.backend_type)).all()

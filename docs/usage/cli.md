@@ -21,6 +21,10 @@ At present, the production CLI path is PostgreSQL-oriented and stores embeddings
 
 - **Database**: Postgres implementation of OMOP CDM. See [`omop-graph` documentation](reference-missing) for information how to setup.
 - **Environment**: `OMOP_DATABASE_URL` must be exported or existing in the .env file  (e.g., `postgresql://user:pass@localhost:5432/omop`).
+- **Schema resolution**: OMOP vocabulary tables are resolved through the
+  PostgreSQL connection `search_path`. If your OMOP tables live in a schema such
+  as `staging_vocabulary`, ensure the connection resolves `concept` to that
+  schema.
 - **Connectivity**: Access to an embeddings endpoint compatible with the
   configured `omop-llm` client.
 
@@ -61,6 +65,8 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 ### Environment Variables
 
 - `OMOP_DATABASE_URL`: database connection string for the OMOP store.
+  The connection should resolve the OMOP `concept` table via PostgreSQL
+  `search_path` if your vocabulary tables are not in the default schema.
 - `OMOP_EMB_MODEL`: default model name if `--model` is omitted.
 - `OMOP_EMB_EMBEDDING_DIM`: explicit embedding dimension override if `--embedding-dim` is omitted.
 - `OMOP_EMB_BACKEND`: default embedding backend if `--backend` is omitted.

@@ -65,6 +65,18 @@ def _resolve_embedding_dim(
     return resolved_dim
 
 
+def _compile_sql(query: sa.Select, engine: sa.Engine) -> str:
+    try:
+        return str(
+            query.compile(
+                dialect=engine.dialect,
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+    except Exception:
+        return str(query)
+
+
 @app.command()
 def add_embeddings(
     api_base: Annotated[str, typer.Option(
@@ -151,7 +163,7 @@ def add_embeddings(
             dimensions=resolved_embedding_dim
         )
 
-        total_concepts = num_embeddings or interface.get_concepts_without_embedding_count(
+        estimated_total_concepts = num_embeddings or interface.get_concepts_without_embedding_count(
             session=reader,
             model_name=resolved_model,
             concept_filter=concept_filter,
@@ -162,13 +174,39 @@ def add_embeddings(
             concept_filter=concept_filter,
             limit=num_embeddings,
         )
+        actual_total_concepts = reader.scalar(
+            sa.select(sa.func.count()).select_from(concepts_without_embedding.subquery())
+        )
 
-        logger.info(f"Total concepts to process: {total_concepts}")
-        with tqdm(total=total_concepts, desc="Processing", unit="concept") as pbar:
+        logger.info(
+            "Embedding source query: %s",
+            _compile_sql(concepts_without_embedding, engine),
+        )
+        if num_embeddings is not None:
+            logger.info(
+                "Requested up to %s concepts; query returned %s concepts.",
+                num_embeddings,
+                actual_total_concepts,
+            )
+        else:
+            logger.info("Query returned %s concepts.", actual_total_concepts)
+
+        logger.info(
+            "Progress bar total: %s concepts.",
+            actual_total_concepts if num_embeddings is not None else estimated_total_concepts,
+        )
+        processed_concepts = 0
+        with tqdm(
+            total=actual_total_concepts if num_embeddings is not None else estimated_total_concepts,
+            desc="Processing",
+            unit="concept",
+        ) as pbar:
             result = reader.execute(concepts_without_embedding)
             
             for row_chunk in result.partitions(batch_size):
                 batch_concepts = {row.concept_id: row.concept_name for row in row_chunk}
+                if not batch_concepts:
+                    continue
                 
                 interface.embed_and_upsert_concepts(
                     session=writer,
@@ -178,9 +216,10 @@ def add_embeddings(
                     batch_size=batch_size,
                 )
                 
+                processed_concepts += len(batch_concepts)
                 pbar.update(len(batch_concepts))
 
-    logger.info("Completed embedding generation and storage.")
+    logger.info("Completed embedding generation and storage. Wrote %s embeddings.", processed_concepts)
 
 
 if __name__ == "__main__":

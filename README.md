@@ -47,6 +47,8 @@ Important:
 
 - `OMOP_DATABASE_URL` must point to the PostgreSQL database that exposes your
   OMOP vocabulary tables.
+- The CLI is intended to work against an existing OMOP database. It should not
+  attempt to create the full OMOP schema.
 - The code queries the OMOP `concept` table by ORM table name, not by a
   hard-coded schema-qualified path such as `vocabulary.concept`.
 - PostgreSQL resolves that table through the connection `search_path`. If your

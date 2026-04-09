@@ -3,7 +3,7 @@ from omop_llm import LLMClient
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from orm_loader.helpers import get_logger, configure_logging, create_db
+from orm_loader.helpers import get_logger, configure_logging
 
 from typing import Annotated, Optional
 import os
@@ -150,8 +150,7 @@ def add_embeddings(
         vocabularies=tuple(vocabularies) if vocabularies else None,
     )
     
-    # Ensure OMOP metadata tables exist, then initialize the embedding store.
-    create_db(engine)
+    # Initialize only the embedding store metadata for this project.
     interface.initialise_store(engine)
 
     with Session(engine) as reader, Session(engine) as writer:

@@ -20,6 +20,9 @@ At present, the production CLI path is PostgreSQL-oriented and stores embeddings
   ```
 
 - **Database**: Postgres implementation of OMOP CDM. See [`omop-graph` documentation](reference-missing) for information how to setup.
+- **Existing schema**: the CLI expects an existing OMOP database. It only
+  creates its own embedding registry/storage metadata and does not need to
+  bootstrap the full OMOP schema.
 - **Environment**: `OMOP_DATABASE_URL` must be exported or existing in the .env file  (e.g., `postgresql://user:pass@localhost:5432/omop`).
 - **Schema resolution**: OMOP vocabulary tables are resolved through the
   PostgreSQL connection `search_path`. If your OMOP tables live in a schema such

@@ -116,6 +116,10 @@ def add_embeddings(
         "--vocabulary",
         help="Optional vocabulary filter. Repeat the option to embed concepts only from specific OMOP vocabularies."
     )] = None,
+    domains: Annotated[Optional[list[str]], typer.Option(
+        "--domain",
+        help="Optional domain filter. Repeat the option to embed concepts only from specific OMOP domains."
+    )] = None,
     num_embeddings: Annotated[Optional[int], typer.Option(
         "--num-embeddings", "-n",
         help="If set, limits the number of concepts for which embeddings are generated. Useful for testing and development to speed up the embedding generation step.")] = None,
@@ -140,6 +144,7 @@ def add_embeddings(
 
     concept_filter = EmbeddingConceptFilter(
         require_standard=standard_only,
+        domains=tuple(domains) if domains else None,
         vocabularies=tuple(vocabularies) if vocabularies else None,
     )
     

@@ -1406,6 +1406,7 @@ dependencies = [
     { name = "omop-llm" },
     { name = "orm-loader" },
     { name = "psycopg2-binary" },
+    { name = "requests" },
     { name = "sqlalchemy" },
     { name = "typing-extensions" },
 ]
@@ -1450,6 +1451,7 @@ requires-dist = [
     { name = "pgvector", marker = "extra == 'all'" },
     { name = "pgvector", marker = "extra == 'pgvector'" },
     { name = "psycopg2-binary", specifier = ">=2.9.11" },
+    { name = "requests", specifier = ">=2.31" },
     { name = "sqlalchemy", specifier = ">=2.0.45" },
     { name = "typing-extensions", specifier = ">=4.15.0" },
 ]

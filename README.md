@@ -49,6 +49,9 @@ Important:
   OMOP vocabulary tables.
 - The CLI is intended to work against an existing OMOP database. It should not
   attempt to create the full OMOP schema.
+- `--api-base` should be the API base URL, for example `http://localhost:8000/v1`,
+  not the full embeddings endpoint path. Use `--embedding-path` if your server
+  expects a non-standard endpoint such as `/embed`.
 - The code queries the OMOP `concept` table by ORM table name, not by a
   hard-coded schema-qualified path such as `vocabulary.concept`.
 - PostgreSQL resolves that table through the connection `search_path`. If your

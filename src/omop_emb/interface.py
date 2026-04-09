@@ -8,8 +8,6 @@ from numpy import ndarray
 from sqlalchemy import Engine, Select
 from sqlalchemy.orm import Session
 
-from omop_llm import LLMClient
-
 from .backends import (
     EmbeddingBackend,
     EmbeddingConceptFilter,
@@ -17,6 +15,7 @@ from .backends import (
     get_embedding_backend,
 )
 from .backends.config import IndexType, MetricType
+from .embedding_client import EmbeddingClientProtocol
 
 
 @dataclass
@@ -28,12 +27,12 @@ class EmbeddingInterface:
     ----------------
     - initialize the selected backend store
     - ensure an embedding model is registered
-    - generate embeddings with an ``LLMClient``
+    - generate embeddings with an embedding client
     - upsert concept embeddings through the selected backend
     - provide a reusable in-process cache for query-text embeddings
 
     """
-    embedding_client: Optional[LLMClient] = None
+    embedding_client: Optional[EmbeddingClientProtocol] = None
     backend: EmbeddingBackend = field(default_factory=get_embedding_backend)
 
 
@@ -46,7 +45,7 @@ class EmbeddingInterface:
     @classmethod
     def from_backend_name(
         cls,
-        embedding_client: Optional[LLMClient] = None,
+        embedding_client: Optional[EmbeddingClientProtocol] = None,
         backend_name: Optional[str] = None,
         *,
         faiss_base_dir: Optional[str] = None,
@@ -271,7 +270,7 @@ class EmbeddingInterface:
         self,
         texts: str | Tuple[str, ...] | List[str],
         *,
-        embedding_client: Optional[LLMClient] = None,
+        embedding_client: Optional[EmbeddingClientProtocol] = None,
         batch_size: Optional[int] = None,
     ) -> np.ndarray:
         client = embedding_client or self.embedding_client
@@ -301,7 +300,7 @@ class EmbeddingInterface:
         model_name: str,
         concept_ids: Sequence[int],
         concept_texts: Sequence[str],
-        embedding_client: Optional[LLMClient] = None,
+        embedding_client: Optional[EmbeddingClientProtocol] = None,
         batch_size: Optional[int] = None,
     ) -> ndarray:
         if len(concept_ids) != len(concept_texts):

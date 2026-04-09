@@ -6,7 +6,12 @@ from unittest.mock import Mock, PropertyMock
 
 import pytest
 
-from omop_emb.cli import _resolve_embedding_dim, _resolve_model_name
+from omop_emb.cli import (
+    _normalize_api_base,
+    _normalize_embedding_path,
+    _resolve_embedding_dim,
+    _resolve_model_name,
+)
 from omop_emb.interface import EmbeddingInterface
 
 
@@ -49,3 +54,15 @@ class TestCliHelpers:
 
         with pytest.raises(RuntimeError, match="--embedding-dim"):
             _resolve_embedding_dim(interface, None)
+
+    def test_normalize_api_base_strips_embeddings_suffix(self):
+        assert _normalize_api_base("http://localhost:8000/v1/embeddings", "/embeddings") == "http://localhost:8000/v1"
+
+    def test_normalize_api_base_leaves_base_url_unchanged(self):
+        assert _normalize_api_base("http://localhost:8000/v1", "/embeddings") == "http://localhost:8000/v1"
+
+    def test_normalize_api_base_strips_custom_embedding_path(self):
+        assert _normalize_api_base("http://localhost:8000/v1/embed", "/embed") == "http://localhost:8000/v1"
+
+    def test_normalize_embedding_path_adds_leading_slash(self):
+        assert _normalize_embedding_path("embed") == "/embed"

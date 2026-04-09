@@ -1,5 +1,3 @@
-from omop_llm import LLMClient
-
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
@@ -14,6 +12,7 @@ import typer
 from omop_emb.backends import (
     EmbeddingConceptFilter,
 )
+from omop_emb.embedding_client import OpenAICompatibleEmbeddingClient
 from omop_emb.interface import EmbeddingInterface
 from omop_emb.backends.config import IndexType
 
@@ -65,6 +64,28 @@ def _resolve_embedding_dim(
     return resolved_dim
 
 
+def _normalize_embedding_path(embedding_path: str) -> str:
+    normalized = embedding_path.strip()
+    if not normalized:
+        raise RuntimeError("Embedding path must not be empty.")
+    if not normalized.startswith("/"):
+        normalized = f"/{normalized}"
+    return normalized
+
+
+def _normalize_api_base(api_base: str, embedding_path: str) -> str:
+    normalized = api_base.rstrip("/")
+    normalized_path = _normalize_embedding_path(embedding_path)
+    if normalized.endswith(normalized_path):
+        normalized = normalized[: -len(normalized_path)]
+        logger.warning(
+            "API base ended with the embedding path `%s`. Normalizing to `%s` so the configured path is not duplicated.",
+            normalized_path,
+            normalized,
+        )
+    return normalized
+
+
 def _compile_sql(query: sa.Select, engine: sa.Engine) -> str:
     try:
         return str(
@@ -101,6 +122,10 @@ def add_embeddings(
         "--embedding-dim",
         help="Explicit embedding dimension for the configured model. Use this for OpenAI-compatible endpoints when the client cannot infer dimensions automatically. Can also be set with `OMOP_EMB_EMBEDDING_DIM`."
     )] = None,
+    embedding_path: Annotated[str, typer.Option(
+        "--embedding-path",
+        help="Embedding endpoint path relative to `--api-base`, for example `/embeddings` or `/embed`. Can also be set with `OMOP_EMB_EMBEDDING_PATH`."
+    )] = "/embeddings",
     backend_name: Annotated[Optional[str], typer.Option(
         "--backend",
         help="Embedding backend to use. Can be replaced by the `OMOP_EMB_BACKEND` environment variable."
@@ -129,6 +154,11 @@ def add_embeddings(
     if engine_string is None:
         raise RuntimeError("OMOP_DATABASE_URL environment variable not set. Please set it in your .env file to point to your database.")
     
+    resolved_embedding_path = _normalize_embedding_path(
+        os.getenv("OMOP_EMB_EMBEDDING_PATH") or embedding_path
+    )
+    resolved_api_base = _normalize_api_base(api_base, resolved_embedding_path)
+
     engine = sa.create_engine(engine_string, future=True, echo=False)
     assert engine.dialect.name == "postgresql", "Only PostgreSQL databases are supported for embedding storage with the current backends. Please check your `OMOP_DATABASE_URL` environment variable and ensure it points to a PostgreSQL database."
     resolved_model = _resolve_model_name(model)
@@ -136,11 +166,13 @@ def add_embeddings(
     interface = EmbeddingInterface.from_backend_name(
         backend_name=backend_name,
         faiss_base_dir=faiss_base_dir,
-        embedding_client=LLMClient(
+        embedding_client=OpenAICompatibleEmbeddingClient(
             model=resolved_model,
-            api_base=api_base,
+            api_base=resolved_api_base,
             api_key=api_key,
-            embedding_batch_size=batch_size
+            embedding_batch_size=batch_size,
+            embedding_path=resolved_embedding_path,
+            encoding_format="float",
         ),
     )
     resolved_embedding_dim = _resolve_embedding_dim(interface, embedding_dim)

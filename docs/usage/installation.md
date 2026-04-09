@@ -64,14 +64,3 @@ That avoids silent fallback between backend implementations.
 If it is not set, `omop-emb` defaults to `./.omop_emb` in the current working directory.
 If a provided path includes `~`, it is expanded automatically.
 
-## Current database support caveat
-
-PostgreSQL-specific embedding dependencies are now optional, but the broader
-system has not yet been tested against non-PostgreSQL database backends.
-
-So the current position is:
-
-- PostgreSQL embedding infrastructure is optional
-- a database backend is still always required
-- database backends other than PostgreSQL should currently be treated as
-  unverified

@@ -1,4 +1,4 @@
-# Backend Selection
+# Backend Selection for embeddings
 
 `omop-emb` now has a backend abstraction layer so embedding storage and
 retrieval can be selected explicitly instead of being inferred implicitly from

@@ -33,18 +33,17 @@ At runtime, backend choice should also be explicit. The intended direction is:
 
 Recommended runtime environment variables:
 
-- `OMOP_EMB_BACKEND` (`pgvector` or `faiss`)
-- `OMOP_EMB_BASE_STORAGE_DIR` (base directory for local metadata and FAISS artifacts; defaults to `./.omop_emb` in the current working directory if unset)
-- `OMOP_DATABASE_URL` (OMOP CDM database URL)
+- **`OMOP_EMB_BACKEND`**: `pgvector` or `faiss`
+- **`OMOP_EMB_BASE_STORAGE_DIR`**: base directory for local metadata and FAISS artifacts; defaults to `omop_emb/.omop_emb` the root direcotry of hte package.
+- **`OMOP_DATABASE_URL`**: OMOP CDM database URL
 
 
 !!! info "Important caveats"
-
-  - `omop-emb` depends on OMOP CDM database access for concept metadata and filtering.
-  - Current operational and test coverage is PostgreSQL-focused.
+    - `omop-emb` depends on OMOP CDM database access for concept metadata and filtering.
+    - Current operational and test coverage is PostgreSQL-focused. Extension planned in the future.
 
 
 ## Documentation overview
 - [Installation](usage/installation.md)
-- [Backend Selection](usage/backend-selection.md)
+- [Embedding storage backends](usage/backend-selection.md)
 - [CLI Reference](usage/cli.md)

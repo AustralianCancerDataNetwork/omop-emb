@@ -1398,7 +1398,7 @@ wheels = [
 
 [[package]]
 name = "omop-emb"
-version = "0.2.2"
+version = "0.2.5"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },

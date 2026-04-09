@@ -4,7 +4,6 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from orm_loader.helpers import get_logger, configure_logging, create_db
-from omop_alchemy.cdm.model.vocabulary import Concept
 
 from typing import Annotated, Optional
 import os
@@ -16,10 +15,54 @@ from omop_emb.backends import (
     EmbeddingConceptFilter,
 )
 from omop_emb.interface import EmbeddingInterface
-from omop_emb.backends.config import BackendType, IndexType
+from omop_emb.backends.config import IndexType
 
 app = typer.Typer()
 logger = get_logger(__name__)
+
+
+def _resolve_model_name(model: Optional[str]) -> str:
+    resolved_model = model or os.getenv("OMOP_EMB_MODEL") or "text-embedding-3-small"
+    if not resolved_model:
+        raise RuntimeError(
+            "No embedding model configured. Pass `--model` or set `OMOP_EMB_MODEL`."
+        )
+    return resolved_model
+
+
+def _resolve_embedding_dim(
+    interface: EmbeddingInterface,
+    embedding_dim: Optional[int],
+) -> int:
+    if embedding_dim is None:
+        raw_dim = os.getenv("OMOP_EMB_EMBEDDING_DIM")
+        if raw_dim:
+            try:
+                embedding_dim = int(raw_dim)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "OMOP_EMB_EMBEDDING_DIM must be an integer."
+                ) from exc
+
+    if embedding_dim is not None:
+        if embedding_dim <= 0:
+            raise RuntimeError("Embedding dimension override must be a positive integer.")
+        return embedding_dim
+
+    try:
+        resolved_dim = interface.embedding_dim
+    except NotImplementedError as exc:
+        raise RuntimeError(
+            "Embedding dimension could not be inferred from the configured API client. "
+            "Pass `--embedding-dim` or set `OMOP_EMB_EMBEDDING_DIM`."
+        ) from exc
+
+    if resolved_dim is None:
+        raise RuntimeError(
+            "Embedding dimensions could not be determined from the embedding client. "
+            "Pass `--embedding-dim` or set `OMOP_EMB_EMBEDDING_DIM`."
+        )
+    return resolved_dim
 
 
 @app.command()
@@ -38,9 +81,14 @@ def add_embeddings(
     batch_size: Annotated[int, typer.Option(
         "--batch-size", "-b",
         help="Batch size to use when generating and inserting embeddings. Adjust based on your system's memory capacity.")] = 100,
-    model: Annotated[str, typer.Option(
+    model: Annotated[Optional[str], typer.Option(
         "--model", "-m",
-        help="Name of the embedding model to use for generating concept embeddings (e.g., 'text-embedding-3-small'). If not provided, embeddings will not be generated.")] = "text-embedding-3-small",
+        help="Name of the embedding model to use for generating concept embeddings. Can also be set with `OMOP_EMB_MODEL`."
+    )] = None,
+    embedding_dim: Annotated[Optional[int], typer.Option(
+        "--embedding-dim",
+        help="Explicit embedding dimension for the configured model. Use this for OpenAI-compatible endpoints when the client cannot infer dimensions automatically. Can also be set with `OMOP_EMB_EMBEDDING_DIM`."
+    )] = None,
     backend_name: Annotated[Optional[str], typer.Option(
         "--backend",
         help="Embedding backend to use. Can be replaced by the `OMOP_EMB_BACKEND` environment variable."
@@ -71,19 +119,19 @@ def add_embeddings(
     
     engine = sa.create_engine(engine_string, future=True, echo=False)
     assert engine.dialect.name == "postgresql", "Only PostgreSQL databases are supported for embedding storage with the current backends. Please check your `OMOP_DATABASE_URL` environment variable and ensure it points to a PostgreSQL database."
+    resolved_model = _resolve_model_name(model)
 
     interface = EmbeddingInterface.from_backend_name(
         backend_name=backend_name,
         faiss_base_dir=faiss_base_dir,
         embedding_client=LLMClient(
-            model=model,
+            model=resolved_model,
             api_base=api_base,
             api_key=api_key,
             embedding_batch_size=batch_size
         ),
     )
-    embedding_dim = interface.embedding_dim
-    assert embedding_dim is not None, "Embedding dimensions could not be determined from the embedding client."
+    resolved_embedding_dim = _resolve_embedding_dim(interface, embedding_dim)
 
     concept_filter = EmbeddingConceptFilter(
         require_standard=standard_only,
@@ -98,19 +146,19 @@ def add_embeddings(
         interface.ensure_model_registered(
             engine=engine,
             session=reader,
-            model_name=model,
+            model_name=resolved_model,
             index_type=index_type,
-            dimensions=embedding_dim
+            dimensions=resolved_embedding_dim
         )
 
         total_concepts = num_embeddings or interface.get_concepts_without_embedding_count(
             session=reader,
-            model_name=model,
+            model_name=resolved_model,
             concept_filter=concept_filter,
         )
         concepts_without_embedding = interface.get_concepts_without_embedding_query(
             session=reader,
-            model_name=model,
+            model_name=resolved_model,
             concept_filter=concept_filter,
             limit=num_embeddings,
         )
@@ -124,7 +172,7 @@ def add_embeddings(
                 
                 interface.embed_and_upsert_concepts(
                     session=writer,
-                    model_name=model,
+                    model_name=resolved_model,
                     concept_ids=tuple(batch_concepts.keys()),
                     concept_texts=tuple(batch_concepts.values()),
                     batch_size=batch_size,

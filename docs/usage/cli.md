@@ -77,3 +77,25 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 - `OMOP_EMB_MODEL`: default model name if `--model` is omitted.
 - `OMOP_EMB_EMBEDDING_DIM`: explicit embedding dimension override if `--embedding-dim` is omitted.
 - `OMOP_EMB_BACKEND`: default embedding backend if `--backend` is omitted.
+
+## `search`
+
+### Usage
+```bash
+omop-emb search "type 2 diabetes" --api-base <URL> [OPTIONS]
+```
+
+This command embeds the query text and searches the stored embeddings for the
+selected model and backend.
+
+### Common options
+
+- `--model`: registered embedding model name to query.
+- `--backend`: `faiss` or `pgvector`.
+- `--metric-type`: nearest-neighbor metric, default `cosine`.
+- `--k`: number of results to return.
+- `--vocabulary`: optional vocabulary filter on the candidate concepts.
+- `--standard-only`: restrict search to standard OMOP concepts.
+
+The output is tab-separated with `rank`, `concept_id`, `similarity`, and
+`concept_name`.

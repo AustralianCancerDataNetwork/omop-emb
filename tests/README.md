@@ -36,6 +36,24 @@ export TEST_DATABASE_URL="postgresql+psycopg2://user:password@host:port/database
 pytest tests/
 ```
 
+### Existing Database Mode
+
+If you do not want to provide admin credentials, run the PostgreSQL tests inside
+a dedicated schema of an existing database:
+
+```bash
+export TEST_DB_HOST=localhost
+export TEST_DB_PORT=5432
+export TEST_DATABASE_NAME=my_existing_database
+export TEST_DB_USERNAME=my_app_user
+export TEST_DB_PASSWORD=my_app_password
+export TEST_DB_USE_EXISTING=1
+export TEST_DB_SCHEMA=omop_emb_test
+```
+
+In this mode the harness does not create or drop databases or roles. It creates
+tables only inside `TEST_DB_SCHEMA` and sets `search_path` accordingly.
+
 ## Running Tests
 
 ### All tests
@@ -48,14 +66,24 @@ pytest tests/ -v
 pytest tests/ -m unit
 ```
 
-### FAISS backend tests
+### Integration tests only
 ```bash
-pytest tests/ -m faiss
+pytest tests/ -m integration
 ```
 
-### pgvector backend tests
+### FAISS backend integration tests
 ```bash
-pytest tests/ -m pgvector
+pytest tests/ -m "faiss and integration"
+```
+
+### pgvector backend integration tests
+```bash
+pytest tests/ -m "pgvector and integration"
+```
+
+### FAISS-only users
+```bash
+pytest tests/ -m "unit and not pgvector"
 ```
 
 ### Specific test file
@@ -73,7 +101,7 @@ pip install pytest
 ## Test Files
 
 - `conftest.py` - Fixtures and database setup
-- `test_fixtures.py` - Fixture validation tests
+- `test_fixtures.py` - PostgreSQL fixture validation tests
 - `test_interface.py` - EmbeddingInterface tests
 - `test_faiss.py` - FAISS backend tests
 - `test_pgvector.py` - pgvector backend tests
@@ -112,7 +140,8 @@ def test_something(session):
 
 ## Notes
 
-- Tests use PostgreSQL only (no SQLite)
+- Backend and fixture integration tests require PostgreSQL
+- Pure unit tests can be run with `pytest tests/ -m unit`
 - Foreign key constraints are enforced (required data must be complete)
 - Each test gets a clean, isolated session
 - Concept table is truncated before each test

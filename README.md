@@ -66,6 +66,45 @@ Important:
   the vocabulary filter matches nothing, or the model is already registered as
   embedded in the SQL registry.
 
+Stored embeddings can also be queried after ingestion:
+
+```bash
+omop-emb search "type 2 diabetes" \
+  --api-base http://localhost:8000/v1 \
+  --embedding-path /embeddings \
+  --model my-embedding-model \
+  --backend faiss \
+  --faiss-base-dir ./data \
+  --metric-type cosine \
+  --k 5
+```
+
+## DB Test Environment
+
+The PostgreSQL-backed test suite reads these environment variables from
+`tests/conftest.py`:
+
+- `TEST_DB_HOST`: required, PostgreSQL host for the test database server.
+- `TEST_DB_PORT`: required, PostgreSQL port.
+- `TEST_DATABASE_NAME`: optional, defaults to `test_omop_emb`.
+- `TEST_DB_USERNAME`: optional, defaults to `test`.
+- `TEST_DB_PASSWORD`: optional, defaults to `test`.
+- `TEST_DB_DRIVER`: optional, defaults to `postgresql+psycopg2`.
+- `POSTGRES_USER`: optional, defaults to `postgres`; used for creating/dropping the test database.
+- `POSTGRES_PASSWORD`: optional, defaults to `postgres`; used for creating/dropping the test database.
+
+The tests create and drop a dedicated database and role, so the admin user must
+have permission to create roles and databases.
+
+For non-admin testing against an existing database, set:
+
+- `TEST_DB_USE_EXISTING=1`
+- `TEST_DB_SCHEMA=<dedicated_test_schema>`
+
+In that mode, the suite does not create or drop databases or roles. It creates
+its tables inside the specified schema and forces the engine `search_path` into
+that schema so your existing OMOP tables are not touched.
+
 # Project Roadmap
 
 - [x] Interface for postgres storage of vectors

@@ -14,7 +14,7 @@ from omop_emb.backends import (
 )
 from omop_emb.embedding_client import OpenAICompatibleEmbeddingClient
 from omop_emb.interface import EmbeddingInterface
-from omop_emb.backends.config import IndexType
+from omop_emb.backends.config import IndexType, MetricType
 
 app = typer.Typer()
 logger = get_logger(__name__)
@@ -107,6 +107,48 @@ def _compile_sql(query: sa.Select, engine: sa.Engine) -> str:
         return str(query)
 
 
+def _create_engine_from_env() -> sa.Engine:
+    engine_string = os.getenv('OMOP_DATABASE_URL')
+    if engine_string is None:
+        raise RuntimeError("OMOP_DATABASE_URL environment variable not set. Please set it in your .env file to point to your database.")
+
+    engine = sa.create_engine(engine_string, future=True, echo=False)
+    assert engine.dialect.name == "postgresql", "Only PostgreSQL databases are supported for embedding storage with the current backends. Please check your `OMOP_DATABASE_URL` environment variable and ensure it points to a PostgreSQL database."
+    return engine
+
+
+def _create_embedding_interface(
+    *,
+    api_base: str,
+    api_key: Optional[str],
+    batch_size: int,
+    model: Optional[str],
+    backend_name: Optional[str],
+    faiss_base_dir: Optional[str],
+    embedding_path: str,
+) -> tuple[EmbeddingInterface, str]:
+    resolved_embedding_path = _normalize_embedding_path(
+        os.getenv("OMOP_EMB_EMBEDDING_PATH") or embedding_path
+    )
+    resolved_api_base = _normalize_api_base(api_base, resolved_embedding_path)
+    resolved_api_key = _resolve_api_key(api_key)
+    resolved_model = _resolve_model_name(model)
+
+    interface = EmbeddingInterface.from_backend_name(
+        backend_name=backend_name,
+        faiss_base_dir=faiss_base_dir,
+        embedding_client=OpenAICompatibleEmbeddingClient(
+            model=resolved_model,
+            api_base=resolved_api_base,
+            api_key=resolved_api_key,
+            embedding_batch_size=batch_size,
+            embedding_path=resolved_embedding_path,
+            encoding_format="float",
+        ),
+    )
+    return interface, resolved_model
+
+
 @app.command()
 def add_embeddings(
     api_base: Annotated[str, typer.Option(
@@ -163,32 +205,15 @@ def add_embeddings(
 ):
     configure_logging()
     load_dotenv()
-
-    engine_string = os.getenv('OMOP_DATABASE_URL')
-    if engine_string is None:
-        raise RuntimeError("OMOP_DATABASE_URL environment variable not set. Please set it in your .env file to point to your database.")
-    
-    resolved_embedding_path = _normalize_embedding_path(
-        os.getenv("OMOP_EMB_EMBEDDING_PATH") or embedding_path
-    )
-    resolved_api_base = _normalize_api_base(api_base, resolved_embedding_path)
-    resolved_api_key = _resolve_api_key(api_key)
-
-    engine = sa.create_engine(engine_string, future=True, echo=False)
-    assert engine.dialect.name == "postgresql", "Only PostgreSQL databases are supported for embedding storage with the current backends. Please check your `OMOP_DATABASE_URL` environment variable and ensure it points to a PostgreSQL database."
-    resolved_model = _resolve_model_name(model)
-
-    interface = EmbeddingInterface.from_backend_name(
+    engine = _create_engine_from_env()
+    interface, resolved_model = _create_embedding_interface(
+        api_base=api_base,
+        api_key=api_key,
+        batch_size=batch_size,
+        model=model,
         backend_name=backend_name,
         faiss_base_dir=faiss_base_dir,
-        embedding_client=OpenAICompatibleEmbeddingClient(
-            model=resolved_model,
-            api_base=resolved_api_base,
-            api_key=resolved_api_key,
-            embedding_batch_size=batch_size,
-            embedding_path=resolved_embedding_path,
-            encoding_format="float",
-        ),
+        embedding_path=embedding_path,
     )
     resolved_embedding_dim = _resolve_embedding_dim(interface, embedding_dim)
 
@@ -267,6 +292,98 @@ def add_embeddings(
                 pbar.update(len(batch_concepts))
 
     logger.info("Completed embedding generation and storage. Wrote %s embeddings.", processed_concepts)
+
+
+@app.command()
+def search(
+    query_text: Annotated[str, typer.Argument(
+        help="Text to embed and search against stored concept embeddings."
+    )],
+    api_base: Annotated[str, typer.Option(
+        "--api-base",
+        help="Base URL for the API to use for generating query embeddings.",
+    )],
+    api_key: Annotated[Optional[str], typer.Option(
+        "--api-key",
+        help="Optional API key for the embedding API. Can also be set with `OMOP_EMB_API_KEY`."
+    )] = None,
+    batch_size: Annotated[int, typer.Option(
+        "--batch-size", "-b",
+        help="Batch size to use when generating query embeddings."
+    )] = 32,
+    model: Annotated[Optional[str], typer.Option(
+        "--model", "-m",
+        help="Name of the embedding model to query."
+    )] = None,
+    embedding_path: Annotated[str, typer.Option(
+        "--embedding-path",
+        help="Embedding endpoint path relative to `--api-base`, for example `/embeddings` or `/embed`."
+    )] = "/embeddings",
+    backend_name: Annotated[Optional[str], typer.Option(
+        "--backend",
+        help="Embedding backend to query. Can be replaced by the `OMOP_EMB_BACKEND` environment variable."
+    )] = None,
+    faiss_base_dir: Annotated[Optional[str], typer.Option(
+        "--faiss-base-dir",
+        help="Optional base directory for FAISS backend storage."
+    )] = None,
+    metric_type: Annotated[MetricType, typer.Option(
+        "--metric-type",
+        help="Similarity or distance metric to use for nearest-neighbor search."
+    )] = MetricType.COSINE,
+    k: Annotated[int, typer.Option(
+        "--k",
+        help="Number of nearest concepts to return."
+    )] = 10,
+    standard_only: Annotated[bool, typer.Option(
+        "--standard-only",
+        help="If set, only search within OMOP standard concepts."
+    )] = False,
+    vocabularies: Annotated[Optional[list[str]], typer.Option(
+        "--vocabulary",
+        help="Optional vocabulary filter. Repeat to restrict the search space."
+    )] = None,
+):
+    configure_logging()
+    load_dotenv()
+
+    engine = _create_engine_from_env()
+    interface, resolved_model = _create_embedding_interface(
+        api_base=api_base,
+        api_key=api_key,
+        batch_size=batch_size,
+        model=model,
+        backend_name=backend_name,
+        faiss_base_dir=faiss_base_dir,
+        embedding_path=embedding_path,
+    )
+    concept_filter = EmbeddingConceptFilter(
+        require_standard=standard_only,
+        vocabularies=tuple(vocabularies) if vocabularies else None,
+    )
+
+    interface.initialise_store(engine)
+
+    with Session(engine) as session:
+        query_embeddings = interface.embed_texts(query_text, batch_size=batch_size)
+        matches = interface.backend.get_nearest_concepts(
+            session=session,
+            model_name=resolved_model,
+            query_embeddings=query_embeddings,
+            metric_type=metric_type,
+            concept_filter=concept_filter,
+            k=k,
+        )
+
+    typer.echo("rank\tconcept_id\tsimilarity\tconcept_name")
+    if not matches or not matches[0]:
+        logger.info("No search results found for model '%s'.", resolved_model)
+        return
+
+    for rank, match in enumerate(matches[0], start=1):
+        typer.echo(
+            f"{rank}\t{match.concept_id}\t{match.similarity:.6f}\t{match.concept_name}"
+        )
 
 
 if __name__ == "__main__":

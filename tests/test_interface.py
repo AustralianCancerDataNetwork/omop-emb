@@ -14,10 +14,10 @@ from omop_emb.backends.errors import ModelRegistrationConflictError
 from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM
 
 
-@pytest.mark.unit
 class TestInterface:
     """Test EmbeddingInterface core functionality."""
-    
+
+    @pytest.mark.integration
     def test_register_model(self, session, embedding_interface: EmbeddingInterface):
         """Test registering an embedding model."""
         model = embedding_interface.ensure_model_registered(
@@ -31,6 +31,7 @@ class TestInterface:
         assert model.model_name == MODEL_NAME
         assert model.dimensions == EMBEDDING_DIM
     
+    @pytest.mark.integration
     def test_model_registration_idempotent(self, session, embedding_interface: EmbeddingInterface):
         """Test registering same model twice returns existing."""
         m1 = embedding_interface.ensure_model_registered(
@@ -51,6 +52,7 @@ class TestInterface:
         
         assert m1.storage_identifier == m2.storage_identifier
 
+    @pytest.mark.unit
     def test_model_registration_dimension_conflict_raises(self, mock_llm_client):
         backend = Mock()
         backend.get_registered_model.return_value = EmbeddingModelRecord(
@@ -76,6 +78,7 @@ class TestInterface:
 
         assert excinfo.value.conflict_field == "dimensions"
 
+    @pytest.mark.unit
     def test_model_registration_dimension_conflict_overwrites_when_requested(self, mock_llm_client):
         backend = Mock()
         backend.get_registered_model.return_value = EmbeddingModelRecord(
@@ -116,6 +119,7 @@ class TestInterface:
         backend.register_model.assert_called_once()
         assert model.dimensions == 512
     
+    @pytest.mark.integration
     def test_is_model_registered(self, session, embedding_interface: EmbeddingInterface):
         """Test checking model registration status."""
         assert not embedding_interface.is_model_registered(session, MODEL_NAME)
@@ -130,20 +134,31 @@ class TestInterface:
         
         assert embedding_interface.is_model_registered(session, MODEL_NAME)
     
-    def test_embed_texts(self, embedding_interface: EmbeddingInterface):
+    @pytest.mark.unit
+    def test_embed_texts(self, mock_llm_client):
         """Test embedding generation."""
+        embedding_interface = EmbeddingInterface(
+            embedding_client=mock_llm_client,
+            backend=Mock(),
+        )
         embeddings = embedding_interface.embed_texts(CONCEPTS["Hypertension"].concept_name)
         
         assert embeddings.shape == (1, EMBEDDING_DIM)
         assert embeddings.dtype == np.float32
     
-    def test_embed_multiple_texts(self, embedding_interface: EmbeddingInterface):
+    @pytest.mark.unit
+    def test_embed_multiple_texts(self, mock_llm_client):
         """Test embedding multiple texts."""
+        embedding_interface = EmbeddingInterface(
+            embedding_client=mock_llm_client,
+            backend=Mock(),
+        )
         texts = [c.concept_name for c in CONCEPTS.values()]
         embeddings = embedding_interface.embed_texts(texts)
         
         assert embeddings.shape == (len(texts), EMBEDDING_DIM)
     
+    @pytest.mark.integration
     def test_embed_and_upsert(self, session, embedding_interface: EmbeddingInterface):
         """Test embedding and upserting concepts."""
         embedding_interface.ensure_model_registered(
@@ -168,6 +183,7 @@ class TestInterface:
         assert embeddings.shape == (2, EMBEDDING_DIM)
         assert embedding_interface.has_any_embeddings(session, MODEL_NAME)
     
+    @pytest.mark.integration
     def test_get_embeddings_by_concept_ids(self, session, embedding_interface: EmbeddingInterface):
         """Test retrieving stored embeddings."""
         embedding_interface.ensure_model_registered(
@@ -198,8 +214,9 @@ class TestInterface:
         assert len(retrieved) == 2
         assert 1 in retrieved and 2 in retrieved
 
+    @pytest.mark.unit
     @pytest.mark.parametrize("backend_name", ["faiss", "pgvector"])
-    def test_search_return_structure_for_backends(self, session, mock_llm_client, backend_name):
+    def test_search_return_structure_for_backends(self, mock_llm_client, backend_name):
         """Search returns tuple[dict[int, float], ...] for both backend modes."""
         mock_backend = Mock()
         mock_backend.get_nearest_concepts.return_value = (
@@ -228,7 +245,7 @@ class TestInterface:
 
         query_embedding = np.zeros((1, EMBEDDING_DIM), dtype=np.float32)
         result = interface.get_nearest_concepts(
-            session=session,
+            session=Mock(),
             model_name=MODEL_NAME,
             query_embedding=query_embedding,
             metric_type=MetricType.COSINE,

@@ -55,7 +55,7 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 | :--- | :--- | :--- | :--- | :--- |
 | **`--api-base`** | | `String` | **Required** | Base URL for the embedding API service, e.g. `http://localhost:8000/v1`. |
 | **`--embedding-path`** | | `String` | `/embeddings` or `OMOP_EMB_EMBEDDING_PATH` | Relative path for the embedding endpoint, e.g. `/embeddings` or `/embed`. |
-| **`--api-key`** | | `String` | **Required** | API key for the embedding API provider. |
+| **`--api-key`** | | `String` | `OMOP_EMB_API_KEY` or none | Optional API key for the embedding API provider. |
 | **`--index-type`** | | `IndexType` | `FLAT` | The storage index for the embeddings for retrieval. Currently supported: `FLAT`. |
 | **`--batch-size`** | `-b` | `Integer` | `100` | Number of concepts to process in each chunk. |
 | **`--model`** | `-m` | `String` | `OMOP_EMB_MODEL` or `text-embedding-3-small` | Name of the embedding model to use for generating vectors. |
@@ -71,6 +71,7 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 - `OMOP_DATABASE_URL`: database connection string for the OMOP store.
   The connection should resolve the OMOP `concept` table via PostgreSQL
   `search_path` if your vocabulary tables are not in the default schema.
+- `OMOP_EMB_API_KEY`: optional API key if your embedding service requires it.
 - `OMOP_EMB_EMBEDDING_PATH`: embedding endpoint path if `--embedding-path` is omitted.
 - `OMOP_EMB_MODEL`: default model name if `--model` is omitted.
 - `OMOP_EMB_EMBEDDING_DIM`: explicit embedding dimension override if `--embedding-dim` is omitted.

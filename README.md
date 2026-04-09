@@ -34,7 +34,6 @@ Example:
 ```bash
 omop-emb add-embeddings \
   --api-base http://localhost:8000/v1/embeddings \
-  --api-key <key> \
   --backend faiss \
   --faiss-base-dir ./data \
   --model my-embedding-model \
@@ -49,6 +48,7 @@ Important:
   OMOP vocabulary tables.
 - The CLI is intended to work against an existing OMOP database. It should not
   attempt to create the full OMOP schema.
+- `--api-key` is optional. Use it only if your embedding service expects bearer-token authentication.
 - `--api-base` should be the API base URL, for example `http://localhost:8000/v1`,
   not the full embeddings endpoint path. Use `--embedding-path` if your server
   expects a non-standard endpoint such as `/embed`.

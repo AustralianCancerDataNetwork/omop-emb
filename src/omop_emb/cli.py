@@ -29,6 +29,15 @@ def _resolve_model_name(model: Optional[str]) -> str:
     return resolved_model
 
 
+def _resolve_api_key(api_key: Optional[str]) -> Optional[str]:
+    resolved_api_key = api_key
+    if resolved_api_key is None:
+        resolved_api_key = os.getenv("OMOP_EMB_API_KEY")
+    if resolved_api_key == "":
+        return None
+    return resolved_api_key
+
+
 def _resolve_embedding_dim(
     interface: EmbeddingInterface,
     embedding_dim: Optional[int],
@@ -104,9 +113,10 @@ def add_embeddings(
         "--api-base",
         help="Base URL for the API to use for generating embeddings.",
     )],
-    api_key: Annotated[str, typer.Option(
+    api_key: Annotated[Optional[str], typer.Option(
         "--api-key",
-        help="API key for the embedding API.")],
+        help="Optional API key for the embedding API. Can also be set with `OMOP_EMB_API_KEY`."
+    )] = None,
     index_type: Annotated[IndexType, typer.Option(
         "--index-type",
         help="Backend-specific index type for newly registered models and how it should be stored.",
@@ -158,6 +168,7 @@ def add_embeddings(
         os.getenv("OMOP_EMB_EMBEDDING_PATH") or embedding_path
     )
     resolved_api_base = _normalize_api_base(api_base, resolved_embedding_path)
+    resolved_api_key = _resolve_api_key(api_key)
 
     engine = sa.create_engine(engine_string, future=True, echo=False)
     assert engine.dialect.name == "postgresql", "Only PostgreSQL databases are supported for embedding storage with the current backends. Please check your `OMOP_DATABASE_URL` environment variable and ensure it points to a PostgreSQL database."
@@ -169,7 +180,7 @@ def add_embeddings(
         embedding_client=OpenAICompatibleEmbeddingClient(
             model=resolved_model,
             api_base=resolved_api_base,
-            api_key=api_key,
+            api_key=resolved_api_key,
             embedding_batch_size=batch_size,
             embedding_path=resolved_embedding_path,
             encoding_format="float",

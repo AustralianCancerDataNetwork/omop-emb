@@ -9,6 +9,7 @@ import pytest
 from omop_emb.cli import (
     _normalize_api_base,
     _normalize_embedding_path,
+    _resolve_api_key,
     _resolve_embedding_dim,
     _resolve_model_name,
 )
@@ -54,6 +55,21 @@ class TestCliHelpers:
 
         with pytest.raises(RuntimeError, match="--embedding-dim"):
             _resolve_embedding_dim(interface, None)
+
+    def test_resolve_api_key_uses_cli_value(self, monkeypatch):
+        monkeypatch.setenv("OMOP_EMB_API_KEY", "env-key")
+
+        assert _resolve_api_key("cli-key") == "cli-key"
+
+    def test_resolve_api_key_uses_env_value(self, monkeypatch):
+        monkeypatch.setenv("OMOP_EMB_API_KEY", "env-key")
+
+        assert _resolve_api_key(None) == "env-key"
+
+    def test_resolve_api_key_allows_missing_value(self, monkeypatch):
+        monkeypatch.delenv("OMOP_EMB_API_KEY", raising=False)
+
+        assert _resolve_api_key(None) is None
 
     def test_normalize_api_base_strips_embeddings_suffix(self):
         assert _normalize_api_base("http://localhost:8000/v1/embeddings", "/embeddings") == "http://localhost:8000/v1"

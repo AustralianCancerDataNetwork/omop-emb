@@ -27,7 +27,7 @@ class EmbeddingClientProtocol(Protocol):
 class OpenAICompatibleEmbeddingClient:
     model: str
     api_base: str
-    api_key: str
+    api_key: Optional[str] = None
     embedding_batch_size: int = 32
     embedding_path: str = "/embeddings"
     encoding_format: str = "float"
@@ -84,8 +84,9 @@ class OpenAICompatibleEmbeddingClient:
 
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
         }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         batch_buffer: list[list[float]] = []
 
         for batch_chunk_idx in range(0, len(text), batch_size):

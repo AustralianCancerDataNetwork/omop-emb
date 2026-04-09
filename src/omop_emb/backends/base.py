@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, mapped_column
 
 from omop_alchemy.cdm.model.vocabulary import Concept
 
-from .registry import ModelRegistry, ensure_model_registry_schema
+from .registry import ModelRegistry, ensure_model_registry_schema, get_metadata_schema
 from .config import BackendType, SUPPORTED_INDICES_AND_METRICS_PER_BACKEND, IndexType, MetricType
 from .errors import ModelRegistrationConflictError
 from .embedding_utils import (
@@ -115,6 +115,15 @@ class EmbeddingBackend(ABC, Generic[T]):
                 # Create the class and cache it
                 dynamic_table = self._create_storage_table(engine=engine, entry=model_entry)
                 self.model_cache[model_entry.model_name] = dynamic_table
+
+    def has_stale_model_artifacts(self, model_name: str) -> bool:
+        """
+        Return True if backend-owned artifacts exist for ``model_name`` outside
+        the SQL registry.
+
+        Backends without external storage can use the default implementation.
+        """
+        return False
 
     def list_registered_models(self, session: Session) -> Sequence[EmbeddingModelRecord]:
         """Return all embedding models known to this backend."""
@@ -390,7 +399,9 @@ class EmbeddingBackend(ABC, Generic[T]):
             return False
 
         session.execute(
-            text(f'DROP TABLE IF EXISTS "{record.storage_identifier}" CASCADE')
+            text(
+                f'DROP TABLE IF EXISTS "{get_metadata_schema()}"."{record.storage_identifier}" CASCADE'
+            )
         )
         row = session.scalar(
             select(ModelRegistry).where(

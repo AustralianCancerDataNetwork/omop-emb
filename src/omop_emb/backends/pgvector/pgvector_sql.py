@@ -12,7 +12,7 @@ import logging
 from numpy import ndarray
 
 from ..config import BackendType, IndexType, MetricType
-from ..registry import ModelRegistry
+from ..registry import ModelRegistry, get_metadata_schema
 from ..base import ConceptIDEmbeddingBase
 from ..embedding_utils import EmbeddingConceptFilter, get_similarity_from_distance
 
@@ -39,14 +39,23 @@ def create_pg_embedding_table(
             "__tablename__": tablename,
             # We override the attribute with the specific dimension-aware column
             "embedding": mapped_column(Vector(dimensions), nullable=False, index=False),
-            "__table_args__": {"extend_existing": True},
+            "__table_args__": {
+                "extend_existing": True,
+                "schema": get_metadata_schema(),
+            },
         }
     )
     Base.metadata.create_all(engine, tables=[table.__table__])  # type: ignore[arg-type]
 
     with engine.connect() as conn:
         inspector = inspect(conn)
-        existing_indexes = [idx['name'] for idx in inspector.get_indexes(model_registry_entry.storage_identifier)]
+        existing_indexes = [
+            idx["name"]
+            for idx in inspector.get_indexes(
+                model_registry_entry.storage_identifier,
+                schema=get_metadata_schema(),
+            )
+        ]
         
         create_index_sql = _create_index_sql(
             model_registry_entry.storage_identifier,
@@ -100,6 +109,9 @@ def add_embeddings_to_registered_table(
 
 
 def _create_index_sql(table_name: str, index_type: IndexType) -> Optional[str]:
+    schema = get_metadata_schema()
+    qualified_table_name = f'"{schema}"."{table_name}"'
+    qualified_index_name = f'"{schema}"."{_index_from_storage_identifier(table_name)}"'
     if index_type == IndexType.FLAT:
         pass # No additional index needed for flat, as the vector column itself can be used for sequential scan
     else:

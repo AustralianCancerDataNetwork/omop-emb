@@ -18,7 +18,7 @@ requires database-backed OMOP access and model registration.
 ## PostgreSQL backend
 
 ```bash
-pip install "omop-emb[postgres]"
+pip install "omop-emb[pgvector]"
 ```
 
 Use this when you want the current pgvector/PostgreSQL-backed embedding store
@@ -52,7 +52,7 @@ install-time.
 Examples:
 
 ```bash
-export OMOP_EMB_BACKEND=postgres
+export OMOP_EMB_BACKEND=pgvector
 export OMOP_EMB_BACKEND=faiss
 ```
 

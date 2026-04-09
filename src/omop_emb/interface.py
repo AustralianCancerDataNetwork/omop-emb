@@ -253,10 +253,30 @@ class EmbeddingInterface:
         Ensure the embedding model exists in the selected backend.
         """
 
+        if overwrite_existing_conflicts:
+            self.backend.delete_model(
+                engine=engine,
+                session=session,
+                model_name=model_name,
+            )
+            return self.backend.register_model(
+                engine=engine,
+                model_name=model_name,
+                dimensions=dimensions,
+                index_type=index_type,
+                metadata=metadata,
+            )
+
         existing = self.backend.get_registered_model(
             session=session,
             model_name=model_name,
         )
+        if existing is None and self.backend.has_stale_model_artifacts(model_name):
+            raise RuntimeError(
+                f"Backend artifacts already exist for model '{model_name}' but no matching "
+                "SQL registration was found. Re-run with "
+                "`--overwrite-model-registration` to force a clean rebuild."
+            )
         if existing is not None:
             conflict: Optional[ModelRegistrationConflictError] = None
             if existing.dimensions != dimensions:
@@ -285,14 +305,6 @@ class EmbeddingInterface:
                 return existing
             if not overwrite_existing_conflicts:
                 raise conflict
-
-            self.backend.delete_model(
-                engine=engine,
-                session=session,
-                model_name=model_name,
-            )
-        else:
-            pass
 
         return self.backend.register_model(
             engine=engine,

@@ -118,6 +118,60 @@ class TestInterface:
         )
         backend.register_model.assert_called_once()
         assert model.dimensions == 512
+
+    @pytest.mark.unit
+    def test_model_registration_overwrite_rebuilds_even_without_conflict(self, mock_llm_client):
+        backend = Mock()
+        backend.register_model.return_value = EmbeddingModelRecord(
+            model_name=MODEL_NAME,
+            dimensions=512,
+            backend_type=BackendType.FAISS,
+            index_type=IndexType.FLAT,
+            storage_identifier="faiss_test_model",
+        )
+        interface = EmbeddingInterface(
+            embedding_client=mock_llm_client,
+            backend=backend,
+        )
+        engine = Mock()
+        session = Mock()
+
+        model = interface.ensure_model_registered(
+            engine=engine,
+            session=session,
+            model_name=MODEL_NAME,
+            dimensions=512,
+            index_type=IndexType.FLAT,
+            overwrite_existing_conflicts=True,
+        )
+
+        backend.delete_model.assert_called_once_with(
+            engine=engine,
+            session=session,
+            model_name=MODEL_NAME,
+        )
+        backend.get_registered_model.assert_not_called()
+        backend.register_model.assert_called_once()
+        assert model.dimensions == 512
+
+    @pytest.mark.unit
+    def test_model_registration_raises_for_stale_backend_artifacts(self, mock_llm_client):
+        backend = Mock()
+        backend.get_registered_model.return_value = None
+        backend.has_stale_model_artifacts.return_value = True
+        interface = EmbeddingInterface(
+            embedding_client=mock_llm_client,
+            backend=backend,
+        )
+
+        with pytest.raises(RuntimeError, match="overwrite-model-registration"):
+            interface.ensure_model_registered(
+                engine=Mock(),
+                session=Mock(),
+                model_name=MODEL_NAME,
+                dimensions=512,
+                index_type=IndexType.FLAT,
+            )
     
     @pytest.mark.integration
     def test_is_model_registered(self, session, embedding_interface: EmbeddingInterface):

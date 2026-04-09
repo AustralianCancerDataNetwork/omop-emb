@@ -11,7 +11,9 @@ The current backend factory recognizes:
 - `pgvector`: The [pgvector](https://github.com/pgvector/pgvector) extension to a standard postgres database to store embeddings directly in the database.
 - `faiss`: The [FAISS](https://github.com/facebookresearch/faiss) storage solution for on-disk storage.
 
-The default backend name is currently `postgres`.
+The supported backend names are `pgvector` and `faiss`. There is no implicit
+default in the backend factory; callers must pass a backend explicitly or set
+`OMOP_EMB_BACKEND`.
 
 ## Runtime selection
 
@@ -23,7 +25,7 @@ The intended pattern is:
 Examples:
 
 ```bash
-export OMOP_EMB_BACKEND=postgres
+export OMOP_EMB_BACKEND=pgvector
 export OMOP_EMB_BACKEND=faiss
 ```
 
@@ -36,7 +38,7 @@ The backend factory lives in `omop_emb.backends`:
 ```python
 from omop_emb.backends import get_embedding_backend
 
-backend = get_embedding_backend("postgres")
+backend = get_embedding_backend("pgvector")
 backend = get_embedding_backend("faiss")
 ```
 
@@ -77,7 +79,7 @@ At the moment:
 
 - the backend abstraction and backend factory exist
 - PostgreSQL and FAISS backend classes exist
-- the production CLI path still targets the PostgreSQL embedding workflow
+- the CLI supports both `pgvector` and `faiss` backends via `--backend`
 - PostgreSQL-specific embedding dependencies are optional, but a database
   backend is still required for OMOP access and model registration
 - model registration is intended to remain shared and database-backed even when

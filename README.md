@@ -7,14 +7,14 @@ Embedding layer for OMOP CDM.
 can match the embedding backend you actually intend to use.
 
 ```bash
-pip install "omop-emb[postgres]"
+pip install "omop-emb[pgvector]"
 pip install "omop-emb[faiss]"
 pip install "omop-emb[all]"
 ```
 
 Notes:
 
-- `postgres` installs the PostgreSQL/pgvector dependencies.
+- `pgvector` installs the PostgreSQL/pgvector dependencies.
 - `faiss` installs the FAISS-based backend dependencies. This currently only includes CPU support
 - `all` installs both backend stacks for development or mixed environments.
 - A plain `pip install omop-emb` installs the shared core package only.
@@ -33,7 +33,8 @@ Example:
 
 ```bash
 omop-emb add-embeddings \
-  --api-base http://localhost:8000/v1/embeddings \
+  --api-base http://localhost:8000/v1 \
+  --embedding-path /embeddings \
   --backend faiss \
   --faiss-base-dir ./data \
   --model my-embedding-model \
@@ -46,6 +47,9 @@ Important:
 
 - `OMOP_DATABASE_URL` must point to the PostgreSQL database that exposes your
   OMOP vocabulary tables.
+- `OMOP_EMB_METADATA_SCHEMA` controls where `omop-emb` creates its own
+  `model_registry` and backend-specific metadata tables. The default is
+  `public`.
 - The CLI is intended to work against an existing OMOP database. It should not
   attempt to create the full OMOP schema.
 - `--api-key` is optional. Use it only if your embedding service expects bearer-token authentication.
@@ -55,6 +59,8 @@ Important:
 - If you need to change the registered dimensions or other model configuration
   for an existing model name, use `--overwrite-model-registration`. This deletes
   the existing backend storage and model registry entry before re-registering it.
+  For FAISS, this also deletes the model's on-disk directory so the vector store
+  is rebuilt cleanly.
 - The code queries the OMOP `concept` table by ORM table name, not by a
   hard-coded schema-qualified path such as `vocabulary.concept`.
 - PostgreSQL resolves that table through the connection `search_path`. If your
@@ -104,6 +110,20 @@ For non-admin testing against an existing database, set:
 In that mode, the suite does not create or drop databases or roles. It creates
 its tables inside the specified schema and forces the engine `search_path` into
 that schema so your existing OMOP tables are not touched.
+
+To run only non-database unit tests:
+
+```bash
+pytest -m unit
+```
+
+To run FAISS integration tests against an existing PostgreSQL database/schema:
+
+```bash
+TEST_DB_USE_EXISTING=1 \
+TEST_DB_SCHEMA=omop_emb_test \
+pytest -m "faiss and integration"
+```
 
 # Project Roadmap
 

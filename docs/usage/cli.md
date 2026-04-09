@@ -2,7 +2,9 @@
 
 This tool generates vector embeddings for OMOP CDM concepts and stores them in the configured embedding backend.
 
-At present, the production CLI path is PostgreSQL-oriented and stores embeddings in Postgres/pgvector-backed model tables. It specifically targets concepts that do not yet have embeddings and processes them in batches.
+The CLI targets concepts that do not yet have embeddings for the selected model
+and backend, processes them in batches, and stores the results in either the
+`pgvector` or `faiss` backend.
 
 !!! note "Supported Models"
 
@@ -16,7 +18,8 @@ At present, the production CLI path is PostgreSQL-oriented and stores embeddings
 - **Installation**: install the PostgreSQL backend dependencies:
 
   ```bash
-  pip install "omop-emb[postgres]"
+  pip install "omop-emb[pgvector]"
+  pip install "omop-emb[faiss]"
   ```
 
 - **Database**: Postgres implementation of OMOP CDM. See [`omop-graph` documentation](reference-missing) for information how to setup.
@@ -28,13 +31,9 @@ At present, the production CLI path is PostgreSQL-oriented and stores embeddings
   PostgreSQL connection `search_path`. If your OMOP tables live in a schema such
   as `staging_vocabulary`, ensure the connection resolves `concept` to that
   schema.
-- **Connectivity**: Access to an embeddings endpoint compatible with the
-  configured `omop-llm` client.
-
-!!! note "Backend Scope"
-
-    `omop-emb` now defines a backend abstraction layer for both PostgreSQL and FAISS-style storage.
-    The current `add-embeddings` CLI still targets the PostgreSQL backend path.
+- **Connectivity**: Access to an embedding endpoint that accepts batched text
+  input and returns numeric embedding vectors. OpenAI-compatible APIs and
+  custom shim services are supported via `--api-base` plus `--embedding-path`.
 
 ---
 
@@ -42,7 +41,7 @@ At present, the production CLI path is PostgreSQL-oriented and stores embeddings
 
 ### Usage
 ```bash
-omop-emb add-embeddings --api-base <URL> --api-key <KEY> [OPTIONS]
+omop-emb add-embeddings --api-base <URL> [OPTIONS]
 ```
 where `[OPTIONS]` are optional arguments that can be specified as described below.
 
@@ -60,8 +59,8 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 | **`--batch-size`** | `-b` | `Integer` | `100` | Number of concepts to process in each chunk. |
 | **`--model`** | `-m` | `String` | `OMOP_EMB_MODEL` or `text-embedding-3-small` | Name of the embedding model to use for generating vectors. |
 | **`--embedding-dim`** | | `Integer` | `OMOP_EMB_EMBEDDING_DIM` or auto-detect | Explicit embedding dimension override for models whose dimensions cannot be inferred automatically. |
-| **`--overwrite-model-registration`** | | `Boolean` | `False` | Delete any existing registration and backend storage for this model name before re-registering it. |
-| **`--backend`** | | `Literal['pgvector', 'faiss']` | `None` | Embedding backend to use (can be replaced by `OMOP_EMB_BACKEND` env var). Requires the respective backend installed using `pip install omop-emb[pgvector or faiss]` |
+| **`--overwrite-model-registration`** | | `Boolean` | `False` | Force a clean rebuild for this model name by deleting backend-owned storage and SQL registration before re-registering it. |
+| **`--backend`** | | `Literal['pgvector', 'faiss']` | `OMOP_EMB_BACKEND` | Embedding backend to use. Requires the respective backend extra to be installed. |
 | **`--faiss-base-dir`** | | `String` | `None` | Optional base directory for FAISS backend storage. |
 | **`--standard-only`** | | `Boolean` | `False` | If set, only generate embeddings for OMOP standard concepts (`standard_concept = 'S'`). |
 | **`--vocabulary`** | | `List[String]` | `None` | Filter to embed concepts only from specific OMOP vocabularies. |
@@ -72,11 +71,35 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 - `OMOP_DATABASE_URL`: database connection string for the OMOP store.
   The connection should resolve the OMOP `concept` table via PostgreSQL
   `search_path` if your vocabulary tables are not in the default schema.
+- `OMOP_EMB_METADATA_SCHEMA`: schema for `omop-emb`'s own `model_registry` and
+  backend-specific metadata tables. Defaults to `public`.
 - `OMOP_EMB_API_KEY`: optional API key if your embedding service requires it.
 - `OMOP_EMB_EMBEDDING_PATH`: embedding endpoint path if `--embedding-path` is omitted.
 - `OMOP_EMB_MODEL`: default model name if `--model` is omitted.
 - `OMOP_EMB_EMBEDDING_DIM`: explicit embedding dimension override if `--embedding-dim` is omitted.
 - `OMOP_EMB_BACKEND`: default embedding backend if `--backend` is omitted.
+- `OMOP_EMB_FAISS_INDEX_DIR`: optional FAISS storage base dir used when the backend is `faiss`.
+
+### Notes
+
+- `--api-base` should be the base service URL such as `http://localhost:8000/v1`,
+  not the full embeddings endpoint. Use `--embedding-path` for endpoint shapes
+  such as `/embeddings` or `/embed`.
+- `--api-key` is optional. If omitted, no bearer token is sent.
+- `--num-embeddings` is only an upper bound. The actual selected count may be
+  lower, including zero.
+- `OMOP_EMB_METADATA_SCHEMA` is separate from the OMOP vocabulary schema. It
+  controls where `omop-emb` stores `model_registry` and backend-owned tables,
+  while `concept` is still resolved through the database connection's
+  `search_path`.
+- If an existing model name is already registered with different dimensions or
+  other incompatible configuration, use `--overwrite-model-registration` to
+  delete the old backend storage and re-register it.
+- For FAISS, `--overwrite-model-registration` also deletes the model's on-disk
+  directory so stale HDF5/index files cannot survive into the rebuild.
+- If stale FAISS artifacts exist on disk without a matching SQL registration,
+  the CLI now fails early and tells you to rerun with
+  `--overwrite-model-registration`.
 
 ## `search`
 
@@ -96,6 +119,8 @@ selected model and backend.
 - `--k`: number of results to return.
 - `--vocabulary`: optional vocabulary filter on the candidate concepts.
 - `--standard-only`: restrict search to standard OMOP concepts.
+- `--embedding-path`: relative embedding endpoint path such as `/embeddings` or `/embed`.
+- `--api-key`: optional bearer token for the embedding service.
 
 The output is tab-separated with `rank`, `concept_id`, `similarity`, and
 `concept_name`.

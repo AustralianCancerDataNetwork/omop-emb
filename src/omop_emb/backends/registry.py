@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from sqlalchemy import DateTime, Engine, Integer, JSON, String, func, inspect, text, Enum
 from sqlalchemy.orm import mapped_column, validates
 
@@ -11,6 +13,13 @@ from .config import (
     IndexType, 
     BackendType
 )
+
+
+ENV_OMOP_EMB_METADATA_SCHEMA = "OMOP_EMB_METADATA_SCHEMA"
+
+
+def get_metadata_schema() -> str:
+    return os.getenv(ENV_OMOP_EMB_METADATA_SCHEMA, "public")
 
 class ModelRegistry(Base):
     """
@@ -25,6 +34,7 @@ class ModelRegistry(Base):
     """
 
     __tablename__ = "model_registry"
+    __table_args__ = {"schema": get_metadata_schema()}
 
     # TODO: Think about having multiple models per index and backend. Would require to 
     # have the storage_identifier (i.e. the table_name) to be unique as well, which is 
@@ -55,4 +65,8 @@ class ModelRegistry(Base):
 
 
 def ensure_model_registry_schema(engine: Engine) -> None:
+    schema = get_metadata_schema()
+    if schema:
+        with engine.begin() as conn:
+            conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
     Base.metadata.create_all(engine, tables=[ModelRegistry.__table__])  # type: ignore[arg-type]

@@ -11,7 +11,7 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 
 from ..base import ConceptIDEmbeddingBase
 from ..config import BackendType
-from ..registry import ModelRegistry
+from ..registry import ModelRegistry, get_metadata_schema
 from ..embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,10 @@ def create_faiss_embedding_registry_table(
         (FAISSConceptIDEmbeddingRegistry, ),
         {
             "__tablename__": tablename,
-            "__table_args__": {"extend_existing": True},
+            "__table_args__": {
+                "extend_existing": True,
+                "schema": get_metadata_schema(),
+            },
         },
     )
     

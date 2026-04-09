@@ -128,6 +128,12 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     
     def get_safe_model_dir(self, model_name: str) -> Path:
         return self.base_dir / self.safe_model_name(model_name)
+
+    def has_stale_model_artifacts(self, model_name: str) -> bool:
+        model_dir = self.get_safe_model_dir(model_name)
+        if not model_dir.exists():
+            return False
+        return any(model_dir.iterdir())
     
     def get_storage_manager(
         self, 
@@ -199,6 +205,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         self.embedding_storage_managers.pop(model_name, None)
         model_dir = self.get_safe_model_dir(model_name)
         if model_dir.exists():
+            logger.info("Deleting FAISS model directory for '%s': %s", model_name, model_dir)
             shutil.rmtree(model_dir)
         return deleted
 

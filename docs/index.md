@@ -18,7 +18,7 @@ The package currently supports:
 Install the backend you actually want to use:
 
 ```bash
-pip install "omop-emb[postgres]"
+pip install "omop-emb[pgvector]"
 pip install "omop-emb[faiss]"
 pip install "omop-emb[all]"
 ```
@@ -28,7 +28,7 @@ A plain `pip install omop-emb` installs only the shared core package.
 At runtime, backend choice should also be explicit. The intended direction is:
 
 - install-time choice via extras
-- runtime choice via config such as `OMOP_EMB_BACKEND=postgres` or `OMOP_EMB_BACKEND=faiss` or passing it as an argument to the respective interface (e.g. see [CLI reference](usage/cli.md))
+- runtime choice via config such as `OMOP_EMB_BACKEND=pgvector` or `OMOP_EMB_BACKEND=faiss` or passing it as an argument to the respective interface (e.g. see [CLI reference](usage/cli.md))
 
 
 !!! info "Important caveats"

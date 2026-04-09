@@ -15,6 +15,7 @@ from omop_emb.backends import (
 from omop_emb.embedding_client import OpenAICompatibleEmbeddingClient
 from omop_emb.interface import EmbeddingInterface
 from omop_emb.backends.config import IndexType, MetricType
+from omop_emb.backends.registry import get_metadata_schema
 
 app = typer.Typer()
 logger = get_logger(__name__)
@@ -206,6 +207,7 @@ def add_embeddings(
     configure_logging()
     load_dotenv()
     engine = _create_engine_from_env()
+    logger.info("Embedding metadata schema: %s", get_metadata_schema())
     interface, resolved_model = _create_embedding_interface(
         api_base=api_base,
         api_key=api_key,
@@ -348,6 +350,7 @@ def search(
     load_dotenv()
 
     engine = _create_engine_from_env()
+    logger.info("Embedding metadata schema: %s", get_metadata_schema())
     interface, resolved_model = _create_embedding_interface(
         api_base=api_base,
         api_key=api_key,

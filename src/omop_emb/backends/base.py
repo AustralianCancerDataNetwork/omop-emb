@@ -377,6 +377,32 @@ class EmbeddingBackend(ABC, Generic[T]):
         backends may choose to rebuild or compact a search index here.
         """
         return None
+
+    def delete_model(
+        self,
+        *,
+        engine: Engine,
+        session: Session,
+        model_name: str,
+    ) -> bool:
+        record = self.get_registered_model(session=session, model_name=model_name)
+        if record is None:
+            return False
+
+        session.execute(
+            text(f'DROP TABLE IF EXISTS "{record.storage_identifier}" CASCADE')
+        )
+        row = session.scalar(
+            select(ModelRegistry).where(
+                ModelRegistry.model_name == model_name,
+                ModelRegistry.backend_type == self.backend_type,
+            )
+        )
+        if row is not None:
+            session.delete(row)
+        session.commit()
+        self.model_cache.pop(model_name, None)
+        return True
     
     def has_any_embeddings(self, session: Session, model_name: str) -> bool:
         embedding_table = self._get_embedding_table(

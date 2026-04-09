@@ -52,6 +52,9 @@ Important:
 - `--api-base` should be the API base URL, for example `http://localhost:8000/v1`,
   not the full embeddings endpoint path. Use `--embedding-path` if your server
   expects a non-standard endpoint such as `/embed`.
+- If you need to change the registered dimensions or other model configuration
+  for an existing model name, use `--overwrite-model-registration`. This deletes
+  the existing backend storage and model registry entry before re-registering it.
 - The code queries the OMOP `concept` table by ORM table name, not by a
   hard-coded schema-qualified path such as `vocabulary.concept`.
 - PostgreSQL resolves that table through the connection `search_path`. If your

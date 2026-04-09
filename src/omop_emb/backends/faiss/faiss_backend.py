@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 from typing import Any, Mapping, Optional, Sequence, Type, cast, Dict, Tuple 
 
 import numpy as np
@@ -186,6 +187,20 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             #metadata=faiss_metadata.to_dict(),
             metadata=metadata
         )
+
+    def delete_model(
+        self,
+        *,
+        engine: Engine,
+        session: Session,
+        model_name: str,
+    ) -> bool:
+        deleted = super().delete_model(engine=engine, session=session, model_name=model_name)
+        self.embedding_storage_managers.pop(model_name, None)
+        model_dir = self.get_safe_model_dir(model_name)
+        if model_dir.exists():
+            shutil.rmtree(model_dir)
+        return deleted
 
     @require_registered_model
     def upsert_embeddings(

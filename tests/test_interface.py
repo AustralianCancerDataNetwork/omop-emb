@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 from omop_emb.interface import EmbeddingInterface
 from omop_emb.backends.config import IndexType, MetricType
 from omop_emb.backends.base import NearestConceptMatch
+from omop_emb.backends.embedding_utils import EmbeddingModelRecord
+from omop_emb.backends.config import BackendType
+from omop_emb.backends.errors import ModelRegistrationConflictError
 from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM
 
 
@@ -47,6 +50,71 @@ class TestInterface:
         )
         
         assert m1.storage_identifier == m2.storage_identifier
+
+    def test_model_registration_dimension_conflict_raises(self, mock_llm_client):
+        backend = Mock()
+        backend.get_registered_model.return_value = EmbeddingModelRecord(
+            model_name=MODEL_NAME,
+            dimensions=1024,
+            backend_type=BackendType.FAISS,
+            index_type=IndexType.FLAT,
+            storage_identifier="faiss_test_model",
+        )
+        interface = EmbeddingInterface(
+            embedding_client=mock_llm_client,
+            backend=backend,
+        )
+
+        with pytest.raises(ModelRegistrationConflictError) as excinfo:
+            interface.ensure_model_registered(
+                engine=Mock(),
+                session=Mock(),
+                model_name=MODEL_NAME,
+                dimensions=512,
+                index_type=IndexType.FLAT,
+            )
+
+        assert excinfo.value.conflict_field == "dimensions"
+
+    def test_model_registration_dimension_conflict_overwrites_when_requested(self, mock_llm_client):
+        backend = Mock()
+        backend.get_registered_model.return_value = EmbeddingModelRecord(
+            model_name=MODEL_NAME,
+            dimensions=1024,
+            backend_type=BackendType.FAISS,
+            index_type=IndexType.FLAT,
+            storage_identifier="faiss_test_model",
+        )
+        backend.register_model.return_value = EmbeddingModelRecord(
+            model_name=MODEL_NAME,
+            dimensions=512,
+            backend_type=BackendType.FAISS,
+            index_type=IndexType.FLAT,
+            storage_identifier="faiss_test_model",
+        )
+        interface = EmbeddingInterface(
+            embedding_client=mock_llm_client,
+            backend=backend,
+        )
+        engine = Mock()
+        session = Mock()
+
+        model = interface.ensure_model_registered(
+            engine=engine,
+            session=session,
+            model_name=MODEL_NAME,
+            dimensions=512,
+            index_type=IndexType.FLAT,
+            overwrite_existing_conflicts=True,
+        )
+
+        backend.delete_model.assert_called_once_with(
+            engine=engine,
+            session=session,
+            model_name=MODEL_NAME,
+        )
+        backend.register_model.assert_called_once()
+        assert model.dimensions == 512
     
     def test_is_model_registered(self, session, embedding_interface: EmbeddingInterface):
         """Test checking model registration status."""

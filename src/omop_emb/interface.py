@@ -15,6 +15,7 @@ from .backends import (
     get_embedding_backend,
 )
 from .backends.config import IndexType, MetricType
+from .backends.errors import ModelRegistrationConflictError
 from .embedding_client import EmbeddingClientProtocol
 
 
@@ -246,6 +247,7 @@ class EmbeddingInterface:
         dimensions: int,
         index_type: IndexType,
         metadata: Mapping[str, object] = {},
+        overwrite_existing_conflicts: bool = False,
     ) -> EmbeddingModelRecord:
         """
         Ensure the embedding model exists in the selected backend.
@@ -256,15 +258,49 @@ class EmbeddingInterface:
             model_name=model_name,
         )
         if existing is not None:
-            return existing
-        else:
-            return self.backend.register_model(
+            conflict: Optional[ModelRegistrationConflictError] = None
+            if existing.dimensions != dimensions:
+                conflict = ModelRegistrationConflictError(
+                    f"Model '{model_name}' is already registered with dimensions "
+                    f"{existing.dimensions}, not {dimensions}. Reuse the existing "
+                    "configuration, choose a new model name, or delete the existing "
+                    "registration before rerunning.",
+                    conflict_field="dimensions",
+                )
+            elif existing.index_type != index_type:
+                conflict = ModelRegistrationConflictError(
+                    f"Model '{model_name}' is already registered with index_type "
+                    f"'{existing.index_type}', not '{index_type}'. Reuse the existing "
+                    "configuration or choose a new model name.",
+                    conflict_field="index_type",
+                )
+            elif existing.metadata != metadata:
+                conflict = ModelRegistrationConflictError(
+                    f"Model '{model_name}' is already registered with different "
+                    "metadata. Reuse the existing model name or choose a new one.",
+                    conflict_field="metadata",
+                )
+
+            if conflict is None:
+                return existing
+            if not overwrite_existing_conflicts:
+                raise conflict
+
+            self.backend.delete_model(
                 engine=engine,
+                session=session,
                 model_name=model_name,
-                dimensions=dimensions,
-                index_type=index_type,
-                metadata=metadata,
             )
+        else:
+            pass
+
+        return self.backend.register_model(
+            engine=engine,
+            model_name=model_name,
+            dimensions=dimensions,
+            index_type=index_type,
+            metadata=metadata,
+        )
 
     def embed_texts(
         self,

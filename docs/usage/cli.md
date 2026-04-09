@@ -60,6 +60,7 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 | **`--batch-size`** | `-b` | `Integer` | `100` | Number of concepts to process in each chunk. |
 | **`--model`** | `-m` | `String` | `OMOP_EMB_MODEL` or `text-embedding-3-small` | Name of the embedding model to use for generating vectors. |
 | **`--embedding-dim`** | | `Integer` | `OMOP_EMB_EMBEDDING_DIM` or auto-detect | Explicit embedding dimension override for models whose dimensions cannot be inferred automatically. |
+| **`--overwrite-model-registration`** | | `Boolean` | `False` | Delete any existing registration and backend storage for this model name before re-registering it. |
 | **`--backend`** | | `Literal['pgvector', 'faiss']` | `None` | Embedding backend to use (can be replaced by `OMOP_EMB_BACKEND` env var). Requires the respective backend installed using `pip install omop-emb[pgvector or faiss]` |
 | **`--faiss-base-dir`** | | `String` | `None` | Optional base directory for FAISS backend storage. |
 | **`--standard-only`** | | `Boolean` | `False` | If set, only generate embeddings for OMOP standard concepts (`standard_concept = 'S'`). |

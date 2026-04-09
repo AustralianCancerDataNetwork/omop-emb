@@ -136,6 +136,10 @@ def add_embeddings(
         "--embedding-path",
         help="Embedding endpoint path relative to `--api-base`, for example `/embeddings` or `/embed`. Can also be set with `OMOP_EMB_EMBEDDING_PATH`."
     )] = "/embeddings",
+    overwrite_model_registration: Annotated[bool, typer.Option(
+        "--overwrite-model-registration",
+        help="If set, delete any existing registration and backend storage for this model name before re-registering it. Use with care when changing dimensions or endpoint behavior."
+    )] = False,
     backend_name: Annotated[Optional[str], typer.Option(
         "--backend",
         help="Embedding backend to use. Can be replaced by the `OMOP_EMB_BACKEND` environment variable."
@@ -202,7 +206,8 @@ def add_embeddings(
             session=reader,
             model_name=resolved_model,
             index_type=index_type,
-            dimensions=resolved_embedding_dim
+            dimensions=resolved_embedding_dim,
+            overwrite_existing_conflicts=overwrite_model_registration,
         )
 
         estimated_total_concepts = num_embeddings or interface.get_concepts_without_embedding_count(

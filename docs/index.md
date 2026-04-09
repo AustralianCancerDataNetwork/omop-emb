@@ -34,7 +34,7 @@ At runtime, backend choice should also be explicit. The intended direction is:
 Recommended runtime environment variables:
 
 - `OMOP_EMB_BACKEND` (`pgvector` or `faiss`)
-- `OMOP_EMB_BASE_STORAGE_DIR` (base directory for local metadata and FAISS artifacts)
+- `OMOP_EMB_BASE_STORAGE_DIR` (base directory for local metadata and FAISS artifacts; defaults to `./.omop_emb` in the current working directory if unset)
 - `OMOP_DATABASE_URL` (OMOP CDM database URL)
 
 

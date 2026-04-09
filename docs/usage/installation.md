@@ -54,13 +54,15 @@ Examples:
 ```bash
 export OMOP_EMB_BACKEND=pgvector
 export OMOP_EMB_BACKEND=faiss
-export OMOP_EMB_BASE_STORAGE_DIR=$HOME/.omop_emb
+export OMOP_EMB_BASE_STORAGE_DIR=$PWD/.omop_emb
 ```
 
 That avoids silent fallback between backend implementations.
 
 `OMOP_EMB_BASE_STORAGE_DIR` controls where `omop-emb` stores local metadata
 (`metadata.db`) and file-based backend artifacts (such as FAISS files).
+If it is not set, `omop-emb` defaults to `./.omop_emb` in the current working directory.
+If a provided path includes `~`, it is expanded automatically.
 
 ## Current database support caveat
 

@@ -26,10 +26,15 @@ Examples:
 ```bash
 export OMOP_EMB_BACKEND=pgvector
 export OMOP_EMB_BACKEND=faiss
-export OMOP_EMB_BASE_STORAGE_DIR=$HOME/.omop_emb
+export OMOP_EMB_BASE_STORAGE_DIR=$PWD/.omop_emb
 ```
 
 You can also pass the backend name directly in Python.
+
+Storage directory behavior:
+
+- If `OMOP_EMB_BASE_STORAGE_DIR` is unset and no explicit path is passed, `omop-emb` defaults to `./.omop_emb` in the current working directory.
+- If a path includes `~`, it is expanded (for example `~/.omop_emb`).
 
 ## Python factory
 

@@ -33,7 +33,7 @@ Notes:
 Common environment variables:
 
 - `OMOP_EMB_BACKEND`: backend name (`pgvector` or `faiss`) used by the backend factory.
-- `OMOP_EMB_BASE_STORAGE_DIR`: local base directory for `omop-emb` artifacts, including local metadata (`metadata.db`) and FAISS files.
+- `OMOP_EMB_BASE_STORAGE_DIR`: local base directory for `omop-emb` artifacts, including local metadata (`metadata.db`) and FAISS files. If unset, `omop-emb` defaults to `./.omop_emb` in the current working directory.
 - `OMOP_DATABASE_URL`: SQLAlchemy URL for the OMOP CDM database.
 
 Extended documentation can be found [here](https://AustralianCancerDataNetwork.github.io/omop-emb).

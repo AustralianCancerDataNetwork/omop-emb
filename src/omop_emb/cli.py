@@ -24,6 +24,43 @@ logger = get_logger(__name__)
 SNAPSHOT_MANIFEST_NAME = "manifest.json"
 
 
+def _load_legacy_rows(engine: sa.Engine, legacy_table: str) -> list[dict[str, object]]:
+    inspector = sa.inspect(engine)
+    if not inspector.has_table(legacy_table):
+        raise RuntimeError(f"Legacy table '{legacy_table}' does not exist in source database.")
+
+    query = sa.text(f'SELECT * FROM "{legacy_table}"')
+    with engine.connect() as conn:
+        rows = conn.execute(query).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def _legacy_row_fields(row: dict[str, object]) -> tuple[str, int, IndexType, str, dict[str, object]]:
+    model_name_raw = row.get("model_name")
+    dimensions_raw = row.get("dimensions")
+    if model_name_raw is None or dimensions_raw is None:
+        raise ValueError("Legacy row missing required fields 'model_name' and/or 'dimensions'.")
+
+    index_raw = row.get("index_type") or row.get("index_method") or IndexType.FLAT.value
+    index_type = IndexType(str(index_raw))
+
+    storage_identifier_raw = row.get("storage_identifier") or row.get("table_name")
+    if storage_identifier_raw is None:
+        raise ValueError("Legacy row missing required storage field ('storage_identifier' or 'table_name').")
+    storage_identifier = str(storage_identifier_raw)
+
+    details_raw = row.get("details") or row.get("metadata") or {}
+    if isinstance(details_raw, dict):
+        metadata = dict(details_raw)
+    else:
+        metadata = {}
+
+    model_name = str(model_name_raw)
+    dimensions = int(str(dimensions_raw))
+
+    return model_name, dimensions, index_type, storage_identifier, metadata
+
+
 def _resolve_engine() -> sa.Engine:
     engine_string = os.getenv('OMOP_DATABASE_URL')
     if engine_string is None:
@@ -343,6 +380,77 @@ def import_pgvector(
                     total_rows += len(batch)
 
             logger.info(f"Imported {total_rows} rows into {table_name} from {csv_file}")
+
+
+@app.command()
+def migrate_legacy_pgvector_registry(
+    storage_base_dir: Annotated[Optional[str], typer.Option(
+        "--storage-base-dir",
+        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to ./.omop_emb in the current working directory. Paths with `~` are expanded.",
+    )] = None,
+    source_database_url: Annotated[Optional[str], typer.Option(
+        "--source-database-url",
+        help="Source database URL containing the legacy model_registry table. Defaults to OMOP_DATABASE_URL.",
+    )] = None,
+    legacy_table: Annotated[str, typer.Option(
+        "--legacy-table",
+        help="Name of the legacy table to migrate from.",
+    )] = "model_registry",
+    dry_run: Annotated[bool, typer.Option(
+        "--dry-run",
+        help="If set, report rows that would be migrated without writing to local metadata.",
+    )] = False,
+    drop_legacy_registry: Annotated[bool, typer.Option(
+        "--drop-legacy-registry",
+        help="If set, drop the legacy table after successful migration.",
+    )] = False,
+):
+    """Migrate legacy pgvector registry rows into local metadata.db registry."""
+    configure_logging()
+    load_dotenv()
+
+    source_url = source_database_url or os.getenv("OMOP_DATABASE_URL")
+    if source_url is None:
+        raise RuntimeError("OMOP_DATABASE_URL is not set. Provide --source-database-url.")
+
+    source_engine = sa.create_engine(source_url, future=True, echo=False)
+    interface = _build_pgvector_interface(storage_base_dir=storage_base_dir)
+
+    legacy_rows = _load_legacy_rows(source_engine, legacy_table=legacy_table)
+    if not legacy_rows:
+        logger.info("No legacy registry rows found. Nothing to migrate.")
+        return
+
+    logger.info(f"Found {len(legacy_rows)} legacy registry rows in '{legacy_table}'.")
+
+    migrated = 0
+    for row in legacy_rows:
+        model_name, dimensions, index_type, storage_identifier, metadata = _legacy_row_fields(row)
+
+        if dry_run:
+            logger.info(
+                f"[DRY RUN] Would migrate model={model_name}, index={index_type.value}, "
+                f"dimensions={dimensions}, storage_identifier={storage_identifier}"
+            )
+            migrated += 1
+            continue
+
+        interface.backend.embedding_model_registry.register_model(
+            model_name=model_name,
+            dimensions=dimensions,
+            backend_type=BackendType.PGVECTOR,
+            index_type=index_type,
+            metadata=metadata,
+            storage_identifier=storage_identifier,
+        )
+        migrated += 1
+
+    logger.info(f"Migrated {migrated} legacy registry rows into local metadata registry.")
+
+    if drop_legacy_registry and not dry_run:
+        with source_engine.begin() as conn:
+            conn.execute(sa.text(f'DROP TABLE IF EXISTS "{legacy_table}"'))
+        logger.info(f"Dropped legacy registry table '{legacy_table}'.")
 
 
 if __name__ == "__main__":

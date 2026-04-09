@@ -42,8 +42,6 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 
 ### Command Options
 
-### Command Options
-
 | Option | Short | Type | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | **`--api-base`** | | `String` | **Required** | Base URL for the embedding API service. |
@@ -52,7 +50,7 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 | **`--batch-size`** | `-b` | `Integer` | `100` | Number of concepts to process in each chunk. |
 | **`--model`** | `-m` | `String` | `text-embedding-3-small` | Name of the embedding model to use for generating vectors. |
 | **`--backend`** | | `Literal['pgvector', 'faiss']` | `None` | Embedding backend to use (can be replaced by `OMOP_EMB_BACKEND`). Requires the corresponding optional dependency. |
-| **`--faiss-base-dir`** | | `String` | `None` | Optional base directory for FAISS backend storage. |
+| **`--storage-base-dir`** | | `String` | `None` | Optional base directory for backend storage and local metadata registry (`metadata.db`). |
 | **`--standard-only`** | | `Boolean` | `False` | If set, only generate embeddings for OMOP standard concepts (`standard_concept = 'S'`). |
 | **`--vocabulary`** | | `List[String]` | `None` | Filter to embed concepts only from specific OMOP vocabularies. |
 | **`--num-embeddings`** | `-n` | `Integer` | `None` | Limit the number of concepts processed (useful for testing). |
@@ -116,3 +114,56 @@ omop-emb import-pgvector --input-dir <SNAPSHOT_DIR> [OPTIONS]
 
 - Import re-registers pgvector models into local metadata before loading rows.
 - Import uses upsert semantics (`ON CONFLICT (concept_id) DO UPDATE`) unless `--replace` is set.
+
+---
+
+## `migrate-legacy-pgvector-registry`
+
+Migrate legacy pgvector registry rows from a source database table into the local metadata registry (`metadata.db`).
+
+This command is intended for compatibility with older setups that kept registry metadata in the database instead of the local metadata store.
+
+### Usage
+```bash
+omop-emb migrate-legacy-pgvector-registry [OPTIONS]
+```
+
+### Options
+
+| Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| **`--storage-base-dir`** | `String` | `None` | Optional path to local metadata registry location. If unset, falls back to `OMOP_EMB_BASE_STORAGE_DIR`, otherwise defaults to `./.omop_emb` in the current working directory. |
+| **`--source-database-url`** | `String` | `OMOP_DATABASE_URL` | Source database URL containing the legacy registry table. |
+| **`--legacy-table`** | `String` | `model_registry` | Name of the legacy registry table in the source database. |
+| **`--dry-run`** | `Boolean` | `False` | Show what would be migrated without writing changes. |
+| **`--drop-legacy-registry`** | `Boolean` | `False` | Drop the legacy table after successful migration. |
+
+### Recommended Migration Flow
+
+1. Validate what will migrate:
+
+```bash
+omop-emb migrate-legacy-pgvector-registry --dry-run
+```
+
+2. Run the migration:
+
+```bash
+omop-emb migrate-legacy-pgvector-registry
+```
+
+3. Optionally remove legacy table after verification:
+
+```bash
+omop-emb migrate-legacy-pgvector-registry --drop-legacy-registry
+```
+
+### Field Mapping
+
+The migration command supports these legacy field names when reading rows:
+
+- model name: `model_name`
+- dimensions: `dimensions`
+- index type: `index_type` (fallback: `index_method`)
+- storage identifier: `storage_identifier` (fallback: `table_name`)
+- metadata: `details` (fallback: `metadata`)

@@ -67,6 +67,7 @@ class ModelRegistryManager:
         backend_type: BackendType,
         index_type: IndexType,
         metadata: Optional[Mapping[str, object]] = None,
+        storage_identifier: Optional[str] = None,
     ) -> EmbeddingModelRecord:
         """
         Shared template method for model registration.
@@ -110,13 +111,19 @@ class ModelRegistryManager:
                         f"metadata. Reuse the existing model name or choose a new one.",
                         conflict_field="metadata"
                     )
+                if storage_identifier is not None and existing_row.storage_identifier != storage_identifier:
+                    raise ModelRegistrationConflictError(
+                        f"Model '{model_name}' is already registered with storage identifier "
+                        f"'{existing_row.storage_identifier}', not '{storage_identifier}'.",
+                        conflict_field="storage_identifier"
+                    )
                 return self._registry_entry_to_model_record(existing_row)
 
             metadata = metadata or {}
 
         safe_name = self.safe_model_name(model_name)
-        storage_name = self.storage_name(
-            safe_model_name=safe_name, 
+        storage_name = storage_identifier or self.storage_name(
+            safe_model_name=safe_name,
             index_type=index_type,
             backend_type=backend_type
         )

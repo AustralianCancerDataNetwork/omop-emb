@@ -150,7 +150,12 @@ def add_embeddings(
     
     # Ensure OMOP metadata tables exist, then initialize the embedding store.
     create_db(engine)
-    interface.initialise_store(engine)
+    interface.setup_and_register_model(
+        engine=engine,
+        model_name=model,
+        dimensions=embedding_dim,
+        index_type=index_type,
+    )
 
     with Session(engine) as reader, Session(engine) as writer:
         total_concepts = num_embeddings or interface.get_concepts_without_embedding_count(

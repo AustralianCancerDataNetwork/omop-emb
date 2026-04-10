@@ -3,13 +3,14 @@ from omop_llm import LLMClient
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from orm_loader.helpers import get_logger, configure_logging, create_db
+from orm_loader.helpers import get_logger, create_db
 
 from typing import Annotated, Optional
 from pathlib import Path
 import csv
 import json
 import os
+import logging
 from dotenv import load_dotenv
 from tqdm import tqdm
 import typer
@@ -22,6 +23,19 @@ app = typer.Typer()
 logger = get_logger(__name__)
 
 SNAPSHOT_MANIFEST_NAME = "manifest.json"
+
+
+def configure_logging_level(verbosity: int) -> None:
+    """Configure global logging based on CLI verbosity flags."""
+    level_map = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
+    log_level = level_map.get(min(verbosity, 2), logging.DEBUG)
+
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
+    )
 
 
 def _load_legacy_rows(engine: sa.Engine, legacy_table: str) -> list[dict[str, object]]:
@@ -123,8 +137,12 @@ def add_embeddings(
     num_embeddings: Annotated[Optional[int], typer.Option(
         "--num-embeddings", "-n",
         help="If set, limits the number of concepts for which embeddings are generated. Useful for testing and development to speed up the embedding generation step.")] = None,
+    verbosity: Annotated[int, typer.Option(
+        "--verbose", "-v", count=True,
+        help="Increase verbosity (up to two levels)"
+    )] = 0,
 ):
-    configure_logging()
+    configure_logging_level(verbosity)
     load_dotenv()
 
     engine = _resolve_engine()
@@ -210,9 +228,13 @@ def export_pgvector(
         "--index-type",
         help="Optional index-type filter.",
     )] = None,
+    verbosity: Annotated[int, typer.Option(
+        "--verbose", "-v", count=True,
+        help="Increase verbosity (up to two levels)"
+    )] = 0,
 ):
     """Export pgvector embedding tables to file for checkpoint/restore workflows."""
-    configure_logging()
+    configure_logging_level(verbosity)
     load_dotenv()
 
     engine = _resolve_engine()
@@ -300,9 +322,13 @@ def import_pgvector(
         "--batch-size", "-b",
         help="Number of rows per INSERT batch.",
     )] = 5000,
+    verbosity: Annotated[int, typer.Option(
+        "--verbose", "-v", count=True,
+        help="Increase verbosity (up to two levels)"
+    )] = 0,
 ):
     """Import pgvector embedding tables from a previously exported snapshot."""
-    configure_logging()
+    configure_logging_level(verbosity)
     load_dotenv()
 
     input_path = Path(input_dir).resolve()
@@ -414,9 +440,13 @@ def migrate_legacy_pgvector_registry(
         "--drop-legacy-registry",
         help="If set, drop the legacy table after successful migration.",
     )] = False,
+    verbosity: Annotated[int, typer.Option(
+        "--verbose", "-v", count=True,
+        help="Increase verbosity (up to two levels)"
+    )] = 0,
 ):
     """Migrate legacy pgvector registry rows into local metadata.db registry."""
-    configure_logging()
+    configure_logging_level(verbosity)
     load_dotenv()
 
     source_url = source_database_url or os.getenv("OMOP_DATABASE_URL")

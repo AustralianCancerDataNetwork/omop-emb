@@ -60,6 +60,23 @@ class EmbeddingInterface:
             embedding_client=embedding_client,
         )
     
+    def setup_and_register_model(
+        self,
+        engine: Engine,
+        model_name: str,
+        dimensions: int,
+        index_type: IndexType,
+        metadata: Mapping[str, object] = {},
+    ) -> None:
+        self.initialise_store(engine)
+        self.register_model(
+            engine=engine,
+            model_name=model_name,
+            dimensions=dimensions,
+            index_type=index_type,
+            metadata=metadata,
+        )
+    
     def initialise_store(self, engine: Engine) -> None:
         self.backend.initialise_store(engine)
 

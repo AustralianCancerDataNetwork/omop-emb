@@ -218,6 +218,26 @@ class EmbeddingInterface:
 
         return self.backend.initialise_store(engine)
 
+    def rebuild_model_indexes(
+        self,
+        *,
+        session: Session,
+        model_name: str,
+        metric_types: Optional[Sequence[MetricType]] = None,
+        batch_size: int = 100_000,
+    ) -> None:
+        rebuild = getattr(self.backend, "rebuild_model_indexes", None)
+        if rebuild is None:
+            raise NotImplementedError(
+                f"Backend {self.backend.backend_name!r} does not implement explicit index rebuilds."
+            )
+        rebuild(
+            session=session,
+            model_name=model_name,
+            metric_types=metric_types,
+            batch_size=batch_size,
+        )
+
     def add_to_db(
         self,
         session: Session,

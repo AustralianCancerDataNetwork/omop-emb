@@ -55,7 +55,7 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 | **`--api-base`** | | `String` | **Required** | Base URL for the embedding API service, e.g. `http://localhost:8000/v1`. |
 | **`--embedding-path`** | | `String` | `/embeddings` or `OMOP_EMB_EMBEDDING_PATH` | Relative path for the embedding endpoint, e.g. `/embeddings` or `/embed`. |
 | **`--api-key`** | | `String` | `OMOP_EMB_API_KEY` or none | Optional API key for the embedding API provider. |
-| **`--index-type`** | | `IndexType` | `FLAT` | The storage index for the embeddings for retrieval. Currently supported: `FLAT`. |
+| **`--index-type`** | | `IndexType` | `FLAT` | The storage index for the embeddings for retrieval. FAISS supports `FLAT` and `HNSW`. |
 | **`--batch-size`** | `-b` | `Integer` | `100` | Number of concepts to process in each chunk. |
 | **`--model`** | `-m` | `String` | `OMOP_EMB_MODEL` or `text-embedding-3-small` | Name of the embedding model to use for generating vectors. |
 | **`--embedding-dim`** | | `Integer` | `OMOP_EMB_EMBEDDING_DIM` or auto-detect | Explicit embedding dimension override for models whose dimensions cannot be inferred automatically. |
@@ -100,6 +100,7 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 - If stale FAISS artifacts exist on disk without a matching SQL registration,
   the CLI now fails early and tells you to rerun with
   `--overwrite-model-registration`.
+- For larger FAISS stores, prefer `--index-type hnsw` over `flat`.
 
 ## `search`
 
@@ -124,3 +125,23 @@ selected model and backend.
 
 The output is tab-separated with `rank`, `concept_id`, `similarity`, and
 `concept_name`.
+
+## `rebuild-index`
+
+### Usage
+```bash
+omop-emb rebuild-index --model <MODEL> --backend faiss [OPTIONS]
+```
+
+This command rebuilds FAISS index files from the stored HDF5 vectors for an
+already registered model. It is useful after recovering from inconsistent local
+index files or when you want to materialize multiple metrics ahead of time.
+
+### Common options
+
+- `--model`: registered embedding model name.
+- `--backend`: currently only `faiss` supports explicit rebuild.
+- `--faiss-base-dir`: base directory containing the model's FAISS storage.
+- `--metric-type`: repeat to rebuild multiple metrics. If omitted, all metrics
+  supported by the model's index type are rebuilt.
+- `--batch-size`: streaming batch size used while rebuilding from HDF5.

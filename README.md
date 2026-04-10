@@ -36,6 +36,7 @@ omop-emb add-embeddings \
   --api-base http://localhost:8000/v1 \
   --embedding-path /embeddings \
   --backend faiss \
+  --index-type hnsw \
   --faiss-base-dir ./data \
   --model my-embedding-model \
   --embedding-dim 1024 \
@@ -61,6 +62,8 @@ Important:
   the existing backend storage and model registry entry before re-registering it.
   For FAISS, this also deletes the model's on-disk directory so the vector store
   is rebuilt cleanly.
+- The FAISS backend now supports `flat` and `hnsw` index types. `hnsw` is the
+  better default for larger retrieval workloads.
 - The code queries the OMOP `concept` table by ORM table name, not by a
   hard-coded schema-qualified path such as `vocabulary.concept`.
 - PostgreSQL resolves that table through the connection `search_path`. If your
@@ -83,6 +86,17 @@ omop-emb search "type 2 diabetes" \
   --faiss-base-dir ./data \
   --metric-type cosine \
   --k 5
+```
+
+FAISS indexes can also be rebuilt explicitly from the stored HDF5 vectors:
+
+```bash
+omop-emb rebuild-index \
+  --model my-embedding-model \
+  --backend faiss \
+  --faiss-base-dir ./data \
+  --metric-type cosine \
+  --metric-type l2
 ```
 
 ## DB Test Environment

@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from omop_emb.backends.config import BackendType, IndexType, MetricType
-from .index_manager import FlatIndexManager, BaseIndexManager
+from .index_manager import FlatIndexManager, HNSWIndexManager, BaseIndexManager
 
 class EmbeddingStorageManager:
     """Storage manager for raw embeddings and concept_ids using HDF5 files for FAISS backend. 
@@ -73,8 +73,13 @@ class EmbeddingStorageManager:
     ) -> BaseIndexManager:
         if index_type == IndexType.FLAT:
             index_manager_cls = FlatIndexManager
+        elif index_type == IndexType.HNSW:
+            index_manager_cls = HNSWIndexManager
         else:
-            raise ValueError(f"Unsupported index type {index_type} for FAISS backend. Only {IndexType.FLAT} is supported currently.")
+            raise ValueError(
+                f"Unsupported index type {index_type} for FAISS backend. "
+                f"Supported indices are {IndexType.FLAT} and {IndexType.HNSW}."
+            )
         
         index_manager = index_manager_cls(
             dimension=self.dimensions,
@@ -152,10 +157,6 @@ class EmbeddingStorageManager:
         if len(unique) != len(concept_ids):
             raise ValueError("Duplicate concept_ids found in the input. Please ensure all concept_ids are unique to prevent data corruption.")
 
-        existing_concept_ids = self.get_concept_ids()
-        if np.intersect1d(existing_concept_ids, concept_ids).size > 0:
-            raise ValueError("Some concept_ids already exist in storage. Appending duplicate concept_ids would corrupt the data. Please ensure all concept_ids are unique and do not already exist in storage.")
-
         with self.open_all(mode="a") as (emb_ds, cid_ds):
             # 1. Calculate new sizes
             old_size = emb_ds.shape[0]
@@ -210,6 +211,18 @@ class EmbeddingStorageManager:
             query_vector=query_vector,
             k=k,
             subset_concept_ids=subset_concept_ids
+        )
+
+    def rebuild_index(
+        self,
+        *,
+        index_type: IndexType,
+        metric_type: MetricType,
+        batch_size: int = 100_000,
+    ) -> None:
+        index_manager = self.get_index_manager(index_type=index_type, metric_type=metric_type)
+        index_manager.rebuild_from_storage(
+            self.stream_concept_ids_and_embeddings(batch_size=batch_size)
         )
     
     def get_embeddings_by_concept_ids(self, concept_ids: np.ndarray) -> Mapping[int, Sequence[float]]:

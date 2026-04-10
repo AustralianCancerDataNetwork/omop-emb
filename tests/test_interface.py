@@ -211,6 +211,23 @@ class TestInterface:
         embeddings = embedding_interface.embed_texts(texts)
         
         assert embeddings.shape == (len(texts), EMBEDDING_DIM)
+
+    @pytest.mark.unit
+    def test_rebuild_model_indexes_delegates_to_backend(self, mock_llm_client):
+        backend = Mock()
+        interface = EmbeddingInterface(
+            embedding_client=mock_llm_client,
+            backend=backend,
+        )
+
+        interface.rebuild_model_indexes(
+            session=Mock(),
+            model_name=MODEL_NAME,
+            metric_types=(MetricType.COSINE,),
+            batch_size=4096,
+        )
+
+        backend.rebuild_model_indexes.assert_called_once()
     
     @pytest.mark.integration
     def test_embed_and_upsert(self, session, embedding_interface: EmbeddingInterface):

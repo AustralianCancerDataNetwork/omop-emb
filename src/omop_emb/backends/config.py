@@ -47,7 +47,8 @@ SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tup
     },
     # Check here: https://github.com/facebookresearch/faiss/wiki/Faiss-indexes
     BackendType.FAISS: {
-        IndexType.FLAT: (MetricType.L2, MetricType.COSINE)
+        IndexType.FLAT: (MetricType.L2, MetricType.COSINE),
+        IndexType.HNSW: (MetricType.L2, MetricType.COSINE),
     }
 }
 
@@ -63,3 +64,7 @@ def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) 
 def get_supported_index_types_for_backend(backend: BackendType) -> Tuple[IndexType, ...]:
     supported_indices_and_metrics = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
     return tuple(supported_indices_and_metrics.keys())
+
+def get_supported_metrics_for_backend_index(backend: BackendType, index: IndexType) -> Tuple[MetricType, ...]:
+    supported_indices_and_metrics = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
+    return supported_indices_and_metrics.get(index, ())

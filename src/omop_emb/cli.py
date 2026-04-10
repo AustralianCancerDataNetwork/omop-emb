@@ -389,5 +389,51 @@ def search(
         )
 
 
+@app.command("rebuild-index")
+def rebuild_index(
+    model: Annotated[Optional[str], typer.Option(
+        "--model", "-m",
+        help="Registered embedding model name to rebuild indexes for."
+    )] = None,
+    backend_name: Annotated[Optional[str], typer.Option(
+        "--backend",
+        help="Embedding backend to rebuild. Currently only FAISS supports explicit rebuild."
+    )] = None,
+    faiss_base_dir: Annotated[Optional[str], typer.Option(
+        "--faiss-base-dir",
+        help="Optional base directory for FAISS backend storage."
+    )] = None,
+    metric_types: Annotated[Optional[list[MetricType]], typer.Option(
+        "--metric-type",
+        help="Metric(s) to rebuild. Repeat to rebuild multiple metrics. Defaults to all metrics supported by the model's index type."
+    )] = None,
+    batch_size: Annotated[int, typer.Option(
+        "--batch-size", "-b",
+        help="Batch size to use when streaming embeddings from disk during rebuild."
+    )] = 100_000,
+):
+    configure_logging()
+    load_dotenv()
+
+    engine = _create_engine_from_env()
+    logger.info("Embedding metadata schema: %s", get_metadata_schema())
+    interface = EmbeddingInterface.from_backend_name(
+        backend_name=backend_name,
+        faiss_base_dir=faiss_base_dir,
+    )
+    resolved_model = _resolve_model_name(model)
+    interface.initialise_store(engine)
+
+    with Session(engine) as session:
+        interface.rebuild_model_indexes(
+            session=session,
+            model_name=resolved_model,
+            metric_types=tuple(metric_types) if metric_types else None,
+            batch_size=batch_size,
+        )
+
+    logger.info("Completed index rebuild for model '%s'.", resolved_model)
+
+
 if __name__ == "__main__":
     app()

@@ -25,6 +25,7 @@ class TestBackendConfig:
         from omop_emb.backends.config import is_index_type_supported_for_backend
         
         assert is_index_type_supported_for_backend(BackendType.FAISS, IndexType.FLAT)
+        assert is_index_type_supported_for_backend(BackendType.FAISS, IndexType.HNSW)
     
     def test_faiss_supports_cosine_metric(self):
         """Test FAISS supports COSINE metric."""
@@ -33,5 +34,10 @@ class TestBackendConfig:
         assert is_supported_index_metric_combination_for_backend(
             BackendType.FAISS,
             IndexType.FLAT,
+            MetricType.COSINE,
+        )
+        assert is_supported_index_metric_combination_for_backend(
+            BackendType.FAISS,
+            IndexType.HNSW,
             MetricType.COSINE,
         )

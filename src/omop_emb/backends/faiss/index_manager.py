@@ -142,6 +142,14 @@ class BaseIndexManager(abc.ABC):
             logger.info(f"No index file found at {self.index_filepath}, populating index from storage.")
             self._populate_from_storage(data_stream)
 
+    def rebuild_from_storage(self, data_stream: Generator[Tuple[np.ndarray, np.ndarray], None, None]):
+        """Delete any persisted index file and rebuild it from the provided storage stream."""
+        if self.has_index_on_disk():
+            logger.info("Deleting existing FAISS index before rebuild: %s", self.index_filepath)
+            self.index_filepath.unlink()
+        self._index = None
+        self._populate_from_storage(data_stream)
+
     def _populate_from_storage(
         self, 
         data_stream: Generator[Tuple[np.ndarray, np.ndarray], None, None]
@@ -214,23 +222,45 @@ class HNSWIndexManager(BaseIndexManager):
         dimension: int, 
         metric_type: MetricType,
         base_index_dir: str | Path,
-        num_neighbors: int = 32
+        num_neighbors: int = 32,
+        ef_search: int = 64,
+        ef_construction: int = 200,
     ):
-        super().__init__(dimension, metric_type, base_index_dir)
         self.num_neighbors = num_neighbors
-        
-    #def _create_index(self) -> faiss.Index:
-    #    if self.metric == MetricType.L2:
-    #        return faiss.IndexHNSWFlat(self.dimension, self.num_neighbors)
-    #    elif self.metric == MetricType.COSINE:
-    #        # Inner Product for Cosine similarity after normalization
-    #        return faiss.IndexHNSWFlat(self.dimension, self.num_neighbors, faiss.METRIC_INNER_PRODUCT)  
-    #    else:
-    #        raise ValueError(f"Unsupported metric {self.metric} for HNSW index.")
+        self.ef_search = ef_search
+        self.ef_construction = ef_construction
+        super().__init__(dimension, metric_type, base_index_dir)
+
+    def _create_index(self) -> faiss.Index:
+        if self.metric_type == MetricType.L2:
+            index = faiss.IndexHNSWFlat(self.dimension, self.num_neighbors, faiss.METRIC_L2)
+        elif self.metric_type == MetricType.COSINE:
+            index = faiss.IndexHNSWFlat(self.dimension, self.num_neighbors, faiss.METRIC_INNER_PRODUCT)
+        else:
+            raise ValueError(f"Unsupported metric {self.metric_type} for HNSW index.")
+
+        index.hnsw.efConstruction = self.ef_construction  # type: ignore[attr-defined]
+        index.hnsw.efSearch = self.ef_search  # type: ignore[attr-defined]
+        return index
         
     @property
     def supported_index_type(self) -> IndexType:
         return IndexType.HNSW
+
+    def _create_search_parameters(self, concept_id_subset: np.ndarray | None = None):
+        if hasattr(faiss, "SearchParametersHNSW"):
+            params = faiss.SearchParametersHNSW()  # type: ignore[attr-defined]
+            params.efSearch = self.ef_search  # type: ignore[attr-defined]
+            if concept_id_subset is not None:
+                self.validate_concept_ids(concept_id_subset)
+                params.sel = faiss.IDSelectorBatch(concept_id_subset)  # type: ignore[attr-defined]
+            return params
+
+        if concept_id_subset is not None:
+            self.validate_concept_ids(concept_id_subset)
+            id_selector = faiss.IDSelectorBatch(concept_id_subset)  # type: ignore
+            return faiss.SearchParameters(sel=id_selector)  # type: ignore
+        return faiss.SearchParameters()
     
 class IVFIndexManager(BaseIndexManager):
     def __init__(

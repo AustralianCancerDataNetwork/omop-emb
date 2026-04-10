@@ -8,7 +8,7 @@ from typing import Any, Mapping, Optional, Sequence, Type, cast, Dict, Tuple
 import numpy as np
 from numpy import ndarray
 from omop_emb.backends.config import BackendType
-from sqlalchemy import Engine, insert, select
+from sqlalchemy import Engine, insert, select, func
 from sqlalchemy.orm import Session
 import logging
 from dataclasses import dataclass, field
@@ -24,7 +24,12 @@ from .faiss_sql import (
     add_concept_ids_to_faiss_registry,
     q_concept_ids_with_embeddings
 )
-from ..config import IndexType, MetricType, ENV_OMOP_EMB_FAISS_INDEX_DIR
+from ..config import (
+    IndexType,
+    MetricType,
+    ENV_OMOP_EMB_FAISS_INDEX_DIR,
+    get_supported_metrics_for_backend_index,
+)
 from .storage_manager import EmbeddingStorageManager
 from ..base import EmbeddingBackend, require_registered_model
 from ..embedding_utils import (
@@ -164,6 +169,23 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                     backend_type=self.backend_type,
                 )
 
+    def _validate_storage_consistency(
+        self,
+        *,
+        session: Session,
+        model_name: str,
+        storage_manager: EmbeddingStorageManager,
+    ) -> None:
+        embedding_table = self._get_embedding_table(session, model_name)
+        registry_count = session.scalar(select(func.count()).select_from(embedding_table))
+        storage_count = storage_manager.get_count()
+        if registry_count != storage_count:
+            raise RuntimeError(
+                f"FAISS storage is inconsistent for model '{model_name}': SQL registry has "
+                f"{registry_count} concept_ids but HDF5 storage has {storage_count} vectors. "
+                "Re-run with `--overwrite-model-registration` or rebuild after cleanup."
+            )
+
     def register_model(
         self,
         engine: Engine,
@@ -261,6 +283,16 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         """
 
         concept_id_tuple = tuple(concept_ids)
+        storage_manager = self.get_storage_manager(
+            model_name=model_name,
+            dimensions=model_record.dimensions,
+            index_type=model_record.index_type,
+        )
+        self._validate_storage_consistency(
+            session=session,
+            model_name=model_name,
+            storage_manager=storage_manager,
+        )
         self.validate_embeddings_and_concept_ids(
             concept_ids=concept_id_tuple,
             embeddings=embeddings,
@@ -280,11 +312,6 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                 f"Failed to add concept IDs to FAISS registry for model '{model_name}'. This may be due to a mismatch between the provided concept_ids and the existing entries in the database, or a database constraint violation. Original error: {str(e)}"
             ) from e
         
-        storage_manager = self.get_storage_manager(
-            model_name=model_name,
-            dimensions=model_record.dimensions,
-            index_type=model_record.index_type,
-        )
         storage_manager.append(
             concept_ids=np.array(concept_id_tuple, dtype=np.int64),
             embeddings=embeddings,
@@ -314,22 +341,27 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         if storage_manager.get_count() == 0:
             return ()
 
-        self.validate_embeddings(embeddings=query_embeddings, dimensions=model_record.dimensions)
-        q_permitted_concept_ids = q_concept_ids_with_embeddings(
-            embedding_table=self._get_embedding_table(session, model_name),
-            concept_filter=concept_filter,
-            limit=None
+        self._validate_storage_consistency(
+            session=session,
+            model_name=model_name,
+            storage_manager=storage_manager,
         )
-
-        permitted_concept_ids_storage = {
-            row.concept_id: row for row in session.execute(q_permitted_concept_ids)
-        }
+        self.validate_embeddings(embeddings=query_embeddings, dimensions=model_record.dimensions)
+        embedding_table = self._get_embedding_table(session, model_name)
 
         if concept_filter is None:
             # Easier to not do any filter if all are allowed
             permitted_concept_ids = None
         else:
-            permitted_concept_ids = np.array(list(permitted_concept_ids_storage.keys()), dtype=np.int64)
+            q_permitted_concept_ids = (
+                select(embedding_table.concept_id)
+                .join(Concept, Concept.concept_id == embedding_table.concept_id)
+            )
+            q_permitted_concept_ids = concept_filter.apply(q_permitted_concept_ids)
+            permitted_concept_ids = np.array(
+                [int(row.concept_id) for row in session.execute(q_permitted_concept_ids)],
+                dtype=np.int64,
+            )
 
         distances, concept_ids = storage_manager.search(
             query_vector=query_embeddings,
@@ -338,6 +370,25 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             k=k,
             subset_concept_ids=permitted_concept_ids
         )
+
+        returned_ids = tuple(
+            int(concept_id)
+            for concept_id in np.unique(concept_ids)
+            if int(concept_id) != -1
+        )
+        if not returned_ids:
+            return tuple(() for _ in range(query_embeddings.shape[0]))
+
+        permitted_concept_ids_storage = {
+            row.concept_id: row
+            for row in session.execute(
+                q_concept_ids_with_embeddings(
+                    embedding_table=embedding_table,
+                    concept_filter=EmbeddingConceptFilter(concept_ids=returned_ids),
+                    limit=None,
+                )
+            )
+        }
 
         matches = []
         for concept_id_pery_query, distance_per_query in zip(concept_ids, distances):
@@ -361,7 +412,48 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
 
     @require_registered_model
     def refresh_model_index(self, session: Session, model_name: str, model_record: EmbeddingModelRecord) -> None:
-        raise NotImplementedError("Explicit index refresh is not required for the FAISS backend as it updates the index on each upsert. This method is a no-op.")
+        self.rebuild_model_indexes(
+            session=session,
+            model_name=model_name,
+            model_record=model_record,
+            metric_types=None,
+        )
+
+    @require_registered_model
+    def rebuild_model_indexes(
+        self,
+        session: Session,
+        model_name: str,
+        model_record: EmbeddingModelRecord,
+        metric_types: Optional[Sequence[MetricType]] = None,
+        batch_size: int = 100_000,
+    ) -> None:
+        storage_manager = self.get_storage_manager(
+            model_name=model_name,
+            dimensions=model_record.dimensions,
+            index_type=model_record.index_type,
+        )
+        self._validate_storage_consistency(
+            session=session,
+            model_name=model_name,
+            storage_manager=storage_manager,
+        )
+        metrics = tuple(metric_types) if metric_types is not None else get_supported_metrics_for_backend_index(
+            self.backend_type,
+            model_record.index_type,
+        )
+        for metric_type in metrics:
+            logger.info(
+                "Rebuilding FAISS index for model '%s' with index_type=%s metric=%s",
+                model_name,
+                model_record.index_type,
+                metric_type,
+            )
+            storage_manager.rebuild_index(
+                index_type=model_record.index_type,
+                metric_type=metric_type,
+                batch_size=batch_size,
+            )
     
     @require_registered_model
     def get_embeddings_by_concept_ids(

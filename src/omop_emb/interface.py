@@ -179,7 +179,7 @@ class EmbeddingInterface:
             session=session,
             model_name=model_name,
             index_type=index_type,
-            query_embedding=query_embedding,
+            query_embeddings=query_embedding,
             concept_filter=concept_filter,
             metric_type=metric_type,
             k=k

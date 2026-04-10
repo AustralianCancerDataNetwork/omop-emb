@@ -19,6 +19,11 @@ class TestBackendConfig:
         """Test getting FAISS backend."""
         backend = get_embedding_backend("faiss", storage_base_dir=str(tmp_path))
         assert backend.backend_type == BackendType.FAISS
+
+    def test_get_backend_rejects_relative_storage_base_dir(self):
+        """Relative storage directories are rejected to avoid cwd-dependent registry paths."""
+        with pytest.raises(ValueError, match="absolute path"):
+            get_embedding_backend("faiss", storage_base_dir=".operator")
     
     def test_faiss_supports_flat_index(self):
         """Test FAISS supports FLAT index."""

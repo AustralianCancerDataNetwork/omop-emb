@@ -68,7 +68,7 @@ class EmbeddingBackend(ABC, Generic[T]):
     to validate models, resolve concept metadata, and apply domain/vocabulary
     filters.
     """
-    DEFAULT_BASE_STORAGE_DIR = ".omop_emb"
+    DEFAULT_BASE_STORAGE_DIR = Path.home() / ".omop_emb"
     def __init__(
         self,
         storage_base_dir: Optional[str | Path] = None,
@@ -77,8 +77,19 @@ class EmbeddingBackend(ABC, Generic[T]):
         super().__init__()
         
         # Local storage for model registry database and more
-        storage_base_dir = storage_base_dir or os.getenv(ENV_BASE_STORAGE_DIR) or self.DEFAULT_BASE_STORAGE_DIR
-        self._storage_base_dir = Path(storage_base_dir).expanduser()
+        storage_base_dir = (
+            storage_base_dir
+            or os.getenv(ENV_BASE_STORAGE_DIR)
+            or self.DEFAULT_BASE_STORAGE_DIR
+        )
+        resolved_storage_base_dir = Path(storage_base_dir).expanduser()
+        if not resolved_storage_base_dir.is_absolute():
+            raise ValueError(
+                "storage_base_dir must be an absolute path. "
+                f"Got '{storage_base_dir}'."
+            )
+
+        self._storage_base_dir = resolved_storage_base_dir
         self._storage_base_dir.mkdir(parents=True, exist_ok=True)
 
         

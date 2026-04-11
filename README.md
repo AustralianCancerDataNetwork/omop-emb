@@ -64,6 +64,12 @@ Important:
   is rebuilt cleanly.
 - The FAISS backend now supports `flat` and `hnsw` index types. `hnsw` is the
   better default for larger retrieval workloads.
+- With the FAISS backend, `add-embeddings` writes raw vectors to
+  `embeddings.h5`. Search indexes are separate metric-specific FAISS files such
+  as `flat_cosine_index.faiss` or `flat_l2_index.faiss` built from that HDF5
+  store.
+- When `--index-type hnsw` is used, the HNSW tuning parameters are stored in
+  the model registry metadata and reused for rebuilds and searches.
 - The code queries the OMOP `concept` table by ORM table name, not by a
   hard-coded schema-qualified path such as `vocabulary.concept`.
 - PostgreSQL resolves that table through the connection `search_path`. If your
@@ -74,6 +80,10 @@ Important:
   selected concepts may still be zero if the query resolves to the wrong table,
   the vocabulary filter matches nothing, or the model is already registered as
   embedded in the SQL registry.
+- `omop-emb search` defaults to cosine. If the corresponding FAISS index file
+  is missing, the system may build it lazily from `embeddings.h5` on first
+  search, which can be expensive for large stores. For predictable performance,
+  run `omop-emb rebuild-index` for the metric or metrics you intend to query.
 
 Stored embeddings can also be queried after ingestion:
 
@@ -97,6 +107,19 @@ omop-emb rebuild-index \
   --faiss-base-dir ./data \
   --metric-type cosine \
   --metric-type l2
+```
+
+Existing FAISS models can be switched from `flat` to `hnsw` without regenerating
+the raw HDF5 embeddings:
+
+```bash
+omop-emb switch-index-type \
+  --model my-embedding-model \
+  --backend faiss \
+  --index-type hnsw \
+  --hnsw-num-neighbors 48 \
+  --hnsw-ef-search 96 \
+  --hnsw-ef-construction 240
 ```
 
 ## DB Test Environment

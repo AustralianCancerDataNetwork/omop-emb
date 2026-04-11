@@ -33,7 +33,9 @@ class EmbeddingStorageManager:
         file_dir: str | Path, 
         dimensions: int,
         backend_type: BackendType,
-        # NOTE: Add neighbours/clusters here as param if differently support index types
+        hnsw_num_neighbors: int = 32,
+        hnsw_ef_search: int = 64,
+        hnsw_ef_construction: int = 200,
     ):
         # Sanity check
         if backend_type != BackendType.FAISS:
@@ -41,6 +43,9 @@ class EmbeddingStorageManager:
 
         self.base_dir = Path(file_dir)
         self.dimensions = dimensions
+        self.hnsw_num_neighbors = hnsw_num_neighbors
+        self.hnsw_ef_search = hnsw_ef_search
+        self.hnsw_ef_construction = hnsw_ef_construction
         self._init_embedding_storage_if_missing()
         self._index_managers: Dict[IndexType, Dict[MetricType, BaseIndexManager]] = {}
 
@@ -81,11 +86,21 @@ class EmbeddingStorageManager:
                 f"Supported indices are {IndexType.FLAT} and {IndexType.HNSW}."
             )
         
-        index_manager = index_manager_cls(
-            dimension=self.dimensions,
-            metric_type=metric_type,
-            base_index_dir=self.base_dir
-        )
+        if index_type == IndexType.HNSW:
+            index_manager = index_manager_cls(
+                dimension=self.dimensions,
+                metric_type=metric_type,
+                base_index_dir=self.base_dir,
+                num_neighbors=self.hnsw_num_neighbors,
+                ef_search=self.hnsw_ef_search,
+                ef_construction=self.hnsw_ef_construction,
+            )
+        else:
+            index_manager = index_manager_cls(
+                dimension=self.dimensions,
+                metric_type=metric_type,
+                base_index_dir=self.base_dir,
+            )
 
         index_manager.load_or_populate(
             self.stream_concept_ids_and_embeddings(batch_size=batch_size)

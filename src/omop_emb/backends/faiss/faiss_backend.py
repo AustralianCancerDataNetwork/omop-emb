@@ -42,6 +42,84 @@ from ..embedding_utils import (
 
 logger = logging.getLogger(__name__)
 
+FAISS_METADATA_HNSW_NUM_NEIGHBORS = "hnsw_num_neighbors"
+FAISS_METADATA_HNSW_EF_SEARCH = "hnsw_ef_search"
+FAISS_METADATA_HNSW_EF_CONSTRUCTION = "hnsw_ef_construction"
+DEFAULT_HNSW_NUM_NEIGHBORS = 32
+DEFAULT_HNSW_EF_SEARCH = 64
+DEFAULT_HNSW_EF_CONSTRUCTION = 200
+
+
+def _coerce_positive_int(*, value: Optional[object], field_name: str, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer. Got {value!r}.") from exc
+    if resolved <= 0:
+        raise ValueError(f"{field_name} must be a positive integer. Got {resolved}.")
+    return resolved
+
+
+def build_faiss_index_metadata(
+    *,
+    index_type: IndexType,
+    existing_metadata: Optional[Mapping[str, object]] = None,
+    hnsw_num_neighbors: Optional[int] = None,
+    hnsw_ef_search: Optional[int] = None,
+    hnsw_ef_construction: Optional[int] = None,
+) -> dict[str, object]:
+    metadata = dict(existing_metadata or {})
+    for key in (
+        FAISS_METADATA_HNSW_NUM_NEIGHBORS,
+        FAISS_METADATA_HNSW_EF_SEARCH,
+        FAISS_METADATA_HNSW_EF_CONSTRUCTION,
+    ):
+        metadata.pop(key, None)
+
+    if index_type == IndexType.HNSW:
+        metadata[FAISS_METADATA_HNSW_NUM_NEIGHBORS] = _coerce_positive_int(
+            value=hnsw_num_neighbors,
+            field_name=FAISS_METADATA_HNSW_NUM_NEIGHBORS,
+            default=DEFAULT_HNSW_NUM_NEIGHBORS,
+        )
+        metadata[FAISS_METADATA_HNSW_EF_SEARCH] = _coerce_positive_int(
+            value=hnsw_ef_search,
+            field_name=FAISS_METADATA_HNSW_EF_SEARCH,
+            default=DEFAULT_HNSW_EF_SEARCH,
+        )
+        metadata[FAISS_METADATA_HNSW_EF_CONSTRUCTION] = _coerce_positive_int(
+            value=hnsw_ef_construction,
+            field_name=FAISS_METADATA_HNSW_EF_CONSTRUCTION,
+            default=DEFAULT_HNSW_EF_CONSTRUCTION,
+        )
+
+    return metadata
+
+
+def resolve_faiss_hnsw_parameters(
+    metadata: Optional[Mapping[str, object]],
+) -> tuple[int, int, int]:
+    metadata = metadata or {}
+    return (
+        _coerce_positive_int(
+            value=metadata.get(FAISS_METADATA_HNSW_NUM_NEIGHBORS),
+            field_name=FAISS_METADATA_HNSW_NUM_NEIGHBORS,
+            default=DEFAULT_HNSW_NUM_NEIGHBORS,
+        ),
+        _coerce_positive_int(
+            value=metadata.get(FAISS_METADATA_HNSW_EF_SEARCH),
+            field_name=FAISS_METADATA_HNSW_EF_SEARCH,
+            default=DEFAULT_HNSW_EF_SEARCH,
+        ),
+        _coerce_positive_int(
+            value=metadata.get(FAISS_METADATA_HNSW_EF_CONSTRUCTION),
+            field_name=FAISS_METADATA_HNSW_EF_CONSTRUCTION,
+            default=DEFAULT_HNSW_EF_CONSTRUCTION,
+        ),
+    )
+
 @dataclass
 class FaissMetadata:
     """Strongly typed metadata required for the FAISS backend to operate."""
@@ -145,11 +223,13 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         model_name: str,
         dimensions: int,
         index_type: IndexType,
+        metadata: Optional[Mapping[str, object]] = None,
     ) -> EmbeddingStorageManager:
         self.register_storage_manager(
             model_name=model_name,
             dimensions=dimensions,
             index_type=index_type,
+            metadata=metadata,
         )
         return self.embedding_storage_managers[model_name]
     
@@ -158,16 +238,67 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         model_name: str,
         dimensions: int,
         index_type: IndexType,
+        metadata: Optional[Mapping[str, object]] = None,
     ) -> None:
         """Registers a storage manager for the given model if not already registered. This ensures that the necessary on-disk structures are in place for the model's embeddings and index."""
 
-        if model_name not in self.embedding_storage_managers:
+        hnsw_num_neighbors, hnsw_ef_search, hnsw_ef_construction = resolve_faiss_hnsw_parameters(metadata)
+        existing_manager = self.embedding_storage_managers.get(model_name)
+        if (
+            existing_manager is None
+            or existing_manager.dimensions != dimensions
+            or existing_manager.hnsw_num_neighbors != hnsw_num_neighbors
+            or existing_manager.hnsw_ef_search != hnsw_ef_search
+            or existing_manager.hnsw_ef_construction != hnsw_ef_construction
+        ):
             logger.info(f"Registering new storage manager for model '{model_name}' with dimensions={dimensions}, index_type={index_type}")
             self.embedding_storage_managers[model_name] = EmbeddingStorageManager(
-                    file_dir=self.get_safe_model_dir(model_name), 
-                    dimensions=dimensions,
-                    backend_type=self.backend_type,
+                file_dir=self.get_safe_model_dir(model_name), 
+                dimensions=dimensions,
+                backend_type=self.backend_type,
+                hnsw_num_neighbors=hnsw_num_neighbors,
+                hnsw_ef_search=hnsw_ef_search,
+                hnsw_ef_construction=hnsw_ef_construction,
+            )
+
+    def update_model_index_configuration(
+        self,
+        *,
+        session: Session,
+        model_name: str,
+        index_type: IndexType,
+        metadata: Mapping[str, object],
+    ) -> EmbeddingModelRecord:
+        row = session.scalar(
+            select(ModelRegistry).where(
+                ModelRegistry.model_name == model_name,
+                ModelRegistry.backend_type == self.backend_type,
+            )
+        )
+        if row is None:
+            raise ValueError(
+                f"Embedding model '{model_name}' is not registered in the FAISS backend."
+            )
+
+        previous_index_type = row.index_type
+        row.index_type = index_type
+        row.details = dict(metadata)
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        self.embedding_storage_managers.pop(model_name, None)
+
+        if previous_index_type != index_type:
+            obsolete_index_dir = self.get_safe_model_dir(model_name) / f"index_{previous_index_type.value}"
+            if obsolete_index_dir.exists():
+                logger.info(
+                    "Deleting obsolete FAISS index directory for model '%s': %s",
+                    model_name,
+                    obsolete_index_dir,
                 )
+                shutil.rmtree(obsolete_index_dir)
+
+        return self._record_from_registry_row(row)
 
     def _validate_storage_consistency(
         self,
@@ -287,6 +418,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             model_name=model_name,
             dimensions=model_record.dimensions,
             index_type=model_record.index_type,
+            metadata=model_record.metadata,
         )
         self._validate_storage_consistency(
             session=session,
@@ -336,6 +468,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             model_name=model_name,
             dimensions=model_record.dimensions,
             index_type=model_record.index_type,
+            metadata=model_record.metadata,
         )
 
         if storage_manager.get_count() == 0:
@@ -349,7 +482,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         self.validate_embeddings(embeddings=query_embeddings, dimensions=model_record.dimensions)
         embedding_table = self._get_embedding_table(session, model_name)
 
-        if concept_filter is None:
+        if concept_filter is None or self._filter_is_empty(concept_filter):
             # Easier to not do any filter if all are allowed
             permitted_concept_ids = None
         else:
@@ -432,6 +565,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             model_name=model_name,
             dimensions=model_record.dimensions,
             index_type=model_record.index_type,
+            metadata=model_record.metadata,
         )
         self._validate_storage_consistency(
             session=session,
@@ -473,6 +607,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             model_name=model_name,
             dimensions=model_record.dimensions,
             index_type=model_record.index_type,
+            metadata=model_record.metadata,
         )
 
         return storage_manager.get_embeddings_by_concept_ids(concept_ids=concept_ids_np)

@@ -50,7 +50,9 @@ class ModelRegistry(Base):
 
     @validates("index_type")
     def validate_index_for_backend(self, key, index_type):
-        if is_index_type_supported_for_backend(self.backend_type, index_type):
+        if self.backend_type is None:
+            return index_type
+        if not is_index_type_supported_for_backend(self.backend_type, index_type):
             raise ValueError(
                 f"Backend {self.backend_type} does not support {index_type}. "
                 f"Supported: {get_supported_index_types_for_backend(self.backend_type)}"

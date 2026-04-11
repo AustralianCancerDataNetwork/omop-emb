@@ -14,7 +14,14 @@ from omop_emb.backends import (
 )
 from omop_emb.embedding_client import OpenAICompatibleEmbeddingClient
 from omop_emb.interface import EmbeddingInterface
-from omop_emb.backends.config import IndexType, MetricType
+from omop_emb.backends.config import BackendType, IndexType, MetricType
+from omop_emb.backends.faiss.faiss_backend import (
+    DEFAULT_HNSW_EF_CONSTRUCTION,
+    DEFAULT_HNSW_EF_SEARCH,
+    DEFAULT_HNSW_NUM_NEIGHBORS,
+    FaissEmbeddingBackend,
+    build_faiss_index_metadata,
+)
 from omop_emb.backends.registry import get_metadata_schema
 
 app = typer.Typer()
@@ -94,6 +101,40 @@ def _normalize_api_base(api_base: str, embedding_path: str) -> str:
             normalized,
         )
     return normalized
+
+
+def _build_concept_filter(
+    *,
+    standard_only: bool,
+    vocabularies: Optional[list[str]],
+) -> Optional[EmbeddingConceptFilter]:
+    resolved_vocabularies = tuple(vocabularies) if vocabularies else None
+    if not standard_only and resolved_vocabularies is None:
+        return None
+    return EmbeddingConceptFilter(
+        require_standard=standard_only,
+        vocabularies=resolved_vocabularies,
+    )
+
+
+def _build_backend_metadata(
+    *,
+    backend_type: BackendType,
+    index_type: IndexType,
+    existing_metadata: Optional[dict[str, object]] = None,
+    hnsw_num_neighbors: Optional[int] = None,
+    hnsw_ef_search: Optional[int] = None,
+    hnsw_ef_construction: Optional[int] = None,
+) -> dict[str, object]:
+    if backend_type != BackendType.FAISS:
+        return dict(existing_metadata or {})
+    return build_faiss_index_metadata(
+        index_type=index_type,
+        existing_metadata=existing_metadata,
+        hnsw_num_neighbors=hnsw_num_neighbors,
+        hnsw_ef_search=hnsw_ef_search,
+        hnsw_ef_construction=hnsw_ef_construction,
+    )
 
 
 def _compile_sql(query: sa.Select, engine: sa.Engine) -> str:
@@ -192,6 +233,18 @@ def add_embeddings(
         "--faiss-base-dir",
         help="Optional base directory for FAISS backend storage."
     )] = None,
+    hnsw_num_neighbors: Annotated[int, typer.Option(
+        "--hnsw-num-neighbors",
+        help="FAISS HNSW M parameter. Used when `--index-type hnsw`."
+    )] = DEFAULT_HNSW_NUM_NEIGHBORS,
+    hnsw_ef_search: Annotated[int, typer.Option(
+        "--hnsw-ef-search",
+        help="FAISS HNSW efSearch parameter. Used when `--index-type hnsw`."
+    )] = DEFAULT_HNSW_EF_SEARCH,
+    hnsw_ef_construction: Annotated[int, typer.Option(
+        "--hnsw-ef-construction",
+        help="FAISS HNSW efConstruction parameter. Used when `--index-type hnsw`."
+    )] = DEFAULT_HNSW_EF_CONSTRUCTION,
     standard_only: Annotated[bool, typer.Option(
         "--standard-only",
         help="If set, only generate embeddings for OMOP standard concepts (standard_concept = 'S')."
@@ -218,10 +271,17 @@ def add_embeddings(
         embedding_path=embedding_path,
     )
     resolved_embedding_dim = _resolve_embedding_dim(interface, embedding_dim)
+    backend_metadata = _build_backend_metadata(
+        backend_type=interface.backend.backend_type,
+        index_type=index_type,
+        hnsw_num_neighbors=hnsw_num_neighbors,
+        hnsw_ef_search=hnsw_ef_search,
+        hnsw_ef_construction=hnsw_ef_construction,
+    )
 
-    concept_filter = EmbeddingConceptFilter(
-        require_standard=standard_only,
-        vocabularies=tuple(vocabularies) if vocabularies else None,
+    concept_filter = _build_concept_filter(
+        standard_only=standard_only,
+        vocabularies=vocabularies,
     )
     
     # Initialize only the embedding store metadata for this project.
@@ -234,6 +294,7 @@ def add_embeddings(
             model_name=resolved_model,
             index_type=index_type,
             dimensions=resolved_embedding_dim,
+            metadata=backend_metadata,
             overwrite_existing_conflicts=overwrite_model_registration,
         )
 
@@ -294,6 +355,12 @@ def add_embeddings(
                 pbar.update(len(batch_concepts))
 
     logger.info("Completed embedding generation and storage. Wrote %s embeddings.", processed_concepts)
+    if interface.backend.backend_type == BackendType.FAISS:
+        typer.echo(
+            "FAISS note: raw embeddings were written to HDF5 storage. "
+            "Rebuild the metric-specific FAISS index before search, for example: "
+            f"omop-emb rebuild-index --model {resolved_model} --backend faiss --metric-type cosine"
+        )
 
 
 @app.command()
@@ -360,9 +427,9 @@ def search(
         faiss_base_dir=faiss_base_dir,
         embedding_path=embedding_path,
     )
-    concept_filter = EmbeddingConceptFilter(
-        require_standard=standard_only,
-        vocabularies=tuple(vocabularies) if vocabularies else None,
+    concept_filter = _build_concept_filter(
+        standard_only=standard_only,
+        vocabularies=vocabularies,
     )
 
     interface.initialise_store(engine)
@@ -433,6 +500,97 @@ def rebuild_index(
         )
 
     logger.info("Completed index rebuild for model '%s'.", resolved_model)
+
+
+@app.command("switch-index-type")
+def switch_index_type(
+    model: Annotated[Optional[str], typer.Option(
+        "--model", "-m",
+        help="Registered embedding model name to update."
+    )] = None,
+    backend_name: Annotated[Optional[str], typer.Option(
+        "--backend",
+        help="Embedding backend to update. Currently only FAISS supports index switching."
+    )] = None,
+    faiss_base_dir: Annotated[Optional[str], typer.Option(
+        "--faiss-base-dir",
+        help="Optional base directory for FAISS backend storage."
+    )] = None,
+    index_type: Annotated[IndexType, typer.Option(
+        "--index-type",
+        help="New FAISS index type to store in the model registry."
+    )] = IndexType.HNSW,
+    metric_types: Annotated[Optional[list[MetricType]], typer.Option(
+        "--metric-type",
+        help="Metric(s) to rebuild after switching. Defaults to all metrics supported by the new index type."
+    )] = None,
+    hnsw_num_neighbors: Annotated[int, typer.Option(
+        "--hnsw-num-neighbors",
+        help="FAISS HNSW M parameter. Used when `--index-type hnsw`."
+    )] = DEFAULT_HNSW_NUM_NEIGHBORS,
+    hnsw_ef_search: Annotated[int, typer.Option(
+        "--hnsw-ef-search",
+        help="FAISS HNSW efSearch parameter. Used when `--index-type hnsw`."
+    )] = DEFAULT_HNSW_EF_SEARCH,
+    hnsw_ef_construction: Annotated[int, typer.Option(
+        "--hnsw-ef-construction",
+        help="FAISS HNSW efConstruction parameter. Used when `--index-type hnsw`."
+    )] = DEFAULT_HNSW_EF_CONSTRUCTION,
+    batch_size: Annotated[int, typer.Option(
+        "--batch-size", "-b",
+        help="Batch size to use when streaming embeddings from disk during rebuild."
+    )] = 100_000,
+    rebuild: Annotated[bool, typer.Option(
+        "--rebuild/--no-rebuild",
+        help="If set, rebuild FAISS index files immediately after updating the registry."
+    )] = True,
+):
+    configure_logging()
+    load_dotenv()
+
+    engine = _create_engine_from_env()
+    logger.info("Embedding metadata schema: %s", get_metadata_schema())
+    interface = EmbeddingInterface.from_backend_name(
+        backend_name=backend_name,
+        faiss_base_dir=faiss_base_dir,
+    )
+    resolved_model = _resolve_model_name(model)
+    interface.initialise_store(engine)
+
+    if interface.backend.backend_type != BackendType.FAISS or not isinstance(interface.backend, FaissEmbeddingBackend):
+        raise RuntimeError("Index-type switching is currently only supported for the FAISS backend.")
+
+    with Session(engine) as session:
+        existing_model = interface.backend.get_registered_model(session=session, model_name=resolved_model)
+        if existing_model is None:
+            raise RuntimeError(f"Embedding model '{resolved_model}' is not registered.")
+
+        metadata = _build_backend_metadata(
+            backend_type=interface.backend.backend_type,
+            index_type=index_type,
+            existing_metadata=dict(existing_model.metadata),
+            hnsw_num_neighbors=hnsw_num_neighbors,
+            hnsw_ef_search=hnsw_ef_search,
+            hnsw_ef_construction=hnsw_ef_construction,
+        )
+        interface.backend.update_model_index_configuration(
+            session=session,
+            model_name=resolved_model,
+            index_type=index_type,
+            metadata=metadata,
+        )
+        if rebuild:
+            interface.rebuild_model_indexes(
+                session=session,
+                model_name=resolved_model,
+                metric_types=tuple(metric_types) if metric_types else None,
+                batch_size=batch_size,
+            )
+
+    typer.echo(
+        f"Updated model '{resolved_model}' to index_type={index_type.value}."
+        + (" Rebuilt FAISS index files." if rebuild else "")
+    )
 
 
 if __name__ == "__main__":

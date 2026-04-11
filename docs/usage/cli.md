@@ -62,6 +62,9 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 | **`--overwrite-model-registration`** | | `Boolean` | `False` | Force a clean rebuild for this model name by deleting backend-owned storage and SQL registration before re-registering it. |
 | **`--backend`** | | `Literal['pgvector', 'faiss']` | `OMOP_EMB_BACKEND` | Embedding backend to use. Requires the respective backend extra to be installed. |
 | **`--faiss-base-dir`** | | `String` | `None` | Optional base directory for FAISS backend storage. |
+| **`--hnsw-num-neighbors`** | | `Integer` | `32` | FAISS HNSW `M` parameter when `--index-type hnsw`. |
+| **`--hnsw-ef-search`** | | `Integer` | `64` | FAISS HNSW `efSearch` parameter when `--index-type hnsw`. |
+| **`--hnsw-ef-construction`** | | `Integer` | `200` | FAISS HNSW `efConstruction` parameter when `--index-type hnsw`. |
 | **`--standard-only`** | | `Boolean` | `False` | If set, only generate embeddings for OMOP standard concepts (`standard_concept = 'S'`). |
 | **`--vocabulary`** | | `List[String]` | `None` | Filter to embed concepts only from specific OMOP vocabularies. |
 | **`--num-embeddings`** | `-n` | `Integer` | `None` | Limit the number of concepts processed (useful for testing). |
@@ -101,6 +104,32 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
   the CLI now fails early and tells you to rerun with
   `--overwrite-model-registration`.
 - For larger FAISS stores, prefer `--index-type hnsw` over `flat`.
+
+### FAISS Storage Layout
+
+When `--backend faiss` is used, `add-embeddings` writes the raw vectors and
+concept IDs into an HDF5 file first. That HDF5 file is the durable source of
+truth for the stored embeddings.
+
+FAISS search indexes are separate files derived from the HDF5 data and they are
+metric-specific. For example, a model directory may contain:
+
+- `embeddings.h5`: raw vectors and concept IDs
+- `index_flat/flat_cosine_index.faiss`: cosine search index
+- `index_flat/flat_l2_index.faiss`: L2 search index
+
+This means:
+
+- creating embeddings does not by itself guarantee that every FAISS metric
+  index already exists;
+- `search` defaults to `--metric-type cosine`;
+- if the required FAISS index file for the chosen metric is missing, it may be
+  built lazily from `embeddings.h5` on first search, which can take a long time
+  for large stores;
+- for large datasets, prefer running `rebuild-index` explicitly for the metric
+  or metrics you plan to query.
+- when `--index-type hnsw` is used, the chosen HNSW settings are stored in the
+  model registry metadata and reused for later rebuilds and searches.
 
 ## `search`
 
@@ -145,3 +174,49 @@ index files or when you want to materialize multiple metrics ahead of time.
 - `--metric-type`: repeat to rebuild multiple metrics. If omitted, all metrics
   supported by the model's index type are rebuilt.
 - `--batch-size`: streaming batch size used while rebuilding from HDF5.
+
+Examples:
+
+```bash
+omop-emb rebuild-index \
+  --model my-embedding-model \
+  --backend faiss \
+  --faiss-base-dir ./data \
+  --metric-type cosine
+```
+
+If you plan to search with multiple metrics, rebuild each required metric or
+omit `--metric-type` to build all metrics supported by the model's index type.
+
+## `switch-index-type`
+
+### Usage
+```bash
+omop-emb switch-index-type --model <MODEL> --backend faiss [OPTIONS]
+```
+
+This command updates the registered FAISS `index_type` for an existing model,
+stores any HNSW configuration in the model metadata, and optionally rebuilds
+the derived FAISS index files from `embeddings.h5`.
+
+Common options:
+
+- `--index-type`: target FAISS index type such as `hnsw` or `flat`.
+- `--metric-type`: metric(s) to rebuild after switching. If omitted, all
+  metrics supported by the target index type are rebuilt.
+- `--hnsw-num-neighbors`: HNSW `M` parameter for `--index-type hnsw`.
+- `--hnsw-ef-search`: HNSW `efSearch` parameter for `--index-type hnsw`.
+- `--hnsw-ef-construction`: HNSW `efConstruction` parameter for `--index-type hnsw`.
+- `--rebuild/--no-rebuild`: rebuild FAISS files immediately after switching.
+
+Example:
+
+```bash
+omop-emb switch-index-type \
+  --model my-embedding-model \
+  --backend faiss \
+  --index-type hnsw \
+  --hnsw-num-neighbors 48 \
+  --hnsw-ef-search 96 \
+  --hnsw-ef-construction 240
+```

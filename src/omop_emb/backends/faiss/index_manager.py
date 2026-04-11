@@ -14,8 +14,10 @@ logger = logging.getLogger(__name__)
 def logger_warning_partial_index_population(filepath: Path):
     logger.warning(
         "Current implementation does not guarantee that indices on disk are fully populated "
-        "or consistent with the raw embedding storage.\nIf you want to "
-        f"re-populate from storage, please delete the existing index file at `{filepath}` first.\n\n"
+        "or consistent with the raw embedding storage in embeddings.h5.\n"
+        "If you want to rebuild from HDF5, run `omop-emb rebuild-index` for the relevant "
+        "model, backend, and metric.\n"
+        f"Loaded existing index file: `{filepath}`.\n"
     )
 
 class BaseIndexManager(abc.ABC):

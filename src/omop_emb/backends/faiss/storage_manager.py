@@ -69,12 +69,12 @@ class EmbeddingStorageManager:
             )
             self._index_managers[index_type][metric_type] = index_manager
         return self._index_managers[index_type][metric_type]
-    
-    def create_index_manager(
+
+    def _instantiate_index_manager(
         self,
+        *,
         index_type: IndexType,
         metric_type: MetricType,
-        batch_size: int = 100_000
     ) -> BaseIndexManager:
         if index_type == IndexType.FLAT:
             index_manager_cls = FlatIndexManager
@@ -85,9 +85,9 @@ class EmbeddingStorageManager:
                 f"Unsupported index type {index_type} for FAISS backend. "
                 f"Supported indices are {IndexType.FLAT} and {IndexType.HNSW}."
             )
-        
+
         if index_type == IndexType.HNSW:
-            index_manager = index_manager_cls(
+            return index_manager_cls(
                 dimension=self.dimensions,
                 metric_type=metric_type,
                 base_index_dir=self.base_dir,
@@ -95,13 +95,23 @@ class EmbeddingStorageManager:
                 ef_search=self.hnsw_ef_search,
                 ef_construction=self.hnsw_ef_construction,
             )
-        else:
-            index_manager = index_manager_cls(
-                dimension=self.dimensions,
-                metric_type=metric_type,
-                base_index_dir=self.base_dir,
-            )
 
+        return index_manager_cls(
+            dimension=self.dimensions,
+            metric_type=metric_type,
+            base_index_dir=self.base_dir,
+        )
+    
+    def create_index_manager(
+        self,
+        index_type: IndexType,
+        metric_type: MetricType,
+        batch_size: int = 100_000
+    ) -> BaseIndexManager:
+        index_manager = self._instantiate_index_manager(
+            index_type=index_type,
+            metric_type=metric_type,
+        )
         index_manager.load_or_populate(
             self.stream_concept_ids_and_embeddings(batch_size=batch_size)
         )
@@ -235,7 +245,15 @@ class EmbeddingStorageManager:
         metric_type: MetricType,
         batch_size: int = 100_000,
     ) -> None:
-        index_manager = self.get_index_manager(index_type=index_type, metric_type=metric_type)
+        if index_type not in self._index_managers:
+            self._index_managers[index_type] = {}
+        index_manager = self._index_managers[index_type].get(metric_type)
+        if index_manager is None:
+            index_manager = self._instantiate_index_manager(
+                index_type=index_type,
+                metric_type=metric_type,
+            )
+            self._index_managers[index_type][metric_type] = index_manager
         index_manager.rebuild_from_storage(
             self.stream_concept_ids_and_embeddings(batch_size=batch_size)
         )

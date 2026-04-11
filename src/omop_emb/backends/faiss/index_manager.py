@@ -115,7 +115,18 @@ class BaseIndexManager(abc.ABC):
         """
         query = self._prepare_vectors(query_vector)
         params = self._create_search_parameters(subset_concept_ids)
+        started_at = time.monotonic()
         distances, concept_ids = self.index.search(query, k=k, params=params)  # type: ignore
+        elapsed_seconds = time.monotonic() - started_at
+        logger.info(
+            "Completed FAISS search: index_type=%s metric=%s queries=%s k=%s subset_size=%s elapsed=%.3fs",
+            self.supported_index_type.value,
+            self.metric_type.value,
+            query.shape[0],
+            k,
+            None if subset_concept_ids is None else int(len(subset_concept_ids)),
+            elapsed_seconds,
+        )
 
         if self.metric_type == MetricType.L2:
             # https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances#metric_l2
@@ -142,7 +153,18 @@ class BaseIndexManager(abc.ABC):
 
     def load(self):
         """Loads an index from disk."""
+        started_at = time.monotonic()
         self._index = faiss.read_index(str(self.index_filepath))
+        elapsed_seconds = time.monotonic() - started_at
+        ntotal = getattr(self._index, "ntotal", "unknown")
+        logger.info(
+            "Loaded FAISS index from disk at %s (index_type=%s metric=%s ntotal=%s elapsed=%.3fs).",
+            self.index_filepath,
+            self.supported_index_type.value,
+            self.metric_type.value,
+            ntotal,
+            elapsed_seconds,
+        )
 
     def load_or_populate(self, data_stream: Generator[Tuple[np.ndarray, np.ndarray], None, None]):
         """Loads the index from disk if it exists, otherwise populates it from the provided data stream."""

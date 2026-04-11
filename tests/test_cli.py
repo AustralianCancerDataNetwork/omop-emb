@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import Mock, PropertyMock
 
 import pytest
@@ -12,12 +13,15 @@ from omop_emb.backends.config import BackendType, IndexType
 from omop_emb.cli import (
     _build_backend_metadata,
     _build_concept_filter,
+    _load_batch_queries,
     _normalize_api_base,
     _normalize_embedding_path,
+    _render_search_results,
     _resolve_api_key,
     _resolve_embedding_dim,
     add_embeddings,
     _resolve_model_name,
+    search_batch,
     switch_index_type,
 )
 from omop_emb.interface import EmbeddingInterface
@@ -131,6 +135,32 @@ class TestCliHelpers:
         assert "hnsw_ef_search" not in metadata
         assert metadata["custom"] == "keep-me"
 
+    def test_load_batch_queries_supports_optional_query_ids(self, tmp_path: Path):
+        query_file = tmp_path / "queries.txt"
+        query_file.write_text("q1\talpha\nbeta\n\nq3\tgamma\n", encoding="utf-8")
+
+        assert _load_batch_queries(str(query_file)) == [
+            ("q1", "alpha"),
+            ("2", "beta"),
+            ("q3", "gamma"),
+        ]
+
+    def test_render_search_results_handles_empty_match_list(self):
+        assert _render_search_results(query_id="q1", query_text="alpha", matches=()) == [
+            "q1\talpha\t0\t\t\t"
+        ]
+
+    def test_render_search_results_formats_rows(self):
+        match = Mock(concept_id=123, similarity=0.9, concept_name="Alpha concept")
+
+        assert _render_search_results(
+            query_id="q1",
+            query_text="alpha",
+            matches=(match,),
+        ) == [
+            "q1\talpha\t1\t123\t0.900000\tAlpha concept"
+        ]
+
     def test_add_embeddings_prints_faiss_rebuild_note(self, monkeypatch, capsys):
         class FakeResult:
             def partitions(self, batch_size):
@@ -217,6 +247,70 @@ class TestCliHelpers:
         stdout = capsys.readouterr().out
         assert "Rebuild the metric-specific FAISS index before search" in stdout
         assert "omop-emb rebuild-index --model tei-qwen:intfloat/multilingual-e5-large-instruct" in stdout
+
+    def test_search_batch_warms_index_once_and_prints_results(self, monkeypatch, capsys, tmp_path: Path):
+        class FakeSession:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+        match = Mock(concept_id=123, similarity=0.9, concept_name="Alpha concept")
+        fake_interface = Mock(spec=EmbeddingInterface)
+        fake_interface.backend = Mock()
+        fake_interface.backend.backend_type = BackendType.FAISS
+        fake_interface.backend.backend_name = "faiss"
+        fake_interface.initialise_store.return_value = None
+
+        query_file = tmp_path / "queries.txt"
+        query_file.write_text("q1\talpha\nq2\tbeta\n", encoding="utf-8")
+
+        monkeypatch.setattr(cli_module, "_create_engine_from_env", lambda: object())
+        monkeypatch.setattr(cli_module, "get_metadata_schema", lambda: "public")
+        monkeypatch.setattr(
+            cli_module,
+            "_create_embedding_interface",
+            lambda **kwargs: (fake_interface, "tei-qwen:intfloat/multilingual-e5-large-instruct"),
+        )
+        monkeypatch.setattr(cli_module, "Session", lambda engine: FakeSession())
+
+        warmed = []
+        searched = []
+
+        monkeypatch.setattr(
+            cli_module,
+            "_warm_search_backend",
+            lambda **kwargs: warmed.append(kwargs["model_name"]),
+        )
+        monkeypatch.setattr(
+            cli_module,
+            "_run_search_query",
+            lambda **kwargs: searched.append(tuple(kwargs["query_texts"])) or ((match,), ()),
+        )
+
+        search_batch(
+            query_file=str(query_file),
+            api_base="http://localhost:14000/v1",
+            api_key=None,
+            batch_size=2,
+            model="tei-qwen:intfloat/multilingual-e5-large-instruct",
+            embedding_path="/embeddings",
+            backend_name="faiss",
+            faiss_base_dir="/tmp/faiss",
+            metric_type=cli_module.MetricType.COSINE,
+            k=5,
+            standard_only=False,
+            vocabularies=None,
+            warm_index=True,
+        )
+
+        assert warmed == ["tei-qwen:intfloat/multilingual-e5-large-instruct"]
+        assert searched == [("alpha", "beta")]
+        stdout = capsys.readouterr().out.strip().splitlines()
+        assert stdout[0] == "query_id\tquery_text\trank\tconcept_id\tsimilarity\tconcept_name"
+        assert stdout[1] == "q1\talpha\t1\t123\t0.900000\tAlpha concept"
+        assert stdout[2] == "q2\tbeta\t0"
 
     def test_switch_index_type_updates_faiss_model_and_rebuilds(self, monkeypatch, capsys):
         class FakeSession:

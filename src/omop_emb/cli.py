@@ -3,7 +3,11 @@ from sqlalchemy.orm import Session
 
 from orm_loader.helpers import get_logger, configure_logging
 
-from typing import Annotated, Optional
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+from pathlib import Path
+import time
+from typing import Annotated, Optional, Sequence
 import os
 from dotenv import load_dotenv
 from tqdm import tqdm
@@ -26,6 +30,12 @@ from omop_emb.backends.registry import get_metadata_schema
 
 app = typer.Typer()
 logger = get_logger(__name__)
+
+
+def _log_timing(stage: str, started_at: float) -> float:
+    elapsed = time.monotonic() - started_at
+    logger.info("Timing: %s completed in %.3fs", stage, elapsed)
+    return elapsed
 
 
 def _resolve_model_name(model: Optional[str]) -> str:
@@ -189,6 +199,124 @@ def _create_embedding_interface(
         ),
     )
     return interface, resolved_model
+
+
+def _load_batch_queries(query_file: str) -> list[tuple[str, str]]:
+    loaded_queries: list[tuple[str, str]] = []
+    with Path(query_file).open("r", encoding="utf-8") as handle:
+        for line_number, raw_line in enumerate(handle, start=1):
+            line = raw_line.rstrip("\n")
+            if not line.strip():
+                continue
+            if "\t" in line:
+                query_id, query_text = line.split("\t", 1)
+            else:
+                query_id = str(line_number)
+                query_text = line
+            query_text = query_text.strip()
+            if not query_text:
+                continue
+            loaded_queries.append((query_id.strip() or str(line_number), query_text))
+    if not loaded_queries:
+        raise RuntimeError(f"No non-empty queries found in {query_file}.")
+    return loaded_queries
+
+
+def _render_search_results(
+    *,
+    query_id: str,
+    query_text: str,
+    matches: Sequence[object],
+) -> list[str]:
+    if not matches:
+        return [f"{query_id}\t{query_text}\t0\t\t\t"]
+    rendered_rows: list[str] = []
+    for rank, match in enumerate(matches, start=1):
+        rendered_rows.append(
+            f"{query_id}\t{query_text}\t{rank}\t{match.concept_id}\t{match.similarity:.6f}\t{match.concept_name}"
+        )
+    return rendered_rows
+
+
+def _warm_search_backend(
+    *,
+    interface: EmbeddingInterface,
+    session: Session,
+    model_name: str,
+    metric_type: MetricType,
+) -> None:
+    backend = interface.backend
+    if backend.backend_type != BackendType.FAISS:
+        return
+    model_record = backend.get_registered_model(session=session, model_name=model_name)
+    if model_record is None:
+        raise RuntimeError(f"Embedding model '{model_name}' is not registered.")
+    storage_manager = backend.get_storage_manager(
+        model_name=model_name,
+        dimensions=model_record.dimensions,
+        index_type=model_record.index_type,
+        metadata=model_record.metadata,
+    )
+    started_at = time.monotonic()
+    storage_manager.get_index_manager(
+        index_type=model_record.index_type,
+        metric_type=metric_type,
+    )
+    _log_timing(
+        f"warm faiss index model={model_name} metric={metric_type.value}",
+        started_at,
+    )
+
+
+def _run_search_query(
+    *,
+    interface: EmbeddingInterface,
+    session: Session,
+    model_name: str,
+    query_texts: Sequence[str],
+    batch_size: int,
+    metric_type: MetricType,
+    concept_filter: Optional[EmbeddingConceptFilter],
+    k: int,
+) -> tuple[tuple[object, ...], ...]:
+    total_started_at = time.monotonic()
+    embed_started_at = time.monotonic()
+    query_embeddings = interface.embed_texts(list(query_texts), batch_size=batch_size)
+    _log_timing("embed query text", embed_started_at)
+
+    search_started_at = time.monotonic()
+    matches = interface.backend.get_nearest_concepts(
+        session=session,
+        model_name=model_name,
+        query_embeddings=query_embeddings,
+        metric_type=metric_type,
+        concept_filter=concept_filter,
+        k=k,
+    )
+    _log_timing("nearest-concept lookup", search_started_at)
+    _log_timing("full search request", total_started_at)
+    return matches
+
+
+def _search_response_payload(
+    *,
+    query_id: str,
+    query_text: str,
+    matches: Sequence[object],
+) -> dict[str, object]:
+    return {
+        "query_id": query_id,
+        "query_text": query_text,
+        "matches": [
+            {
+                "rank": rank,
+                "concept_id": int(match.concept_id),
+                "similarity": float(match.similarity),
+                "concept_name": match.concept_name,
+            }
+            for rank, match in enumerate(matches, start=1)
+        ],
+    }
 
 
 @app.command()
@@ -435,11 +563,12 @@ def search(
     interface.initialise_store(engine)
 
     with Session(engine) as session:
-        query_embeddings = interface.embed_texts(query_text, batch_size=batch_size)
-        matches = interface.backend.get_nearest_concepts(
+        matches = _run_search_query(
+            interface=interface,
             session=session,
             model_name=resolved_model,
-            query_embeddings=query_embeddings,
+            query_texts=(query_text,),
+            batch_size=batch_size,
             metric_type=metric_type,
             concept_filter=concept_filter,
             k=k,
@@ -454,6 +583,280 @@ def search(
         typer.echo(
             f"{rank}\t{match.concept_id}\t{match.similarity:.6f}\t{match.concept_name}"
         )
+
+
+@app.command("search-batch")
+def search_batch(
+    query_file: Annotated[str, typer.Argument(
+        help="Path to a UTF-8 text file containing one query per line, or `query_id<TAB>query_text` per line."
+    )],
+    api_base: Annotated[str, typer.Option(
+        "--api-base",
+        help="Base URL for the API to use for generating query embeddings.",
+    )],
+    api_key: Annotated[Optional[str], typer.Option(
+        "--api-key",
+        help="Optional API key for the embedding API. Can also be set with `OMOP_EMB_API_KEY`."
+    )] = None,
+    batch_size: Annotated[int, typer.Option(
+        "--batch-size", "-b",
+        help="Batch size to use when generating query embeddings and executing batched search."
+    )] = 32,
+    model: Annotated[Optional[str], typer.Option(
+        "--model", "-m",
+        help="Name of the embedding model to query."
+    )] = None,
+    embedding_path: Annotated[str, typer.Option(
+        "--embedding-path",
+        help="Embedding endpoint path relative to `--api-base`, for example `/embeddings` or `/embed`."
+    )] = "/embeddings",
+    backend_name: Annotated[Optional[str], typer.Option(
+        "--backend",
+        help="Embedding backend to query. Can be replaced by the `OMOP_EMB_BACKEND` environment variable."
+    )] = None,
+    faiss_base_dir: Annotated[Optional[str], typer.Option(
+        "--faiss-base-dir",
+        help="Optional base directory for FAISS backend storage."
+    )] = None,
+    metric_type: Annotated[MetricType, typer.Option(
+        "--metric-type",
+        help="Similarity or distance metric to use for nearest-neighbor search."
+    )] = MetricType.COSINE,
+    k: Annotated[int, typer.Option(
+        "--k",
+        help="Number of nearest concepts to return."
+    )] = 10,
+    standard_only: Annotated[bool, typer.Option(
+        "--standard-only",
+        help="If set, only search within OMOP standard concepts."
+    )] = False,
+    vocabularies: Annotated[Optional[list[str]], typer.Option(
+        "--vocabulary",
+        help="Optional vocabulary filter. Repeat to restrict the search space."
+    )] = None,
+    warm_index: Annotated[bool, typer.Option(
+        "--warm-index/--no-warm-index",
+        help="Preload the FAISS index once before processing the batch."
+    )] = True,
+):
+    configure_logging()
+    load_dotenv()
+
+    queries = _load_batch_queries(query_file)
+    engine = _create_engine_from_env()
+    logger.info("Embedding metadata schema: %s", get_metadata_schema())
+    interface, resolved_model = _create_embedding_interface(
+        api_base=api_base,
+        api_key=api_key,
+        batch_size=batch_size,
+        model=model,
+        backend_name=backend_name,
+        faiss_base_dir=faiss_base_dir,
+        embedding_path=embedding_path,
+    )
+    concept_filter = _build_concept_filter(
+        standard_only=standard_only,
+        vocabularies=vocabularies,
+    )
+    interface.initialise_store(engine)
+
+    typer.echo("query_id\tquery_text\trank\tconcept_id\tsimilarity\tconcept_name")
+    with Session(engine) as session:
+        if warm_index:
+            _warm_search_backend(
+                interface=interface,
+                session=session,
+                model_name=resolved_model,
+                metric_type=metric_type,
+            )
+
+        for batch_start in range(0, len(queries), batch_size):
+            query_batch = queries[batch_start:batch_start + batch_size]
+            matches_batch = _run_search_query(
+                interface=interface,
+                session=session,
+                model_name=resolved_model,
+                query_texts=[query_text for _, query_text in query_batch],
+                batch_size=batch_size,
+                metric_type=metric_type,
+                concept_filter=concept_filter,
+                k=k,
+            )
+            for (query_id, query_text), matches_per_query in zip(query_batch, matches_batch):
+                for row in _render_search_results(
+                    query_id=query_id,
+                    query_text=query_text,
+                    matches=matches_per_query,
+                ):
+                    typer.echo(row)
+
+
+@app.command("serve-search")
+def serve_search(
+    api_base: Annotated[str, typer.Option(
+        "--api-base",
+        help="Base URL for the API to use for generating query embeddings.",
+    )],
+    api_key: Annotated[Optional[str], typer.Option(
+        "--api-key",
+        help="Optional API key for the embedding API. Can also be set with `OMOP_EMB_API_KEY`."
+    )] = None,
+    batch_size: Annotated[int, typer.Option(
+        "--batch-size", "-b",
+        help="Batch size to use when generating query embeddings."
+    )] = 32,
+    model: Annotated[Optional[str], typer.Option(
+        "--model", "-m",
+        help="Name of the embedding model to query."
+    )] = None,
+    embedding_path: Annotated[str, typer.Option(
+        "--embedding-path",
+        help="Embedding endpoint path relative to `--api-base`, for example `/embeddings` or `/embed`."
+    )] = "/embeddings",
+    backend_name: Annotated[Optional[str], typer.Option(
+        "--backend",
+        help="Embedding backend to query. Can be replaced by the `OMOP_EMB_BACKEND` environment variable."
+    )] = None,
+    faiss_base_dir: Annotated[Optional[str], typer.Option(
+        "--faiss-base-dir",
+        help="Optional base directory for FAISS backend storage."
+    )] = None,
+    metric_type: Annotated[MetricType, typer.Option(
+        "--metric-type",
+        help="Similarity or distance metric to use for nearest-neighbor search."
+    )] = MetricType.COSINE,
+    k: Annotated[int, typer.Option(
+        "--k",
+        help="Number of nearest concepts to return."
+    )] = 10,
+    standard_only: Annotated[bool, typer.Option(
+        "--standard-only",
+        help="If set, only search within OMOP standard concepts."
+    )] = False,
+    vocabularies: Annotated[Optional[list[str]], typer.Option(
+        "--vocabulary",
+        help="Optional vocabulary filter. Repeat to restrict the search space."
+    )] = None,
+    host: Annotated[str, typer.Option(
+        "--host",
+        help="Host interface for the search service."
+    )] = "127.0.0.1",
+    port: Annotated[int, typer.Option(
+        "--port",
+        help="Port for the search service."
+    )] = 8080,
+    warm_index: Annotated[bool, typer.Option(
+        "--warm-index/--no-warm-index",
+        help="Preload the FAISS index before accepting requests."
+    )] = True,
+):
+    configure_logging()
+    load_dotenv()
+
+    engine = _create_engine_from_env()
+    logger.info("Embedding metadata schema: %s", get_metadata_schema())
+    interface, resolved_model = _create_embedding_interface(
+        api_base=api_base,
+        api_key=api_key,
+        batch_size=batch_size,
+        model=model,
+        backend_name=backend_name,
+        faiss_base_dir=faiss_base_dir,
+        embedding_path=embedding_path,
+    )
+    concept_filter = _build_concept_filter(
+        standard_only=standard_only,
+        vocabularies=vocabularies,
+    )
+    interface.initialise_store(engine)
+
+    if warm_index:
+        with Session(engine) as warm_session:
+            _warm_search_backend(
+                interface=interface,
+                session=warm_session,
+                model_name=resolved_model,
+                metric_type=metric_type,
+            )
+
+    class SearchHandler(BaseHTTPRequestHandler):
+        def _send_json(self, status_code: int, payload: dict[str, object]) -> None:
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/health":
+                self._send_json(
+                    200,
+                    {
+                        "status": "ok",
+                        "model": resolved_model,
+                        "backend": interface.backend.backend_name,
+                        "metric_type": metric_type.value,
+                    },
+                )
+                return
+            self._send_json(404, {"error": "not found"})
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path != "/search":
+                self._send_json(404, {"error": "not found"})
+                return
+            content_length = int(self.headers.get("Content-Length", "0"))
+            raw_body = self.rfile.read(content_length)
+            try:
+                payload = json.loads(raw_body or b"{}")
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "invalid json"})
+                return
+
+            query_text = payload.get("query_text")
+            if not isinstance(query_text, str) or not query_text.strip():
+                self._send_json(400, {"error": "`query_text` must be a non-empty string"})
+                return
+
+            request_k = payload.get("k", k)
+            if not isinstance(request_k, int) or request_k <= 0:
+                self._send_json(400, {"error": "`k` must be a positive integer"})
+                return
+
+            with Session(engine) as session:
+                matches = _run_search_query(
+                    interface=interface,
+                    session=session,
+                    model_name=resolved_model,
+                    query_texts=(query_text,),
+                    batch_size=batch_size,
+                    metric_type=metric_type,
+                    concept_filter=concept_filter,
+                    k=request_k,
+                )
+            self._send_json(
+                200,
+                _search_response_payload(
+                    query_id=str(payload.get("query_id", "1")),
+                    query_text=query_text,
+                    matches=matches[0] if matches else (),
+                ),
+            )
+
+        def log_message(self, format: str, *args: object) -> None:
+            logger.info("search-service " + format, *args)
+
+    server = HTTPServer((host, port), SearchHandler)
+    typer.echo(
+        f"Serving search on http://{host}:{port} using model '{resolved_model}', backend '{interface.backend.backend_name}', metric '{metric_type.value}'."
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("Stopping search service.")
+    finally:
+        server.server_close()
 
 
 @app.command("rebuild-index")

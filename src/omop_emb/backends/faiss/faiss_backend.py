@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import shutil
+import time
 from typing import Any, Mapping, Optional, Sequence, Type, cast, Dict, Tuple 
 
 import numpy as np
@@ -486,6 +487,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             # Easier to not do any filter if all are allowed
             permitted_concept_ids = None
         else:
+            filter_started_at = time.monotonic()
             q_permitted_concept_ids = (
                 select(embedding_table.concept_id)
                 .join(Concept, Concept.concept_id == embedding_table.concept_id)
@@ -495,13 +497,26 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                 [int(row.concept_id) for row in session.execute(q_permitted_concept_ids)],
                 dtype=np.int64,
             )
+            logger.info(
+                "Resolved FAISS filter candidate set: model=%s count=%s elapsed=%.3fs",
+                model_name,
+                len(permitted_concept_ids),
+                time.monotonic() - filter_started_at,
+            )
 
+        faiss_search_started_at = time.monotonic()
         distances, concept_ids = storage_manager.search(
             query_vector=query_embeddings,
             metric_type=metric_type,
             index_type=model_record.index_type,
             k=k,
             subset_concept_ids=permitted_concept_ids
+        )
+        logger.info(
+            "Completed backend nearest-neighbor stage: model=%s queries=%s elapsed=%.3fs",
+            model_name,
+            query_embeddings.shape[0],
+            time.monotonic() - faiss_search_started_at,
         )
 
         returned_ids = tuple(
@@ -512,6 +527,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         if not returned_ids:
             return tuple(() for _ in range(query_embeddings.shape[0]))
 
+        hydration_started_at = time.monotonic()
         permitted_concept_ids_storage = {
             row.concept_id: row
             for row in session.execute(
@@ -522,6 +538,12 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                 )
             )
         }
+        logger.info(
+            "Hydrated FAISS result metadata: model=%s concepts=%s elapsed=%.3fs",
+            model_name,
+            len(permitted_concept_ids_storage),
+            time.monotonic() - hydration_started_at,
+        )
 
         matches = []
         for concept_id_pery_query, distance_per_query in zip(concept_ids, distances):

@@ -155,6 +155,107 @@ selected model and backend.
 The output is tab-separated with `rank`, `concept_id`, `similarity`, and
 `concept_name`.
 
+### Timing visibility
+
+The search path now emits timing logs for the main phases of a request:
+
+- query embedding HTTP call
+- FAISS index load from disk, if it was not already loaded in-process
+- FAISS nearest-neighbor search
+- SQL metadata hydration for returned concept IDs
+
+This is useful for distinguishing one-time index warmup cost from steady-state
+query latency.
+
+## `search-batch`
+
+### Usage
+```bash
+omop-emb search-batch queries.txt --api-base <URL> [OPTIONS]
+```
+
+This command runs many searches in one Python process so FAISS index loading
+and client initialization happen once instead of once per shell invocation.
+
+Input file format:
+
+- one query per line, or
+- `query_id<TAB>query_text` per line
+
+Output is tab-separated:
+
+- `query_id`
+- `query_text`
+- `rank`
+- `concept_id`
+- `similarity`
+- `concept_name`
+
+Common options:
+
+- `--batch-size`: number of query texts to embed and search together
+- `--warm-index/--no-warm-index`: preload the FAISS index before processing
+- `--metric-type`, `--k`, `--vocabulary`, `--standard-only`: same semantics as `search`
+
+Example:
+
+```bash
+omop-emb search-batch queries.tsv \
+  --api-base http://localhost:14000/v1 \
+  --embedding-path /embeddings \
+  --model tei-qwen:intfloat/multilingual-e5-large-instruct \
+  --backend faiss \
+  --faiss-base-dir /media/large-backup-drive/omop-embeddings \
+  --metric-type cosine \
+  --k 5
+```
+
+## `serve-search`
+
+### Usage
+```bash
+omop-emb serve-search --api-base <URL> [OPTIONS]
+```
+
+This command starts a small HTTP service that keeps the embedding client and
+FAISS index warm in one long-lived process.
+
+Endpoints:
+
+- `GET /health`: basic health/status response
+- `POST /search`: JSON request body with `query_text`, optional `query_id`, and optional `k`
+
+Example request:
+
+```bash
+curl -X POST http://127.0.0.1:8080/search \
+  -H 'Content-Type: application/json' \
+  -d '{"query_id":"1","query_text":"Xanthomonapepsin","k":5}'
+```
+
+Example response:
+
+```json
+{
+  "query_id": "1",
+  "query_text": "Xanthomonapepsin",
+  "matches": [
+    {
+      "rank": 1,
+      "concept_id": 4238563,
+      "similarity": 0.940029,
+      "concept_name": "Phomopsin"
+    }
+  ]
+}
+```
+
+Common options:
+
+- `--host`, `--port`: bind address for the service
+- `--warm-index/--no-warm-index`: preload the FAISS index before accepting requests
+- `--metric-type`, `--k`, `--vocabulary`, `--standard-only`: default search configuration used by requests
+
 ## `rebuild-index`
 
 ### Usage

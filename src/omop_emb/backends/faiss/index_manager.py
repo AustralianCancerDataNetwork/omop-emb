@@ -4,6 +4,7 @@ This module is closely tied to the storage manager, as it needs to know how to r
 import faiss
 import numpy as np
 import abc
+import time
 from pathlib import Path
 from typing import Optional, Generator, Tuple
 
@@ -128,7 +129,16 @@ class BaseIndexManager(abc.ABC):
 
     def save(self):
         """Saves the index to disk."""
+        ntotal = getattr(self.index, "ntotal", "unknown")
+        logger.info(
+            "Writing FAISS index to disk at %s (index_type=%s metric=%s ntotal=%s).",
+            self.index_filepath,
+            self.supported_index_type.value,
+            self.metric_type.value,
+            ntotal,
+        )
         faiss.write_index(self.index, str(self.index_filepath))
+        logger.info("Completed writing FAISS index to disk at %s.", self.index_filepath)
 
     def load(self):
         """Loads an index from disk."""
@@ -170,8 +180,30 @@ class BaseIndexManager(abc.ABC):
             logger_warning_partial_index_population(self.index_filepath)
         else:
             logger.info(f"Populating {self.supported_index_type.value} from storage with data stream. This may take a while for large datasets...")
+            started_at = time.monotonic()
+            processed_vectors = 0
+            batch_count = 0
             for concept_ids, embeddings in data_stream:
                 self.add(concept_ids, embeddings)
+                batch_count += 1
+                processed_vectors += int(len(concept_ids))
+                if batch_count == 1 or batch_count % 10 == 0:
+                    elapsed_seconds = time.monotonic() - started_at
+                    logger.info(
+                        "FAISS index build progress: index_type=%s metric=%s batches=%s vectors=%s elapsed=%.1fs",
+                        self.supported_index_type.value,
+                        self.metric_type.value,
+                        batch_count,
+                        processed_vectors,
+                        elapsed_seconds,
+                    )
+            logger.info(
+                "Completed populating FAISS index in memory: index_type=%s metric=%s batches=%s vectors=%s. Saving index to disk next.",
+                self.supported_index_type.value,
+                self.metric_type.value,
+                batch_count,
+                processed_vectors,
+            )
             self.save()
 
     def validate_embedding_vector(self, vector: np.ndarray):

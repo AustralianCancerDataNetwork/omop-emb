@@ -1,3 +1,10 @@
+# [0.3.0](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.2.5...v0.3.0) (2026-04-12)
+
+
+### Features
+
+* Local metadata storage ([#2](https://github.com/AustralianCancerDataNetwork/omop-emb/issues/2)) ([1aa8da5](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/1aa8da55c4790abe7e2a4540fc3c8cdad2f88470))
+
 ## [0.2.5](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.2.4...v0.2.5) (2026-04-03)
 
 

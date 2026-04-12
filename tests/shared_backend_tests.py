@@ -319,12 +319,12 @@ class SharedBackendTests:
         
         With deterministic embeddings (1D vectors):
         - TEST_CONCEPT_EMB = [-1.0] → normalized: [-1.0]
-        - Hypertension = [-10.0] → normalized: [-1.0] → similarity = 1.0
+        - Hypertension = [-10.0] → normalized: [-1.0] → cosine similarity = 1.0 → normalized similarity = 1.0
         - Diabetes = [0.0] → zero vector (special case, skip exact check)
-        - Aspirin = [10.0] → normalized: [1.0] → similarity: -1.0
+        - Aspirin = [10.0] → normalized: [1.0] → cosine similarity = -1.0 → normalized similarity = 0.0
         
         Cosine distance in pgvector: 1 - cosine_similarity
-        Final similarity returned: 1 - distance = 1 - (1 - cos_sim) = cos_sim
+        Final normalized similarity returned: 1 - distance / 2 = (1 + cos_sim) / 2
         """
         backend.register_model(
             engine=session.bind,
@@ -357,9 +357,10 @@ class SharedBackendTests:
         # For 1D unit vectors, cos_sim = (norm_a) * (norm_b)
         # Query normalized: -1.0, Hypertension normalized: -1.0 → cos_sim = 1.0
         # Query normalized: -1.0, Aspirin normalized: 1.0 → cos_sim = -1.0
+        # Normalized similarity = (1 + cos_sim) / 2
         expected_similarities = {
             CONCEPTS["Hypertension"].concept_id: 1.0,
-            CONCEPTS["Aspirin"].concept_id: -1.0,
+            CONCEPTS["Aspirin"].concept_id: 0.0,
             # Diabetes is zero vector; skip exact check as it's backend-dependent
         }
 

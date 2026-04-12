@@ -163,6 +163,7 @@ def q_embedding_nearest_concepts(
     query_vector_cast = cast(query_v.c.q_vec, Vector)
     distance = get_distance(embedding_table, query_vector_cast, metric_type)
     similarity = get_similarity_from_distance(distance, metric_type)
+    assert isinstance(similarity, ColumnElement), "Expected similarity to be a SQL expression column for use in the query construction."
 
     inner_stmt = (
         select(

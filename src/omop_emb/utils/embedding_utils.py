@@ -1,10 +1,11 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Mapping, Optional, Sequence, Union, Type, TypeVar, Generic, Dict, Any, Callable, Tuple
+from dataclasses import dataclass
+from typing import Optional
 
-from sqlalchemy import Select
+from sqlalchemy import Select, func
+from sqlalchemy.sql.elements import ColumnElement
 from omop_alchemy.cdm.model.vocabulary import Concept
-from ..config import BackendType, IndexType, MetricType 
+from ..config import MetricType 
 
 
 @dataclass(frozen=True)
@@ -54,29 +55,25 @@ class NearestConceptMatch:
     is_active: bool
 
 
-def get_similarity_from_distance(distance_col, metric: MetricType):
+def get_similarity_from_distance(distance_col: float | ColumnElement, metric: MetricType) -> float | ColumnElement:
     """
-    Helper to map various distance metrics to a 0.0 - 1.0 similarity score.
+    Map distance values to a similarity score in [0.0, 1.0].
     """
     if metric == MetricType.COSINE:
-        return 1.0 - distance_col
-
+        # Cosine distance is typically in [0, 2], so this maps to [0, 1].
+        similarity = 1.0 - (distance_col / 2.0)
     elif metric == MetricType.L2:
-        return 1.0 / (1.0 + distance_col)
-
+        similarity = 1.0 / (1.0 + distance_col)
     elif metric == MetricType.L1:
-        return 1.0 / (1.0 + distance_col)
-
+        similarity = 1.0 / (1.0 + distance_col)
     elif metric == MetricType.HAMMING:
-        # Hamming distance is the number of differing bits.
-        # To get similarity, we need to know total bits (dimensions)
-        # Assuming you want a normalized score: 1 - (dist / dim)
-        # Note: This requires passing 'dimensions' into the helper
         raise NotImplementedError()
-        return 1.0 - (distance_col / dimensions)
-
     elif metric == MetricType.JACCARD:
-        return 1.0 - distance_col
-
+        similarity = 1.0 - distance_col
     else:
         raise ValueError(f"Unsupported metric type: {metric.value}")
+
+    if isinstance(similarity, ColumnElement):
+        return func.least(func.greatest(similarity, 0.0), 1.0)
+    else:
+        return min(1.0, max(0.0, similarity))

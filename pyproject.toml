@@ -1,6 +1,6 @@
 [project]
 name = "omop-emb"
-version = "0.3.0"
+version = "0.3.1"
 description = "Embedding extension to omop-graph"
 readme = "README.md"
 requires-python = ">=3.12"

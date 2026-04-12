@@ -47,9 +47,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     arrays and rebuild the FAISS index, which is acceptable for a first pass
     but not ideal for very large incremental workloads.
     """
-
-    DEFAULT_FAISS_DIR = ".omop_emb/faiss"
-
+    
     def __init__(
         self,
         storage_base_dir: Optional[str | Path] = None,

@@ -183,14 +183,7 @@ def q_embedding_nearest_concepts(
     )
 
     if concept_filter:
-        if concept_filter.concept_ids is not None:
-            inner_stmt = inner_stmt.where(Concept.concept_id.in_(concept_filter.concept_ids))
-        if concept_filter.domains is not None:
-            inner_stmt = inner_stmt.where(Concept.domain_id.in_(concept_filter.domains))
-        if concept_filter.vocabularies is not None:
-            inner_stmt = inner_stmt.where(Concept.vocabulary_id.in_(concept_filter.vocabularies))
-        if concept_filter.require_standard:
-            inner_stmt = inner_stmt.where(Concept.standard_concept.in_(["S", "C"]))
+        inner_stmt = concept_filter.apply(inner_stmt)
 
     lateral_subq = inner_stmt.limit(limit).lateral("top_k")
 

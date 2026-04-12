@@ -1,3 +1,10 @@
+## [0.3.2](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.3.1...v0.3.2) (2026-04-12)
+
+
+### Bug Fixes
+
+* correctly normalise all distances to [0,1] similarities ([5657aef](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/5657aefb41f59cdfb405c21fdd640b1ee601f74d))
+
 ## [0.3.1](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.3.0...v0.3.1) (2026-04-12)
 
 

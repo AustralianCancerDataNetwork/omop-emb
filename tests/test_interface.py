@@ -6,7 +6,7 @@ from unittest.mock import Mock
 from sqlalchemy.orm import Session
 
 from omop_emb.interface import EmbeddingInterface
-from omop_emb.backends.config import IndexType, MetricType
+from omop_emb.config import IndexType, MetricType
 from omop_emb.backends.base import NearestConceptMatch
 from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM
 
@@ -17,9 +17,8 @@ class TestInterface:
     
     def test_register_model(self, session, embedding_interface: EmbeddingInterface):
         """Test registering an embedding model."""
-        model = embedding_interface.ensure_model_registered(
+        model = embedding_interface.register_model(
             engine=session.bind,
-            session=session,
             model_name=MODEL_NAME,
             dimensions=EMBEDDING_DIM,
             index_type=IndexType.FLAT,
@@ -28,39 +27,36 @@ class TestInterface:
         assert model.model_name == MODEL_NAME
         assert model.dimensions == EMBEDDING_DIM
     
-    def test_model_registration_idempotent(self, session, embedding_interface: EmbeddingInterface):
+    def test_model_registration_idempotent(self, session, embedding_interface: EmbeddingInterface, index_type: IndexType = IndexType.FLAT):
         """Test registering same model twice returns existing."""
-        m1 = embedding_interface.ensure_model_registered(
+        m1 = embedding_interface.register_model(
             engine=session.bind,
-            session=session,
             model_name=MODEL_NAME,
             dimensions=EMBEDDING_DIM,
-            index_type=IndexType.FLAT,
+            index_type=index_type,
         )
         
-        m2 = embedding_interface.ensure_model_registered(
+        m2 = embedding_interface.register_model(
             engine=session.bind,
-            session=session,
             model_name=MODEL_NAME,
             dimensions=EMBEDDING_DIM,
-            index_type=IndexType.FLAT,
+            index_type=index_type,
         )
         
         assert m1.storage_identifier == m2.storage_identifier
     
-    def test_is_model_registered(self, session, embedding_interface: EmbeddingInterface):
+    def test_is_model_registered(self, session, embedding_interface: EmbeddingInterface, index_type: IndexType = IndexType.FLAT):
         """Test checking model registration status."""
-        assert not embedding_interface.is_model_registered(session, MODEL_NAME)
+        assert not embedding_interface.is_model_registered(model_name=MODEL_NAME, index_type=index_type)
         
-        embedding_interface.ensure_model_registered(
+        embedding_interface.register_model(
             engine=session.bind,
-            session=session,
             model_name=MODEL_NAME,
             dimensions=EMBEDDING_DIM,
-            index_type=IndexType.FLAT,
+            index_type=index_type,
         )
         
-        assert embedding_interface.is_model_registered(session, MODEL_NAME)
+        assert embedding_interface.is_model_registered(model_name=MODEL_NAME, index_type=index_type)
     
     def test_embed_texts(self, embedding_interface: EmbeddingInterface):
         """Test embedding generation."""
@@ -76,14 +72,13 @@ class TestInterface:
         
         assert embeddings.shape == (len(texts), EMBEDDING_DIM)
     
-    def test_embed_and_upsert(self, session, embedding_interface: EmbeddingInterface):
+    def test_embed_and_upsert(self, session, embedding_interface: EmbeddingInterface, index_type: IndexType = IndexType.FLAT):
         """Test embedding and upserting concepts."""
-        embedding_interface.ensure_model_registered(
+        embedding_interface.register_model(
             engine=session.bind,
-            session=session,
             model_name=MODEL_NAME,
             dimensions=EMBEDDING_DIM,
-            index_type=IndexType.FLAT,
+            index_type=index_type,
         )
         
         test_concepts = [CONCEPTS["Hypertension"], CONCEPTS["Diabetes"]]
@@ -95,19 +90,19 @@ class TestInterface:
             model_name=MODEL_NAME,
             concept_ids=concept_ids,
             concept_texts=concept_texts,
+            index_type=index_type,
         )
         
         assert embeddings.shape == (2, EMBEDDING_DIM)
-        assert embedding_interface.has_any_embeddings(session, MODEL_NAME)
+        assert embedding_interface.has_any_embeddings(session, embedding_model_name=MODEL_NAME, index_type=index_type)
     
-    def test_get_embeddings_by_concept_ids(self, session, embedding_interface: EmbeddingInterface):
+    def test_get_embeddings_by_concept_ids(self, session, embedding_interface: EmbeddingInterface, index_type: IndexType = IndexType.FLAT):
         """Test retrieving stored embeddings."""
-        embedding_interface.ensure_model_registered(
+        embedding_interface.register_model(
             engine=session.bind,
-            session=session,
             model_name=MODEL_NAME,
             dimensions=EMBEDDING_DIM,
-            index_type=IndexType.FLAT,
+            index_type=index_type,
         )
         
         test_concepts = [CONCEPTS["Hypertension"], CONCEPTS["Diabetes"]]
@@ -117,6 +112,7 @@ class TestInterface:
         embeddings = embedding_interface.embed_and_upsert_concepts(
             session=session,
             model_name=MODEL_NAME,
+            index_type=index_type,
             concept_ids=concept_ids,
             concept_texts=concept_texts,
         )
@@ -125,13 +121,14 @@ class TestInterface:
             session=session,
             embedding_model_name=MODEL_NAME,
             concept_ids=concept_ids,
+            index_type=index_type,
         )
         
         assert len(retrieved) == 2
         assert 1 in retrieved and 2 in retrieved
 
     @pytest.mark.parametrize("backend_name", ["faiss", "pgvector"])
-    def test_search_return_structure_for_backends(self, session, mock_llm_client, backend_name):
+    def test_search_return_structure_for_backends(self, session, mock_llm_client, backend_name, index_type: IndexType = IndexType.FLAT):
         """Search returns tuple[dict[int, float], ...] for both backend modes."""
         mock_backend = Mock()
         mock_backend.get_nearest_concepts.return_value = (
@@ -162,6 +159,7 @@ class TestInterface:
         result = interface.get_nearest_concepts(
             session=session,
             model_name=MODEL_NAME,
+            index_type=index_type,
             query_embedding=query_embedding,
             metric_type=MetricType.COSINE,
             k=2,

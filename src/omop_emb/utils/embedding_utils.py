@@ -4,25 +4,7 @@ from typing import Mapping, Optional, Sequence, Union, Type, TypeVar, Generic, D
 
 from sqlalchemy import Select
 from omop_alchemy.cdm.model.vocabulary import Concept
-from .config import BackendType, SUPPORTED_INDICES_AND_METRICS_PER_BACKEND, IndexType, MetricType 
-
-
-@dataclass(frozen=True)
-class EmbeddingModelRecord:
-    """
-    Canonical description of a registered embedding model.
-
-    ``storage_identifier`` is intentionally backend-specific. For example:
-    - PostgreSQL backend: dynamic embedding table name
-    - FAISS backend: on-disk index path or logical collection name
-    """
-
-    model_name: str
-    dimensions: int
-    backend_type: BackendType
-    index_type: IndexType
-    storage_identifier: Optional[str] = None
-    metadata: Mapping[str, object] = field(default_factory=dict)
+from ..config import BackendType, IndexType, MetricType 
 
 
 @dataclass(frozen=True)
@@ -70,27 +52,6 @@ class NearestConceptMatch:
     similarity: float
     is_standard: bool
     is_active: bool
-
-
-@dataclass(frozen=True)
-class EmbeddingBackendCapabilities:
-    """
-    Capability flags for a backend implementation.
-
-    These are not used by the current code yet, but they make backend
-    differences explicit. For example, a FAISS backend might support nearest
-    neighbor search but require explicit refreshes after bulk writes.
-    """
-
-    stores_embeddings: bool = True
-    supports_incremental_upsert: bool = True
-    supports_nearest_neighbor_search: bool = True
-    supports_server_side_similarity: bool = True
-    supports_filter_by_concept_ids: bool = True
-    supports_filter_by_domain: bool = True
-    supports_filter_by_vocabulary: bool = True
-    supports_filter_by_standard_flag: bool = True
-    requires_explicit_index_refresh: bool = False
 
 
 def get_similarity_from_distance(distance_col, metric: MetricType):

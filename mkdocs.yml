@@ -31,6 +31,7 @@ nav:
   - Home: index.md
   - Getting Started:
       - Installation: usage/installation.md
+      - Embedding Storage: usage/backend-selection.md
       - "CLI Reference": usage/cli.md
 
 plugins:

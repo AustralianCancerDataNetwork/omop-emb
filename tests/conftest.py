@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 import pytest
 import numpy as np
 import sqlalchemy as sa
-from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -23,9 +22,7 @@ from omop_llm import LLMClient
 
 from omop_emb.backends.faiss import FaissEmbeddingBackend
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
-from omop_emb.backends.registry import ensure_model_registry_schema, ModelRegistry
 from omop_emb.interface import EmbeddingInterface
-from omop_emb.backends.config import IndexType
 
 
 TEST_DB_NAME = os.getenv("TEST_DATABASE_NAME", "test_omop_emb")
@@ -90,8 +87,6 @@ def _create_test_database() -> sa.URL:
             conn.execute(sa.text(f"DROP ROLE IF EXISTS {TEST_USERNAME}"))
             conn.execute(sa.text(f"CREATE USER {TEST_USERNAME} WITH PASSWORD '{TEST_PASSWORD}' SUPERUSER"))
             conn.execute(sa.text(f'CREATE DATABASE "{TEST_DB_NAME}" OWNER {TEST_USERNAME}'))
-            conn.execute(sa.text(f"DROP TABLE IF EXISTS {ModelRegistry.__tablename__} CASCADE;"))
-            
 
     finally:
         admin_engine.dispose()
@@ -135,7 +130,6 @@ def pg_engine():
             
             # Create all tables
             Base.metadata.create_all(engine)
-            ensure_model_registry_schema(engine)
             
             yield engine
             
@@ -158,11 +152,8 @@ def session(pg_engine) -> Generator[Session, None, None]:
     # Clear tables before test
     with pg_engine.connect() as conn:
         with conn.begin():
-            res = conn.execute(sa.text(f"SELECT table_name FROM {ModelRegistry.__tablename__}"))
-            for (table_name,) in res:
-                conn.execute(sa.text(f"DROP TABLE IF EXISTS {table_name} CASCADE"))
-            conn.execute(sa.text(f"TRUNCATE TABLE concept, {ModelRegistry.__tablename__} CASCADE"))
-    
+            conn.execute(sa.text(f"TRUNCATE TABLE concept CASCADE"))
+
     Session = sessionmaker(bind=pg_engine, future=True)
     db_session = Session()
 
@@ -194,24 +185,24 @@ def mock_llm_client() -> Mock:
 
 
 @pytest.fixture
-def temp_faiss_dir():
+def temp_storage_dir():
     """Temporary directory for FAISS indices."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
 
 
 @pytest.fixture
-def faiss_backend(session, temp_faiss_dir) -> FaissEmbeddingBackend:
+def faiss_backend(session, temp_storage_dir) -> FaissEmbeddingBackend:
     """FAISS backend with model registry initialized."""
-    backend = FaissEmbeddingBackend(base_dir=temp_faiss_dir)
+    backend = FaissEmbeddingBackend(storage_base_dir=temp_storage_dir)
     backend.initialise_store(session.bind)
     return backend
 
 
 @pytest.fixture
-def pgvector_backend(session) -> PGVectorEmbeddingBackend:
+def pgvector_backend(session, temp_storage_dir) -> PGVectorEmbeddingBackend:
     """PGVector backend with vector extension and model registry initialized."""
-    backend = PGVectorEmbeddingBackend()
+    backend = PGVectorEmbeddingBackend(storage_base_dir=temp_storage_dir)
     backend.initialise_store(session.bind)
     return backend
 

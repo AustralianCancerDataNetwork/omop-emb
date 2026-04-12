@@ -11,7 +11,7 @@ from typing import cast, Generator, Tuple, Optional, Mapping, Sequence, Dict
 import logging
 logger = logging.getLogger(__name__)
 
-from omop_emb.backends.config import BackendType, IndexType, MetricType
+from omop_emb.config import BackendType, IndexType, MetricType
 from .index_manager import FlatIndexManager, BaseIndexManager
 
 class EmbeddingStorageManager:

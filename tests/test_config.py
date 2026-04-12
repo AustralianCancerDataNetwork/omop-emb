@@ -3,7 +3,7 @@
 import pytest
 
 from omop_emb.backends.factory import normalize_backend_name, get_embedding_backend
-from omop_emb.backends.config import BackendType, IndexType, MetricType
+from omop_emb.config import BackendType, IndexType, MetricType
 
 
 @pytest.mark.unit
@@ -17,18 +17,23 @@ class TestBackendConfig:
     
     def test_get_faiss_backend(self, tmp_path):
         """Test getting FAISS backend."""
-        backend = get_embedding_backend("faiss", faiss_base_dir=str(tmp_path))
+        backend = get_embedding_backend("faiss", storage_base_dir=str(tmp_path))
         assert backend.backend_type == BackendType.FAISS
+
+    def test_get_backend_rejects_relative_storage_base_dir(self):
+        """Relative storage directories are rejected to avoid cwd-dependent registry paths."""
+        with pytest.raises(ValueError, match="absolute path"):
+            get_embedding_backend("faiss", storage_base_dir=".operator")
     
     def test_faiss_supports_flat_index(self):
         """Test FAISS supports FLAT index."""
-        from omop_emb.backends.config import is_index_type_supported_for_backend
+        from omop_emb.config import is_index_type_supported_for_backend
         
         assert is_index_type_supported_for_backend(BackendType.FAISS, IndexType.FLAT)
     
     def test_faiss_supports_cosine_metric(self):
         """Test FAISS supports COSINE metric."""
-        from omop_emb.backends.config import is_supported_index_metric_combination_for_backend
+        from omop_emb.config import is_supported_index_metric_combination_for_backend
         
         assert is_supported_index_metric_combination_for_backend(
             BackendType.FAISS,

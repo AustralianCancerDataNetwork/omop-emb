@@ -1,18 +1,6 @@
 from .base import (
     EmbeddingBackend,
 )
-from .embedding_utils import (
-    EmbeddingModelRecord,
-    EmbeddingBackendCapabilities,
-    EmbeddingConceptFilter,
-    NearestConceptMatch,
-)
-from .errors import (
-    EmbeddingBackendConfigurationError,
-    EmbeddingBackendDependencyError,
-    EmbeddingBackendError,
-    UnknownEmbeddingBackendError,
-)
 from .factory import (
     get_embedding_backend,
     normalize_backend_name,
@@ -20,14 +8,6 @@ from .factory import (
 
 __all__ = [
     "EmbeddingBackend",
-    "EmbeddingBackendCapabilities",
-    "EmbeddingConceptFilter",
-    "EmbeddingModelRecord",
-    "NearestConceptMatch",
-    "EmbeddingBackendConfigurationError",
-    "EmbeddingBackendDependencyError",
-    "EmbeddingBackendError",
-    "UnknownEmbeddingBackendError",
     "get_embedding_backend",
     "normalize_backend_name",
     "FaissEmbeddingBackend",

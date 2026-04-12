@@ -2,7 +2,7 @@ from enum import StrEnum
 from typing import Dict, Tuple
 
 ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
-ENV_OMOP_EMB_FAISS_INDEX_DIR = "OMOP_EMB_FAISS_INDEX_DIR"
+ENV_BASE_STORAGE_DIR = "OMOP_EMB_BASE_STORAGE_DIR"  # For backends that use file-based storage, e.g. FAISS with on-disk indices or registry metadata storage
 
 
 class BackendType(StrEnum):
@@ -38,6 +38,45 @@ class MetricType(StrEnum):
     L1 = "l1"
     HAMMING = "hamming"
     JACCARD = "jaccard"
+
+
+def parse_backend_type(value: str | BackendType) -> BackendType:
+    """Normalize a backend value to ``BackendType`` with a clear error message."""
+    if isinstance(value, BackendType):
+        return value
+    try:
+        return BackendType(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid backend type {value!r}. Expected one of "
+            f"{[member.value for member in BackendType]}."
+        ) from exc
+
+
+def parse_index_type(value: str | IndexType) -> IndexType:
+    """Normalize an index value to ``IndexType`` with a clear error message."""
+    if isinstance(value, IndexType):
+        return value
+    try:
+        return IndexType(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid index type {value!r}. Expected one of "
+            f"{[member.value for member in IndexType]}."
+        ) from exc
+
+
+def parse_metric_type(value: str | MetricType) -> MetricType:
+    """Normalize a metric value to ``MetricType`` with a clear error message."""
+    if isinstance(value, MetricType):
+        return value
+    try:
+        return MetricType(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid metric type {value!r}. Expected one of "
+            f"{[member.value for member in MetricType]}."
+        ) from exc
 
 # TODO: Support non-flat indices in the future
 SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tuple[MetricType, ...]]] = {

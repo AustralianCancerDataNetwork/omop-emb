@@ -51,6 +51,24 @@ class EmbeddingInterface:
         storage_base_dir: Optional[str] = None,
         registry_db_name: Optional[str] = None,
     ) -> EmbeddingInterface:
+        """Create an interface by resolving and constructing a backend.
+
+        Parameters
+        ----------
+        embedding_client : LLMClient, optional
+            Optional default client used for text embedding generation.
+        backend_name : str | BackendType, optional
+            Backend selector passed to ``get_embedding_backend``.
+            Resolution order:
+            1. explicit ``backend_name`` argument
+            2. ``OMOP_EMB_BACKEND`` environment variable
+        storage_base_dir : str, optional
+            Optional storage directory forwarded to backend constructor.
+            Backend constructors apply fallback resolution (typically explicit arg,
+            then ``OMOP_EMB_BASE_STORAGE_DIR``, then backend default).
+        registry_db_name : str, optional
+            Optional registry database filename forwarded to the backend.
+        """
         return cls(
             backend=get_embedding_backend(
                 backend_name=backend_name,

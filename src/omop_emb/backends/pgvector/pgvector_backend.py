@@ -30,6 +30,11 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     ``omop_emb`` implementation. It is not wired into the current accessor or
     CLI yet, but it demonstrates how the present behavior maps onto the new
     backend abstraction.
+
+    Backend selection is controlled externally (explicit backend argument or
+    ``OMOP_EMB_BACKEND`` env var in the factory). ``storage_base_dir`` remains
+    relevant for local registry metadata even though vectors themselves are stored
+    in PostgreSQL.
     """
 
     @property

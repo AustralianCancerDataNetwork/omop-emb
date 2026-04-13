@@ -74,6 +74,19 @@ class EmbeddingBackend(ABC, Generic[T]):
         storage_base_dir: Optional[str | Path] = None,
         registry_db_name: Optional[str] = None,
     ):
+        """
+        Parameters
+        ----------
+        storage_base_dir : str | Path, optional
+            Local base directory used for backend metadata and file-based assets.
+            Resolution order:
+            1. explicit ``storage_base_dir`` argument
+            2. ``OMOP_EMB_BASE_STORAGE_DIR`` environment variable
+            3. ``DEFAULT_BASE_STORAGE_DIR``
+            The resolved value must be an absolute path.
+        registry_db_name : str, optional
+            Optional registry database filename. If omitted, backend defaults are used.
+        """
         super().__init__()
         
         # Local storage for model registry database and more

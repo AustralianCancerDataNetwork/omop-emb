@@ -48,6 +48,16 @@ def get_embedding_backend(
 
     This factory keeps backend imports local so optional dependencies only need
     to be present when their backend is actually requested.
+
+    Resolution
+    ----------
+    ``backend_name`` is resolved via :func:`normalize_backend_name`:
+    1. explicit ``backend_name`` argument
+    2. ``OMOP_EMB_BACKEND`` environment variable
+
+    ``storage_base_dir`` is forwarded to backend constructors, where each
+    backend applies its own fallback policy (commonly explicit arg, then
+    ``OMOP_EMB_BASE_STORAGE_DIR``, then backend default path).
     """
 
     resolved = normalize_backend_name(backend_name)

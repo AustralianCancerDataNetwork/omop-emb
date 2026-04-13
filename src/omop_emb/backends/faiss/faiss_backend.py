@@ -53,6 +53,17 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         storage_base_dir: Optional[str | Path] = None,
         registry_db_name: Optional[str] = None,
     ):
+        """Initialize FAISS backend storage and registry wiring.
+
+        Parameters
+        ----------
+        storage_base_dir : str | Path, optional
+            Base directory for FAISS files and local metadata.
+            Resolution is handled by ``EmbeddingBackend``:
+            explicit argument, then ``OMOP_EMB_BASE_STORAGE_DIR``, then backend default.
+        registry_db_name : str, optional
+            Optional local model-registry database filename.
+        """
         super().__init__(
             storage_base_dir=storage_base_dir,
             registry_db_name=registry_db_name,

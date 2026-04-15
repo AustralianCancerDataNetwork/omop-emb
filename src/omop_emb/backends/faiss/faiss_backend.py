@@ -214,7 +214,6 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         metric_type: MetricType,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-        k: int = 10,
         _model_record: EmbeddingModelRecord,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         
@@ -237,8 +236,10 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         if concept_filter is None:
             # Easier to not do any filter if all are allowed
             permitted_concept_ids = None
+            k = self.DEFAULT_K_NEAREST
         else:
             permitted_concept_ids = np.array(list(permitted_concept_ids_storage.keys()), dtype=np.int64)
+            k = concept_filter.limit if concept_filter.limit is not None else self.DEFAULT_K_NEAREST
 
         distances, concept_ids = storage_manager.search(
             query_vector=query_embeddings,
@@ -258,16 +259,22 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                 if row is None:
                     logger.warning(f"Concept ID {concept_id} returned by FAISS search but not found in permitted concept IDs. This indicates a mismatch between the FAISS index and the database registry. Skipping this result.")
                     continue
+
+                similarity = get_similarity_from_distance(distance.item(), metric_type)
+                assert isinstance(similarity, float), f"Expected similarity to be a float, got {type(similarity)}"
                 matches_per_query.append(NearestConceptMatch(
                     concept_id=int(concept_id),
                     concept_name=row.concept_name,
-                    similarity=get_similarity_from_distance(distance, metric_type),
+                    similarity=similarity,
                     is_standard=bool(row.is_standard),
                     is_active=bool(row.is_active),
                 ))
             matches.append(tuple(matches_per_query))
-        return tuple(matches)
-    
+
+        matches_tuple = tuple(matches)
+        self.validate_nearest_concepts_output(matches_tuple, k, query_embeddings=query_embeddings)
+        return matches_tuple
+
     @require_registered_model
     def get_embeddings_by_concept_ids(
         self, 

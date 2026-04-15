@@ -156,9 +156,7 @@ class EmbeddingInterface:
         *,
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-        k: int = 10,
     ) -> Tuple[Mapping[int, float], ...]:
-        
         """
         Return nearest stored concepts for the query embedding.
 
@@ -176,18 +174,12 @@ class EmbeddingInterface:
         metric_type : MetricType
             The similarity or distance metric to use for nearest neighbor search. This must be compatible with the index type used by the database.
         concept_filter : Optional[EmbeddingConceptFilter], optional
-            A filter to specify which concepts to consider as potential nearest neighbors.
-        vocabularies : Optional[Tuple[str, ...]], optional
-            If provided, only consider concepts from these vocabularies as potential nearest neighbors.
-        require_standard : bool, optional
-            If True, only consider standard concepts as potential nearest neighbors. By default False.
-        k : int, optional
-            K nearest neighbors to return for each query vector. Default is 10.
+            A filter to specify which concepts to consider as potential nearest neighbors. The `limit` field of this filter determines the number of neighbors returned.
 
         Returns
         -------
         Tuple[Mapping[int, float], ...]
-            A tuple of dictionaries containing nearest concept matches for each query vector. The outer tuple corresponds to the query vectors in order, and each inner dictionary contains the nearest matches for that query vector, sorted by similarity. Returned shape is (q, k) where q is the number of query vectors and k is the number of nearest neighbors returned per query.
+            A tuple of dictionaries containing nearest concept matches for each query vector. The outer tuple corresponds to the query vectors in order, and each inner dictionary contains the nearest matches for that query vector, sorted by similarity. Returned shape is (q, limit) where q is the number of query vectors and limit is the number of nearest neighbors returned per query as determined by the `concept_filter` argument or backend default.
         """
         if not isinstance(metric_type, MetricType):
             raise TypeError(
@@ -199,10 +191,9 @@ class EmbeddingInterface:
             index_type=index_type,
             query_embeddings=query_embedding,
             concept_filter=concept_filter,
-            metric_type=metric_type,
-            k=k
+            metric_type=metric_type
         )
-        return tuple({match_per_query.concept_id: match_per_query.similarity for match_per_query in match} for match in nearest_concepts)
+        return tuple({match.concept_id: match.similarity for match in matches_per_query} for matches_per_query in nearest_concepts)
     
     def get_nearest_concepts_by_texts(
         self,
@@ -213,12 +204,12 @@ class EmbeddingInterface:
         *,
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-        k: int = 10,
         batch_size: Optional[int] = None
     ) -> Tuple[Mapping[int, float], ...]:
-        
         """
         Return nearest stored concepts for the query embedding. Convenience wrapper that embeds the query texts before performing the nearest neighbor search.
+
+        The number of neighbors returned is determined by the `limit` field of the `concept_filter` argument. If `limit` is not set, a backend default may be used.
 
         Parameters
         ----------
@@ -233,16 +224,14 @@ class EmbeddingInterface:
         metric_type : MetricType
             The similarity or distance metric to use for nearest neighbor search. This should be compatible with the index type used by the model.
         concept_filter : Optional[EmbeddingConceptFilter], optional
-            A filter to specify which concepts to consider as potential nearest neighbors.
-        k : int, optional
-            K nearest neighbors to return for each query vector. Default is 10.
+            A filter to specify which concepts to consider as potential nearest neighbors. The `limit` field of this filter determines the number of neighbors returned.
         batch_size : Optional[int], optional
             If provided, this batch size will be used when embedding the query texts. If not provided, the default batch size of the embedding client will be used.
 
         Returns
         -------
         Tuple[Mapping[int, float], ...]
-            A tuple of dictionaries containing nearest concept matches for each query vector. The outer tuple corresponds to the query vectors in order, and each inner dictionary contains the nearest matches for that query vector, sorted by similarity. Returned shape is (q, k) where q is the number of query vectors and k is the number of nearest neighbors returned per query.
+            A tuple of dictionaries containing nearest concept matches for each query vector. The outer tuple corresponds to the query vectors in order, and each inner dictionary contains the nearest matches for that query vector, sorted by similarity. Returned shape is (q, limit) where q is the number of query vectors and limit is the number of nearest neighbors returned per query.
         """
         if isinstance(query_texts, str):
             query_texts = (query_texts,)
@@ -258,7 +247,6 @@ class EmbeddingInterface:
             query_embedding=query_embeddings,
             metric_type=metric_type,
             concept_filter=concept_filter,
-            k=k,
         )
 
     def get_embeddings_by_concept_ids(

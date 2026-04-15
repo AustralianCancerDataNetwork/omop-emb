@@ -69,6 +69,7 @@ class EmbeddingBackend(ABC, Generic[T]):
     filters.
     """
     DEFAULT_BASE_STORAGE_DIR = Path.home() / ".omop_emb"
+    DEFAULT_K_NEAREST = 10
     def __init__(
         self,
         storage_base_dir: Optional[str | Path] = None,
@@ -383,7 +384,6 @@ class EmbeddingBackend(ABC, Generic[T]):
         query_embedding: ndarray,
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-        k: int = 10,
         _model_record: EmbeddingModelRecord,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         """
@@ -402,9 +402,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         metric_type : MetricType
             Similarity or distance metric for nearest-neighbor search.
         concept_filter : Optional[EmbeddingConceptFilter], optional
-            Optional filter restricting which OMOP concepts are considered.
-        k : int, optional
-            Number of nearest matches to return per query.
+            Optional filter restricting which OMOP concepts are considered. The "limit" field of the filter determines how many nearest neighbors are returned per query vector. If not set, defaults to the global DEFAULT_K_NEAREST.
         _model_record : EmbeddingModelRecord
             Internal registered-model record injected by ``@require_registered_model``.
 
@@ -413,6 +411,23 @@ class EmbeddingBackend(ABC, Generic[T]):
         Tuple[Tuple[NearestConceptMatch, ...], ...]
             A tuple of tuples containing nearest concept matches for each query vector. The outer tuple corresponds to the query vectors in order, and each inner tuple contains the nearest matches for that query vector, sorted by similarity. Returned shape is (q, k) where q is the number of query vectors and k is the number of nearest neighbors returned per query.
         """
+
+    def validate_nearest_concepts_output(
+        self,
+        nearest_concepts: Tuple[Tuple[NearestConceptMatch, ...], ...],
+        k: int,
+        query_embeddings: ndarray,
+    ) -> None:
+        assert all(len(d) <= k for d in nearest_concepts), (
+            f"Expected at most {k} nearest neighbors per query embedding, but found a dictionary with {max(len(d) for d in nearest_concepts)} entries."
+        )
+
+        assert len(nearest_concepts) == query_embeddings.shape[0], (
+            f"Expected nearest concepts for {query_embeddings.shape[0]} query embeddings, "
+            f"but got {len(nearest_concepts)}."
+        )
+
+
     
     def has_any_embeddings(
         self, 

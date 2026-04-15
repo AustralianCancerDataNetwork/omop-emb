@@ -15,12 +15,15 @@ class EmbeddingConceptFilter:
 
     This mirrors the current OMOP grounding needs without importing
     ``omop_graph`` or its search-constraint objects into ``omop_emb``.
+
+    The `limit` field determines the number of nearest neighbors returned by embedding search operations. If not set, a backend default may be used.
     """
 
     concept_ids: Optional[tuple[int, ...]] = None
     domains: Optional[tuple[str, ...]] = None
     vocabularies: Optional[tuple[str, ...]] = None
     require_standard: bool = False
+    limit: Optional[int] = None
 
     def apply(self, query: Select) -> Select:
         if self.concept_ids is not None:
@@ -35,7 +38,7 @@ class EmbeddingConceptFilter:
         if self.require_standard:
             query = query.where(Concept.standard_concept.in_(["S", "C"]))
 
-        return query
+        return query.limit(self.limit)
 
 
 @dataclass(frozen=True)

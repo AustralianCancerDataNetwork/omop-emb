@@ -124,7 +124,6 @@ def q_embedding_nearest_concepts(
     query_embeddings: List[List[float]],
     metric_type: MetricType,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
-    limit: int = 10,
 ) -> Select:
     """Constructs a SQL query to retrieve the nearest concepts for the given query embeddings, applying the specified metric and filters. The query uses a LATERAL join to compute distances/similarities for each query vector against all candidate concept embeddings, and then applies the necessary OMOP filters before returning the top K results per query vector.
     
@@ -148,7 +147,7 @@ def q_embedding_nearest_concepts(
     metric_type : MetricType
         The distance metric to use for nearest neighbor search (e.g., COSINE, L2, etc.). This will determine which pgvector distance function is used in the query.
     concept_filter : Optional[EmbeddingConceptFilter], optional
-        An optional filter object containing criteria to filter the concepts (e.g., by concept_id, domain, vocabulary, standard_concept flag).
+        An optional filter object containing criteria to filter the concepts (e.g., by concept_id, domain, vocabulary, standard_concept flag). Also is used to limit the number of nearest neighbors (K) returned per query vector. 
     limit : int, optional
         The number of nearest neighbors (K) to return for each query embedding, by default 10.
     """
@@ -186,7 +185,7 @@ def q_embedding_nearest_concepts(
     if concept_filter:
         inner_stmt = concept_filter.apply(inner_stmt)
 
-    lateral_subq = inner_stmt.limit(limit).lateral("top_k")
+    lateral_subq = inner_stmt.lateral("top_k")
 
     # Joins the Q vectors to their K nearest neighbors
     stmt = (

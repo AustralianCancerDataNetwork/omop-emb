@@ -155,7 +155,7 @@ class SharedBackendTests:
             index_type=index_type,
             query_embeddings=query_embeddings,
             metric_type=MetricType.L2,
-            k=1,
+            concept_filter=EmbeddingConceptFilter(limit=1),
         )
 
         assert len(results) == 1
@@ -182,15 +182,13 @@ class SharedBackendTests:
             concept_ids=concept_ids,
             embeddings=embeddings,
         )
-
         results = backend.get_nearest_concepts(
             session=session,
             model_name=MODEL_NAME,
             index_type=index_type,
             query_embeddings=TEST_CONCEPT_EMB,
-            concept_filter=EmbeddingConceptFilter(domains=("Condition",)),
+            concept_filter=EmbeddingConceptFilter(domains=("Condition",), limit=10),
             metric_type=MetricType.L2,
-            k=10,
         )
 
         expected_ids = {CONCEPTS["Hypertension"].concept_id, CONCEPTS["Diabetes"].concept_id}
@@ -223,9 +221,8 @@ class SharedBackendTests:
             model_name=MODEL_NAME,
             index_type=index_type,
             query_embeddings=TEST_CONCEPT_EMB,
-            concept_filter=EmbeddingConceptFilter(vocabularies=("RxNorm",)),
+            concept_filter=EmbeddingConceptFilter(vocabularies=("RxNorm",), limit=10),
             metric_type=MetricType.L2,
-            k=10,
         )
 
         assert len(results) == 1
@@ -297,7 +294,7 @@ class SharedBackendTests:
             index_type=index_type,
             query_embeddings=TEST_CONCEPT_EMB,
             metric_type=MetricType.L2,
-            k=10,
+            concept_filter=EmbeddingConceptFilter(limit=10),
         )
 
         expected_similarities = {
@@ -351,7 +348,7 @@ class SharedBackendTests:
             index_type=index_type,
             query_embeddings=TEST_CONCEPT_EMB,
             metric_type=MetricType.COSINE,
-            k=10,
+            concept_filter=EmbeddingConceptFilter(limit=10),
         )
 
         # For 1D unit vectors, cos_sim = (norm_a) * (norm_b)

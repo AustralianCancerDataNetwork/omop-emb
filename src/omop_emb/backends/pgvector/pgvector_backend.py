@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Mapping, Optional, Sequence, Type, Tuple
 
 from numpy import ndarray
+import logging
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +22,8 @@ from omop_emb.utils.embedding_utils import (
     NearestConceptMatch,
 )
 from omop_emb.model_registry import EmbeddingModelRecord
+
+logger = logging.getLogger(__name__)
 
 class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]):
     """
@@ -197,16 +200,19 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         self.validate_embeddings(embeddings=query_embeddings, dimensions=_model_record.dimensions)
 
         # Guarantee that concept_filter has a limit set for K nearest neighbors
-        if concept_filter is None:
-            concept_filter = EmbeddingConceptFilter(limit=self.DEFAULT_K_NEAREST)
-        elif concept_filter.limit is None:
-            concept_filter = EmbeddingConceptFilter(
-                concept_ids=concept_filter.concept_ids,
-                domains=concept_filter.domains,
-                vocabularies=concept_filter.vocabularies,
-                require_standard=concept_filter.require_standard,
-                limit=self.DEFAULT_K_NEAREST,
-            )
+        if concept_filter is None or concept_filter.limit is None:
+            logger.debug(f"No concept filter or concept filter limit provided. Setting number of returned nearest concepts (k) to default: {self.DEFAULT_K_NEAREST}")
+            
+            if concept_filter is None:
+                concept_filter = EmbeddingConceptFilter(limit=self.DEFAULT_K_NEAREST)
+            elif concept_filter.limit is None:
+                concept_filter = EmbeddingConceptFilter(
+                    concept_ids=concept_filter.concept_ids,
+                    domains=concept_filter.domains,
+                    vocabularies=concept_filter.vocabularies,
+                    require_standard=concept_filter.require_standard,
+                    limit=self.DEFAULT_K_NEAREST,
+                )
 
         query_list = query_embeddings.tolist()
         query = q_embedding_nearest_concepts(

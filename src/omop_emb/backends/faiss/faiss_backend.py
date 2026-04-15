@@ -236,10 +236,15 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         if concept_filter is None:
             # Easier to not do any filter if all are allowed
             permitted_concept_ids = None
+            logger.debug(f"No concept filter provided. Setting number of returned nearest concepts (k) to default: {self.DEFAULT_K_NEAREST}")
             k = self.DEFAULT_K_NEAREST
         else:
             permitted_concept_ids = np.array(list(permitted_concept_ids_storage.keys()), dtype=np.int64)
-            k = concept_filter.limit if concept_filter.limit is not None else self.DEFAULT_K_NEAREST
+            if concept_filter.limit is not None:
+                k = concept_filter.limit
+            else:
+                logger.debug(f"Concept filter provided without limit. Setting number of returned nearest concepts (k) to default: {self.DEFAULT_K_NEAREST}")
+                k = self.DEFAULT_K_NEAREST
 
         distances, concept_ids = storage_manager.search(
             query_vector=query_embeddings,

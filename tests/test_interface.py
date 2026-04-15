@@ -3,9 +3,9 @@
 import pytest
 import numpy as np
 from unittest.mock import Mock
-from sqlalchemy.orm import Session
 
 from omop_emb.interface import EmbeddingInterface
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.config import IndexType, MetricType
 from omop_emb.backends.base import NearestConceptMatch
 from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM
@@ -162,7 +162,7 @@ class TestInterface:
             index_type=index_type,
             query_embedding=query_embedding,
             metric_type=MetricType.COSINE,
-            k=2,
+            concept_filter=EmbeddingConceptFilter(limit=2),
         )
 
         assert isinstance(result, tuple)

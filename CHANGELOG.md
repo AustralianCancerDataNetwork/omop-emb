@@ -1,3 +1,10 @@
+## [0.3.3](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.3.2...v0.3.3) (2026-04-15)
+
+
+### Bug Fixes
+
+* Limit the number of concepts retrieved through EmbeddingConceptFilter for unified interface ([#5](https://github.com/AustralianCancerDataNetwork/omop-emb/issues/5)) ([4bfa86b](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/4bfa86b4808b5f2f01297bee76474fc1aaf5ad9c))
+
 ## [0.3.2](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.3.1...v0.3.2) (2026-04-12)
 
 

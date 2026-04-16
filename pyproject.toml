@@ -38,6 +38,7 @@ dependencies = [
     "psycopg2-binary>=2.9.11",
     "openai",
     "numpy",
+    "requests"
 ]
 
 [project.optional-dependencies]
@@ -66,7 +67,8 @@ dev = [
     "ruff>=0.14.10",
     "h5py",
     "openai",
-    "numpy"
+    "numpy",
+    "requests",
 ]
 
 [build-system]

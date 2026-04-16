@@ -171,6 +171,10 @@ def mock_llm_client() -> Mock:
     client = Mock(spec=EmbeddingClient)
     client.embedding_dim = EMBEDDING_DIM
     
+    mock_provider = Mock()
+    mock_provider.canonical_model_name.side_effect = lambda name: name  # Return input as-is
+    client.provider = mock_provider
+    
     def create_embeddings(concept_names: list[str] | str, batch_size: Optional[int] = None) -> np.ndarray:
         if isinstance(concept_names, str):
             concept_names = [concept_names]
@@ -273,7 +277,7 @@ CONCEPTS: Dict[str, TestConcept] = {
 TEST_CONCEPT_EMB = np.array([[-1.0]], dtype=np.float32)
 
 
-MODEL_NAME = "test-model"
+MODEL_NAME = "test-model:v1"
 EMBEDDING_DIM = 1
 
 

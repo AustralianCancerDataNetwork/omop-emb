@@ -19,7 +19,7 @@ class TestInterface:
         """Test registering an embedding model."""
         model = embedding_interface.register_model(
             engine=session.bind,
-            model_name=MODEL_NAME,
+            canonical_model_name=MODEL_NAME,
             dimensions=EMBEDDING_DIM,
             index_type=IndexType.FLAT,
         )
@@ -31,14 +31,14 @@ class TestInterface:
         """Test registering same model twice returns existing."""
         m1 = embedding_interface.register_model(
             engine=session.bind,
-            model_name=MODEL_NAME,
+            canonical_model_name=MODEL_NAME,
             dimensions=EMBEDDING_DIM,
             index_type=index_type,
         )
-        
+
         m2 = embedding_interface.register_model(
             engine=session.bind,
-            model_name=MODEL_NAME,
+            canonical_model_name=MODEL_NAME,
             dimensions=EMBEDDING_DIM,
             index_type=index_type,
         )
@@ -47,16 +47,16 @@ class TestInterface:
     
     def test_is_model_registered(self, session, embedding_interface: EmbeddingInterface, index_type: IndexType = IndexType.FLAT):
         """Test checking model registration status."""
-        assert not embedding_interface.is_model_registered(model_name=MODEL_NAME, index_type=index_type)
-        
+        assert not embedding_interface.is_model_registered(canonical_model_name=MODEL_NAME, index_type=index_type)
+
         embedding_interface.register_model(
             engine=session.bind,
-            model_name=MODEL_NAME,
+            canonical_model_name=MODEL_NAME,
             dimensions=EMBEDDING_DIM,
             index_type=index_type,
         )
-        
-        assert embedding_interface.is_model_registered(model_name=MODEL_NAME, index_type=index_type)
+
+        assert embedding_interface.is_model_registered(canonical_model_name=MODEL_NAME, index_type=index_type)
     
     def test_embed_texts(self, embedding_interface: EmbeddingInterface):
         """Test embedding generation."""
@@ -76,50 +76,50 @@ class TestInterface:
         """Test embedding and upserting concepts."""
         embedding_interface.register_model(
             engine=session.bind,
-            model_name=MODEL_NAME,
+            canonical_model_name=MODEL_NAME,
             dimensions=EMBEDDING_DIM,
             index_type=index_type,
         )
-        
+
         test_concepts = [CONCEPTS["Hypertension"], CONCEPTS["Diabetes"]]
         concept_ids = tuple(c.concept_id for c in test_concepts)
         concept_texts = [c.concept_name for c in test_concepts]
-        
+
         embeddings = embedding_interface.embed_and_upsert_concepts(
             session=session,
-            model_name=MODEL_NAME,
+            canonical_model_name=MODEL_NAME,
             concept_ids=concept_ids,
             concept_texts=concept_texts,
             index_type=index_type,
         )
-        
+
         assert embeddings.shape == (2, EMBEDDING_DIM)
-        assert embedding_interface.has_any_embeddings(session, embedding_model_name=MODEL_NAME, index_type=index_type)
+        assert embedding_interface.has_any_embeddings(session, canonical_model_name=MODEL_NAME, index_type=index_type)
     
     def test_get_embeddings_by_concept_ids(self, session, embedding_interface: EmbeddingInterface, index_type: IndexType = IndexType.FLAT):
         """Test retrieving stored embeddings."""
         embedding_interface.register_model(
             engine=session.bind,
-            model_name=MODEL_NAME,
+            canonical_model_name=MODEL_NAME,
             dimensions=EMBEDDING_DIM,
             index_type=index_type,
         )
-        
+
         test_concepts = [CONCEPTS["Hypertension"], CONCEPTS["Diabetes"]]
         concept_ids = tuple(c.concept_id for c in test_concepts)
         concept_texts = [c.concept_name for c in test_concepts]
-        
+
         embeddings = embedding_interface.embed_and_upsert_concepts(
             session=session,
-            model_name=MODEL_NAME,
+            canonical_model_name=MODEL_NAME,
             index_type=index_type,
             concept_ids=concept_ids,
             concept_texts=concept_texts,
         )
-        
+
         retrieved = embedding_interface.get_embeddings_by_concept_ids(
             session=session,
-            embedding_model_name=MODEL_NAME,
+            canonical_model_name=MODEL_NAME,
             concept_ids=concept_ids,
             index_type=index_type,
         )
@@ -158,7 +158,7 @@ class TestInterface:
         query_embedding = np.zeros((1, EMBEDDING_DIM), dtype=np.float32)
         result = interface.get_nearest_concepts(
             session=session,
-            model_name=MODEL_NAME,
+            canonical_model_name=MODEL_NAME,
             index_type=index_type,
             query_embedding=query_embedding,
             metric_type=MetricType.COSINE,

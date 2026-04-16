@@ -8,7 +8,7 @@ from numpy import ndarray
 from sqlalchemy import Engine, Select
 from sqlalchemy.orm import Session
 
-from omop_llm import LLMClient
+from omop_emb.embeddings import EmbeddingClient
 
 from .backends import (
     EmbeddingBackend,
@@ -28,12 +28,22 @@ class EmbeddingInterface:
     ----------------
     - initialize the selected backend store
     - ensure an embedding model is registered
-    - generate embeddings with an ``LLMClient``
+    - generate embeddings with an ``EmbeddingClient``
     - upsert concept embeddings through the selected backend
     - provide a reusable in-process cache for query-text embeddings
 
+    Notes
+    -----
+    All methods that accept a model identifier expect a *canonical* model name
+    — i.e. the form returned by
+    :meth:`~omop_emb.config.EmbeddingProvider.canonical_model_name`.  For
+    Ollama this means the name includes an explicit, immutable tag (e.g. ``'llama3:8b'``);
+    for OpenAI-compatible providers the name is used verbatim
+    (e.g. ``'text-embedding-3-small'``).  Passing a non-canonical name (e.g.
+    ``'llama3'`` without a tag) will result in a mismatch with stored registry
+    entries.
     """
-    embedding_client: Optional[LLMClient] = None
+    embedding_client: Optional[EmbeddingClient] = None
     backend: EmbeddingBackend = field(default_factory=get_embedding_backend)
 
 
@@ -46,7 +56,7 @@ class EmbeddingInterface:
     @classmethod
     def from_backend_name(
         cls,
-        embedding_client: Optional[LLMClient] = None,
+        embedding_client: Optional[EmbeddingClient] = None,
         backend_name: Optional[str | BackendType] = None,
         storage_base_dir: Optional[str] = None,
         registry_db_name: Optional[str] = None,
@@ -55,7 +65,7 @@ class EmbeddingInterface:
 
         Parameters
         ----------
-        embedding_client : LLMClient, optional
+        embedding_client : EmbeddingClient, optional
             Optional default client used for text embedding generation.
         backend_name : str | BackendType, optional
             Backend selector passed to ``get_embedding_backend``.
@@ -77,30 +87,48 @@ class EmbeddingInterface:
             ),
             embedding_client=embedding_client,
         )
-    
+
     def setup_and_register_model(
         self,
         engine: Engine,
-        model_name: str,
+        canonical_model_name: str,
         dimensions: int,
         index_type: IndexType,
         metadata: Mapping[str, object] = {},
     ) -> None:
+        """Initialise the store and register the embedding model.
+
+        Parameters
+        ----------
+        engine : Engine
+            SQLAlchemy engine for the target database.
+        canonical_model_name : str
+            Canonical model name (with explicit, immutable tag for Ollama), e.g.
+            ``'llama3:8b'`` or ``'text-embedding-3-small'``.  Obtain this
+            from :attr:`~omop_emb.embedding_client.EmbeddingClient.model` after
+            constructing the client.
+        dimensions : int
+            Embedding vector dimension.
+        index_type : IndexType
+            Backend-specific index type to register.
+        metadata : Mapping[str, object], optional
+            Arbitrary metadata to attach to the registry entry.
+        """
         self.initialise_store(engine)
         self.register_model(
             engine=engine,
-            model_name=model_name,
+            canonical_model_name=canonical_model_name,
             dimensions=dimensions,
             index_type=index_type,
             metadata=metadata,
         )
-    
+
     def initialise_store(self, engine: Engine) -> None:
         self.backend.initialise_store(engine)
 
     def get_model_table_name(
         self,
-        model_name: str,
+        canonical_model_name: str,
         index_type: IndexType,
     ) -> Optional[str]:
         """
@@ -109,27 +137,47 @@ class EmbeddingInterface:
         Historically this returned a PostgreSQL table name. Under the backend
         abstraction it returns the backend-specific storage identifier.
         """
-        record = self.backend.get_registered_model(model_name=model_name, index_type=index_type)
+        record = self.backend.get_registered_model(model_name=canonical_model_name, index_type=index_type)
         return record.storage_identifier if record is not None else None
 
     def is_model_registered(
         self,
-        model_name: str,
+        canonical_model_name: str,
         index_type: IndexType,
     ) -> bool:
-        return self.backend.is_model_registered(model_name=model_name, index_type=index_type)
+        return self.backend.is_model_registered(model_name=canonical_model_name, index_type=index_type)
 
     def register_model(
         self,
         engine: Engine,
-        model_name: str,
+        canonical_model_name: str,
         dimensions: int,
         index_type: IndexType,
         metadata: Mapping[str, object] = {},
     ) -> EmbeddingModelRecord:
+        """Register an embedding model in the backend registry.
+
+        Parameters
+        ----------
+        engine : Engine
+            SQLAlchemy engine for the target database.
+        canonical_model_name : str
+            Canonical model name (with tag if applicable).
+        dimensions : int
+            Embedding vector dimension.
+        index_type : IndexType
+            Backend-specific index type.
+        metadata : Mapping[str, object], optional
+            Arbitrary metadata to attach to the registry entry.
+
+        Returns
+        -------
+        EmbeddingModelRecord
+            The newly created or existing registry entry.
+        """
         return self.backend.register_model(
             engine=engine,
-            model_name=model_name,
+            model_name=canonical_model_name,
             dimensions=dimensions,
             index_type=index_type,
             metadata=metadata,
@@ -138,19 +186,19 @@ class EmbeddingInterface:
     def has_any_embeddings(
         self,
         session: Session,
-        embedding_model_name: str,
+        canonical_model_name: str,
         index_type: IndexType,
     ) -> bool:
         return self.backend.has_any_embeddings(
             session=session,
-            model_name=embedding_model_name,
+            model_name=canonical_model_name,
             index_type=index_type,
         )
 
     def get_nearest_concepts(
         self,
         session: Session,
-        model_name: str,
+        canonical_model_name: str,
         index_type: IndexType,
         query_embedding: np.ndarray,
         *,
@@ -164,8 +212,9 @@ class EmbeddingInterface:
         ----------
         session : Session
             SQLAlchemy session for any required relational access.
-        model_name : str
-            Name of the embedding model used to create the embeddings.
+        canonical_model_name : str
+            Canonical name of the embedding model used to create the stored
+            embeddings (e.g. ``'llama3:latest'``).
         index_type : IndexType
             The type of vector index used to store the embeddings.
         query_embedding : ndarray
@@ -187,18 +236,18 @@ class EmbeddingInterface:
             )
         nearest_concepts = self.backend.get_nearest_concepts(
             session=session,
-            model_name=model_name,
+            model_name=canonical_model_name,
             index_type=index_type,
             query_embeddings=query_embedding,
             concept_filter=concept_filter,
             metric_type=metric_type
         )
         return tuple({match.concept_id: match.similarity for match in matches_per_query} for matches_per_query in nearest_concepts)
-    
+
     def get_nearest_concepts_by_texts(
         self,
         session: Session,
-        embedding_model_name: str,
+        canonical_model_name: str,
         index_type: IndexType,
         query_texts: str | Tuple[str, ...] | List[str],
         *,
@@ -215,8 +264,9 @@ class EmbeddingInterface:
         ----------
         session : Session
             SQLAlchemy session for any required relational access.
-        embedding_model_name : str
-            Name of the embedding model used to create the embeddings.
+        canonical_model_name : str
+            Canonical name of the embedding model used to create the stored
+            embeddings (e.g. ``'llama3:latest'``).
         index_type : IndexType
             The type of vector index used to store the embeddings.
         query_texts : str | Tuple[str, ...] | List[str]
@@ -242,7 +292,7 @@ class EmbeddingInterface:
         query_embeddings = self.embed_texts(query_texts, batch_size=batch_size)
         return self.get_nearest_concepts(
             session=session,
-            model_name=embedding_model_name,
+            canonical_model_name=canonical_model_name,
             index_type=index_type,
             query_embedding=query_embeddings,
             metric_type=metric_type,
@@ -252,13 +302,13 @@ class EmbeddingInterface:
     def get_embeddings_by_concept_ids(
         self,
         session: Session,
-        embedding_model_name: str,
+        canonical_model_name: str,
         index_type: IndexType,
         concept_ids: Tuple[int, ...],
     ) -> Mapping[int, Sequence[float]]:
         return self.backend.get_embeddings_by_concept_ids(
             session=session,
-            model_name=embedding_model_name,
+            model_name=canonical_model_name,
             index_type=index_type,
             concept_ids=concept_ids,
         )
@@ -276,7 +326,7 @@ class EmbeddingInterface:
         index_type: IndexType,
         concept_ids: Tuple[int, ...],
         embeddings: ndarray,
-        model: str,
+        canonical_model_name: str,
     ):
         assert embeddings.ndim == 2, f"Expected 2 dimensions of embeddings. Got {embeddings.ndim}"
         assert len(concept_ids) == embeddings.shape[0], (
@@ -286,7 +336,7 @@ class EmbeddingInterface:
 
         return self.backend.upsert_embeddings(
             session=session,
-            model_name=model,
+            model_name=canonical_model_name,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
@@ -296,7 +346,7 @@ class EmbeddingInterface:
         self,
         texts: str | Tuple[str, ...] | List[str],
         *,
-        embedding_client: Optional[LLMClient] = None,
+        embedding_client: Optional[EmbeddingClient] = None,
         batch_size: Optional[int] = None,
     ) -> np.ndarray:
         client = embedding_client or self.embedding_client
@@ -308,14 +358,14 @@ class EmbeddingInterface:
         self,
         *,
         session: Session,
-        model_name: str,
+        canonical_model_name: str,
         index_type: IndexType,
         concept_ids: Sequence[int],
         embeddings: ndarray,
     ) -> None:
         self.backend.upsert_embeddings(
             session=session,
-            model_name=model_name,
+            model_name=canonical_model_name,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
@@ -325,11 +375,11 @@ class EmbeddingInterface:
         self,
         *,
         session: Session,
-        model_name: str,
+        canonical_model_name: str,
         index_type: IndexType,
         concept_ids: Sequence[int],
         concept_texts: Sequence[str],
-        embedding_client: Optional[LLMClient] = None,
+        embedding_client: Optional[EmbeddingClient] = None,
         batch_size: Optional[int] = None,
     ) -> ndarray:
         if len(concept_ids) != len(concept_texts):
@@ -344,7 +394,7 @@ class EmbeddingInterface:
         )
         self.upsert_concept_embeddings(
             session=session,
-            model_name=model_name,
+            canonical_model_name=canonical_model_name,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
@@ -355,45 +405,45 @@ class EmbeddingInterface:
         self,
         *,
         session: Session,
-        model_name: str,
+        canonical_model_name: str,
         index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: Optional[int] = None,
     ) -> Mapping[int, str]:
         return self.backend.get_concepts_without_embedding(
             session=session,
-            model_name=model_name,
+            model_name=canonical_model_name,
             index_type=index_type,
             concept_filter=concept_filter,
             limit=limit,
         )
-    
+
     def q_get_concepts_without_embedding(
         self,
         *,
-        model_name: str,
+        canonical_model_name: str,
         index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: Optional[int] = None,
     ) -> Select:
         return self.backend.q_get_concepts_without_embedding(
-            model_name=model_name,
+            model_name=canonical_model_name,
             index_type=index_type,
             concept_filter=concept_filter,
             limit=limit,
         )
-    
+
     def get_concepts_without_embedding_count(
         self,
         *,
         session: Session,
-        model_name: str,
+        canonical_model_name: str,
         index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
     ) -> int:
         return self.backend.get_concepts_without_embedding_count(
             session=session,
-            model_name=model_name,
+            model_name=canonical_model_name,
             index_type=index_type,
             concept_filter=concept_filter,
         )

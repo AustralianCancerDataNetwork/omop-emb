@@ -41,7 +41,7 @@ def test_pgvector_export_import_roundtrip(
 
     interface.register_model(
         engine=engine,
-        model_name=MODEL_NAME,
+        canonical_model_name=MODEL_NAME,
         dimensions=EMBEDDING_DIM,
         index_type=IndexType.FLAT,
         metadata={"origin": "roundtrip-test"},
@@ -56,7 +56,7 @@ def test_pgvector_export_import_roundtrip(
         index_type=IndexType.FLAT,
         concept_ids=concept_ids,
         embeddings=embeddings,
-        model=MODEL_NAME,
+        canonical_model_name=MODEL_NAME,
     )
 
     engine_url = engine.url.render_as_string(hide_password=False)

@@ -145,7 +145,7 @@ class ModelRegistryManager:
     
     @staticmethod
     def safe_model_name(model_name: str) -> str:
-        name = model_name.lower()
+        name = model_name.lower().strip()
         sanitized = re.sub(r"[^\w]+", "_", name)
         sanitized = re.sub(r"_+", "_", sanitized).strip("_")
         return sanitized

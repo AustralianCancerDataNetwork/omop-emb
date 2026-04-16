@@ -1,5 +1,3 @@
-from omop_llm import LLMClient
-
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
@@ -15,6 +13,7 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 import typer
 
+from omop_emb.embeddings import EmbeddingClient
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.interface import EmbeddingInterface
 from omop_emb.config import IndexType, BackendType
@@ -147,16 +146,19 @@ def add_embeddings(
 
     engine = _resolve_engine()
 
+    embedding_client = EmbeddingClient(
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
+        embedding_batch_size=batch_size
+    )
     interface = EmbeddingInterface.from_backend_name(
         backend_name=backend_name,
         storage_base_dir=storage_base_dir,
-        embedding_client=LLMClient(
-            model=model,
-            api_base=api_base,
-            api_key=api_key,
-            embedding_batch_size=batch_size
-        ),
+        embedding_client=embedding_client
     )
+
+    canonical_model = embedding_client.model
     embedding_dim = interface.embedding_dim
     assert embedding_dim is not None, "Embedding dimensions could not be determined from the embedding client."
 
@@ -165,12 +167,12 @@ def add_embeddings(
         domains=tuple(domains) if domains else None,
         vocabularies=tuple(vocabularies) if vocabularies else None,
     )
-    
+
     # Ensure OMOP metadata tables exist, then initialize the embedding store.
     create_db(engine)
     interface.setup_and_register_model(
         engine=engine,
-        model_name=model,
+        canonical_model_name=canonical_model,
         dimensions=embedding_dim,
         index_type=index_type,
     )
@@ -178,12 +180,12 @@ def add_embeddings(
     with Session(engine) as reader, Session(engine) as writer:
         total_concepts = num_embeddings or interface.get_concepts_without_embedding_count(
             session=reader,
-            model_name=model,
+            canonical_model_name=canonical_model,
             concept_filter=concept_filter,
             index_type=index_type
         )
         concepts_without_embedding = interface.q_get_concepts_without_embedding(
-            model_name=model,
+            canonical_model_name=canonical_model,
             concept_filter=concept_filter,
             limit=num_embeddings,
             index_type=index_type
@@ -192,19 +194,19 @@ def add_embeddings(
         logger.info(f"Total concepts to process: {total_concepts}")
         with tqdm(total=total_concepts, desc="Processing", unit="concept") as pbar:
             result = reader.execute(concepts_without_embedding)
-            
+
             for row_chunk in result.partitions(batch_size):
                 batch_concepts = {row.concept_id: row.concept_name for row in row_chunk}
-                
+
                 interface.embed_and_upsert_concepts(
                     session=writer,
-                    model_name=model,
+                    canonical_model_name=canonical_model,
                     concept_ids=tuple(batch_concepts.keys()),
                     concept_texts=tuple(batch_concepts.values()),
                     batch_size=batch_size,
                     index_type=index_type
                 )
-                
+
                 pbar.update(len(batch_concepts))
 
     logger.info("Completed embedding generation and storage.")
@@ -356,13 +358,13 @@ def import_pgvector(
 
         interface.register_model(
             engine=engine,
-            model_name=model_name,
+            canonical_model_name=model_name,
             dimensions=dimensions,
             index_type=index_type_enum,
             metadata=metadata,
         )
         actual_table_name = interface.get_model_table_name(
-            model_name=model_name,
+            canonical_model_name=model_name,
             index_type=index_type_enum,
         )
         if actual_table_name != expected_table_name:

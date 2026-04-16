@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from omop_alchemy.cdm.model.vocabulary import Concept
 from orm_loader.helpers import Base
-from omop_llm import LLMClient
+from omop_emb.embeddings import EmbeddingClient
 
 from omop_emb.backends.faiss import FaissEmbeddingBackend
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
@@ -167,8 +167,8 @@ def session(pg_engine) -> Generator[Session, None, None]:
 
 @pytest.fixture
 def mock_llm_client() -> Mock:
-    """Mock LLMClient with deterministic, low-dimensional embeddings."""
-    client = Mock(spec=LLMClient)
+    """Mock EmbeddingClient with deterministic, low-dimensional embeddings."""
+    client = Mock(spec=EmbeddingClient)
     client.embedding_dim = EMBEDDING_DIM
     
     def create_embeddings(concept_names: list[str] | str, batch_size: Optional[int] = None) -> np.ndarray:

@@ -36,7 +36,6 @@ dependencies = [
     "sqlalchemy>=2.0.45",
     "typing-extensions>=4.15.0",
     "psycopg2-binary>=2.9.11",
-    "omop-llm>=0.1.1"
 ]
 
 [project.optional-dependencies]

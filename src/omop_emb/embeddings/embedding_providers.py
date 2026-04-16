@@ -17,6 +17,8 @@ from abc import ABC, abstractmethod
 from httpx import URL
 import requests
 
+from omop_emb.config import ProviderType
+
 
 class EmbeddingProvider(ABC):
     """Abstract base class for embedding providers.
@@ -27,6 +29,11 @@ class EmbeddingProvider(ABC):
     OpenAI-compatible ``/v1/embeddings`` endpoint, similarity helpers, etc.)
     is shared and lives in ``EmbeddingClient`` directly.
     """
+    @property
+    @abstractmethod
+    def provider_type(self) -> ProviderType:
+        """Return the provider type as a value of the ProviderType enum."""
+        ...
 
     @abstractmethod
     def canonical_model_name(self, name: str) -> str:
@@ -86,6 +93,10 @@ class OllamaProvider(EmbeddingProvider):
     Both untagged names and the mutable ``:latest`` tag are rejected.
     Embedding dimensions are retrieved via Ollama's ``POST /api/show`` endpoint.
     """
+
+    @property
+    def provider_type(self) -> ProviderType:
+        return ProviderType.OLLAMA
 
     def canonical_model_name(self, name: str) -> str:
         """Require an explicit, immutable model tag.
@@ -164,7 +175,7 @@ class OllamaProvider(EmbeddingProvider):
         )
 
 
-class OpenAICompatProvider(EmbeddingProvider):
+class OpenAIProvider(EmbeddingProvider):
     """Provider for OpenAI-compatible APIs (OpenAI, Azure OpenAI, etc.).
 
     Model names require no tag normalisation.  Embedding dimensions are not
@@ -173,6 +184,10 @@ class OpenAICompatProvider(EmbeddingProvider):
     ``embedding_dim`` parameter of :class:`~omop_emb.embedding_client.EmbeddingClient`
     instead.
     """
+
+    @property
+    def provider_type(self) -> ProviderType:
+        return ProviderType.OPENAI
 
     def canonical_model_name(self, name: str) -> str:
         """Return *name* unchanged (no tag normalisation required).
@@ -233,4 +248,4 @@ def get_provider_for_api_base(
 
     if is_ollama:
         return OllamaProvider()
-    return OpenAICompatProvider()
+    return OpenAIProvider()

@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 from unittest.mock import Mock
 
-from omop_emb.interface import EmbeddingInterface
+from omop_emb.interface import EmbeddingWriterInterface
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.config import IndexType, MetricType
 from omop_emb.backends.base import NearestConceptMatch
@@ -15,7 +15,7 @@ from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM
 class TestInterface:
     """Test EmbeddingInterface core functionality."""
     
-    def test_register_model(self, session, embedding_interface: EmbeddingInterface):
+    def test_register_model(self, session, embedding_interface: EmbeddingWriterInterface):
         """Test registering an embedding model."""
         model = embedding_interface.register_model(
             engine=session.bind,
@@ -27,7 +27,7 @@ class TestInterface:
         assert model.model_name == MODEL_NAME
         assert model.dimensions == EMBEDDING_DIM
     
-    def test_model_registration_idempotent(self, session, embedding_interface: EmbeddingInterface, index_type: IndexType = IndexType.FLAT):
+    def test_model_registration_idempotent(self, session, embedding_interface: EmbeddingWriterInterface, index_type: IndexType = IndexType.FLAT):
         """Test registering same model twice returns existing."""
         m1 = embedding_interface.register_model(
             engine=session.bind,
@@ -45,7 +45,7 @@ class TestInterface:
         
         assert m1.storage_identifier == m2.storage_identifier
     
-    def test_is_model_registered(self, session, embedding_interface: EmbeddingInterface, index_type: IndexType = IndexType.FLAT):
+    def test_is_model_registered(self, session, embedding_interface: EmbeddingWriterInterface, index_type: IndexType = IndexType.FLAT):
         """Test checking model registration status."""
         assert not embedding_interface.is_model_registered(canonical_model_name=MODEL_NAME, index_type=index_type)
 
@@ -58,21 +58,21 @@ class TestInterface:
 
         assert embedding_interface.is_model_registered(canonical_model_name=MODEL_NAME, index_type=index_type)
     
-    def test_embed_texts(self, embedding_interface: EmbeddingInterface):
+    def test_embed_texts(self, embedding_interface: EmbeddingWriterInterface):
         """Test embedding generation."""
         embeddings = embedding_interface.embed_texts(CONCEPTS["Hypertension"].concept_name)
         
         assert embeddings.shape == (1, EMBEDDING_DIM)
         assert embeddings.dtype == np.float32
     
-    def test_embed_multiple_texts(self, embedding_interface: EmbeddingInterface):
+    def test_embed_multiple_texts(self, embedding_interface: EmbeddingWriterInterface):
         """Test embedding multiple texts."""
         texts = [c.concept_name for c in CONCEPTS.values()]
         embeddings = embedding_interface.embed_texts(texts)
         
         assert embeddings.shape == (len(texts), EMBEDDING_DIM)
     
-    def test_embed_and_upsert(self, session, embedding_interface: EmbeddingInterface, index_type: IndexType = IndexType.FLAT):
+    def test_embed_and_upsert(self, session, embedding_interface: EmbeddingWriterInterface, index_type: IndexType = IndexType.FLAT):
         """Test embedding and upserting concepts."""
         embedding_interface.register_model(
             engine=session.bind,
@@ -96,7 +96,7 @@ class TestInterface:
         assert embeddings.shape == (2, EMBEDDING_DIM)
         assert embedding_interface.has_any_embeddings(session, canonical_model_name=MODEL_NAME, index_type=index_type)
     
-    def test_get_embeddings_by_concept_ids(self, session, embedding_interface: EmbeddingInterface, index_type: IndexType = IndexType.FLAT):
+    def test_get_embeddings_by_concept_ids(self, session, embedding_interface: EmbeddingWriterInterface, index_type: IndexType = IndexType.FLAT):
         """Test retrieving stored embeddings."""
         embedding_interface.register_model(
             engine=session.bind,
@@ -150,7 +150,7 @@ class TestInterface:
             ),
         )
 
-        interface = EmbeddingInterface(
+        interface = EmbeddingWriterInterface(
             embedding_client=mock_llm_client,
             backend=mock_backend,
         )

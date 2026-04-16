@@ -4,8 +4,9 @@ from dataclasses import dataclass, field
 from typing import Optional, Mapping
 
 from omop_emb.config import (
-    IndexType, 
-    BackendType
+    IndexType,
+    BackendType,
+    ProviderType
 )
 
 @dataclass(frozen=True)
@@ -16,9 +17,13 @@ class EmbeddingModelRecord:
     ``storage_identifier`` is intentionally backend-specific. For example:
     - PostgreSQL backend: dynamic embedding table name
     - FAISS backend: on-disk index path or logical collection name
+
+    ``provider_type`` identifies which embedding provider was used to register
+    the model (e.g. "OllamaProvider", "OpenAICompatProvider").
     """
 
     model_name: str
+    provider_type: ProviderType
     dimensions: int
     backend_type: BackendType
     index_type: IndexType

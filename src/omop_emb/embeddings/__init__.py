@@ -3,5 +3,5 @@ from .embedding_providers import (
     EmbeddingProvider,
     get_provider_for_api_base,
     OllamaProvider,
-    OpenAICompatProvider,
+    OpenAIProvider,
 )

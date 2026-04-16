@@ -17,6 +17,7 @@ class SharedBackendTests:
         model = backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type="OllamaProvider",
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -29,6 +30,7 @@ class SharedBackendTests:
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type="OllamaProvider",
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -43,6 +45,7 @@ class SharedBackendTests:
         params = {
             "engine": session.bind,
             "model_name": MODEL_NAME,
+            "provider_type": "OllamaProvider",
             "dimensions": EMBEDDING_DIM,
             "index_type": index_type,
             "metadata": {"version": "1.0"},
@@ -59,6 +62,7 @@ class SharedBackendTests:
         params = {
             "engine": session.bind,
             "model_name": MODEL_NAME,
+            "provider_type": "OllamaProvider",
             "dimensions": EMBEDDING_DIM,
             "index_type": index_type,
             "metadata": {"version": "1.0"},
@@ -78,6 +82,7 @@ class SharedBackendTests:
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type="OllamaProvider",
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -101,6 +106,7 @@ class SharedBackendTests:
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type="OllamaProvider",
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -132,6 +138,7 @@ class SharedBackendTests:
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type="OllamaProvider",
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -167,6 +174,7 @@ class SharedBackendTests:
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type="OllamaProvider",
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -200,6 +208,7 @@ class SharedBackendTests:
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type="OllamaProvider",
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -234,6 +243,7 @@ class SharedBackendTests:
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type="OllamaProvider",
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -262,7 +272,7 @@ class SharedBackendTests:
 
     def test_l2_similarity_exact_values(self, session, backend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
         """Test L2 distance calculations yield expected similarity scores.
-        
+
         With deterministic embeddings:
         - TEST_CONCEPT_EMB = [-1.0]
         - Hypertension = [-10.0] → L2 distance = 9.0 → similarity = 1/(1+9) = 0.1
@@ -272,6 +282,7 @@ class SharedBackendTests:
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type="OllamaProvider",
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -313,19 +324,20 @@ class SharedBackendTests:
 
     def test_cosine_similarity_exact_values(self, session, backend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
         """Test cosine distance calculations yield expected similarity scores.
-        
+
         With deterministic embeddings (1D vectors):
         - TEST_CONCEPT_EMB = [-1.0] → normalized: [-1.0]
         - Hypertension = [-10.0] → normalized: [-1.0] → cosine similarity = 1.0 → normalized similarity = 1.0
         - Diabetes = [0.0] → zero vector (special case, skip exact check)
         - Aspirin = [10.0] → normalized: [1.0] → cosine similarity = -1.0 → normalized similarity = 0.0
-        
+
         Cosine distance in pgvector: 1 - cosine_similarity
         Final normalized similarity returned: 1 - distance / 2 = (1 + cos_sim) / 2
         """
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type="OllamaProvider",
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )

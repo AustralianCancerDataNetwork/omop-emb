@@ -4,7 +4,7 @@ import pytest
 
 from omop_emb.embeddings import (
     OllamaProvider,
-    OpenAICompatProvider,
+    OpenAIProvider,
     get_provider_for_api_base,
     )  # Note: providers are in embeddings.embedding_providers
 
@@ -52,14 +52,14 @@ class TestOllamaProviderCanonicalModelName:
 
 class TestOpenAICompatProviderCanonicalModelName:
     def test_returns_name_unchanged(self):
-        assert OpenAICompatProvider().canonical_model_name("text-embedding-3-small") == "text-embedding-3-small"
+        assert OpenAIProvider().canonical_model_name("text-embedding-3-small") == "text-embedding-3-small"
 
     def test_strips_whitespace(self):
-        assert OpenAICompatProvider().canonical_model_name("  text-embedding-3-small  ") == "text-embedding-3-small"
+        assert OpenAIProvider().canonical_model_name("  text-embedding-3-small  ") == "text-embedding-3-small"
 
     def test_get_embedding_dim_raises(self):
         with pytest.raises(NotImplementedError):
-            OpenAICompatProvider().get_embedding_dim("text-embedding-3-small", "https://api.openai.com/v1")
+            OpenAIProvider().get_embedding_dim("text-embedding-3-small", "https://api.openai.com/v1")
 
 
 class TestGetProviderForApiBase:
@@ -70,10 +70,10 @@ class TestGetProviderForApiBase:
         assert isinstance(get_provider_for_api_base("http://localhost:11434/v1", "ollama"), OllamaProvider)
 
     def test_localhost_with_real_key_is_openai_compat(self):
-        assert isinstance(get_provider_for_api_base("http://localhost:8000/v1", "sk-real-key"), OpenAICompatProvider)
+        assert isinstance(get_provider_for_api_base("http://localhost:8000/v1", "sk-real-key"), OpenAIProvider)
 
     def test_openai_api(self):
-        assert isinstance(get_provider_for_api_base("https://api.openai.com/v1", "sk-abc"), OpenAICompatProvider)
+        assert isinstance(get_provider_for_api_base("https://api.openai.com/v1", "sk-abc"), OpenAIProvider)
 
     def test_127_0_0_1_with_ollama_key(self):
         assert isinstance(get_provider_for_api_base("http://127.0.0.1:11434/v1", "ollama"), OllamaProvider)

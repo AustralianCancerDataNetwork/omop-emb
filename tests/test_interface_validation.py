@@ -5,16 +5,22 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
-from omop_emb.config import IndexType, MetricType
+from omop_emb.config import IndexType, MetricType, BackendType, ProviderType
 from omop_emb.embeddings import OllamaProvider
-from omop_emb.interface import EmbeddingInterface
+from omop_emb.interface import EmbeddingWriterInterface
 
 
 @pytest.mark.unit
 class TestInterfaceValidation:
     def test_get_nearest_concepts_requires_index_type(self):
         """Index type is required as part of the strict core interface."""
-        interface = EmbeddingInterface(backend=Mock(), embedding_client=Mock())
+        mock_client = Mock()
+        mock_client.provider = Mock()
+        mock_client.provider.provider_type = ProviderType.OLLAMA
+        interface = EmbeddingWriterInterface(
+            embedding_client=mock_client,
+            backend_type=BackendType.PGVECTOR,
+        )
         kwargs = {
             "session": Mock(),
             "canonical_model_name": "test-model:latest",
@@ -27,7 +33,13 @@ class TestInterfaceValidation:
 
     def test_get_nearest_concepts_requires_metric_type(self):
         """Metric type is required as part of the strict core interface."""
-        interface = EmbeddingInterface(backend=Mock(), embedding_client=Mock())
+        mock_client = Mock()
+        mock_client.provider = Mock()
+        mock_client.provider.provider_type = ProviderType.OLLAMA
+        interface = EmbeddingWriterInterface(
+            embedding_client=mock_client,
+            backend_type=BackendType.PGVECTOR,
+        )
         kwargs = {
             "session": Mock(),
             "canonical_model_name": "test-model:latest",
@@ -40,7 +52,13 @@ class TestInterfaceValidation:
 
     def test_get_nearest_concepts_rejects_non_enum_metric_type(self):
         """Core interface rejects non-MetricType values with a clear error."""
-        interface = EmbeddingInterface(backend=Mock(), embedding_client=Mock())
+        mock_client = Mock()
+        mock_client.provider = Mock()
+        mock_client.provider.provider_type = ProviderType.OLLAMA
+        interface = EmbeddingWriterInterface(
+            embedding_client=mock_client,
+            backend_type=BackendType.PGVECTOR,
+        )
 
         with pytest.raises(TypeError, match="metric_type must be MetricType"):
             interface.get_nearest_concepts(
@@ -64,12 +82,23 @@ class TestCanonicalModelName:
 
     def test_interface_stores_name_verbatim(self):
         """EmbeddingInterface passes canonical_model_name through unchanged."""
-        mock_backend = Mock()
-        mock_backend.register_model.return_value = Mock(
-            model_name="pseudo-model:v1",
-            storage_identifier="pgvector_pseudo_model_v1_flat",
+        mock_client = Mock()
+        mock_provider = Mock()
+        mock_provider.canonical_model_name.side_effect = lambda name: name
+        mock_provider.provider_type = ProviderType.OLLAMA
+        mock_client.provider = mock_provider
+
+        interface = EmbeddingWriterInterface(
+            embedding_client=mock_client,
+            backend_type=BackendType.PGVECTOR,
         )
-        interface = EmbeddingInterface(backend=mock_backend)
+
+        # Mock the backend's register_model to verify the call
+        interface._backend.register_model = Mock(return_value=Mock(
+            model_name="pseudo-model:v1",
+            provider_type=ProviderType.OLLAMA,
+            storage_identifier="pgvector_pseudo_model_v1_flat",
+        ))
 
         interface.register_model(
             engine=Mock(),
@@ -78,8 +107,9 @@ class TestCanonicalModelName:
             index_type=IndexType.FLAT,
         )
 
-        call_kwargs = mock_backend.register_model.call_args.kwargs
+        call_kwargs = interface._backend.register_model.call_args.kwargs
         assert call_kwargs["model_name"] == "pseudo-model:v1"
+        assert call_kwargs["provider_type"] == ProviderType.OLLAMA
 
     def test_ollama_provider_rejects_untagged_name(self):
         """OllamaProvider raises when no tag is present.

@@ -14,7 +14,7 @@ from omop_emb.cli import (
     migrate_legacy_pgvector_registry,
 )
 from omop_emb.config import BackendType, IndexType
-from omop_emb.interface import EmbeddingInterface
+from omop_emb.interface import EmbeddingWriterInterface
 
 from .conftest import CONCEPTS, EMBEDDING_DIM, MODEL_NAME
 
@@ -32,7 +32,7 @@ def test_pgvector_export_import_roundtrip(
     source_storage = temp_storage_dir / "source_registry"
     source_storage.mkdir(parents=True, exist_ok=True)
 
-    interface = EmbeddingInterface.from_backend_name(
+    interface = EmbeddingWriterInterface.from_backend_name(
         backend_name=BackendType.PGVECTOR,
         storage_base_dir=str(source_storage),
         embedding_client=mock_llm_client,
@@ -152,7 +152,7 @@ def test_migrate_legacy_pgvector_registry(
         drop_legacy_registry=False,
     )
 
-    interface = EmbeddingInterface.from_backend_name(
+    interface = EmbeddingWriterInterface.from_backend_name(
         backend_name=BackendType.PGVECTOR,
         storage_base_dir=str(storage_dir),
     )

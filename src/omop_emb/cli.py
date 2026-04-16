@@ -15,8 +15,8 @@ import typer
 
 from omop_emb.embeddings import EmbeddingClient
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
-from omop_emb.interface import EmbeddingInterface
-from omop_emb.config import IndexType, BackendType
+from omop_emb.interface import EmbeddingWriterInterface, EmbeddingReaderInterface
+from omop_emb.config import IndexType, BackendType, ProviderType
 
 app = typer.Typer()
 logger = get_logger(__name__)
@@ -80,18 +80,20 @@ def _resolve_engine() -> sa.Engine:
         raise RuntimeError("OMOP_DATABASE_URL environment variable not set. Please set it in your .env file to point to your database.")
 
     engine = sa.create_engine(engine_string, future=True, echo=False)
-    assert engine.dialect.name == "postgresql", "Only PostgreSQL databases are supported for embedding storage with the current backends. Please check your `OMOP_DATABASE_URL` environment variable and ensure it points to a PostgreSQL database."
+    if engine.dialect.name != "postgresql":
+        raise RuntimeError("Only PostgreSQL databases are supported for embedding storage with the current backends. Please check your `OMOP_DATABASE_URL` environment variable and ensure it points to a PostgreSQL database.")
     return engine
 
 
-def _build_pgvector_interface(storage_base_dir: Optional[str]) -> EmbeddingInterface:
-    interface = EmbeddingInterface.from_backend_name(
-        backend_name=BackendType.PGVECTOR,
+def _build_pgvector_reader(storage_base_dir: Optional[str], provider_type: ProviderType = ProviderType.OLLAMA) -> EmbeddingReaderInterface:
+    reader = EmbeddingReaderInterface(
+        backend_type=BackendType.PGVECTOR,
+        provider_type=provider_type,
         storage_base_dir=storage_base_dir,
     )
-    if interface.backend.backend_type != BackendType.PGVECTOR:
+    if reader.backend_type != BackendType.PGVECTOR:
         raise RuntimeError("Resolved embedding backend is not pgvector. Set --storage-base-dir and/or OMOP_EMB_BACKEND appropriately.")
-    return interface
+    return reader
 
 
 @app.command()
@@ -152,15 +154,16 @@ def add_embeddings(
         api_key=api_key,
         embedding_batch_size=batch_size
     )
-    interface = EmbeddingInterface.from_backend_name(
-        backend_name=backend_name,
+    interface = EmbeddingWriterInterface(
+        embedding_client=embedding_client,
+        backend_type=backend_name or BackendType.PGVECTOR,
         storage_base_dir=storage_base_dir,
-        embedding_client=embedding_client
     )
 
     canonical_model = embedding_client.model
     embedding_dim = interface.embedding_dim
-    assert embedding_dim is not None, "Embedding dimensions could not be determined from the embedding client."
+    if embedding_dim is None:
+        raise RuntimeError("Embedding dimensions could not be determined from the embedding client.")
 
     concept_filter = EmbeddingConceptFilter(
         require_standard=standard_only,
@@ -240,13 +243,11 @@ def export_pgvector(
     load_dotenv()
 
     engine = _resolve_engine()
-    interface = _build_pgvector_interface(storage_base_dir=storage_base_dir)
-    interface.initialise_store(engine)
+    reader = _build_pgvector_reader(storage_base_dir=storage_base_dir)
+    reader.initialise_store(engine)
 
-    records = interface.backend.embedding_model_registry.get_registered_models_from_db(
-        backend_type=BackendType.PGVECTOR
-    )
-    if records is None:
+    records = reader.list_registered_models()
+    if not records:
         raise RuntimeError("No pgvector models found in local registry metadata. Nothing to export.")
 
     model_filter = set(model) if model else None
@@ -292,6 +293,7 @@ def export_pgvector(
             manifest["tables"].append(
                 {
                     "model_name": record.model_name,
+                    "provider_type": record.provider_type.value,
                     "index_type": record.index_type.value,
                     "dimensions": record.dimensions,
                     "storage_identifier": record.storage_identifier,
@@ -347,23 +349,30 @@ def import_pgvector(
         raise ValueError("Snapshot manifest does not contain any tables.")
 
     engine = _resolve_engine()
-    interface = _build_pgvector_interface(storage_base_dir=storage_base_dir)
 
     for table_spec in table_specs:
         model_name = str(table_spec["model_name"])
+        provider_type_str = str(table_spec.get("provider_type", ProviderType.OLLAMA.value))
+        provider_type_enum = ProviderType(provider_type_str)
         index_type_enum = IndexType(str(table_spec["index_type"]))
         dimensions = int(table_spec["dimensions"])
         expected_table_name = str(table_spec["storage_identifier"])
         metadata = table_spec.get("metadata") or {}
 
-        interface.register_model(
-            engine=engine,
-            canonical_model_name=model_name,
+        EmbeddingReaderInterface._migrate_legacy_row(
+            backend_type=BackendType.PGVECTOR,
+            provider_type=provider_type_enum,
+            storage_base_dir=storage_base_dir,
+            model_name=model_name,
             dimensions=dimensions,
             index_type=index_type_enum,
             metadata=metadata,
+            storage_identifier=expected_table_name,
         )
-        actual_table_name = interface.get_model_table_name(
+
+        # Verify storage identifier matches (the migration should have created it)
+        reader = _build_pgvector_reader(storage_base_dir=storage_base_dir, provider_type=provider_type_enum)
+        actual_table_name = reader.get_model_table_name(
             canonical_model_name=model_name,
             index_type=index_type_enum,
         )
@@ -372,7 +381,14 @@ def import_pgvector(
                 f"Storage identifier mismatch for model '{model_name}': expected '{expected_table_name}', got '{actual_table_name}'."
             )
 
-    interface.initialise_store(engine)
+    # Initialize the store using the first provider type from the manifest
+    if table_specs:
+        first_provider_str = str(table_specs[0].get("provider_type", ProviderType.OLLAMA.value))
+        first_provider = ProviderType(first_provider_str)
+        reader = _build_pgvector_reader(storage_base_dir=storage_base_dir, provider_type=first_provider)
+    else:
+        reader = _build_pgvector_reader(storage_base_dir=storage_base_dir)
+    reader.initialise_store(engine)
 
     with Session(engine) as session:
         for table_spec in table_specs:
@@ -426,6 +442,10 @@ def migrate_legacy_pgvector_registry(
         "--storage-base-dir",
         help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to ./.omop_emb in the current working directory. Paths with `~` are expanded.",
     )] = None,
+    provider_type: Annotated[ProviderType, typer.Option(
+        "--provider-type",
+        help="Provider type for the migrated models.",
+    )] = ProviderType.OLLAMA,
     source_database_url: Annotated[Optional[str], typer.Option(
         "--source-database-url",
         help="Source database URL containing the legacy model_registry table. Defaults to OMOP_DATABASE_URL.",
@@ -456,7 +476,6 @@ def migrate_legacy_pgvector_registry(
         raise RuntimeError("OMOP_DATABASE_URL is not set. Provide --source-database-url.")
 
     source_engine = sa.create_engine(source_url, future=True, echo=False)
-    interface = _build_pgvector_interface(storage_base_dir=storage_base_dir)
 
     legacy_rows = _load_legacy_rows(source_engine, legacy_table=legacy_table)
     if not legacy_rows:
@@ -477,10 +496,12 @@ def migrate_legacy_pgvector_registry(
             migrated += 1
             continue
 
-        interface.backend.embedding_model_registry.register_model(
+        EmbeddingReaderInterface._migrate_legacy_row(
+            backend_type=BackendType.PGVECTOR,
+            provider_type=provider_type,
+            storage_base_dir=storage_base_dir,
             model_name=model_name,
             dimensions=dimensions,
-            backend_type=BackendType.PGVECTOR,
             index_type=index_type,
             metadata=metadata,
             storage_identifier=storage_identifier,

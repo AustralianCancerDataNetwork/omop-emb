@@ -15,7 +15,7 @@ from .faiss_sql import (
     add_concept_ids_to_faiss_registry,
     q_concept_ids_with_embeddings
 )
-from omop_emb.config import BackendType, IndexType, MetricType
+from omop_emb.config import BackendType, IndexType, MetricType, ProviderType
 from .storage_manager import EmbeddingStorageManager
 from ..base import EmbeddingBackend, require_registered_model
 from omop_emb.utils.embedding_utils import (
@@ -78,7 +78,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         return create_faiss_embedding_registry_table(engine=engine, model_record=model_record)
     
     def get_safe_model_dir(self, model_name: str) -> Path:
-        return self.storage_base_dir / self.embedding_model_registry.safe_model_name(model_name)
+        return self.storage_base_dir / self._embedding_model_registry.safe_model_name(model_name)
     
     def get_storage_manager(
         self, 
@@ -109,23 +109,32 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         model_name: str,
         dimensions: int,
         *,
+        provider_type: ProviderType,
         index_type: IndexType,
         metadata: Mapping[str, object] = {},
     ) -> EmbeddingModelRecord:
+        """Register a model with FAISS backend.
 
-        # Create the storage for the model on disk
-        safe_name = self.embedding_model_registry.safe_model_name(model_name)
+        DB write happens first — if it raises (e.g., conflict), no directory is created.
+        Directory creation is a side effect that happens only after successful registration.
+        """
+        # DB write first — if this raises, directory was never created
+        record = super().register_model(
+            engine=engine,
+            model_name=model_name,
+            provider_type=provider_type,
+            dimensions=dimensions,
+            index_type=index_type,
+            metadata=metadata,
+        )
+
+        # Only create directory after successful registration
+        safe_name = self._embedding_model_registry.safe_model_name(model_name)
         model_dir = self.storage_base_dir / safe_name
         model_dir.mkdir(parents=False, exist_ok=True)
         logger.info(f"Created model directory: {model_dir}")
 
-        return super().register_model(
-            engine=engine,
-            model_name=model_name,
-            dimensions=dimensions,
-            index_type=index_type,
-            metadata=metadata
-        )
+        return record
 
     @require_registered_model
     def upsert_embeddings(
@@ -266,7 +275,8 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                     continue
 
                 similarity = get_similarity_from_distance(distance.item(), metric_type)
-                assert isinstance(similarity, float), f"Expected similarity to be a float, got {type(similarity)}"
+                if not isinstance(similarity, float):
+                    raise RuntimeError(f"Expected similarity to be a float, got {type(similarity)}")
                 matches_per_query.append(NearestConceptMatch(
                     concept_id=int(concept_id),
                     concept_name=row.concept_name,

@@ -150,8 +150,10 @@ class EmbeddingClient:
             buffer.extend(emb.embedding for emb in response.data)
 
         result = np.array(buffer)
-        assert result.ndim == 2, f"Expected 2-D embedding array, got shape {result.shape}"
-        assert result.shape[0] == len(text)
+        if result.ndim != 2:
+            raise RuntimeError(f"Expected 2-D embedding array, got shape {result.shape}")
+        if result.shape[0] != len(text):
+            raise RuntimeError(f"Expected {len(text)} embeddings, got {result.shape[0]}")
         return result
 
     def similarity(
@@ -170,7 +172,8 @@ class EmbeddingClient:
     @staticmethod
     def cosine_similarity(vecs_a: np.ndarray, vecs_b: np.ndarray) -> np.ndarray:
         """Cosine similarity between row-vector matrices (M×D, N×D → M×N)."""
-        assert vecs_a.ndim == 2 and vecs_b.ndim == 2
+        if vecs_a.ndim != 2 or vecs_b.ndim != 2:
+            raise RuntimeError(f"Expected 2-D arrays, got shapes {vecs_a.shape} and {vecs_b.shape}")
         norm_a = np.linalg.norm(vecs_a, axis=1, keepdims=True)
         norm_b = np.linalg.norm(vecs_b, axis=1, keepdims=True)
         norm_a[norm_a == 0] = 1e-10

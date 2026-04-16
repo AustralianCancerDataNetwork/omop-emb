@@ -22,7 +22,8 @@ from omop_emb.embeddings import EmbeddingClient
 
 from omop_emb.backends.faiss import FaissEmbeddingBackend
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
-from omop_emb.interface import EmbeddingInterface
+from omop_emb.interface import EmbeddingWriterInterface, EmbeddingReaderInterface
+from omop_emb.config import BackendType, ProviderType
 
 
 TEST_DB_NAME = os.getenv("TEST_DATABASE_NAME", "test_omop_emb")
@@ -170,20 +171,21 @@ def mock_llm_client() -> Mock:
     """Mock EmbeddingClient with deterministic, low-dimensional embeddings."""
     client = Mock(spec=EmbeddingClient)
     client.embedding_dim = EMBEDDING_DIM
-    
+
     mock_provider = Mock()
     mock_provider.canonical_model_name.side_effect = lambda name: name  # Return input as-is
+    mock_provider.provider_type = ProviderType.OLLAMA
     client.provider = mock_provider
-    
+
     def create_embeddings(concept_names: list[str] | str, batch_size: Optional[int] = None) -> np.ndarray:
         if isinstance(concept_names, str):
             concept_names = [concept_names]
         else:
             concept_names = list(concept_names)
-        
+
         embeddings: list[np.ndarray] = [CONCEPTS[name].embeddings for name in concept_names]
         return np.vstack(embeddings).astype(np.float32)
-    
+
     client.embeddings = Mock(side_effect=create_embeddings)
     return client
 
@@ -212,11 +214,12 @@ def pgvector_backend(session, temp_storage_dir) -> PGVectorEmbeddingBackend:
 
 
 @pytest.fixture
-def embedding_interface(session, mock_llm_client, faiss_backend) -> EmbeddingInterface:
+def embedding_interface(session, mock_llm_client, temp_storage_dir) -> EmbeddingWriterInterface:
     """Full embedding interface ready for testing."""
-    interface = EmbeddingInterface(
+    interface = EmbeddingWriterInterface(
         embedding_client=mock_llm_client,
-        backend=faiss_backend,
+        backend_type=BackendType.FAISS,
+        storage_base_dir=temp_storage_dir,
     )
     interface.initialise_store(session.bind)
     return interface

@@ -239,7 +239,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         matches_tuple = tuple(tuple(matches) for matches in results)
 
         k = concept_filter.limit
-        assert k is not None, "Internal error: concept_filter.limit should have been set to a non-None value by this point."
+        if k is None:
+            raise RuntimeError("Internal error: concept_filter.limit should have been set to a non-None value by this point.")
         self.validate_nearest_concepts_output(matches_tuple, k, query_embeddings=query_embeddings)
         return matches_tuple
 

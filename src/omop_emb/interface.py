@@ -8,7 +8,7 @@ from numpy import ndarray
 from sqlalchemy import Engine, Select
 from sqlalchemy.orm import Session
 
-from omop_emb.embeddings import EmbeddingClient
+from omop_emb.embeddings import EmbeddingClient, EmbeddingProvider
 
 from .backends import (
     EmbeddingBackend,
@@ -36,16 +36,58 @@ class EmbeddingInterface:
     -----
     All methods that accept a model identifier expect a *canonical* model name
     — i.e. the form returned by
-    :meth:`~omop_emb.config.EmbeddingProvider.canonical_model_name`.  For
+    :meth:`~omop_emb.embeddings.EmbeddingProvider.canonical_model_name`.  For
     Ollama this means the name includes an explicit, immutable tag (e.g. ``'llama3:8b'``);
     for OpenAI-compatible providers the name is used verbatim
     (e.g. ``'text-embedding-3-small'``).  Passing a non-canonical name (e.g.
-    ``'llama3'`` without a tag) will result in a mismatch with stored registry
-    entries.
+    ``'llama3'`` without a tag) will result in a validation error.
+
+    Model name validation is automatic when an ``embedding_client`` is provided;
+    for queries without embedding generation, pass an explicit ``provider`` to
+    enable validation, or rely on registry enforcement of previously registered names.
     """
     embedding_client: Optional[EmbeddingClient] = None
     backend: EmbeddingBackend = field(default_factory=get_embedding_backend)
+    provider: Optional[EmbeddingProvider] = None
 
+    def __post_init__(self) -> None:
+        """Auto-populate provider from embedding_client if not explicitly set."""
+        if self.provider is None and self.embedding_client is not None:
+            self.provider = self.embedding_client.provider
+
+    def _validate_canonical_model_name(self, canonical_model_name: str) -> None:
+        """Validate that model name is in canonical form.
+
+        If a provider is available, re-validates the name through the provider's
+        canonicalization logic to catch common errors (e.g., untagged Ollama names,
+        mutable :latest tags). If no provider is available, skips validation.
+
+        Parameters
+        ----------
+        canonical_model_name : str
+            Model name to validate.
+
+        Raises
+        ------
+        ValueError
+            If the name fails provider validation.
+        """
+        if self.provider is None:
+            # No provider available for validation; trust the caller
+            return
+
+        try:
+            # Re-validate to catch any issues
+            validated = self.provider.canonical_model_name(canonical_model_name)
+            if validated != canonical_model_name:
+                raise ValueError(
+                    f"Model name {canonical_model_name!r} is not in canonical form "
+                    f"(expected: {validated!r})"
+                )
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid canonical_model_name {canonical_model_name!r}: {e}"
+            ) from e
 
     @property
     def embedding_dim(self) -> Optional[int]:
@@ -114,6 +156,7 @@ class EmbeddingInterface:
         metadata : Mapping[str, object], optional
             Arbitrary metadata to attach to the registry entry.
         """
+        self._validate_canonical_model_name(canonical_model_name)
         self.initialise_store(engine)
         self.register_model(
             engine=engine,
@@ -137,6 +180,7 @@ class EmbeddingInterface:
         Historically this returned a PostgreSQL table name. Under the backend
         abstraction it returns the backend-specific storage identifier.
         """
+        self._validate_canonical_model_name(canonical_model_name)
         record = self.backend.get_registered_model(model_name=canonical_model_name, index_type=index_type)
         return record.storage_identifier if record is not None else None
 
@@ -145,6 +189,7 @@ class EmbeddingInterface:
         canonical_model_name: str,
         index_type: IndexType,
     ) -> bool:
+        self._validate_canonical_model_name(canonical_model_name)
         return self.backend.is_model_registered(model_name=canonical_model_name, index_type=index_type)
 
     def register_model(
@@ -175,6 +220,7 @@ class EmbeddingInterface:
         EmbeddingModelRecord
             The newly created or existing registry entry.
         """
+        self._validate_canonical_model_name(canonical_model_name)
         return self.backend.register_model(
             engine=engine,
             model_name=canonical_model_name,
@@ -189,6 +235,7 @@ class EmbeddingInterface:
         canonical_model_name: str,
         index_type: IndexType,
     ) -> bool:
+        self._validate_canonical_model_name(canonical_model_name)
         return self.backend.has_any_embeddings(
             session=session,
             model_name=canonical_model_name,
@@ -234,6 +281,7 @@ class EmbeddingInterface:
             raise TypeError(
                 f"metric_type must be MetricType, got {type(metric_type).__name__}."
             )
+        self._validate_canonical_model_name(canonical_model_name)
         nearest_concepts = self.backend.get_nearest_concepts(
             session=session,
             model_name=canonical_model_name,
@@ -283,6 +331,7 @@ class EmbeddingInterface:
         Tuple[Mapping[int, float], ...]
             A tuple of dictionaries containing nearest concept matches for each query vector. The outer tuple corresponds to the query vectors in order, and each inner dictionary contains the nearest matches for that query vector, sorted by similarity. Returned shape is (q, limit) where q is the number of query vectors and limit is the number of nearest neighbors returned per query.
         """
+        self._validate_canonical_model_name(canonical_model_name)
         if isinstance(query_texts, str):
             query_texts = (query_texts,)
         elif isinstance(query_texts, (list, tuple)):
@@ -306,6 +355,7 @@ class EmbeddingInterface:
         index_type: IndexType,
         concept_ids: Tuple[int, ...],
     ) -> Mapping[int, Sequence[float]]:
+        self._validate_canonical_model_name(canonical_model_name)
         return self.backend.get_embeddings_by_concept_ids(
             session=session,
             model_name=canonical_model_name,
@@ -328,6 +378,7 @@ class EmbeddingInterface:
         embeddings: ndarray,
         canonical_model_name: str,
     ):
+        self._validate_canonical_model_name(canonical_model_name)
         assert embeddings.ndim == 2, f"Expected 2 dimensions of embeddings. Got {embeddings.ndim}"
         assert len(concept_ids) == embeddings.shape[0], (
             f"Mismatch between #concept_ids ({len(concept_ids)}) and embedding "
@@ -363,6 +414,7 @@ class EmbeddingInterface:
         concept_ids: Sequence[int],
         embeddings: ndarray,
     ) -> None:
+        self._validate_canonical_model_name(canonical_model_name)
         self.backend.upsert_embeddings(
             session=session,
             model_name=canonical_model_name,
@@ -382,6 +434,7 @@ class EmbeddingInterface:
         embedding_client: Optional[EmbeddingClient] = None,
         batch_size: Optional[int] = None,
     ) -> ndarray:
+        self._validate_canonical_model_name(canonical_model_name)
         if len(concept_ids) != len(concept_texts):
             raise ValueError(
                 f"Mismatch between #concept_ids ({len(concept_ids)}) and "
@@ -410,6 +463,7 @@ class EmbeddingInterface:
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: Optional[int] = None,
     ) -> Mapping[int, str]:
+        self._validate_canonical_model_name(canonical_model_name)
         return self.backend.get_concepts_without_embedding(
             session=session,
             model_name=canonical_model_name,
@@ -426,6 +480,7 @@ class EmbeddingInterface:
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: Optional[int] = None,
     ) -> Select:
+        self._validate_canonical_model_name(canonical_model_name)
         return self.backend.q_get_concepts_without_embedding(
             model_name=canonical_model_name,
             index_type=index_type,
@@ -441,6 +496,7 @@ class EmbeddingInterface:
         index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
     ) -> int:
+        self._validate_canonical_model_name(canonical_model_name)
         return self.backend.get_concepts_without_embedding_count(
             session=session,
             model_name=canonical_model_name,

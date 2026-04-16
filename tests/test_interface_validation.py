@@ -5,7 +5,8 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
-from omop_emb.config import IndexType, MetricType, OllamaProvider
+from omop_emb.config import IndexType, MetricType
+from omop_emb.embeddings import OllamaProvider
 from omop_emb.interface import EmbeddingInterface
 
 

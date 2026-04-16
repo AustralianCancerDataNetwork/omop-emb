@@ -45,5 +45,6 @@ Recommended runtime environment variables:
 
 ## Documentation overview
 - [Installation](usage/installation.md)
+- [**EmbeddingInterface Guide**](usage/interface-guide.md) — The primary API for embedding operations with model name validation
 - [Embedding storage backends](usage/backend-selection.md)
 - [CLI Reference](usage/cli.md)

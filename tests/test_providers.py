@@ -6,7 +6,7 @@ from omop_emb.embeddings import (
     OllamaProvider,
     OpenAICompatProvider,
     get_provider_for_api_base,
-)
+    )  # Note: providers are in embeddings.embedding_providers
 
 
 class TestOllamaProviderCanonicalModelName:

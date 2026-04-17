@@ -15,7 +15,11 @@ import typer
 
 from omop_emb.embeddings import EmbeddingClient
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
-from omop_emb.interface import EmbeddingWriterInterface, EmbeddingReaderInterface
+from omop_emb.interface import (
+    EmbeddingWriterInterface, 
+    EmbeddingReaderInterface, 
+    migrate_legacy_registry_row,
+)
 from omop_emb.config import IndexType, BackendType, ProviderType
 
 app = typer.Typer()
@@ -85,8 +89,13 @@ def _resolve_engine() -> sa.Engine:
     return engine
 
 
-def _build_pgvector_reader(storage_base_dir: Optional[str], provider_type: ProviderType = ProviderType.OLLAMA) -> EmbeddingReaderInterface:
+def _build_pgvector_reader(
+    canonical_model_name: str,
+    storage_base_dir: Optional[str], 
+    provider_type: ProviderType = ProviderType.OLLAMA
+) -> EmbeddingReaderInterface:
     reader = EmbeddingReaderInterface(
+        canonical_model_name=canonical_model_name,
         backend_name_or_type=BackendType.PGVECTOR,
         provider_name_or_type=provider_type,
         storage_base_dir=storage_base_dir,
@@ -154,16 +163,11 @@ def add_embeddings(
         api_key=api_key,
         embedding_batch_size=batch_size
     )
-    interface = EmbeddingWriterInterface(
+    embedding_writer = EmbeddingWriterInterface(
         embedding_client=embedding_client,
         backend_name_or_type=backend_name,
         storage_base_dir=storage_base_dir,
     )
-
-    canonical_model = embedding_client.model
-    embedding_dim = interface.embedding_dim
-    if embedding_dim is None:
-        raise RuntimeError("Embedding dimensions could not be determined from the embedding client.")
 
     concept_filter = EmbeddingConceptFilter(
         require_standard=standard_only,
@@ -173,22 +177,18 @@ def add_embeddings(
 
     # Ensure OMOP metadata tables exist, then initialize the embedding store.
     create_db(engine)
-    interface.setup_and_register_model(
+    embedding_writer.setup_and_register_model(
         engine=engine,
-        canonical_model_name=canonical_model,
-        dimensions=embedding_dim,
         index_type=index_type,
     )
 
     with Session(engine) as reader, Session(engine) as writer:
-        total_concepts = num_embeddings or interface.get_concepts_without_embedding_count(
+        total_concepts = num_embeddings or embedding_writer.get_concepts_without_embedding_count(
             session=reader,
-            canonical_model_name=canonical_model,
             concept_filter=concept_filter,
             index_type=index_type
         )
-        concepts_without_embedding = interface.q_get_concepts_without_embedding(
-            canonical_model_name=canonical_model,
+        concepts_without_embedding = embedding_writer.q_get_concepts_without_embedding(
             concept_filter=concept_filter,
             limit=num_embeddings,
             index_type=index_type
@@ -201,9 +201,8 @@ def add_embeddings(
             for row_chunk in result.partitions(batch_size):
                 batch_concepts = {row.concept_id: row.concept_name for row in row_chunk}
 
-                interface.embed_and_upsert_concepts(
+                embedding_writer.embed_and_upsert_concepts(
                     session=writer,
-                    canonical_model_name=canonical_model,
                     concept_ids=tuple(batch_concepts.keys()),
                     concept_texts=tuple(batch_concepts.values()),
                     batch_size=batch_size,
@@ -214,227 +213,8 @@ def add_embeddings(
 
     logger.info("Completed embedding generation and storage.")
 
-
-@app.command()
-def export_pgvector(
-    output_dir: Annotated[str, typer.Option(
-        "--output-dir", "-o",
-        help="Directory where pgvector snapshot files (CSV + manifest) are written.",
-    )],
-    storage_base_dir: Annotated[Optional[str], typer.Option(
-        "--storage-base-dir",
-        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to ./.omop_emb in the current working directory. Paths with `~` are expanded.",
-    )] = None,
-    model: Annotated[Optional[list[str]], typer.Option(
-        "--model", "-m",
-        help="Optional model-name filter. Repeat to export specific models only.",
-    )] = None,
-    index_type: Annotated[Optional[IndexType], typer.Option(
-        "--index-type",
-        help="Optional index-type filter.",
-    )] = None,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)"
-    )] = 0,
-):
-    """Export pgvector embedding tables to file for checkpoint/restore workflows."""
-    configure_logging_level(verbosity)
-    load_dotenv()
-
-    engine = _resolve_engine()
-    reader = _build_pgvector_reader(storage_base_dir=storage_base_dir)
-    reader.initialise_store(engine)
-
-    records = reader.list_registered_models()
-    if not records:
-        raise RuntimeError("No pgvector models found in local registry metadata. Nothing to export.")
-
-    model_filter = set(model) if model else None
-    selected_records = [
-        record for record in records
-        if (model_filter is None or record.model_name in model_filter)
-        and (index_type is None or record.index_type == index_type)
-    ]
-    if not selected_records:
-        raise RuntimeError("No pgvector models matched the provided filters.")
-
-    output_path = Path(output_dir).resolve()
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    manifest = {
-        "format_version": 1,
-        "backend": BackendType.PGVECTOR.value,
-        "tables": [],
-    }
-
-    with engine.connect() as conn:
-        for record in selected_records:
-            table_name = record.storage_identifier
-            quoted_table_name = f'"{table_name}"'
-            row_count = conn.execute(sa.text(f"SELECT COUNT(*) FROM {quoted_table_name}"))
-            n_rows = int(row_count.scalar_one())
-
-            csv_filename = f"{table_name}.csv"
-            csv_path = output_path / csv_filename
-
-            query = sa.text(
-                f"SELECT concept_id, embedding::text AS embedding FROM {quoted_table_name} ORDER BY concept_id"
-            )
-            result = conn.execution_options(stream_results=True).execute(query)
-
-            with csv_path.open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.writer(handle)
-                writer.writerow(["concept_id", "embedding"])
-                for row in result:
-                    writer.writerow([int(row.concept_id), str(row.embedding)])
-
-            logger.info(f"Exported {n_rows} rows from {table_name} to {csv_path}")
-            manifest["tables"].append(
-                {
-                    "model_name": record.model_name,
-                    "provider_type": record.provider_type.value,
-                    "index_type": record.index_type.value,
-                    "dimensions": record.dimensions,
-                    "storage_identifier": record.storage_identifier,
-                    "metadata": dict(record.metadata),
-                    "rows": n_rows,
-                    "file": csv_filename,
-                }
-            )
-
-    manifest_path = output_path / SNAPSHOT_MANIFEST_NAME
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    logger.info(f"Wrote pgvector snapshot manifest to {manifest_path}")
-
-
-@app.command()
-def import_pgvector(
-    input_dir: Annotated[str, typer.Option(
-        "--input-dir", "-i",
-        help="Directory containing pgvector snapshot files and manifest.json.",
-    )],
-    storage_base_dir: Annotated[Optional[str], typer.Option(
-        "--storage-base-dir",
-        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to ./.omop_emb in the current working directory. Paths with `~` are expanded.",
-    )] = None,
-    replace: Annotated[bool, typer.Option(
-        "--replace",
-        help="If set, truncate each destination embedding table before import.",
-    )] = False,
-    batch_size: Annotated[int, typer.Option(
-        "--batch-size", "-b",
-        help="Number of rows per INSERT batch.",
-    )] = 5000,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)"
-    )] = 0,
-):
-    """Import pgvector embedding tables from a previously exported snapshot."""
-    configure_logging_level(verbosity)
-    load_dotenv()
-
-    input_path = Path(input_dir).resolve()
-    manifest_path = input_path / SNAPSHOT_MANIFEST_NAME
-    if not manifest_path.is_file():
-        raise FileNotFoundError(f"Snapshot manifest not found at {manifest_path}")
-
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("backend") != BackendType.PGVECTOR.value:
-        raise ValueError("Snapshot manifest backend is not pgvector.")
-
-    table_specs = manifest.get("tables")
-    if not isinstance(table_specs, list) or not table_specs:
-        raise ValueError("Snapshot manifest does not contain any tables.")
-
-    engine = _resolve_engine()
-
-    for table_spec in table_specs:
-        model_name = str(table_spec["model_name"])
-        provider_type_str = str(table_spec.get("provider_type", ProviderType.OLLAMA.value))
-        provider_type_enum = ProviderType(provider_type_str)
-        index_type_enum = IndexType(str(table_spec["index_type"]))
-        dimensions = int(table_spec["dimensions"])
-        expected_table_name = str(table_spec["storage_identifier"])
-        metadata = table_spec.get("metadata") or {}
-
-        EmbeddingReaderInterface._migrate_legacy_row(
-            backend_type=BackendType.PGVECTOR,
-            provider_type=provider_type_enum,
-            storage_base_dir=storage_base_dir,
-            model_name=model_name,
-            dimensions=dimensions,
-            index_type=index_type_enum,
-            metadata=metadata,
-            storage_identifier=expected_table_name,
-        )
-
-        # Verify storage identifier matches (the migration should have created it)
-        reader = _build_pgvector_reader(storage_base_dir=storage_base_dir, provider_type=provider_type_enum)
-        actual_table_name = reader.get_model_table_name(
-            canonical_model_name=model_name,
-            index_type=index_type_enum,
-        )
-        if actual_table_name != expected_table_name:
-            raise RuntimeError(
-                f"Storage identifier mismatch for model '{model_name}': expected '{expected_table_name}', got '{actual_table_name}'."
-            )
-
-    # Initialize the store using the first provider type from the manifest
-    if table_specs:
-        first_provider_str = str(table_specs[0].get("provider_type", ProviderType.OLLAMA.value))
-        first_provider = ProviderType(first_provider_str)
-        reader = _build_pgvector_reader(storage_base_dir=storage_base_dir, provider_type=first_provider)
-    else:
-        reader = _build_pgvector_reader(storage_base_dir=storage_base_dir)
-    reader.initialise_store(engine)
-
-    with Session(engine) as session:
-        for table_spec in table_specs:
-            table_name = str(table_spec["storage_identifier"])
-            csv_file = input_path / str(table_spec["file"])
-            if not csv_file.is_file():
-                raise FileNotFoundError(f"Missing snapshot table file: {csv_file}")
-
-            quoted_table_name = f'"{table_name}"'
-            if replace:
-                session.execute(sa.text(f"TRUNCATE TABLE {quoted_table_name}"))
-                session.commit()
-
-            insert_sql = sa.text(
-                f"""
-                INSERT INTO {quoted_table_name} (concept_id, embedding)
-                VALUES (:concept_id, CAST(:embedding AS vector))
-                ON CONFLICT (concept_id) DO UPDATE
-                SET embedding = EXCLUDED.embedding
-                """
-            )
-
-            total_rows = 0
-            batch: list[dict[str, object]] = []
-            with csv_file.open("r", encoding="utf-8", newline="") as handle:
-                reader = csv.DictReader(handle)
-                for row in reader:
-                    batch.append(
-                        {
-                            "concept_id": int(row["concept_id"]),
-                            "embedding": row["embedding"],
-                        }
-                    )
-                    if len(batch) >= batch_size:
-                        session.execute(insert_sql, batch)
-                        session.commit()
-                        total_rows += len(batch)
-                        batch = []
-
-                if batch:
-                    session.execute(insert_sql, batch)
-                    session.commit()
-                    total_rows += len(batch)
-
-            logger.info(f"Imported {total_rows} rows into {table_name} from {csv_file}")
-
+# TODO: Import and Export routines
+# Requires common format for exporting bits and pieces in the respective storage backends
 
 @app.command()
 def migrate_legacy_pgvector_registry(
@@ -496,15 +276,15 @@ def migrate_legacy_pgvector_registry(
             migrated += 1
             continue
 
-        EmbeddingReaderInterface._migrate_legacy_row(
+        migrate_legacy_registry_row(
             backend_type=BackendType.PGVECTOR,
             provider_type=provider_type,
-            storage_base_dir=storage_base_dir,
             model_name=model_name,
             dimensions=dimensions,
             index_type=index_type,
             metadata=metadata,
             storage_identifier=storage_identifier,
+            storage_base_dir=storage_base_dir,
         )
         migrated += 1
 

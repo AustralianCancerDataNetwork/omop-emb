@@ -75,8 +75,10 @@ def add_embeddings_to_registered_table(
     sqlalchemy.exc.IntegrityError
         If there is duplicate concept_id entries in the input, or if any of the concept_ids violate database constraints.
     """
-    assert session.bind is not None, "No engine assigned to session. Unexpected"
-    assert session.bind.dialect.name == "postgresql", "Only postgres dialect supported for now."
+    if session.bind is None:
+        raise ValueError("Session must be bound to an engine to add embeddings to PGVector registry.")
+    if session.bind.dialect.name != "postgresql":
+        raise ValueError(f"This function is only implemented for PostgreSQL databases, but got {session.bind.dialect.name}.")
 
     insert_values = [
         {
@@ -162,7 +164,9 @@ def q_embedding_nearest_concepts(
     query_vector_cast = cast(query_v.c.q_vec, Vector)
     distance = get_distance(embedding_table, query_vector_cast, metric_type)
     similarity = get_similarity_from_distance(distance, metric_type)
-    assert isinstance(similarity, ColumnElement), "Expected similarity to be a SQL expression column for use in the query construction."
+
+    if not isinstance(similarity, ColumnElement):
+        raise TypeError(f"Expected similarity to be a SQL expression column for use in the query construction, but got {type(similarity)}")
 
     inner_stmt = (
         select(

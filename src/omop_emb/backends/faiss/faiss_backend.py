@@ -68,7 +68,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             storage_base_dir=storage_base_dir,
             registry_db_name=registry_db_name,
         )
-        self.embedding_storage_managers: Dict[str, EmbeddingStorageManager] = {}
+        self._embedding_storage_managers: Dict[str, EmbeddingStorageManager] = {}
 
     @property
     def backend_type(self) -> BackendType:
@@ -87,7 +87,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         self.register_storage_manager(
             model_record=model_record,
         )
-        return self.embedding_storage_managers[model_record.model_name]
+        return self._embedding_storage_managers[model_record.model_name]
     
     def register_storage_manager(
         self,
@@ -95,9 +95,9 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     ) -> None:
         """Registers a storage manager for the given model if not already registered. This ensures that the necessary on-disk structures are in place for the model's embeddings and index."""
 
-        if model_record.model_name not in self.embedding_storage_managers:
+        if model_record.model_name not in self._embedding_storage_managers:
             logger.info(f"Registering new storage manager for model '{model_record.model_name}' with dimensions={model_record.dimensions}, index_type={model_record.index_type}")
-            self.embedding_storage_managers[model_record.model_name] = EmbeddingStorageManager(
+            self._embedding_storage_managers[model_record.model_name] = EmbeddingStorageManager(
                     file_dir=self.get_safe_model_dir(model_record.model_name), 
                     dimensions=model_record.dimensions,
                     backend_type=self.backend_type,
@@ -111,7 +111,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         *,
         provider_type: ProviderType,
         index_type: IndexType,
-        metadata: Mapping[str, object] = {},
+        metadata: Optional[Mapping[str, object]] = None,
     ) -> EmbeddingModelRecord:
         """Register a model with FAISS backend.
 

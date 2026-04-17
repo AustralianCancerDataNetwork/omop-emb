@@ -171,6 +171,7 @@ def mock_llm_client() -> Mock:
     """Mock EmbeddingClient with deterministic, low-dimensional embeddings."""
     client = Mock(spec=EmbeddingClient)
     client.embedding_dim = EMBEDDING_DIM
+    client.canonical_model_name = MODEL_NAME
 
     mock_provider = Mock()
     mock_provider.canonical_model_name.side_effect = lambda name: name  # Return input as-is
@@ -214,6 +215,19 @@ def pgvector_backend(session, temp_storage_dir) -> PGVectorEmbeddingBackend:
 
 
 @pytest.fixture
+def embedding_reader_interface(session, temp_storage_dir) -> EmbeddingReaderInterface:
+    """Read-only embedding interface sharing the same local registry as writer fixtures."""
+    reader = EmbeddingReaderInterface(
+        canonical_model_name=MODEL_NAME,
+        provider_name_or_type=PROVIDER_TYPE,
+        backend_name_or_type=BackendType.FAISS,
+        storage_base_dir=str(temp_storage_dir),
+    )
+    reader.initialise_store(session.bind)
+    return reader
+
+
+@pytest.fixture
 def embedding_writer_interface(session, mock_llm_client, temp_storage_dir) -> EmbeddingWriterInterface:
     """Full embedding interface ready for testing."""
     interface = EmbeddingWriterInterface(
@@ -230,8 +244,6 @@ def registered_embedding_writer_interface(session, embedding_writer_interface: E
     """Embedding interface with a pre-registered model for testing read operations."""
     embedding_writer_interface.register_model(
         engine=session.bind,
-        canonical_model_name=MODEL_NAME,
-        dimensions=EMBEDDING_DIM,
         index_type=IndexType.FLAT,
     )
     return embedding_writer_interface

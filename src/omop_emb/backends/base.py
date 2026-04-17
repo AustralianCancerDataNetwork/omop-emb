@@ -22,10 +22,10 @@ from omop_emb.utils.embedding_utils import (
 def require_registered_model(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(
-        self, 
-        model_name: str, 
-        index_type: IndexType,
+        self,
+        model_name: str,
         provider_type: ProviderType,
+        index_type: IndexType,
         **kwargs
     ) -> Any:
         record = self.get_registered_model(model_name=model_name, index_type=index_type, provider_type=provider_type)

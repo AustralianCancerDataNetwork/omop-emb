@@ -1,4 +1,4 @@
-from .interface import EmbeddingWriterInterface, EmbeddingReaderInterface
+from .interface import EmbeddingWriterInterface, EmbeddingReaderInterface, list_registered_models, migrate_legacy_registry_row
 from .backends.base import EmbeddingConceptFilter
 from .embeddings import (
     EmbeddingClient,
@@ -35,4 +35,6 @@ __all__ = [
     "OpenAIProvider",
     "get_provider_for_api_base",
     "get_embedding_backend",
+    "list_registered_models",
+    "migrate_legacy_registry_row",
 ]

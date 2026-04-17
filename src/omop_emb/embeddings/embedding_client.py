@@ -70,8 +70,7 @@ class EmbeddingClient:
         return self._provider
 
     @property
-    def model(self) -> str:
-        """Canonical model name — the stable key stored in the omop-emb registry."""
+    def canonical_model_name(self) -> str:
         return self._model
 
     @property

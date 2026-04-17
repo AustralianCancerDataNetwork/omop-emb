@@ -10,20 +10,26 @@ from omop_emb.embeddings import OllamaProvider
 from omop_emb.interface import EmbeddingWriterInterface
 
 
+def _make_mock_client(model_name: str = "test-model:v1") -> Mock:
+    """Create a mock EmbeddingClient with valid provider wiring."""
+    mock_client = Mock()
+    mock_client.canonical_model_name = model_name
+    mock_client.provider = Mock()
+    mock_client.provider.canonical_model_name.side_effect = lambda name: name
+    mock_client.provider.provider_type = ProviderType.OLLAMA
+    return mock_client
+
+
 @pytest.mark.unit
 class TestInterfaceValidation:
     def test_get_nearest_concepts_requires_index_type(self):
         """Index type is required as part of the strict core interface."""
-        mock_client = Mock()
-        mock_client.provider = Mock()
-        mock_client.provider.provider_type = ProviderType.OLLAMA
         interface = EmbeddingWriterInterface(
-            embedding_client=mock_client,
+            embedding_client=_make_mock_client(),
             backend_name_or_type=BackendType.PGVECTOR,
         )
         kwargs = {
             "session": Mock(),
-            "canonical_model_name": "test-model:latest",
             "query_embedding": np.zeros((1, 1), dtype=np.float32),
             "metric_type": MetricType.COSINE,
         }
@@ -33,16 +39,12 @@ class TestInterfaceValidation:
 
     def test_get_nearest_concepts_requires_metric_type(self):
         """Metric type is required as part of the strict core interface."""
-        mock_client = Mock()
-        mock_client.provider = Mock()
-        mock_client.provider.provider_type = ProviderType.OLLAMA
         interface = EmbeddingWriterInterface(
-            embedding_client=mock_client,
+            embedding_client=_make_mock_client(),
             backend_name_or_type=BackendType.PGVECTOR,
         )
         kwargs = {
             "session": Mock(),
-            "canonical_model_name": "test-model:latest",
             "index_type": IndexType.FLAT,
             "query_embedding": np.zeros((1, 1), dtype=np.float32),
         }
@@ -52,18 +54,14 @@ class TestInterfaceValidation:
 
     def test_get_nearest_concepts_rejects_non_enum_metric_type(self):
         """Core interface rejects non-MetricType values with a clear error."""
-        mock_client = Mock()
-        mock_client.provider = Mock()
-        mock_client.provider.provider_type = ProviderType.OLLAMA
         interface = EmbeddingWriterInterface(
-            embedding_client=mock_client,
+            embedding_client=_make_mock_client(),
             backend_name_or_type=BackendType.PGVECTOR,
         )
 
         with pytest.raises(TypeError, match="metric_type must be MetricType"):
             interface.get_nearest_concepts(
                 session=Mock(),
-                canonical_model_name="test-model:latest",
                 index_type=IndexType.FLAT,
                 query_embedding=np.zeros((1, 1), dtype=np.float32),
                 metric_type="cosine",  # type: ignore[arg-type]
@@ -82,14 +80,8 @@ class TestCanonicalModelName:
 
     def test_interface_stores_name_verbatim(self):
         """EmbeddingInterface passes canonical_model_name through unchanged."""
-        mock_client = Mock()
-        mock_provider = Mock()
-        mock_provider.canonical_model_name.side_effect = lambda name: name
-        mock_provider.provider_type = ProviderType.OLLAMA
-        mock_client.provider = mock_provider
-
         interface = EmbeddingWriterInterface(
-            embedding_client=mock_client,
+            embedding_client=_make_mock_client("pseudo-model:v1"),
             backend_name_or_type=BackendType.PGVECTOR,
         )
 
@@ -102,8 +94,6 @@ class TestCanonicalModelName:
 
         interface.register_model(
             engine=Mock(),
-            canonical_model_name="pseudo-model:v1",
-            dimensions=768,
             index_type=IndexType.FLAT,
         )
 

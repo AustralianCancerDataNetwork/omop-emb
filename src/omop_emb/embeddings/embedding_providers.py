@@ -249,3 +249,12 @@ def get_provider_for_api_base(
     if is_ollama:
         return OllamaProvider()
     return OpenAIProvider()
+
+def get_provider_from_provider_type(provider_type: ProviderType) -> EmbeddingProvider:
+    """Map a ProviderType enum to an EmbeddingProvider instance."""
+    if provider_type == ProviderType.OLLAMA:
+        return OllamaProvider()
+    elif provider_type == ProviderType.OPENAI:
+        return OpenAIProvider()
+    else:
+        raise ValueError(f"Unsupported provider type: {provider_type}")

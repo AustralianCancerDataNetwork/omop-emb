@@ -23,7 +23,7 @@ from omop_emb.embeddings import EmbeddingClient
 from omop_emb.backends.faiss import FaissEmbeddingBackend
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 from omop_emb.interface import EmbeddingWriterInterface, EmbeddingReaderInterface
-from omop_emb.config import BackendType, ProviderType
+from omop_emb.config import BackendType, ProviderType, IndexType
 
 
 TEST_DB_NAME = os.getenv("TEST_DATABASE_NAME", "test_omop_emb")
@@ -192,7 +192,7 @@ def mock_llm_client() -> Mock:
 
 @pytest.fixture
 def temp_storage_dir():
-    """Temporary directory for FAISS indices."""
+    """Temporary directory for embedding registry"""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
 
@@ -214,15 +214,38 @@ def pgvector_backend(session, temp_storage_dir) -> PGVectorEmbeddingBackend:
 
 
 @pytest.fixture
+def embedding_reader(temp_storage_dir) -> EmbeddingReaderInterface:
+    """Read-only embedding reader for testing."""
+    reader = EmbeddingReaderInterface(
+        backend_name_or_type=BackendType.FAISS,
+        provider_name_or_type=ProviderType.OLLAMA,
+        storage_base_dir=temp_storage_dir,
+    )
+    return reader
+
+
+@pytest.fixture
 def embedding_interface(session, mock_llm_client, temp_storage_dir) -> EmbeddingWriterInterface:
     """Full embedding interface ready for testing."""
     interface = EmbeddingWriterInterface(
         embedding_client=mock_llm_client,
-        backend_type=BackendType.FAISS,
+        backend_name_or_type=BackendType.FAISS,
         storage_base_dir=temp_storage_dir,
     )
     interface.initialise_store(session.bind)
     return interface
+
+
+@pytest.fixture
+def registered_embedding_interface(session, embedding_interface: EmbeddingWriterInterface) -> EmbeddingWriterInterface:
+    """Embedding interface with a pre-registered model for testing read operations."""
+    embedding_interface.register_model(
+        engine=session.bind,
+        canonical_model_name=MODEL_NAME,
+        dimensions=EMBEDDING_DIM,
+        index_type=IndexType.FLAT,
+    )
+    return embedding_interface
 
 
 # ================ Test Data ================
@@ -281,6 +304,8 @@ TEST_CONCEPT_EMB = np.array([[-1.0]], dtype=np.float32)
 
 
 MODEL_NAME = "test-model:v1"
+PROVIDER = "ollama"
+PROVIDER_TYPE = ProviderType(PROVIDER)
 EMBEDDING_DIM = 1
 
 

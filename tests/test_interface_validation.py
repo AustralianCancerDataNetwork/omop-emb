@@ -19,7 +19,7 @@ class TestInterfaceValidation:
         mock_client.provider.provider_type = ProviderType.OLLAMA
         interface = EmbeddingWriterInterface(
             embedding_client=mock_client,
-            backend_type=BackendType.PGVECTOR,
+            backend_name_or_type=BackendType.PGVECTOR,
         )
         kwargs = {
             "session": Mock(),
@@ -38,7 +38,7 @@ class TestInterfaceValidation:
         mock_client.provider.provider_type = ProviderType.OLLAMA
         interface = EmbeddingWriterInterface(
             embedding_client=mock_client,
-            backend_type=BackendType.PGVECTOR,
+            backend_name_or_type=BackendType.PGVECTOR,
         )
         kwargs = {
             "session": Mock(),
@@ -57,7 +57,7 @@ class TestInterfaceValidation:
         mock_client.provider.provider_type = ProviderType.OLLAMA
         interface = EmbeddingWriterInterface(
             embedding_client=mock_client,
-            backend_type=BackendType.PGVECTOR,
+            backend_name_or_type=BackendType.PGVECTOR,
         )
 
         with pytest.raises(TypeError, match="metric_type must be MetricType"):
@@ -90,7 +90,7 @@ class TestCanonicalModelName:
 
         interface = EmbeddingWriterInterface(
             embedding_client=mock_client,
-            backend_type=BackendType.PGVECTOR,
+            backend_name_or_type=BackendType.PGVECTOR,
         )
 
         # Mock the backend's register_model to verify the call

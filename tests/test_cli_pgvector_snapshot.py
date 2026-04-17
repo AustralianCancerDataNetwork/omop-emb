@@ -13,10 +13,10 @@ from omop_emb.cli import (
     import_pgvector,
     migrate_legacy_pgvector_registry,
 )
-from omop_emb.config import BackendType, IndexType
-from omop_emb.interface import EmbeddingWriterInterface
+from omop_emb.config import BackendType, IndexType, ProviderType
+from omop_emb.interface import EmbeddingWriterInterface, EmbeddingReaderInterface
 
-from .conftest import CONCEPTS, EMBEDDING_DIM, MODEL_NAME
+from .conftest import CONCEPTS, EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE
 
 
 @pytest.mark.pgvector
@@ -32,10 +32,10 @@ def test_pgvector_export_import_roundtrip(
     source_storage = temp_storage_dir / "source_registry"
     source_storage.mkdir(parents=True, exist_ok=True)
 
-    interface = EmbeddingWriterInterface.from_backend_name(
-        backend_name=BackendType.PGVECTOR,
-        storage_base_dir=str(source_storage),
+    interface = EmbeddingWriterInterface(
         embedding_client=mock_llm_client,
+        backend_name_or_type=BackendType.PGVECTOR,
+        storage_base_dir=str(source_storage),
     )
     interface.initialise_store(engine)
 
@@ -144,6 +144,7 @@ def test_migrate_legacy_pgvector_registry(
     storage_dir = temp_storage_dir / "migrated_registry"
     storage_dir.mkdir(parents=True, exist_ok=True)
 
+    # Dry run — nothing should be written to the local registry
     migrate_legacy_pgvector_registry(
         storage_base_dir=str(storage_dir),
         source_database_url=source_url,
@@ -152,17 +153,19 @@ def test_migrate_legacy_pgvector_registry(
         drop_legacy_registry=False,
     )
 
-    interface = EmbeddingWriterInterface.from_backend_name(
-        backend_name=BackendType.PGVECTOR,
+    # Verify dry run wrote nothing — use EmbeddingReaderInterface to query
+    reader = EmbeddingReaderInterface(
+        backend_name_or_type=BackendType.PGVECTOR,
+        provider_name_or_type=PROVIDER_TYPE,
         storage_base_dir=str(storage_dir),
     )
-    migrated_before = interface.backend.embedding_model_registry.get_registered_models_from_db(
-        backend_type=BackendType.PGVECTOR,
+    migrated_before = reader.list_registered_models(
         model_name="legacy-model",
         index_type=IndexType.FLAT,
     )
-    assert migrated_before is None
+    assert len(migrated_before) == 0
 
+    # Real migration
     migrate_legacy_pgvector_registry(
         storage_base_dir=str(storage_dir),
         source_database_url=source_url,
@@ -171,12 +174,16 @@ def test_migrate_legacy_pgvector_registry(
         drop_legacy_registry=True,
     )
 
-    migrated = interface.backend.embedding_model_registry.get_registered_models_from_db(
-        backend_type=BackendType.PGVECTOR,
+    # Re-read the registry (fresh reader to pick up new rows)
+    reader_after = EmbeddingReaderInterface(
+        backend_name_or_type=BackendType.PGVECTOR,
+        provider_name_or_type=PROVIDER_TYPE,
+        storage_base_dir=str(storage_dir),
+    )
+    migrated = reader_after.list_registered_models(
         model_name="legacy-model",
         index_type=IndexType.FLAT,
     )
-    assert migrated is not None
     assert len(migrated) == 1
     assert migrated[0].storage_identifier == "legacy_table_flat"
 

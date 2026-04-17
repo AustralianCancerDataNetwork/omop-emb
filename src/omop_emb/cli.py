@@ -87,8 +87,8 @@ def _resolve_engine() -> sa.Engine:
 
 def _build_pgvector_reader(storage_base_dir: Optional[str], provider_type: ProviderType = ProviderType.OLLAMA) -> EmbeddingReaderInterface:
     reader = EmbeddingReaderInterface(
-        backend_type=BackendType.PGVECTOR,
-        provider_type=provider_type,
+        backend_name_or_type=BackendType.PGVECTOR,
+        provider_name_or_type=provider_type,
         storage_base_dir=storage_base_dir,
     )
     if reader.backend_type != BackendType.PGVECTOR:
@@ -156,7 +156,7 @@ def add_embeddings(
     )
     interface = EmbeddingWriterInterface(
         embedding_client=embedding_client,
-        backend_type=backend_name or BackendType.PGVECTOR,
+        backend_name_or_type=backend_name,
         storage_base_dir=storage_base_dir,
     )
 

@@ -15,7 +15,7 @@ from .pgvector_sql import (
     create_pg_embedding_table,
     add_embeddings_to_registered_table,
 )
-from omop_emb.config import BackendType, MetricType, IndexType
+from omop_emb.config import BackendType, MetricType, IndexType, ProviderType
 from ..base import EmbeddingBackend, require_registered_model
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
@@ -56,6 +56,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     def upsert_embeddings(
         self,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
         *,
         session: Session,
@@ -70,6 +71,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         ----------
         model_name : str
             Registered name of the embedding model.
+        provider_type : ProviderType
+            Provider type for the embedding model.
         index_type : IndexType
             Storage index type used for this model's embeddings.
         session : Session
@@ -92,6 +95,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         table = self.get_embedding_table(
             model_name=model_name,
             index_type=index_type,
+            provider_type=provider_type,
         )
 
         try:
@@ -111,6 +115,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     def get_embeddings_by_concept_ids(
         self,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
         *,
         session: Session,
@@ -124,6 +129,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         ----------
         model_name : str
             Registered name of the embedding model.
+        provider_type : ProviderType
+            Provider type for the embedding model.
         index_type : IndexType
             Storage index type used for this model's embeddings.
         session : Session
@@ -141,6 +148,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         embedding_table = self.get_embedding_table(
             model_name=model_name,
             index_type=index_type,
+            provider_type=provider_type,
         )
         query = q_embedding_vectors_by_concept_ids(
             embedding_table=embedding_table,
@@ -163,6 +171,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     def get_nearest_concepts(
         self,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
         *,
         session: Session,
@@ -178,6 +187,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         ----------
         model_name : str
             Registered name of the embedding model.
+        provider_type : ProviderType
+            Provider type for the embedding model.
         index_type : IndexType
             Storage index type used for this model's embeddings.
         session : Session
@@ -196,6 +207,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         embedding_table = self.get_embedding_table(
             model_name=model_name,
             index_type=index_type,
+            provider_type=provider_type,
         )
         self.validate_embeddings(embeddings=query_embeddings, dimensions=_model_record.dimensions)
 

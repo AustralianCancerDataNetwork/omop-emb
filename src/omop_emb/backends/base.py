@@ -25,16 +25,17 @@ def require_registered_model(func: Callable) -> Callable:
         self, 
         model_name: str, 
         index_type: IndexType,
+        provider_type: ProviderType,
         *args, **kwargs
     ) -> Any:
-        record = self.get_registered_model(model_name=model_name, index_type=index_type)
+        record = self.get_registered_model(model_name=model_name, index_type=index_type, provider_type=provider_type)
         
         if record is None:
             raise ValueError(
                 f"Embedding model '{model_name}' with index_type='{index_type.value}' is not registered in backend '{self.backend_type.value}'."
             )
         kwargs["_model_record"] = record
-        return func(self, model_name, index_type, *args, **kwargs)
+        return func(self, model_name, provider_type, index_type, *args, **kwargs)
         
     return wrapper
 
@@ -107,7 +108,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         self._storage_base_dir.mkdir(parents=True, exist_ok=True)
 
         
-        self._embedding_table_cache: dict[Tuple[str, BackendType, IndexType], Type[T]] = {}
+        self._embedding_table_cache: dict[Tuple[str, ProviderType, BackendType, IndexType], Type[T]] = {}
         self._embedding_model_registry = ModelRegistryManager(
             base_dir=self.storage_base_dir,
             db_file=registry_db_name,
@@ -136,7 +137,7 @@ class EmbeddingBackend(ABC, Generic[T]):
     ) -> None:
         """Cache the given model record in the embedding table cache. This is used to keep track of which models are registered and their associated metadata."""
         dynamic_table = self._create_storage_table(engine=engine, model_record=model_record)
-        storage_key = (model_record.model_name, self.backend_type, model_record.index_type)
+        storage_key = (model_record.model_name, model_record.provider_type, self.backend_type, model_record.index_type)
         self._embedding_table_cache[storage_key] = dynamic_table
 
     
@@ -195,7 +196,7 @@ class EmbeddingBackend(ABC, Generic[T]):
             index_type=index_type,
             provider_type=provider_type,
         )
-        if registered_model is None:
+        if not registered_model:
             return None
 
         if len(registered_model) != 1:
@@ -242,6 +243,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         self,
         session: Session,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: Optional[int] = None,
@@ -249,6 +251,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         """Return concept IDs and names for concepts that do not have embeddings."""
         query = self.q_get_concepts_without_embedding(
             model_name=model_name, 
+            provider_type=provider_type,
             index_type=index_type,
             concept_filter=concept_filter,
             limit=limit
@@ -258,11 +261,12 @@ class EmbeddingBackend(ABC, Generic[T]):
     def q_get_concepts_without_embedding(
         self,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: Optional[int] = None,
     ) -> Select:
-        embedding_table = self.get_embedding_table(model_name=model_name, index_type=index_type)
+        embedding_table = self.get_embedding_table(model_name=model_name, index_type=index_type, provider_type=provider_type)
         subq = select(1).where(embedding_table.concept_id == Concept.concept_id)
 
         query = (
@@ -279,10 +283,11 @@ class EmbeddingBackend(ABC, Generic[T]):
         self,
         session: Session,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
     ) -> int:
-        embedding_table = self.get_embedding_table(model_name=model_name, index_type=index_type)
+        embedding_table = self.get_embedding_table(model_name=model_name, index_type=index_type, provider_type=provider_type)
         subq = select(1).where(embedding_table.concept_id == Concept.concept_id)
 
         query = (
@@ -342,6 +347,7 @@ class EmbeddingBackend(ABC, Generic[T]):
     def upsert_embeddings(
         self,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
         *,
         session: Session,
@@ -388,6 +394,7 @@ class EmbeddingBackend(ABC, Generic[T]):
     def get_embeddings_by_concept_ids(
         self,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
         *,
         session: Session,
@@ -402,6 +409,7 @@ class EmbeddingBackend(ABC, Generic[T]):
     def get_nearest_concepts(
         self,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
         *,
         session: Session,
@@ -455,23 +463,24 @@ class EmbeddingBackend(ABC, Generic[T]):
                 f"but got {len(nearest_concepts)}."
             )
 
-
-    
     def has_any_embeddings(
         self, 
         session: Session, 
         model_name: str,
         index_type: IndexType,
+        provider_type: ProviderType,
     ) -> bool:
         embedding_table = self.get_embedding_table(
             model_name=model_name,
             index_type=index_type,
+            provider_type=provider_type,
         )
         return session.query(embedding_table.concept_id).limit(1).first() is not None
     
     def get_embedding_table(
         self,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
     ) -> Type[T]:
         """Return dynamically created ORM class for the embedding table associated with the given model name.
@@ -484,6 +493,8 @@ class EmbeddingBackend(ABC, Generic[T]):
         ----------
         model_name : str
             The name of the embedding model whose associated embedding table class is to be retrieved.
+        provider_type : ProviderType
+            The provider type of the model.
         index_type : IndexType
             The index type of the model.
 
@@ -498,7 +509,7 @@ class EmbeddingBackend(ABC, Generic[T]):
             If the model name is not found in the embedding table cache, indicating that the store
             was not properly initialized or the model has not been registered.
         """
-        storage_key = (model_name, self.backend_type, index_type)
+        storage_key = (model_name, provider_type, self.backend_type, index_type)
         embedding_table = self._embedding_table_cache.get(storage_key)
         if embedding_table is not None:
             return embedding_table

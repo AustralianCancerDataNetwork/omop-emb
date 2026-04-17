@@ -30,7 +30,7 @@ class ModelRegistry(ModelRegistryBase):
     __tablename__ = "model_registry"
 
     model_name = mapped_column(String, primary_key=True)
-    provider_type = mapped_column(Enum(ProviderType), primary_key=True, nullable=False)
+    provider_type = mapped_column(Enum(ProviderType, native_enum=False), nullable=False, primary_key=True)
     backend_type = mapped_column(Enum(BackendType, native_enum=False), nullable=False, primary_key=True)
     index_type = mapped_column(Enum(IndexType, native_enum=False), nullable=False, primary_key=True)
     dimensions = mapped_column(Integer, nullable=False)

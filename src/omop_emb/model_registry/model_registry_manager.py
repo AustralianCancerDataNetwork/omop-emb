@@ -31,6 +31,7 @@ class ModelRegistryManager:
     ):
         db_file = db_file or self.DB_FILENAME
         self._db_path = pathlib.Path(base_dir) / db_file
+        assert self._db_path.suffix == ".db", "Database file must have .db extension"
         self._engine = create_engine(f"sqlite:///{self._db_path}")
 
         ensure_model_registry_schema(self._engine)

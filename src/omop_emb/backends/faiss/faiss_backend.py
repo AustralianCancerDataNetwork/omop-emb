@@ -140,6 +140,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     def upsert_embeddings(
         self,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
         session: Session,
         concept_ids: Sequence[int],
@@ -158,6 +159,8 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         ----------
         model_name : str
             Registered name of the embedding model.
+        provider_type : ProviderType
+            Provider type for the embedding model.
         index_type : IndexType
             Storage index type used for this model's embeddings.
         session : sqlalchemy.orm.Session
@@ -197,6 +200,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                 registered_table=self.get_embedding_table(
                     model_name=model_name,
                     index_type=index_type,
+                    provider_type=provider_type,
                 ),
             )
         except Exception as e:
@@ -217,6 +221,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     def get_nearest_concepts(
         self,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
         session: Session,
         query_embeddings: np.ndarray,
@@ -233,7 +238,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
 
         self.validate_embeddings(embeddings=query_embeddings, dimensions=_model_record.dimensions)
         q_permitted_concept_ids = q_concept_ids_with_embeddings(
-            embedding_table=self.get_embedding_table(model_name=model_name, index_type=index_type),
+            embedding_table=self.get_embedding_table(model_name=model_name, index_type=index_type, provider_type=provider_type),
             concept_filter=concept_filter,
             limit=None
         )
@@ -294,6 +299,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     def get_embeddings_by_concept_ids(
         self, 
         model_name: str, 
+        provider_type: ProviderType,
         index_type: IndexType,
         session: Session,
         concept_ids: Sequence[int],

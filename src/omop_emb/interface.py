@@ -42,8 +42,8 @@ class EmbeddingReaderInterface:
 
     def __init__(
         self,
-        backend_type: str | BackendType,
-        provider_type: str | ProviderType,
+        provider_name_or_type: str | ProviderType,
+        backend_name_or_type: Optional[str | BackendType] = None,
         storage_base_dir: Optional[str] = None,
         registry_db_name: Optional[str] = None,
     ):
@@ -51,8 +51,8 @@ class EmbeddingReaderInterface:
 
         Parameters
         ----------
-        backend_type : str | BackendType
-            Embedding backend type (pgvector, faiss, etc.)
+        backend_name_or_type : str | BackendType
+            Embedding backend name or type (pgvector, faiss, etc.)
         provider_type : str | ProviderType
             Provider type used for model lookups (OLLAMA, OPENAI, etc.)
         storage_base_dir : Optional[str]
@@ -60,27 +60,32 @@ class EmbeddingReaderInterface:
         registry_db_name : Optional[str]
             Custom model registry database filename
         """
-        if isinstance(backend_type, str):
-            backend_type = BackendType(backend_type)
-        if isinstance(provider_type, str):
-            provider_type = ProviderType(provider_type)
+        if isinstance(provider_name_or_type, str):
+            provider_type = ProviderType(provider_name_or_type)
+        elif isinstance(provider_name_or_type, ProviderType):
+            provider_type = provider_name_or_type
+        else:
+            raise ValueError(
+                f"Invalid provider_name_or_type: expected str or ProviderType, got {type(provider_name_or_type).__name__}."
+             )
 
         self._backend = get_embedding_backend(
-            backend_name=backend_type,
+            backend_name_or_type=backend_name_or_type,
             storage_base_dir=storage_base_dir,
             registry_db_name=registry_db_name,
         )
-        self.backend_type = backend_type
-        self.provider_type = provider_type
+        self._backend_type = self._backend.backend_type
+        self._provider_type = provider_type
 
     @property
     def backend_type(self) -> BackendType:
         """Backend type for this reader."""
         return self._backend_type
-
-    @backend_type.setter
-    def backend_type(self, value: BackendType) -> None:
-        self._backend_type = value
+    
+    @property
+    def provider_type(self) -> ProviderType:
+        """Provider type for this reader."""
+        return self._provider_type
 
     def initialise_store(self, engine: Engine) -> None:
         """Initialize the backend store."""
@@ -122,6 +127,7 @@ class EmbeddingReaderInterface:
             session=session,
             model_name=canonical_model_name,
             index_type=index_type,
+            provider_type=self.provider_type,
         )
 
     def get_nearest_concepts(
@@ -164,6 +170,7 @@ class EmbeddingReaderInterface:
         nearest_concepts = self._backend.get_nearest_concepts(
             session=session,
             model_name=canonical_model_name,
+            provider_type=self.provider_type,
             index_type=index_type,
             query_embeddings=query_embedding,
             concept_filter=concept_filter,
@@ -187,6 +194,7 @@ class EmbeddingReaderInterface:
             model_name=canonical_model_name,
             index_type=index_type,
             concept_ids=concept_ids,
+            provider_type=self.provider_type,
         )
 
     def get_concepts_without_embedding(
@@ -202,6 +210,7 @@ class EmbeddingReaderInterface:
         return self._backend.get_concepts_without_embedding(
             session=session,
             model_name=canonical_model_name,
+            provider_type=self.provider_type,
             index_type=index_type,
             concept_filter=concept_filter,
             limit=limit,
@@ -218,6 +227,7 @@ class EmbeddingReaderInterface:
         """Query for concepts without embeddings."""
         return self._backend.q_get_concepts_without_embedding(
             model_name=canonical_model_name,
+            provider_type=self.provider_type,
             index_type=index_type,
             concept_filter=concept_filter,
             limit=limit,
@@ -235,6 +245,7 @@ class EmbeddingReaderInterface:
         return self._backend.get_concepts_without_embedding_count(
             session=session,
             model_name=canonical_model_name,
+            provider_type=self.provider_type,
             index_type=index_type,
             concept_filter=concept_filter,
         )
@@ -284,8 +295,8 @@ class EmbeddingReaderInterface:
         provider_type from legacy data or command-line arguments.
         """
         reader = cls(
-            backend_type=backend_type,
-            provider_type=provider_type,
+            backend_name_or_type=backend_type,
+            provider_name_or_type=provider_type,
             storage_base_dir=storage_base_dir,
         )
         return reader._backend._embedding_model_registry.register_model(
@@ -323,7 +334,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
     def __init__(
         self,
         embedding_client: EmbeddingClient,
-        backend_type: str | BackendType,
+        backend_name_or_type: Optional[str | BackendType] = None,
         storage_base_dir: Optional[str] = None,
         registry_db_name: Optional[str] = None,
     ):
@@ -347,10 +358,9 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         self.embedding_client = embedding_client
         self._provider = embedding_client.provider
 
-        # Initialize parent with provider_type derived from client
         super().__init__(
-            backend_type=backend_type,
-            provider_type=self._provider.provider_type,
+            backend_name_or_type=backend_name_or_type,
+            provider_name_or_type=self._provider.provider_type,
             storage_base_dir=storage_base_dir,
             registry_db_name=registry_db_name,
         )
@@ -359,41 +369,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
     def embedding_dim(self) -> Optional[int]:
         """Get embedding dimension from the client."""
         return self.embedding_client.embedding_dim
-
-    @classmethod
-    def from_backend_name(
-        cls,
-        embedding_client: EmbeddingClient,
-        backend_name: Optional[str | BackendType] = None,
-        storage_base_dir: Optional[str] = None,
-        registry_db_name: Optional[str] = None,
-    ) -> EmbeddingWriterInterface:
-        """Create an interface by resolving and constructing a backend.
-
-        Parameters
-        ----------
-        embedding_client : EmbeddingClient
-            Required. Used to derive the provider for model name validation
-            and to generate embeddings for upsert and query operations.
-        backend_name : str | BackendType, optional
-            Backend selector passed to ``get_embedding_backend``.
-            Resolution order:
-            1. explicit ``backend_name`` argument
-            2. ``OMOP_EMB_BACKEND`` environment variable
-        storage_base_dir : str, optional
-            Optional storage directory forwarded to backend constructor.
-        registry_db_name : str, optional
-            Optional registry database filename forwarded to the backend.
-        """
-        if backend_name is None:
-            backend_name = BackendType.PGVECTOR
-
-        return cls(
-            embedding_client=embedding_client,
-            backend_type=backend_name,
-            storage_base_dir=storage_base_dir,
-            registry_db_name=registry_db_name,
-        )
 
     def _validate_canonical_model_name(self, canonical_model_name: str) -> None:
         """Validate that model name is in canonical form.
@@ -534,6 +509,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         self._backend.upsert_embeddings(
             session=session,
             model_name=canonical_model_name,
+            provider_type=self._provider.provider_type,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
@@ -589,6 +565,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         self._backend.upsert_embeddings(
             session=session,
             model_name=canonical_model_name,
+            provider_type=self._provider.provider_type,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,

@@ -98,6 +98,51 @@ omop-emb search "type 2 diabetes" \
   --k 5
 ```
 
+For repeated queries against the same FAISS model, use one of the warm-process
+options instead of invoking `omop-emb search` once per shell command:
+
+- `omop-emb search-batch` runs many queries in one process from a text file.
+- `omop-emb serve-search` starts a small single-threaded HTTP service that
+  keeps the FAISS index loaded in memory.
+
+Example batch search:
+
+```bash
+omop-emb search-batch queries.tsv \
+  --api-base http://localhost:8000/v1 \
+  --embedding-path /embeddings \
+  --model my-embedding-model \
+  --backend faiss \
+  --faiss-base-dir ./data \
+  --metric-type cosine \
+  --k 5
+```
+
+Example search service:
+
+```bash
+omop-emb serve-search \
+  --api-base http://localhost:8000/v1 \
+  --embedding-path /embeddings \
+  --model my-embedding-model \
+  --backend faiss \
+  --faiss-base-dir ./data \
+  --metric-type cosine \
+  --host 127.0.0.1 \
+  --port 18080
+```
+
+Example request to the service:
+
+```bash
+curl -X POST http://127.0.0.1:18080/search \
+  -H 'Content-Type: application/json' \
+  -d '{"query_id":"1","query_text":"type 2 diabetes","k":5}'
+```
+
+The current service implementation is intentionally single-threaded, so
+overlapping requests are queued and handled one at a time.
+
 FAISS indexes can also be rebuilt explicitly from the stored HDF5 vectors:
 
 ```bash

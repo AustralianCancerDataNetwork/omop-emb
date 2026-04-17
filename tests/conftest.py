@@ -214,18 +214,7 @@ def pgvector_backend(session, temp_storage_dir) -> PGVectorEmbeddingBackend:
 
 
 @pytest.fixture
-def embedding_reader(temp_storage_dir) -> EmbeddingReaderInterface:
-    """Read-only embedding reader for testing."""
-    reader = EmbeddingReaderInterface(
-        backend_name_or_type=BackendType.FAISS,
-        provider_name_or_type=ProviderType.OLLAMA,
-        storage_base_dir=temp_storage_dir,
-    )
-    return reader
-
-
-@pytest.fixture
-def embedding_interface(session, mock_llm_client, temp_storage_dir) -> EmbeddingWriterInterface:
+def embedding_writer_interface(session, mock_llm_client, temp_storage_dir) -> EmbeddingWriterInterface:
     """Full embedding interface ready for testing."""
     interface = EmbeddingWriterInterface(
         embedding_client=mock_llm_client,
@@ -237,15 +226,15 @@ def embedding_interface(session, mock_llm_client, temp_storage_dir) -> Embedding
 
 
 @pytest.fixture
-def registered_embedding_interface(session, embedding_interface: EmbeddingWriterInterface) -> EmbeddingWriterInterface:
+def registered_embedding_writer_interface(session, embedding_writer_interface: EmbeddingWriterInterface) -> EmbeddingWriterInterface:
     """Embedding interface with a pre-registered model for testing read operations."""
-    embedding_interface.register_model(
+    embedding_writer_interface.register_model(
         engine=session.bind,
         canonical_model_name=MODEL_NAME,
         dimensions=EMBEDDING_DIM,
         index_type=IndexType.FLAT,
     )
-    return embedding_interface
+    return embedding_writer_interface
 
 
 # ================ Test Data ================

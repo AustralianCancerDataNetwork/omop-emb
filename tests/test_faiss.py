@@ -6,7 +6,7 @@ from .shared_backend_tests import SharedBackendTests
 
 
 @pytest.mark.faiss
-@pytest.mark.unit
+@pytest.mark.integration
 class TestFaissBackend(SharedBackendTests):
     """Test FAISS embedding backend."""
 

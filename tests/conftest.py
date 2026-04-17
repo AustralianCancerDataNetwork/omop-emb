@@ -6,7 +6,7 @@ import os
 import time
 import tempfile
 from pathlib import Path
-from typing import Generator, Dict, Any, Optional
+from typing import Generator, Dict, Any, Optional, TYPE_CHECKING
 from unittest.mock import Mock
 from dataclasses import dataclass, field
 
@@ -24,10 +24,23 @@ from omop_emb.backends.faiss import FaissEmbeddingBackend
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 from omop_emb.interface import EmbeddingInterface
 
+if TYPE_CHECKING:
+    from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
+
+try:
+    from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
+    HAS_PGVECTOR = True
+except ImportError:
+    PGVectorEmbeddingBackend = None  # type: ignore[assignment]
+    HAS_PGVECTOR = False
+
 
 TEST_DB_NAME = os.getenv("TEST_DATABASE_NAME", "test_omop_emb")
 TEST_USERNAME = os.getenv("TEST_DB_USERNAME", "test")
 TEST_PASSWORD = os.getenv("TEST_DB_PASSWORD", "test")
+TEST_DB_USE_EXISTING = os.getenv("TEST_DB_USE_EXISTING", "").lower() in {"1", "true", "yes"}
+TEST_DB_SCHEMA = os.getenv("TEST_DB_SCHEMA", "test_omop_emb")
+TEST_DB_CLEANUP_SCHEMA_ON_EXIT = os.getenv("TEST_DB_CLEANUP_SCHEMA_ON_EXIT", "").lower() in {"1", "true", "yes"}
 
 DB_HOST = os.getenv("TEST_DB_HOST", None)
 DB_PORT = os.getenv("TEST_DB_PORT", None)
@@ -37,6 +50,16 @@ DB_ADMIN_PASS = os.getenv("POSTGRES_PASSWORD", "postgres")
 
 
 # ================ Fixtures ================
+
+
+def pytest_collection_modifyitems(config, items):
+    if HAS_PGVECTOR:
+        return
+
+    skip_pgvector = pytest.mark.skip(reason="pgvector dependency is not installed")
+    for item in items:
+        if "pgvector" in item.keywords:
+            item.add_marker(skip_pgvector)
 
 
 def _create_test_url() -> sa.URL:
@@ -56,6 +79,10 @@ def _create_test_url() -> sa.URL:
         port=int(DB_PORT),
         database=TEST_DB_NAME
     )
+
+
+def _engine_connect_args() -> dict[str, str]:
+    return {"options": f"-csearch_path={TEST_DB_SCHEMA}"}
 
 def _create_admin_url() -> sa.URL:
     """Construct the admin database URL for managing test DB."""
@@ -93,6 +120,16 @@ def _create_test_database() -> sa.URL:
     return test_url
 
 
+def _prepare_existing_test_schema(engine: sa.Engine) -> None:
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.execute(sa.text(f'CREATE SCHEMA IF NOT EXISTS "{TEST_DB_SCHEMA}"'))
+
+
+def _drop_existing_test_schema(engine: sa.Engine) -> None:
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.execute(sa.text(f'DROP SCHEMA IF EXISTS "{TEST_DB_SCHEMA}" CASCADE'))
+
+
 def _drop_test_database() -> None:
     """Drop the test database and the associated test user."""
     admin_url = _create_admin_url()
@@ -117,16 +154,37 @@ def _drop_test_database() -> None:
 
 @pytest.fixture(scope="session")
 def pg_engine():
-    """Create PostgreSQL engine with retry logic and dedicated test DB."""
-    test_db_url = _create_test_database()
+    """Create PostgreSQL engine with retry logic and dedicated DB or isolated schema."""
+    if DB_HOST is None or DB_PORT is None or not DB_PORT.isdigit():
+        pytest.skip(
+            "PostgreSQL integration test environment is not configured "
+            "(set TEST_DB_HOST and TEST_DB_PORT)."
+        )
+
+    if TEST_DB_USE_EXISTING:
+        test_db_url = _create_test_url()
+    else:
+        test_db_url = _create_test_database()
 
     max_retries = 20
     for attempt in range(max_retries):
         try:
-            engine = sa.create_engine(test_db_url, echo=False, future=True)
+            engine = sa.create_engine(
+                test_db_url,
+                echo=False,
+                future=True,
+                connect_args=_engine_connect_args(),
+            )
             with engine.connect() as conn:
                 conn.execute(sa.text("SELECT 1"))
-            print(f"\n--- PostgreSQL connection established to {TEST_DB_NAME} ---")
+            if TEST_DB_USE_EXISTING:
+                _prepare_existing_test_schema(engine)
+                print(
+                    f"\n--- PostgreSQL connection established to existing database "
+                    f"{TEST_DB_NAME} using schema {TEST_DB_SCHEMA} ---"
+                )
+            else:
+                print(f"\n--- PostgreSQL connection established to {TEST_DB_NAME} ---")
             
             # Create all tables
             Base.metadata.create_all(engine)
@@ -134,7 +192,20 @@ def pg_engine():
             yield engine
             
             engine.dispose()
-            _drop_test_database()
+            if TEST_DB_USE_EXISTING:
+                if TEST_DB_CLEANUP_SCHEMA_ON_EXIT:
+                    cleanup_engine = sa.create_engine(
+                        test_db_url,
+                        echo=False,
+                        future=True,
+                        connect_args=_engine_connect_args(),
+                    )
+                    try:
+                        _drop_existing_test_schema(cleanup_engine)
+                    finally:
+                        cleanup_engine.dispose()
+            else:
+                _drop_test_database()
             return
 
         except Exception as e:
@@ -142,7 +213,8 @@ def pg_engine():
                 print(f"[{attempt + 1}/{max_retries}] PostgreSQL not ready: {e}")
                 time.sleep(1)
             else:
-                _drop_test_database()
+                if not TEST_DB_USE_EXISTING:
+                    _drop_test_database()
                 raise RuntimeError(f"PostgreSQL never became available after {max_retries} attempts: {e}")
 
 

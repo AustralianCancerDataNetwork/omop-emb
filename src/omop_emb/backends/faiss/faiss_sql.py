@@ -10,6 +10,7 @@ from orm_loader.helpers import Base
 from omop_alchemy.cdm.model.vocabulary import Concept
 
 from omop_emb.model_registry import EmbeddingModelRecord
+from omop_emb.model_registry import get_metadata_schema
 from ..base import ConceptIDEmbeddingBase
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
@@ -43,7 +44,10 @@ def create_faiss_embedding_registry_table(
         (FAISSConceptIDEmbeddingRegistry, ),
         {
             "__tablename__": tablename,
-            "__table_args__": {"extend_existing": True},
+            "__table_args__": {
+                "extend_existing": True,
+                "schema": get_metadata_schema(),
+            },
             "__module__": __name__,
         },
     )

@@ -13,6 +13,7 @@ from numpy import ndarray
 
 from omop_emb.config import BackendType, IndexType, MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
+from omop_emb.model_registry import get_metadata_schema
 from ..base import ConceptIDEmbeddingBase
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, get_similarity_from_distance
 
@@ -47,7 +48,10 @@ def create_pg_embedding_table(
         {
             "__tablename__": tablename,
             "embedding": mapped_column(Vector(dimensions), nullable=False, index=False),
-            "__table_args__": {"extend_existing": True},
+            "__table_args__": {
+                "extend_existing": True,
+                "schema": get_metadata_schema(),
+            },
             "__module__": __name__,
         }
     )
@@ -99,18 +103,27 @@ def add_embeddings_to_registered_table(
 def create_indices_for_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) -> None:
     with engine.connect() as conn:
         inspector = inspect(conn)
-        existing_indexes = [idx['name'] for idx in inspector.get_indexes(model_record.storage_identifier)]
+        existing_indexes = [
+            idx["name"]
+            for idx in inspector.get_indexes(
+                model_record.storage_identifier,
+                schema=get_metadata_schema(),
+            )
+        ]
         
         if _index_from_storage_identifier(model_record.storage_identifier) not in existing_indexes:
-            query = q_create_index_sql(
+            query = _create_index_sql(
                 model_record.storage_identifier,
-               model_record.index_type,
+                model_record.index_type,
             )
             if query is not None:
                 conn.execute(text(query))
                 conn.commit()
 
-def q_create_index_sql(table_name: str, index_type: IndexType) -> Optional[str]:
+def _create_index_sql(table_name: str, index_type: IndexType) -> Optional[str]:
+    schema = get_metadata_schema()
+    qualified_table_name = f'"{schema}"."{table_name}"'
+    qualified_index_name = f'"{schema}"."{_index_from_storage_identifier(table_name)}"'
     if index_type == IndexType.FLAT:
         pass # No additional index needed for flat, as the vector column itself can be used for sequential scan
     else:

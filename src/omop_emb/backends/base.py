@@ -12,7 +12,11 @@ from sqlalchemy.orm import Session, mapped_column
 
 from omop_alchemy.cdm.model.vocabulary import Concept
 
-from ..model_registry import EmbeddingModelRecord, ModelRegistryManager
+from ..model_registry import (
+    EmbeddingModelRecord,
+    ModelRegistryManager,
+    get_metadata_schema,
+)
 from ..config import BackendType, IndexType, MetricType, ENV_BASE_STORAGE_DIR
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter, 
@@ -193,6 +197,15 @@ class EmbeddingBackend(ABC, Generic[T]):
             SQLAlchemy engine for OMOP CDM database storage.
         """
         pass
+
+    def has_stale_model_artifacts(self, model_name: str) -> bool:
+        """
+        Return True if backend-owned artifacts exist for ``model_name`` outside
+        the SQL registry.
+
+        Backends without external storage can use the default implementation.
+        """
+        return False
 
     def get_registered_model(
         self,
@@ -428,6 +441,39 @@ class EmbeddingBackend(ABC, Generic[T]):
         )
 
 
+    def delete_model(
+        self,
+        *,
+        engine: Engine,
+        session: Session,
+        model_name: str,
+    ) -> bool:
+        deleted_any = False
+        records = self.embedding_model_registry.get_registered_models_from_db(
+            backend_type=self.backend_type,
+            model_name=model_name,
+        )
+        if records is None:
+            return False
+
+        for record in records:
+            session.execute(
+                text(
+                    f'DROP TABLE IF EXISTS "{get_metadata_schema()}"."{record.storage_identifier}" CASCADE'
+                )
+            )
+            self.embedding_model_registry.delete_model(
+                backend_type=self.backend_type,
+                model_name=model_name,
+                index_type=record.index_type,
+            )
+            self.embedding_table_cache.pop(
+                (model_name, self.backend_type, record.index_type),
+                None,
+            )
+            deleted_any = True
+        session.commit()
+        return deleted_any
     
     def has_any_embeddings(
         self, 

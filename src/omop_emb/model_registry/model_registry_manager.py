@@ -142,6 +142,29 @@ class ModelRegistryManager:
             session.commit()
         return self._registry_entry_to_model_record(new_entry)
 
+    def delete_model(
+        self,
+        *,
+        backend_type: BackendType,
+        model_name: str,
+        index_type: IndexType,
+    ) -> bool:
+        with Session(self.engine, expire_on_commit=False) as session:
+            row = session.scalar(
+                select(ModelRegistry).where(
+                    and_(
+                        ModelRegistry.model_name == model_name,
+                        ModelRegistry.backend_type == backend_type,
+                        ModelRegistry.index_type == index_type,
+                    )
+                )
+            )
+            if row is None:
+                return False
+            session.delete(row)
+            session.commit()
+            return True
+
     
     @staticmethod
     def safe_model_name(model_name: str) -> str:

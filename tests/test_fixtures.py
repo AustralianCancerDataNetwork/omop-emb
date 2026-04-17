@@ -6,7 +6,7 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 from .conftest import CONCEPTS, EMBEDDING_DIM
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 class TestFixtures:
     """Test that fixtures and database setup work."""
     

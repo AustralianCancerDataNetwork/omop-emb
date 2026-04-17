@@ -183,14 +183,16 @@ def add_embeddings(
     )
 
     with Session(engine) as reader, Session(engine) as writer:
-        total_concepts = num_embeddings or embedding_writer.get_concepts_without_embedding_count(
+        total_concepts_missing_concepts = embedding_writer.get_concepts_without_embedding_count(
             session=reader,
             concept_filter=concept_filter,
-            index_type=index_type
+            index_type=index_type,
         )
+        total_concepts = min(total_concepts_missing_concepts, num_embeddings) if num_embeddings is not None else total_concepts_missing_concepts
+
         concepts_without_embedding = embedding_writer.q_get_concepts_without_embedding(
             concept_filter=concept_filter,
-            limit=num_embeddings,
+            limit=total_concepts,
             index_type=index_type
         )
 

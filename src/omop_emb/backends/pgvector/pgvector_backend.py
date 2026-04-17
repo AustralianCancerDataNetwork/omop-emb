@@ -55,35 +55,15 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     @require_registered_model
     def upsert_embeddings(
         self,
+        *,
+        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
-        *,
-        session: Session,
         concept_ids: Sequence[int],
         embeddings: ndarray,
         _model_record: EmbeddingModelRecord,
     ) -> None:
-        """
-        Insert or update embeddings for OMOP concept IDs.
-
-        Parameters
-        ----------
-        model_name : str
-            Registered name of the embedding model.
-        provider_type : ProviderType
-            Provider type for the embedding model.
-        index_type : IndexType
-            Storage index type used for this model's embeddings.
-        session : Session
-            SQLAlchemy session bound to the OMOP CDM database.
-        concept_ids : Sequence[int]
-            Concept IDs aligned with the rows of ``embeddings``.
-        embeddings : ndarray
-            Embedding matrix of shape ``(n_concepts, D)``.
-        _model_record : EmbeddingModelRecord
-            Internal registered-model record injected by ``@require_registered_model``.
-        """
         concept_id_tuple = tuple(concept_ids)
 
         self.validate_embeddings_and_concept_ids(
@@ -114,33 +94,14 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     @require_registered_model
     def get_embeddings_by_concept_ids(
         self,
+        *,
+        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
-        *,
-        session: Session,
         concept_ids: Sequence[int],
         _model_record: EmbeddingModelRecord,
     ) -> Mapping[int, Sequence[float]]:
-        """
-        Return embeddings for the requested concept IDs.
-
-        Parameters
-        ----------
-        model_name : str
-            Registered name of the embedding model.
-        provider_type : ProviderType
-            Provider type for the embedding model.
-        index_type : IndexType
-            Storage index type used for this model's embeddings.
-        session : Session
-            SQLAlchemy session bound to the OMOP CDM database.
-        concept_ids : Sequence[int]
-            Concept IDs to fetch from backend storage.
-        _model_record : EmbeddingModelRecord
-            Internal registered-model record injected by ``@require_registered_model``.
-        """
-
         concept_id_tuple = tuple(concept_ids)
         if not concept_id_tuple:
             return {}
@@ -170,40 +131,16 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     @require_registered_model
     def get_nearest_concepts(
         self,
+        *,
+        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
-        *,
-        session: Session,
         query_embeddings: ndarray,
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         _model_record: EmbeddingModelRecord,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:           
-        """
-        Return nearest stored concepts for query embeddings.
-
-        Parameters
-        ----------
-        model_name : str
-            Registered name of the embedding model.
-        provider_type : ProviderType
-            Provider type for the embedding model.
-        index_type : IndexType
-            Storage index type used for this model's embeddings.
-        session : Session
-            SQLAlchemy session bound to the OMOP CDM database.
-        query_embeddings : ndarray
-            Query embedding matrix of shape ``(Q, D)``.
-        metric_type : MetricType
-            Similarity or distance metric for nearest-neighbor search.
-        concept_filter : Optional[EmbeddingConceptFilter], optional
-            Optional filter restricting which OMOP concepts are considered.
-        k : int, optional
-            Number of nearest matches to return per query.
-        _model_record : EmbeddingModelRecord
-            Internal registered-model record injected by ``@require_registered_model``.
-        """
         embedding_table = self.get_embedding_table(
             model_name=model_name,
             index_type=index_type,

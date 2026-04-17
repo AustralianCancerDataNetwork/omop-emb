@@ -139,10 +139,11 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     @require_registered_model
     def upsert_embeddings(
         self,
+        *,
+        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
-        session: Session,
         concept_ids: Sequence[int],
         embeddings: ndarray,
         _model_record: EmbeddingModelRecord,
@@ -157,22 +158,22 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
 
         Parameters
         ----------
+        session : sqlalchemy.orm.Session
+            SQLAlchemy session bound to the OMOP CDM database.
         model_name : str
             Registered name of the embedding model.
         provider_type : ProviderType
             Provider type for the embedding model.
         index_type : IndexType
             Storage index type used for this model's embeddings.
-        session : sqlalchemy.orm.Session
-            SQLAlchemy session bound to the OMOP CDM database.
         concept_ids : Sequence[int]
             Concept IDs aligned with the rows of ``embeddings``.
         embeddings : numpy.ndarray
-            Embedding matrix of shape ``(n_concepts, D)``.
+            Embedding matrix of shape ``(n_concepts, D)``, where $D$ is the embedding dimensionality defined in the model registration.
         _model_record : EmbeddingModelRecord
             Internal registered-model record injected by ``@require_registered_model``.
         metric_type : Optional[MetricType]
-            Optional metric used when creating/updating the FAISS index.
+            Optional metric type for the FAISS index. If provided, the index will be created or updated with the specified metric. If not provided, embeddings will be stored without an index, and nearest neighbor search will not be available until an index is created with a specified metric.
 
         Returns
         -------
@@ -220,13 +221,13 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     @require_registered_model
     def get_nearest_concepts(
         self,
+        *,
+        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
-        session: Session,
         query_embeddings: np.ndarray,
         metric_type: MetricType,
-        *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         _model_record: EmbeddingModelRecord,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
@@ -298,10 +299,11 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     @require_registered_model
     def get_embeddings_by_concept_ids(
         self, 
+        *,
+        session: Session,
         model_name: str, 
         provider_type: ProviderType,
         index_type: IndexType,
-        session: Session,
         concept_ids: Sequence[int],
         _model_record: EmbeddingModelRecord
         ) -> Mapping[int, Sequence[float]]:

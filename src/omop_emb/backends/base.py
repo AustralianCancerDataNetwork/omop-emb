@@ -26,7 +26,7 @@ def require_registered_model(func: Callable) -> Callable:
         model_name: str, 
         index_type: IndexType,
         provider_type: ProviderType,
-        *args, **kwargs
+        **kwargs
     ) -> Any:
         record = self.get_registered_model(model_name=model_name, index_type=index_type, provider_type=provider_type)
         
@@ -35,7 +35,7 @@ def require_registered_model(func: Callable) -> Callable:
                 f"Embedding model '{model_name}' with index_type='{index_type.value}' is not registered in backend '{self.backend_type.value}'."
             )
         kwargs["_model_record"] = record
-        return func(self, model_name, provider_type, index_type, *args, **kwargs)
+        return func(self, model_name=model_name, provider_type=provider_type, index_type=index_type, **kwargs)
         
     return wrapper
 
@@ -186,8 +186,8 @@ class EmbeddingBackend(ABC, Generic[T]):
     def get_registered_model(
         self,
         model_name: str,
-        index_type: IndexType,
         provider_type: ProviderType,
+        index_type: IndexType,
     ) -> Optional[EmbeddingModelRecord]:
         """Return metadata for one registered model, if present."""
         registered_model = self._embedding_model_registry.get_registered_models_from_db(
@@ -212,8 +212,8 @@ class EmbeddingBackend(ABC, Generic[T]):
     def is_model_registered(
         self,
         model_name: str,
-        index_type: IndexType,
         provider_type: ProviderType,
+        index_type: IndexType,
     ) -> bool:
         """Convenience wrapper over ``get_registered_model``."""
         return (
@@ -228,8 +228,8 @@ class EmbeddingBackend(ABC, Generic[T]):
     def get_registered_models(
         self,
         model_name: Optional[str] = None,
-        index_type: Optional[IndexType] = None,
         provider_type: Optional[ProviderType] = None,
+        index_type: Optional[IndexType] = None,
     ) -> tuple[EmbeddingModelRecord, ...]:
         """Get registered models, optionally filtered by name, index_type, and/or provider_type."""
         return self._embedding_model_registry.get_registered_models_from_db(
@@ -304,12 +304,12 @@ class EmbeddingBackend(ABC, Generic[T]):
 
     def register_model(
         self,
+        *,
         engine: Engine,
         model_name: str,
         dimensions: int,
-        *,
-        index_type: IndexType,
         provider_type: ProviderType,
+        index_type: IndexType,
         metadata: Optional[Mapping[str, object]] = None,
     ) -> EmbeddingModelRecord:
         """
@@ -346,35 +346,32 @@ class EmbeddingBackend(ABC, Generic[T]):
     @require_registered_model
     def upsert_embeddings(
         self,
+        *,
+        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
-        *,
-        session: Session,
         concept_ids: Sequence[int],
         embeddings: ndarray,
         _model_record: EmbeddingModelRecord,
     ) -> None:
         """
         Insert or update vector embeddings for a collection of OMOP concept IDs.
-
-        This method handles the persistence of generated embeddings. Depending on the 
-        concrete backend implementation, this may involve staging data in a durable store for later indexing
-        and (optionally) writing to a high-performance vector index (FAISS), or updateing a relational dataabase 
-        table (like pgvector)
-
+        
         Parameters
         ----------
-        model_name : str
-            Registered name of the embedding model.
-        index_type : IndexType
-            Storage index type used for this model's embeddings.
         session : sqlalchemy.orm.Session
             SQLAlchemy session bound to the OMOP CDM database.
+        model_name : str
+            Registered name of the embedding model.
+        provider_type : ProviderType
+            Provider type for the embedding model.
+        index_type : IndexType
+            Storage index type used for this model's embeddings.
         concept_ids : Sequence[int]
             Concept IDs aligned with the rows of ``embeddings``.
         embeddings : numpy.ndarray
-            Embedding matrix of shape ``(n_concepts, D)``.
+            Embedding matrix of shape ``(n_concepts, D)``, where $D$ is the embedding dimensionality defined in the model registration.
         _model_record : EmbeddingModelRecord
             Internal registered-model record injected by ``@require_registered_model``.
 
@@ -393,26 +390,47 @@ class EmbeddingBackend(ABC, Generic[T]):
     @require_registered_model
     def get_embeddings_by_concept_ids(
         self,
+        *,
+        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
-        *,
-        session: Session,
         concept_ids: Sequence[int],
         _model_record: EmbeddingModelRecord,
     ) -> Mapping[int, Sequence[float]]:
-        """Fetch stored embedding vectors keyed by concept ID."""
+        """Fetch stored embedding vectors keyed by concept ID.
+        
+        Parameters
+        ----------
+        session : sqlalchemy.orm.Session
+            SQLAlchemy session bound to the OMOP CDM database.
+        model_name : str
+            Registered name of the embedding model.
+        provider_type : ProviderType
+            Provider type for the embedding model.
+        index_type : IndexType
+            Storage index type used for this model's embeddings.
+        concept_ids : Sequence[int]
+            Concept IDs aligned with the rows of ``embeddings``.
+        _model_record : EmbeddingModelRecord
+            Internal registered-model record injected by ``@require_registered_model``.
 
+        Returns
+        -------
+        Mapping[int, Sequence[float]]
+            Dictionary mapping concept IDs to their corresponding embedding vectors.
+
+        """
 
     @abstractmethod
     @require_registered_model
     def get_nearest_concepts(
         self,
+        *,
+        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
-        *,
-        session: Session,
         query_embedding: ndarray,
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
@@ -423,14 +441,16 @@ class EmbeddingBackend(ABC, Generic[T]):
 
         Parameters
         ----------
-        model_name : str
-            Registered name of the embedding model.
-        index_type : IndexType
-            Storage index type used for this model's embeddings.
         session : Session
             SQLAlchemy session bound to the OMOP CDM database.
+        model_name : str
+            Registered name of the embedding model.
+        provider_type : ProviderType
+            Provider type for the embedding model.
+        index_type : IndexType
+            Storage index type used for this model's embeddings.
         query_embedding : ndarray
-            Query embedding matrix of shape ``(Q, D)``.
+            Query embedding matrix of shape ``(Q, D)``, with $Q$ query vectors and embedding dimensionality $D$ matching the model configuration.
         metric_type : MetricType
             Similarity or distance metric for nearest-neighbor search.
         concept_filter : Optional[EmbeddingConceptFilter], optional
@@ -467,8 +487,8 @@ class EmbeddingBackend(ABC, Generic[T]):
         self, 
         session: Session, 
         model_name: str,
-        index_type: IndexType,
         provider_type: ProviderType,
+        index_type: IndexType,
     ) -> bool:
         embedding_table = self.get_embedding_table(
             model_name=model_name,

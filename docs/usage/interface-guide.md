@@ -1,228 +1,245 @@
 # EmbeddingInterface Guide
 
-The `EmbeddingInterface` is the primary API for managing concept embeddings in `omop-emb`. It provides a backend-neutral interface for registering models, generating embeddings, and querying stored vectors.
+`omop-emb` exposes two complementary interfaces:
 
-## Overview
+- **`EmbeddingWriterInterface`** — write + read. Requires an `EmbeddingClient` (embedding generation, model registration, upsert).
+- **`EmbeddingReaderInterface`** — read-only. No `EmbeddingClient` needed (nearest-neighbor queries, registry lookups).
 
-`EmbeddingInterface` is designed to be **the** interface for all embedding operations. It enforces **model name canonicalization** and **validation** to ensure data consistency:
+Both interfaces validate model names via the provider on construction.
 
-- Model names must be **canonical** (validated by embedding providers)
-- Ollama models require explicit, immutable tags (e.g., `llama3:8b`, not `llama3` or `llama3:latest`)
-- OpenAI-compatible models use names verbatim (e.g., `text-embedding-3-small`)
+---
 
-## Creating an Interface
+## EmbeddingWriterInterface
 
-### With an EmbeddingClient (automatic validation)
+### Creating the interface
 
 ```python
-from omop_emb import EmbeddingInterface, EmbeddingClient
+from omop_emb import EmbeddingWriterInterface, EmbeddingClient
 
-# Create an embedding client — this canonicalizes the model name automatically
 embedding_client = EmbeddingClient(
-    model="llama3:8b",  # Will be validated by OllamaProvider
+    model="nomic-embed-text:v1.5",   # validated by OllamaProvider
     api_base="http://localhost:11434/v1",
 )
 
-# Create interface with the client — validation happens automatically
-interface = EmbeddingInterface.from_backend_name(
+interface = EmbeddingWriterInterface(
     embedding_client=embedding_client,
-    backend_name="faiss",  # or "pgvector"
-)
-
-# The interface now has access to the provider for validation
-canonical_model = embedding_client.model  # e.g., "llama3:8b"
-```
-
-### Without an EmbeddingClient (for query-only scenarios)
-
-```python
-from omop_emb import EmbeddingInterface, OllamaProvider
-
-# For queries without embedding generation, pass provider explicitly
-provider = OllamaProvider()
-
-interface = EmbeddingInterface.from_backend_name(
-    backend_name="faiss",
-    provider=provider,  # Enable validation
-)
-
-# Now all operations validate model names
-nearest = interface.get_nearest_concepts(
-    session=session,
-    canonical_model_name="llama3:8b",  # Will be validated
-    index_type=IndexType.FLAT,
-    query_embedding=query_vec,
-    metric_type=MetricType.COSINE,
+    backend_name_or_type="faiss",    # or "pgvector", or BackendType.FAISS
 )
 ```
 
-### Without Validation (trusting the caller)
+`backend_name_or_type` falls back to the `OMOP_EMB_BACKEND` environment variable when omitted.
+
+### Register and initialise
 
 ```python
-# If neither embedding_client nor provider is passed,
-# validation is skipped (trust the caller):
-interface = EmbeddingInterface(backend=my_backend)
+from omop_emb import IndexType
 
-# Validation will not happen; you must ensure model names are canonical
-```
-
-## Model Name Validation
-
-When an `EmbeddingInterface` has a provider (from `embedding_client` or explicit `provider` parameter), all methods that accept a `canonical_model_name` will validate it.
-
-### Valid Names
-
-**Ollama:**
-- ✅ `llama3:8b`
-- ✅ `nomic-embed-text:v1.5`
-- ✅ Any name with explicit, immutable tag
-
-**OpenAI-compatible:**
-- ✅ `text-embedding-3-small`
-- ✅ `text-embedding-3-large`
-
-### Invalid Names (will raise ValueError)
-
-**Ollama:**
-- ❌ `llama3` → "must include an explicit tag"
-- ❌ `llama3:latest` → "uses the mutable ':latest' tag"
-
-**Why the strictness?**
-
-In healthcare contexts where embeddings are stored long-term:
-- Untagged names like `llama3` default to `:latest`, which is mutable
-- Running `ollama pull llama3` could silently change which model version `:latest` points to
-- This breaks consistency: stored embeddings from model v1 don't match new queries from model v2
-
-## Usage Examples
-
-### Register and Embed Concepts
-
-```python
-from omop_emb import EmbeddingInterface, EmbeddingClient, IndexType
-
-embedding_client = EmbeddingClient(
-    model="llama3:8b",
-    api_base="http://localhost:11434/v1",
-)
-
-interface = EmbeddingInterface.from_backend_name(
-    embedding_client=embedding_client,
-    backend_name="pgvector",
-)
-
-# Register model — validates name automatically
+# One-shot: register then initialise storage
 interface.setup_and_register_model(
     engine=db_engine,
-    canonical_model_name=embedding_client.model,  # "llama3:8b"
-    dimensions=embedding_client.embedding_dim,
     index_type=IndexType.FLAT,
 )
 
-# Generate and store embeddings
+# Or separately:
+interface.register_model(engine=db_engine, index_type=IndexType.FLAT)
+interface.initialise_store(db_engine)
+```
+
+### Generate and store embeddings
+
+```python
+# Generate embeddings for texts and upsert in one step
 interface.embed_and_upsert_concepts(
     session=session,
-    canonical_model_name=embedding_client.model,  # Validated
     index_type=IndexType.FLAT,
     concept_ids=(1, 2, 3),
     concept_texts=("Hypertension", "Diabetes", "Aspirin"),
 )
+
+# Or generate and upsert separately
+embeddings = interface.embed_texts(["Hypertension", "Diabetes"])
+interface.upsert_concept_embeddings(
+    session=session,
+    index_type=IndexType.FLAT,
+    concept_ids=(1, 2),
+    embeddings=embeddings,
+)
 ```
 
-### Query Nearest Concepts
+### Query nearest concepts
 
 ```python
-# Query with existing embeddings (no generation needed)
-nearest = interface.get_nearest_concepts(
+from omop_emb import MetricType
+
+# Query by pre-computed embedding
+results = interface.get_nearest_concepts(
     session=session,
-    canonical_model_name="llama3:8b",  # Validated against provider
+    index_type=IndexType.FLAT,
+    query_embedding=query_vec,   # shape (q, D)
+    metric_type=MetricType.COSINE,
+)
+
+# Query by text (embeds automatically)
+results = interface.get_nearest_concepts_by_texts(
+    session=session,
+    index_type=IndexType.FLAT,
+    query_texts=("high blood pressure",),
+    metric_type=MetricType.COSINE,
+)
+# results: tuple of {concept_id: similarity_score} dicts, one per query
+```
+
+---
+
+## EmbeddingReaderInterface
+
+Use this when you only need to query stored embeddings — no embedding generation, no `EmbeddingClient` required.
+
+```python
+from omop_emb import EmbeddingReaderInterface, ProviderType, IndexType, MetricType
+
+reader = EmbeddingReaderInterface(
+    canonical_model_name="nomic-embed-text:v1.5",
+    provider_name_or_type=ProviderType.OLLAMA,   # or "ollama"
+    backend_name_or_type="faiss",
+)
+reader.initialise_store(db_engine)
+
+results = reader.get_nearest_concepts(
+    session=session,
     index_type=IndexType.FLAT,
     query_embedding=query_vec,
     metric_type=MetricType.COSINE,
 )
-
-# Or query with text (convenience wrapper)
-nearest = interface.get_nearest_concepts_by_texts(
-    session=session,
-    canonical_model_name="llama3:8b",  # Validated
-    index_type=IndexType.FLAT,
-    query_texts=("high blood pressure", "low glucose"),
-    metric_type=MetricType.COSINE,
-)
 ```
 
-### Check Model Registration
+The constructor validates `canonical_model_name` against the provider rules. For Ollama, an untagged name or `:latest` will raise `ValueError` on construction.
+
+---
+
+## EmbeddingClient and providers
+
+`EmbeddingClient` wraps any OpenAI-compatible endpoint. It canonicalises the model name at construction time and exposes `canonical_model_name` as the stable identifier used in the registry.
 
 ```python
-# Check if a model is already registered
-if interface.is_model_registered(
-    canonical_model_name="llama3:8b",  # Validated
-    index_type=IndexType.FLAT,
-):
-    print("Model is registered")
+from omop_emb import EmbeddingClient, OllamaProvider, OpenAIProvider
+
+# Ollama — provider inferred from URL
+client = EmbeddingClient(
+    model="nomic-embed-text:v1.5",
+    api_base="http://localhost:11434/v1",
+)
+
+# OpenAI — provider inferred from URL + API key
+client = EmbeddingClient(
+    model="text-embedding-3-small",
+    api_base="https://api.openai.com/v1",
+    api_key="sk-...",
+)
+
+# Explicit provider (custom or future backends)
+client = EmbeddingClient(
+    model="nomic-embed-text:v1.5",
+    api_base="http://my-custom-host/v1",
+    provider=OllamaProvider(),
+)
+
+print(client.canonical_model_name)  # "nomic-embed-text:v1.5"
+print(client.embedding_dim)         # auto-discovered via Ollama /api/show
 ```
 
-## Error Messages
+Provider inference rules (evaluated in order):
 
-When validation fails, you get a clear, actionable error:
+| Condition | Provider |
+|-----------|----------|
+| `"ollama"` in `api_base` | `OllamaProvider` |
+| `localhost` or `127.0.0.1` in `api_base` **and** `api_key == "ollama"` | `OllamaProvider` |
+| everything else | `OpenAIProvider` |
+
+Pass `provider=` explicitly to override inference for any custom backend.
+
+---
+
+## Model name validation
+
+### Valid names
+
+**Ollama:**
+
+- ✅ `nomic-embed-text:v1.5`
+- ✅ `llama3:8b`
+- Any name with an explicit, immutable tag
+
+**OpenAI-compatible:**
+
+- ✅ `text-embedding-3-small`
+- ✅ `text-embedding-3-large`
+
+### Invalid names (raise `ValueError`)
+
+**Ollama:**
+
+- ❌ `llama3` — "must include an explicit tag"
+- ❌ `llama3:latest` — "uses the mutable ':latest' tag"
+
+!!! info
+    **Why the strictness?** In long-term healthcare data storage, `:latest` is a moving target. Running `ollama pull llama3` silently changes which model version `:latest` points to, breaking consistency between stored embeddings and new query embeddings.
+
+---
+
+## Utility functions
 
 ```python
-# ❌ This fails with a clear message
-interface.get_nearest_concepts(
-    session=session,
-    canonical_model_name="llama3",  # Untagged!
-    index_type=IndexType.FLAT,
-    query_embedding=query_vec,
-    metric_type=MetricType.COSINE,
+from omop_emb import list_registered_models
+
+models = list_registered_models(
+    backend_name_or_type="faiss",
+    provider_type=ProviderType.OLLAMA,
 )
-# ValueError: Invalid canonical_model_name 'llama3': Ollama model name
-# 'llama3' must include an explicit tag. Use a specific version 
-# (e.g. 'llama3:8b') instead of relying on the mutable ':latest' pointer.
+for m in models:
+    print(m.model_name, m.provider_type, m.dimensions)
 ```
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│         Your Application Code               │
-└─────────────┬───────────────────────────────┘
-              │
-              ↓
-┌─────────────────────────────────────────────┐
-│      EmbeddingInterface (API boundary)      │
-│  - Validates model names                    │
-│  - Routes to backend                        │
-│  - Enforces canonical naming                │
-└────────┬────────────────────┬───────────────┘
-         │                    │
-         ↓                    ↓
-    ┌─────────┐        ┌─────────────┐
-    │Embedding│        │  Backend    │
-    │ Client  │        │(pgvector/   │
-    │+Provider│        │ faiss)      │
-    └─────────┘        └─────────────┘
+┌─────────────────────────────────────────────────────┐
+│                Your Application Code                │
+└──────────────┬──────────────────────────────────────┘
+               │
+        ┌──────┴──────────────────┐
+        │                         │
+        ▼                         ▼
+┌───────────────────┐   ┌──────────────────────┐
+│ EmbeddingWriter   │   │  EmbeddingReader      │
+│ Interface         │   │  Interface            │
+│ (write + read)    │   │  (read only)          │
+└───────┬───────────┘   └──────────┬───────────┘
+        │                          │
+        ▼                          │
+┌───────────────────┐              │
+│  EmbeddingClient  │              │
+│  + Provider       │              │
+└───────────────────┘              │
+        │                          │
+        └──────────┬───────────────┘
+                   │
+                   ▼
+          ┌─────────────────┐
+          │    Backend      │
+          │ (pgvector/faiss)│
+          └─────────────────┘
 ```
 
-The interface is the **validation and enforcement layer**. All embedding operations should go through it.
+`EmbeddingWriterInterface` inherits from `EmbeddingReaderInterface` — all reader methods are available on the writer too.
 
-## Best Practices
+---
 
-1. **Always use `EmbeddingInterface`** — Don't interact with backends directly
-2. **Provide a provider** — Either via `embedding_client` or explicit `provider` parameter
-3. **Use `embedding_client.model`** — This is guaranteed to be canonical
-4. **Validate early** — If validation fails, you'll know immediately with a clear error
-5. **Trust the validation** — Once a name passes validation, it's canonical and safe to store
+## Best practices
 
-## Migration Guide
-
-If you were previously calling backends directly:
-
-```python
-# ❌ Old approach (no validation)
-backend.register_model(model_name=raw_input, ...)
-
-# ✅ New approach (validated)
-interface = EmbeddingInterface(backend=backend, provider=provider)
-interface.register_model(canonical_model_name=raw_input, ...)
-# Will validate or raise ValueError
-```
+1. **Use the interfaces**, not backends directly — they enforce canonical naming.
+2. **`EmbeddingWriterInterface` for write flows**, `EmbeddingReaderInterface` for query-only services.
+3. **Use `embedding_client.canonical_model_name`** when constructing a matching reader — it is guaranteed to be canonical.
+4. **Provide `storage_base_dir`** explicitly in production to control where `metadata.db` and FAISS files land.

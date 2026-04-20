@@ -2,117 +2,103 @@
 
 ## Overview
 
-Minimal, focused test suite for omop-emb with FAISS backend testing.
+Focused test suite for `omop-emb`. Unit tests run without any external services; integration tests require PostgreSQL.
 
 ## Requirements
 
-### PostgreSQL Database
+### PostgreSQL (integration tests only)
 
-Tests require a running PostgreSQL instance. By default, tests connect to:
-- **Host**: localhost
-- **Port**: 5432
-- **Database**: omop_emb_test
-- **User**: postgres
-- **Password**: postgres
+Set these environment variables before running integration tests:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TEST_DB_HOST` | *(required)* | PostgreSQL host |
+| `TEST_DB_PORT` | *(required)* | PostgreSQL port |
+| `TEST_DB_USERNAME` | `test` | Test user |
+| `TEST_DB_PASSWORD` | `test` | Test password |
+| `TEST_DATABASE_NAME` | `test_omop_emb` | Test database name |
+| `POSTGRES_USER` | `postgres` | Admin user (for DB creation) |
+| `POSTGRES_PASSWORD` | `postgres` | Admin password |
 
 ### Using Docker
 
-Start a PostgreSQL container for testing:
-
 ```bash
 docker run --name omop-emb-test-db \
-  -e POSTGRES_DB=omop_emb_test \
   -e POSTGRES_PASSWORD=postgres \
   -p 5432:5432 \
   -d postgres:15
-```
 
-### Custom Connection String
-
-Override the connection string via environment variable:
-
-```bash
-export TEST_DATABASE_URL="postgresql+psycopg2://user:password@host:port/database"
-pytest tests/
+export TEST_DB_HOST=localhost
+export TEST_DB_PORT=5432
 ```
 
 ## Running Tests
 
-### All tests
 ```bash
-pytest tests/ -v
-```
+# Unit tests only (no PostgreSQL needed)
+uv run pytest tests/ -m unit -v
 
-### Unit tests only
-```bash
-pytest tests/ -m unit
-```
+# All tests (requires PostgreSQL env vars)
+uv run pytest tests/ -v
 
-### FAISS backend tests
-```bash
-pytest tests/ -m faiss
-```
+# FAISS backend tests
+uv run pytest tests/ -m faiss -v
 
-### pgvector backend tests
-```bash
-pytest tests/ -m pgvector
-```
+# pgvector backend tests
+uv run pytest tests/ -m pgvector -v
 
-### Specific test file
-```bash
-pytest tests/test_interface.py -v
-```
-
-## Installation
-
-```bash
-pip install -e ".[faiss]"
-pip install pytest
+# Single file
+uv run pytest tests/test_embedding_client.py -v
 ```
 
 ## Test Files
 
-- `conftest.py` - Fixtures and database setup
-- `test_fixtures.py` - Fixture validation tests
-- `test_interface.py` - EmbeddingInterface tests
-- `test_faiss.py` - FAISS backend tests
-- `test_pgvector.py` - pgvector backend tests
-- `test_config.py` - Configuration and factory tests
+| File | What it tests | External services |
+|------|--------------|-------------------|
+| `test_providers.py` | `OllamaProvider`, `OpenAIProvider`, `get_provider_for_api_base`, `get_provider_from_provider_type` | None |
+| `test_embedding_client.py` | `EmbeddingClient` — construction, batching, similarity, euclidean distance | None (OpenAI mocked) |
+| `test_ollama_provider_api.py` | `OllamaProvider.get_embedding_dim()` HTTP interaction | None (requests mocked) |
+| `test_interface_validation.py` | `EmbeddingWriterInterface` input contracts, canonical name enforcement | None |
+| `test_interface.py` | `EmbeddingWriterInterface` end-to-end write/read flows | PostgreSQL + FAISS |
+| `test_config.py` | Backend/index/metric config factories | None |
+| `test_fixtures.py` | Fixture health checks | PostgreSQL |
+| `test_faiss.py` | FAISS backend (inherits `SharedBackendTests`) | PostgreSQL |
+| `test_pgvector.py` | pgvector backend (inherits `SharedBackendTests`) | PostgreSQL |
+| `shared_backend_tests.py` | Shared backend contract tests (not a test file itself) | — |
 
 ## Fixtures
 
-### Core Fixtures
-- `pg_engine` - PostgreSQL connection (session scope)
-- `session` - Clean database session per test
+### Database fixtures
+- `pg_engine` *(session scope)* — creates a dedicated test PostgreSQL database; drops it on teardown
+- `session` — clean SQLAlchemy session per test; truncates `concept` table before each test
 
-### Mock Fixtures
-- `mock_llm_client` - Mock LLMClient with deterministic embeddings
+### Mock fixtures
+- `mock_llm_client` — `Mock(spec=EmbeddingClient)` with deterministic 1-D embeddings for the three test concepts; uses `ProviderType.OLLAMA`
 
-### Backend Fixtures
-- `temp_faiss_dir` - Temporary FAISS index directory
-- `faiss_backend` - Initialized FAISS backend
-- `embedding_interface` - Full EmbeddingInterface
+### Backend fixtures
+- `faiss_backend` — `FaissEmbeddingBackend` with model registry initialised
+- `pgvector_backend` — `PGVectorEmbeddingBackend` with vector extension and model registry initialised
+- `temp_storage_dir` — temporary directory for FAISS files and `metadata.db`
 
-### Test Data Helper
-- `add_concepts_to_db()` - Helper function to load test concepts
+### Interface fixtures
+- `embedding_writer_interface` — `EmbeddingWriterInterface` backed by FAISS, using `mock_llm_client`
+- `registered_embedding_writer_interface` — writer interface with a pre-registered `FLAT` model
+- `embedding_reader_interface` — `EmbeddingReaderInterface` pointing at the same FAISS registry
 
 ## Test Data
 
-Three test concepts are available:
-1. **Concept 1**: Hypertension (Condition, SNOMED, Standard)
-2. **Concept 2**: Diabetes (Condition, SNOMED, Standard)
-3. **Concept 3**: Aspirin (Drug, RxNorm, Standard)
+Three concepts are pre-loaded by the `session` fixture:
 
-Load them in tests via:
+| ID | Name | Domain | Embedding |
+|----|------|--------|-----------|
+| 1 | Hypertension | Condition | `[[-10.0]]` |
+| 2 | Diabetes | Condition | `[[0.0]]` |
+| 3 | Aspirin | Drug | `[[10.0]]` |
+
+Constants exported from `conftest.py`:
+
 ```python
-def test_something(session):
-    add_concepts_to_db(session)
-    # concepts now available
+MODEL_NAME     = "test-model:v1"
+PROVIDER_TYPE  = ProviderType.OLLAMA
+EMBEDDING_DIM  = 1
 ```
-
-## Notes
-
-- Tests use PostgreSQL only (no SQLite)
-- Foreign key constraints are enforced (required data must be complete)
-- Each test gets a clean, isolated session
-- Concept table is truncated before each test

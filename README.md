@@ -45,6 +45,7 @@ Extended documentation can be found [here](https://AustralianCancerDataNetwork.g
 - [x] Extensive unit testing
     - [x] Backend testing
     - [x] Corruption and restoration of DB testing
+- [ ] Support importing and exporting of calculated embeddings
 - [ ] Support non-Flat indices for each backend
 - [ ] `faiss` GPU support
 - [ ] [`pgvectorscale`](https://github.com/timescale/pgvectorscale) support

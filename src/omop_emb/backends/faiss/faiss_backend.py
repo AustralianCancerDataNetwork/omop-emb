@@ -15,7 +15,7 @@ from .faiss_sql import (
     add_concept_ids_to_faiss_registry,
     q_concept_ids_with_embeddings
 )
-from omop_emb.config import BackendType, IndexType, MetricType
+from omop_emb.config import BackendType, IndexType, MetricType, ProviderType
 from .storage_manager import EmbeddingStorageManager
 from ..base import EmbeddingBackend, require_registered_model
 from omop_emb.utils.embedding_utils import (
@@ -68,7 +68,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             storage_base_dir=storage_base_dir,
             registry_db_name=registry_db_name,
         )
-        self.embedding_storage_managers: Dict[str, EmbeddingStorageManager] = {}
+        self._embedding_storage_managers: Dict[str, EmbeddingStorageManager] = {}
 
     @property
     def backend_type(self) -> BackendType:
@@ -78,7 +78,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         return create_faiss_embedding_registry_table(engine=engine, model_record=model_record)
     
     def get_safe_model_dir(self, model_name: str) -> Path:
-        return self.storage_base_dir / self.embedding_model_registry.safe_model_name(model_name)
+        return self.storage_base_dir / self._embedding_model_registry.safe_model_name(model_name)
     
     def get_storage_manager(
         self, 
@@ -87,7 +87,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         self.register_storage_manager(
             model_record=model_record,
         )
-        return self.embedding_storage_managers[model_record.model_name]
+        return self._embedding_storage_managers[model_record.model_name]
     
     def register_storage_manager(
         self,
@@ -95,9 +95,9 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     ) -> None:
         """Registers a storage manager for the given model if not already registered. This ensures that the necessary on-disk structures are in place for the model's embeddings and index."""
 
-        if model_record.model_name not in self.embedding_storage_managers:
+        if model_record.model_name not in self._embedding_storage_managers:
             logger.info(f"Registering new storage manager for model '{model_record.model_name}' with dimensions={model_record.dimensions}, index_type={model_record.index_type}")
-            self.embedding_storage_managers[model_record.model_name] = EmbeddingStorageManager(
+            self._embedding_storage_managers[model_record.model_name] = EmbeddingStorageManager(
                     file_dir=self.get_safe_model_dir(model_record.model_name), 
                     dimensions=model_record.dimensions,
                     backend_type=self.backend_type,
@@ -109,30 +109,41 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         model_name: str,
         dimensions: int,
         *,
+        provider_type: ProviderType,
         index_type: IndexType,
-        metadata: Mapping[str, object] = {},
+        metadata: Optional[Mapping[str, object]] = None,
     ) -> EmbeddingModelRecord:
+        """Register a model with FAISS backend.
 
-        # Create the storage for the model on disk
-        safe_name = self.embedding_model_registry.safe_model_name(model_name)
+        DB write happens first — if it raises (e.g., conflict), no directory is created.
+        Directory creation is a side effect that happens only after successful registration.
+        """
+        # DB write first — if this raises, directory was never created
+        record = super().register_model(
+            engine=engine,
+            model_name=model_name,
+            provider_type=provider_type,
+            dimensions=dimensions,
+            index_type=index_type,
+            metadata=metadata,
+        )
+
+        # Only create directory after successful registration
+        safe_name = self._embedding_model_registry.safe_model_name(model_name)
         model_dir = self.storage_base_dir / safe_name
         model_dir.mkdir(parents=False, exist_ok=True)
         logger.info(f"Created model directory: {model_dir}")
 
-        return super().register_model(
-            engine=engine,
-            model_name=model_name,
-            dimensions=dimensions,
-            index_type=index_type,
-            metadata=metadata
-        )
+        return record
 
     @require_registered_model
     def upsert_embeddings(
         self,
-        model_name: str,
-        index_type: IndexType,
+        *,
         session: Session,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
         concept_ids: Sequence[int],
         embeddings: ndarray,
         _model_record: EmbeddingModelRecord,
@@ -147,20 +158,22 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
 
         Parameters
         ----------
-        model_name : str
-            Registered name of the embedding model.
-        index_type : IndexType
-            Storage index type used for this model's embeddings.
         session : sqlalchemy.orm.Session
             SQLAlchemy session bound to the OMOP CDM database.
+        model_name : str
+            Registered name of the embedding model.
+        provider_type : ProviderType
+            Provider type for the embedding model.
+        index_type : IndexType
+            Storage index type used for this model's embeddings.
         concept_ids : Sequence[int]
             Concept IDs aligned with the rows of ``embeddings``.
         embeddings : numpy.ndarray
-            Embedding matrix of shape ``(n_concepts, D)``.
+            Embedding matrix of shape ``(n_concepts, D)``, where $D$ is the embedding dimensionality defined in the model registration.
         _model_record : EmbeddingModelRecord
             Internal registered-model record injected by ``@require_registered_model``.
         metric_type : Optional[MetricType]
-            Optional metric used when creating/updating the FAISS index.
+            Optional metric type for the FAISS index. If provided, the index will be created or updated with the specified metric. If not provided, embeddings will be stored without an index, and nearest neighbor search will not be available until an index is created with a specified metric.
 
         Returns
         -------
@@ -188,6 +201,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                 registered_table=self.get_embedding_table(
                     model_name=model_name,
                     index_type=index_type,
+                    provider_type=provider_type,
                 ),
             )
         except Exception as e:
@@ -207,12 +221,13 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     @require_registered_model
     def get_nearest_concepts(
         self,
-        model_name: str,
-        index_type: IndexType,
+        *,
         session: Session,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
         query_embeddings: np.ndarray,
         metric_type: MetricType,
-        *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         _model_record: EmbeddingModelRecord,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
@@ -224,7 +239,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
 
         self.validate_embeddings(embeddings=query_embeddings, dimensions=_model_record.dimensions)
         q_permitted_concept_ids = q_concept_ids_with_embeddings(
-            embedding_table=self.get_embedding_table(model_name=model_name, index_type=index_type),
+            embedding_table=self.get_embedding_table(model_name=model_name, index_type=index_type, provider_type=provider_type),
             concept_filter=concept_filter,
             limit=None
         )
@@ -266,7 +281,8 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                     continue
 
                 similarity = get_similarity_from_distance(distance.item(), metric_type)
-                assert isinstance(similarity, float), f"Expected similarity to be a float, got {type(similarity)}"
+                if not isinstance(similarity, float):
+                    raise RuntimeError(f"Expected similarity to be a float, got {type(similarity)}")
                 matches_per_query.append(NearestConceptMatch(
                     concept_id=int(concept_id),
                     concept_name=row.concept_name,
@@ -283,9 +299,11 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     @require_registered_model
     def get_embeddings_by_concept_ids(
         self, 
-        model_name: str, 
-        index_type: IndexType,
+        *,
         session: Session,
+        model_name: str, 
+        provider_type: ProviderType,
+        index_type: IndexType,
         concept_ids: Sequence[int],
         _model_record: EmbeddingModelRecord
         ) -> Mapping[int, Sequence[float]]:

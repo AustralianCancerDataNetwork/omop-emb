@@ -1,9 +1,17 @@
-from .interface import EmbeddingInterface
+from .interface import EmbeddingWriterInterface, EmbeddingReaderInterface, list_registered_models, migrate_legacy_registry_row
 from .backends.base import EmbeddingConceptFilter
+from .embeddings import (
+    EmbeddingClient,
+    EmbeddingProvider,
+    OllamaProvider,
+    OpenAIProvider,
+    get_provider_for_api_base,
+)
 from .config import (
     BackendType,
     IndexType,
     MetricType,
+    ProviderType,
     parse_backend_type,
     parse_index_type,
     parse_metric_type,
@@ -11,13 +19,22 @@ from .config import (
 from .backends.factory import get_embedding_backend
 
 __all__ = [
-    "EmbeddingInterface",
+    "EmbeddingWriterInterface",
+    "EmbeddingReaderInterface",
     "EmbeddingConceptFilter",
+    "EmbeddingClient",
     "BackendType",
     "IndexType",
     "MetricType",
+    "ProviderType",
     "parse_backend_type",
     "parse_index_type",
     "parse_metric_type",
+    "EmbeddingProvider",
+    "OllamaProvider",
+    "OpenAIProvider",
+    "get_provider_for_api_base",
     "get_embedding_backend",
+    "list_registered_models",
+    "migrate_legacy_registry_row",
 ]

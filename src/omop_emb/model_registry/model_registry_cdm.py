@@ -4,10 +4,11 @@ from sqlalchemy import DateTime, Engine, Integer, JSON, String, func, inspect, t
 from sqlalchemy.orm import DeclarativeBase, mapped_column, validates
 
 from ..config import (
-    is_index_type_supported_for_backend, 
+    is_index_type_supported_for_backend,
     get_supported_index_types_for_backend,
-    IndexType, 
-    BackendType
+    IndexType,
+    BackendType,
+    ProviderType
 )
 
 class ModelRegistryBase(DeclarativeBase):
@@ -29,6 +30,7 @@ class ModelRegistry(ModelRegistryBase):
     __tablename__ = "model_registry"
 
     model_name = mapped_column(String, primary_key=True)
+    provider_type = mapped_column(Enum(ProviderType, native_enum=False), nullable=False, primary_key=True)
     backend_type = mapped_column(Enum(BackendType, native_enum=False), nullable=False, primary_key=True)
     index_type = mapped_column(Enum(IndexType, native_enum=False), nullable=False, primary_key=True)
     dimensions = mapped_column(Integer, nullable=False)
@@ -37,6 +39,12 @@ class ModelRegistry(ModelRegistryBase):
     created_at = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
+
+    @validates("provider_type")
+    def validate_provider_type(self, key, provider_type):
+        if provider_type not in ProviderType:
+            raise ValueError(f"Unsupported provider type: {provider_type}. Supported: {list(ProviderType)}")
+        return provider_type
 
     @validates("backend_type")
     def validate_backend_type(self, key, backend_type):

@@ -137,8 +137,21 @@ class EmbeddingBackend(ABC, Generic[T]):
     ) -> None:
         """Cache the given model record in the embedding table cache. This is used to keep track of which models are registered and their associated metadata."""
         dynamic_table = self._create_storage_table(engine=engine, model_record=model_record)
-        storage_key = (model_record.model_name, model_record.provider_type, self.backend_type, model_record.index_type)
+        storage_key = self._get_embedding_table_cache_key(
+            model_name=model_record.model_name,
+            provider_type=model_record.provider_type,
+            index_type=model_record.index_type
+        )
         self._embedding_table_cache[storage_key] = dynamic_table
+
+    def _get_embedding_table_cache_key(
+        self,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
+    ) -> Tuple[str, ProviderType, BackendType, IndexType]:
+        """Helper to construct the cache key for the embedding table cache."""
+        return (model_name, provider_type, self.backend_type, index_type)
 
     
     @abstractmethod
@@ -529,7 +542,11 @@ class EmbeddingBackend(ABC, Generic[T]):
             If the model name is not found in the embedding table cache, indicating that the store
             was not properly initialized or the model has not been registered.
         """
-        storage_key = (model_name, provider_type, self.backend_type, index_type)
+        storage_key = self._get_embedding_table_cache_key(
+            model_name=model_name,
+            provider_type=provider_type,
+            index_type=index_type
+        )
         embedding_table = self._embedding_table_cache.get(storage_key)
         if embedding_table is not None:
             return embedding_table

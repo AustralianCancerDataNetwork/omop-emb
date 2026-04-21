@@ -10,10 +10,9 @@ from ..config import (
     get_supported_index_types_for_backend,
     IndexType,
     BackendType,
-    ProviderType
+    ProviderType,
+    ENV_OMOP_EMB_METADATA_SCHEMA,
 )
-
-ENV_OMOP_EMB_METADATA_SCHEMA = "OMOP_EMB_METADATA_SCHEMA"
 
 
 def get_metadata_schema() -> str:
@@ -59,6 +58,12 @@ class ModelRegistry(ModelRegistryBase):
     def validate_backend_type(self, key, backend_type):
         if backend_type not in BackendType:
             raise ValueError(f"Unsupported backend type: {backend_type}. Supported backends: {list(BackendType)}")
+        existing_index_type = getattr(self, "index_type", None)
+        if existing_index_type is not None and not is_index_type_supported_for_backend(backend_type, existing_index_type):
+            raise ValueError(
+                f"Backend {backend_type} does not support {existing_index_type}. "
+                f"Supported: {get_supported_index_types_for_backend(backend_type)}"
+            )
         return backend_type
     
     @validates("index_type")

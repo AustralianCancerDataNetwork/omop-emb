@@ -114,7 +114,7 @@ def create_indices_for_embedding_table(engine: Engine, model_record: EmbeddingMo
         ]
         
         if _index_from_storage_identifier(model_record.storage_identifier) not in existing_indexes:
-            query = _create_index_sql(
+            query = q_create_index_sql(
                 model_record.storage_identifier,
                 model_record.index_type,
             )
@@ -122,7 +122,7 @@ def create_indices_for_embedding_table(engine: Engine, model_record: EmbeddingMo
                 conn.execute(text(query))
                 conn.commit()
 
-def _create_index_sql(table_name: str, index_type: IndexType) -> Optional[str]:
+def q_create_index_sql(table_name: str, index_type: IndexType) -> Optional[str]:
     schema = get_metadata_schema()
     qualified_table_name = f'"{schema}"."{table_name}"'
     qualified_index_name = f'"{schema}"."{_index_from_storage_identifier(table_name)}"'

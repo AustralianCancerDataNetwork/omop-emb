@@ -13,10 +13,14 @@ from omop_emb.embeddings import EmbeddingClient, get_provider_from_provider_type
 from .backends import get_embedding_backend
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.model_registry import EmbeddingModelRecord
-from .config import BackendType, IndexType, MetricType, ProviderType
-
-ENV_DOCUMENT_EMBEDDING_PREFIX = "OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX"
-ENV_QUERY_EMBEDDING_PREFIX = "OMOP_EMB_QUERY_EMBEDDING_PREFIX"
+from .config import (
+    BackendType,
+    IndexType,
+    MetricType,
+    ProviderType,
+    ENV_DOCUMENT_EMBEDDING_PREFIX,
+    ENV_QUERY_EMBEDDING_PREFIX,
+)
 
 
 

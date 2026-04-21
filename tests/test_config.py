@@ -61,3 +61,29 @@ class TestBackendConfig:
         )
 
         assert row.index_type == IndexType.HNSW
+
+    def test_model_registry_accepts_supported_index_when_kwargs_are_reversed(self):
+        configure_mappers()
+        row = ModelRegistry(
+            model_name="test-model",
+            dimensions=128,
+            storage_identifier="faiss_test_model",
+            index_type=IndexType.HNSW,
+            backend_type=BackendType.FAISS,
+            details={},
+        )
+
+        assert row.backend_type == BackendType.FAISS
+        assert row.index_type == IndexType.HNSW
+
+    def test_model_registry_rejects_unsupported_index_when_backend_set_after_index(self):
+        configure_mappers()
+        with pytest.raises(ValueError, match="does not support"):
+            ModelRegistry(
+                model_name="test-model",
+                dimensions=128,
+                storage_identifier="pgvector_test_model",
+                index_type=IndexType.HNSW,
+                backend_type=BackendType.PGVECTOR,
+                details={},
+            )

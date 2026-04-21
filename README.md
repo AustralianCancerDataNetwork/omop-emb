@@ -35,6 +35,11 @@ Common environment variables:
 - `OMOP_EMB_BACKEND`: backend name (`pgvector` or `faiss`) used by the backend factory.
 - `OMOP_EMB_BASE_STORAGE_DIR`: local base directory for `omop-emb` artifacts, including local metadata (`metadata.db`) and FAISS files. If unset, `omop-emb` defaults to `./.omop_emb` in the current working directory.
 - `OMOP_DATABASE_URL`: SQLAlchemy URL for the OMOP CDM database.
+- `OMOP_EMB_MODEL`: default embedding model name when `--model` is omitted.
+- `OMOP_EMB_API_KEY`: optional bearer token for embedding services that require authentication.
+- `OMOP_EMB_EMBEDDING_DIM`: explicit embedding dimension override when the client cannot infer dimensions automatically.
+- `OMOP_EMB_EMBEDDING_PATH`: embedding endpoint path relative to `--api-base`, for example `/embeddings` or `/embed`.
+- `OMOP_EMB_METADATA_SCHEMA`: schema for `omop-emb`'s own metadata tables in PostgreSQL-backed flows.
 
 Extended documentation can be found [here](https://AustralianCancerDataNetwork.github.io/omop-emb).
 
@@ -51,7 +56,7 @@ omop-emb add-embeddings \
   --embedding-path /embeddings \
   --backend faiss \
   --index-type hnsw \
-  --faiss-base-dir ./data \
+  --storage-base-dir ./data \
   --model my-embedding-model \
   --embedding-dim 1024 \
   --vocabulary SNOMED \
@@ -107,7 +112,7 @@ omop-emb search "type 2 diabetes" \
   --embedding-path /embeddings \
   --model my-embedding-model \
   --backend faiss \
-  --faiss-base-dir ./data \
+  --storage-base-dir ./data \
   --metric-type cosine \
   --k 5
 ```
@@ -125,7 +130,7 @@ omop-emb search-batch queries.tsv \
   --embedding-path /embeddings \
   --model my-embedding-model \
   --backend faiss \
-  --faiss-base-dir ./data \
+  --storage-base-dir ./data \
   --metric-type cosine \
   --k 5
 ```
@@ -136,7 +141,7 @@ FAISS indexes can also be rebuilt explicitly from the stored HDF5 vectors:
 omop-emb rebuild-index \
   --model my-embedding-model \
   --backend faiss \
-  --faiss-base-dir ./data \
+  --storage-base-dir ./data \
   --metric-type cosine \
   --metric-type l2
 ```
@@ -148,10 +153,15 @@ the raw HDF5 embeddings:
 omop-emb switch-index-type \
   --model my-embedding-model \
   --backend faiss \
+  --storage-base-dir ./data \
   --index-type hnsw \
   --hnsw-num-neighbors 48 \
   --hnsw-ef-search 96 \
   --hnsw-ef-construction 240
+
+Compatibility note:
+
+- `--faiss-base-dir` remains accepted as a deprecated alias for `--storage-base-dir`.
 ```
 
 ## DB Test Environment

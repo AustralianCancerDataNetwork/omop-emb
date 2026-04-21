@@ -74,6 +74,11 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 - `OMOP_DATABASE_URL`: OMOP CDM database connection string.
 - `OMOP_EMB_BACKEND`: backend selector used when `--backend` is not provided.
 - `OMOP_EMB_BASE_STORAGE_DIR`: local storage root for metadata and file-based artifacts. If unset, `omop-emb` defaults to `./.omop_emb` in the current working directory.
+- `OMOP_EMB_MODEL`: default embedding model name when `--model` is not provided.
+- `OMOP_EMB_API_KEY`: optional bearer token for embedding services that require authentication.
+- `OMOP_EMB_EMBEDDING_DIM`: explicit embedding dimension override when the client cannot infer dimensions automatically.
+- `OMOP_EMB_EMBEDDING_PATH`: embedding endpoint path relative to `--api-base`, for example `/embeddings` or `/embed`.
+- `OMOP_EMB_METADATA_SCHEMA`: schema for `omop-emb` metadata tables in PostgreSQL-backed flows.
 
 Paths that include `~` are expanded automatically.
 
@@ -268,7 +273,7 @@ omop-emb search-batch queries.tsv \
   --embedding-path /embeddings \
   --model tei-qwen:intfloat/multilingual-e5-large-instruct \
   --backend faiss \
-  --faiss-base-dir /media/large-backup-drive/omop-embeddings \
+  --storage-base-dir /media/large-backup-drive/omop-embeddings \
   --metric-type cosine \
   --k 5
 ```
@@ -288,7 +293,7 @@ index files or when you want to materialize multiple metrics ahead of time.
 
 - `--model`: registered embedding model name.
 - `--backend`: currently only `faiss` supports explicit rebuild.
-- `--faiss-base-dir`: base directory containing the model's FAISS storage.
+- `--storage-base-dir`: base directory containing the model's FAISS storage.
 - `--metric-type`: repeat to rebuild multiple metrics. If omitted, all metrics
   supported by the model's index type are rebuilt.
 - `--batch-size`: streaming batch size used while rebuilding from HDF5.
@@ -299,12 +304,16 @@ Examples:
 omop-emb rebuild-index \
   --model my-embedding-model \
   --backend faiss \
-  --faiss-base-dir ./data \
+  --storage-base-dir ./data \
   --metric-type cosine
 ```
 
 If you plan to search with multiple metrics, rebuild each required metric or
 omit `--metric-type` to build all metrics supported by the model's index type.
+
+Compatibility note:
+
+- `--faiss-base-dir` remains accepted as a deprecated alias for `--storage-base-dir`.
 
 ## `switch-index-type`
 

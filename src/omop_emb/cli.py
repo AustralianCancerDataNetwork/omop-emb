@@ -17,7 +17,17 @@ import typer
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.embedding_client import OpenAICompatibleEmbeddingClient
 from omop_emb.interface import EmbeddingInterface, EmbeddingReaderInterface, migrate_legacy_registry_row
-from omop_emb.config import BackendType, IndexType, MetricType, ProviderType
+from omop_emb.config import (
+    BackendType,
+    IndexType,
+    MetricType,
+    ProviderType,
+    ENV_OMOP_DATABASE_URL,
+    ENV_OMOP_EMB_MODEL,
+    ENV_OMOP_EMB_API_KEY,
+    ENV_OMOP_EMB_EMBEDDING_DIM,
+    ENV_OMOP_EMB_EMBEDDING_PATH,
+)
 from omop_emb.backends.faiss.faiss_backend import (
     DEFAULT_HNSW_EF_CONSTRUCTION,
     DEFAULT_HNSW_EF_SEARCH,
@@ -84,13 +94,13 @@ def _legacy_row_fields(row: dict[str, object]) -> tuple[str, int, IndexType, str
 
 
 def _resolve_engine() -> sa.Engine:
-    engine_string = os.getenv('OMOP_DATABASE_URL')
+    engine_string = os.getenv(ENV_OMOP_DATABASE_URL)
     if engine_string is None:
-        raise RuntimeError("OMOP_DATABASE_URL environment variable not set. Please set it in your .env file to point to your database.")
+        raise RuntimeError(f"{ENV_OMOP_DATABASE_URL} environment variable not set. Please set it in your .env file to point to your database.")
 
     engine = sa.create_engine(engine_string, future=True, echo=False)
     if engine.dialect.name != "postgresql":
-        raise RuntimeError("Only PostgreSQL databases are supported for embedding storage with the current backends. Please check your `OMOP_DATABASE_URL` environment variable and ensure it points to a PostgreSQL database.")
+        raise RuntimeError(f"Only PostgreSQL databases are supported for embedding storage with the current backends. Please check your `{ENV_OMOP_DATABASE_URL}` environment variable and ensure it points to a PostgreSQL database.")
     return engine
 
 
@@ -117,10 +127,10 @@ def _log_timing(stage: str, started_at: float) -> float:
 
 
 def _resolve_model_name(model: Optional[str]) -> str:
-    resolved_model = model or os.getenv("OMOP_EMB_MODEL") or "text-embedding-3-small"
+    resolved_model = model or os.getenv(ENV_OMOP_EMB_MODEL) or "text-embedding-3-small"
     if not resolved_model:
         raise RuntimeError(
-            "No embedding model configured. Pass `--model` or set `OMOP_EMB_MODEL`."
+            f"No embedding model configured. Pass `--model` or set `{ENV_OMOP_EMB_MODEL}`."
         )
     return resolved_model
 
@@ -128,7 +138,7 @@ def _resolve_model_name(model: Optional[str]) -> str:
 def _resolve_api_key(api_key: Optional[str]) -> Optional[str]:
     resolved_api_key = api_key
     if resolved_api_key is None:
-        resolved_api_key = os.getenv("OMOP_EMB_API_KEY")
+        resolved_api_key = os.getenv(ENV_OMOP_EMB_API_KEY)
     if resolved_api_key == "":
         return None
     return resolved_api_key
@@ -139,13 +149,13 @@ def _resolve_embedding_dim(
     embedding_dim: Optional[int],
 ) -> int:
     if embedding_dim is None:
-        raw_dim = os.getenv("OMOP_EMB_EMBEDDING_DIM")
+        raw_dim = os.getenv(ENV_OMOP_EMB_EMBEDDING_DIM)
         if raw_dim:
             try:
                 embedding_dim = int(raw_dim)
             except ValueError as exc:
                 raise RuntimeError(
-                    "OMOP_EMB_EMBEDDING_DIM must be an integer."
+                    f"{ENV_OMOP_EMB_EMBEDDING_DIM} must be an integer."
                 ) from exc
 
     if embedding_dim is not None:
@@ -158,13 +168,13 @@ def _resolve_embedding_dim(
     except NotImplementedError as exc:
         raise RuntimeError(
             "Embedding dimension could not be inferred from the configured API client. "
-            "Pass `--embedding-dim` or set `OMOP_EMB_EMBEDDING_DIM`."
+            f"Pass `--embedding-dim` or set `{ENV_OMOP_EMB_EMBEDDING_DIM}`."
         ) from exc
 
     if resolved_dim is None:
         raise RuntimeError(
             "Embedding dimensions could not be determined from the embedding client. "
-            "Pass `--embedding-dim` or set `OMOP_EMB_EMBEDDING_DIM`."
+            f"Pass `--embedding-dim` or set `{ENV_OMOP_EMB_EMBEDDING_DIM}`."
         )
     return resolved_dim
 
@@ -241,12 +251,12 @@ def _compile_sql(query: sa.Select, engine: sa.Engine) -> str:
 
 
 def _create_engine_from_env() -> sa.Engine:
-    engine_string = os.getenv('OMOP_DATABASE_URL')
+    engine_string = os.getenv(ENV_OMOP_DATABASE_URL)
     if engine_string is None:
-        raise RuntimeError("OMOP_DATABASE_URL environment variable not set. Please set it in your .env file to point to your database.")
+        raise RuntimeError(f"{ENV_OMOP_DATABASE_URL} environment variable not set. Please set it in your .env file to point to your database.")
 
     engine = sa.create_engine(engine_string, future=True, echo=False)
-    assert engine.dialect.name == "postgresql", "Only PostgreSQL databases are supported for embedding storage with the current backends. Please check your `OMOP_DATABASE_URL` environment variable and ensure it points to a PostgreSQL database."
+    assert engine.dialect.name == "postgresql", f"Only PostgreSQL databases are supported for embedding storage with the current backends. Please check your `{ENV_OMOP_DATABASE_URL}` environment variable and ensure it points to a PostgreSQL database."
     return engine
 
 
@@ -261,7 +271,7 @@ def _create_embedding_interface(
     embedding_path: str,
 ) -> tuple[EmbeddingInterface, str]:
     resolved_embedding_path = _normalize_embedding_path(
-        os.getenv("OMOP_EMB_EMBEDDING_PATH") or embedding_path
+        os.getenv(ENV_OMOP_EMB_EMBEDDING_PATH) or embedding_path
     )
     resolved_api_base = _normalize_api_base(api_base, resolved_embedding_path)
     resolved_api_key = _resolve_api_key(api_key)
@@ -416,7 +426,7 @@ def add_embeddings(
     )],
     api_key: Annotated[Optional[str], typer.Option(
         "--api-key",
-        help="Optional API key for the embedding API. Can also be set with `OMOP_EMB_API_KEY`."
+        help=f"Optional API key for the embedding API. Can also be set with `{ENV_OMOP_EMB_API_KEY}`."
     )] = None,
     index_type: Annotated[IndexType, typer.Option(
         "--index-type",
@@ -427,15 +437,15 @@ def add_embeddings(
         help="Batch size to use when generating and inserting embeddings. Adjust based on your system's memory capacity.")] = 100,
     model: Annotated[Optional[str], typer.Option(
         "--model", "-m",
-        help="Name of the embedding model to use for generating concept embeddings. Can also be set with `OMOP_EMB_MODEL`."
+        help=f"Name of the embedding model to use for generating concept embeddings. Can also be set with `{ENV_OMOP_EMB_MODEL}`."
     )] = None,
     embedding_dim: Annotated[Optional[int], typer.Option(
         "--embedding-dim",
-        help="Explicit embedding dimension for the configured model. Use this for OpenAI-compatible endpoints when the client cannot infer dimensions automatically. Can also be set with `OMOP_EMB_EMBEDDING_DIM`."
+        help=f"Explicit embedding dimension for the configured model. Use this for OpenAI-compatible endpoints when the client cannot infer dimensions automatically. Can also be set with `{ENV_OMOP_EMB_EMBEDDING_DIM}`."
     )] = None,
     embedding_path: Annotated[str, typer.Option(
         "--embedding-path",
-        help="Embedding endpoint path relative to `--api-base`, for example `/embeddings` or `/embed`. Can also be set with `OMOP_EMB_EMBEDDING_PATH`."
+        help=f"Embedding endpoint path relative to `--api-base`, for example `/embeddings` or `/embed`. Can also be set with `{ENV_OMOP_EMB_EMBEDDING_PATH}`."
     )] = "/embeddings",
     overwrite_model_registration: Annotated[bool, typer.Option(
         "--overwrite-model-registration",
@@ -607,7 +617,7 @@ def search(
     )],
     api_key: Annotated[Optional[str], typer.Option(
         "--api-key",
-        help="Optional API key for the embedding API. Can also be set with `OMOP_EMB_API_KEY`."
+        help=f"Optional API key for the embedding API. Can also be set with `{ENV_OMOP_EMB_API_KEY}`."
     )] = None,
     batch_size: Annotated[int, typer.Option(
         "--batch-size", "-b",
@@ -625,9 +635,10 @@ def search(
         "--backend",
         help="Embedding backend to query. Can be replaced by the `OMOP_EMB_BACKEND` environment variable."
     )] = None,
-    faiss_base_dir: Annotated[Optional[str], typer.Option(
+    storage_base_dir: Annotated[Optional[str], typer.Option(
+        "--storage-base-dir",
         "--faiss-base-dir",
-        help="Optional base directory for FAISS backend storage."
+        help="Optional base directory for FAISS backend storage. `--faiss-base-dir` is retained as a deprecated alias."
     )] = None,
     metric_type: Annotated[MetricType, typer.Option(
         "--metric-type",
@@ -657,7 +668,7 @@ def search(
         batch_size=batch_size,
         model=model,
         backend_name=backend_name,
-        storage_base_dir=faiss_base_dir,
+        storage_base_dir=storage_base_dir,
         embedding_path=embedding_path,
     )
     concept_filter = _build_concept_filter(
@@ -701,7 +712,7 @@ def search_batch(
     )],
     api_key: Annotated[Optional[str], typer.Option(
         "--api-key",
-        help="Optional API key for the embedding API. Can also be set with `OMOP_EMB_API_KEY`."
+        help=f"Optional API key for the embedding API. Can also be set with `{ENV_OMOP_EMB_API_KEY}`."
     )] = None,
     batch_size: Annotated[int, typer.Option(
         "--batch-size", "-b",
@@ -719,9 +730,10 @@ def search_batch(
         "--backend",
         help="Embedding backend to query. Can be replaced by the `OMOP_EMB_BACKEND` environment variable."
     )] = None,
-    faiss_base_dir: Annotated[Optional[str], typer.Option(
+    storage_base_dir: Annotated[Optional[str], typer.Option(
+        "--storage-base-dir",
         "--faiss-base-dir",
-        help="Optional base directory for FAISS backend storage."
+        help="Optional base directory for FAISS backend storage. `--faiss-base-dir` is retained as a deprecated alias."
     )] = None,
     metric_type: Annotated[MetricType, typer.Option(
         "--metric-type",
@@ -756,7 +768,7 @@ def search_batch(
         batch_size=batch_size,
         model=model,
         backend_name=backend_name,
-        storage_base_dir=faiss_base_dir,
+        storage_base_dir=storage_base_dir,
         embedding_path=embedding_path,
     )
     concept_filter = _build_concept_filter(
@@ -806,9 +818,10 @@ def rebuild_index(
         "--backend",
         help="Embedding backend to rebuild. Currently only FAISS supports explicit rebuild."
     )] = None,
-    faiss_base_dir: Annotated[Optional[str], typer.Option(
+    storage_base_dir: Annotated[Optional[str], typer.Option(
+        "--storage-base-dir",
         "--faiss-base-dir",
-        help="Optional base directory for FAISS backend storage."
+        help="Optional base directory for FAISS backend storage. `--faiss-base-dir` is retained as a deprecated alias."
     )] = None,
     metric_types: Annotated[Optional[list[MetricType]], typer.Option(
         "--metric-type",
@@ -826,7 +839,7 @@ def rebuild_index(
     logger.info("Embedding metadata schema: %s", get_metadata_schema())
     interface = EmbeddingInterface.from_backend_name(
         backend_name=backend_name,
-        storage_base_dir=faiss_base_dir,
+        storage_base_dir=storage_base_dir,
     )
     resolved_model = _resolve_model_name(model)
     interface.initialise_store(engine)
@@ -852,9 +865,10 @@ def switch_index_type(
         "--backend",
         help="Embedding backend to update. Currently only FAISS supports index switching."
     )] = None,
-    faiss_base_dir: Annotated[Optional[str], typer.Option(
+    storage_base_dir: Annotated[Optional[str], typer.Option(
+        "--storage-base-dir",
         "--faiss-base-dir",
-        help="Optional base directory for FAISS backend storage."
+        help="Optional base directory for FAISS backend storage. `--faiss-base-dir` is retained as a deprecated alias."
     )] = None,
     index_type: Annotated[IndexType, typer.Option(
         "--index-type",
@@ -892,7 +906,7 @@ def switch_index_type(
     logger.info("Embedding metadata schema: %s", get_metadata_schema())
     interface = EmbeddingInterface.from_backend_name(
         backend_name=backend_name,
-        storage_base_dir=faiss_base_dir,
+        storage_base_dir=storage_base_dir,
     )
     resolved_model = _resolve_model_name(model)
     interface.initialise_store(engine)
@@ -956,7 +970,7 @@ def migrate_legacy_pgvector_registry(
     )] = ProviderType.OLLAMA,
     source_database_url: Annotated[Optional[str], typer.Option(
         "--source-database-url",
-        help="Source database URL containing the legacy model_registry table. Defaults to OMOP_DATABASE_URL.",
+        help=f"Source database URL containing the legacy model_registry table. Defaults to {ENV_OMOP_DATABASE_URL}.",
     )] = None,
     legacy_table: Annotated[str, typer.Option(
         "--legacy-table",
@@ -979,9 +993,9 @@ def migrate_legacy_pgvector_registry(
     configure_logging_level(verbosity)
     load_dotenv()
 
-    source_url = source_database_url or os.getenv("OMOP_DATABASE_URL")
+    source_url = source_database_url or os.getenv(ENV_OMOP_DATABASE_URL)
     if source_url is None:
-        raise RuntimeError("OMOP_DATABASE_URL is not set. Provide --source-database-url.")
+        raise RuntimeError(f"{ENV_OMOP_DATABASE_URL} is not set. Provide --source-database-url.")
 
     source_engine = sa.create_engine(source_url, future=True, echo=False)
 

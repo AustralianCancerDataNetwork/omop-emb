@@ -22,11 +22,11 @@ and backend, processes them in batches, and stores the results in either the
   pip install "omop-emb[faiss]"
   ```
 
-- **Database**: Postgres implementation of OMOP CDM. See [`omop-graph` documentation](reference-missing) for information how to setup.
+- **Database**: Postgres implementation of OMOP CDM. See [`omop-graph` documentation](https://AustralianCancerDataNetwork.github.io/omop-graph) for information how to setup.
 - **Existing schema**: the CLI expects an existing OMOP database. It only
   creates its own embedding registry/storage metadata and does not need to
   bootstrap the full OMOP schema.
-- **Environment**: `OMOP_DATABASE_URL` must be exported or existing in the .env file  (e.g., `postgresql://user:pass@localhost:5432/omop`).
+- **Environment**: `OMOP_DATABASE_URL` must be exported or existing in the .env file  (e.g., `postgresql://user:pass@localhost:5432/omop`). Also, set `OMOP_EMB_BASE_STORAGE_DIR` to the file location for storage of metadata.db and FAISS data.
 - **Schema resolution**: OMOP vocabulary tables are resolved through the
   PostgreSQL connection `search_path`. If your OMOP tables live in a schema such
   as `staging_vocabulary`, ensure the connection resolves `concept` to that
@@ -59,13 +59,15 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 | **`--embedding-dim`** | | `Integer` | `OMOP_EMB_EMBEDDING_DIM` or auto-detect | Explicit embedding dimension override for models whose dimensions cannot be inferred automatically. |
 | **`--overwrite-model-registration`** | | `Boolean` | `False` | Force a clean rebuild for this model name by deleting backend-owned storage and SQL registration before re-registering it. |
 | **`--backend`** | | `Literal['pgvector', 'faiss']` | `OMOP_EMB_BACKEND` | Embedding backend to use. Requires the respective backend extra to be installed. |
-| **`--faiss-base-dir`** | | `String` | `None` | Optional base directory for FAISS backend storage. |
+| **`--storage-base-dir`** | | `String` | `None` | Optional base directory for FAISS backend storage. |
 | **`--hnsw-num-neighbors`** | | `Integer` | `32` | FAISS HNSW `M` parameter when `--index-type hnsw`. |
 | **`--hnsw-ef-search`** | | `Integer` | `64` | FAISS HNSW `efSearch` parameter when `--index-type hnsw`. |
 | **`--hnsw-ef-construction`** | | `Integer` | `200` | FAISS HNSW `efConstruction` parameter when `--index-type hnsw`. |
 | **`--standard-only`** | | `Boolean` | `False` | If set, only generate embeddings for OMOP standard concepts (`standard_concept = 'S'`). |
 | **`--vocabulary`** | | `List[String]` | `None` | Filter to embed concepts only from specific OMOP vocabularies. |
+| **`--domain`** | | `List[String]` | `None` | Filter to embed concepts only from specific OMOP domains. |
 | **`--num-embeddings`** | `-n` | `Integer` | `None` | Limit the number of concepts processed (useful for testing). |
+| **`--verbose`** | `-v` | `Integer` | `0` | Increase logging verbosity. Repeat the flag for more detail. |
 
 ## Environment Variables
 
@@ -139,7 +141,7 @@ The migration command supports these legacy field names when reading rows:
 - `OMOP_EMB_MODEL`: default model name if `--model` is omitted.
 - `OMOP_EMB_EMBEDDING_DIM`: explicit embedding dimension override if `--embedding-dim` is omitted.
 - `OMOP_EMB_BACKEND`: default embedding backend if `--backend` is omitted.
-- `OMOP_EMB_FAISS_INDEX_DIR`: optional FAISS storage base dir used when the backend is `faiss`.
+- `OMOP_EMB_BASE_STORAGE_DIR`: local storage root for metadata and file-based backend artifacts; used when a command-specific storage path is not provided.
 
 ### Notes
 
@@ -162,6 +164,9 @@ The migration command supports these legacy field names when reading rows:
   the CLI now fails early and tells you to rerun with
   `--overwrite-model-registration`.
 - For larger FAISS stores, prefer `--index-type hnsw` over `flat`.
+
+!!! note
+The HDF5 file is the durable source of truth for the stored embeddings. This facilitates the creation of various indices from the same embeddings, and also facilitates the extension of trained indices (see [HNSW](https://github.com/facebookresearch/faiss/wiki/Faster-search) for example). Trainable indices loose the ability to retrieve the raw embeddings from the index storage, which prevents the creation of other indices from the same original embeddings without the HDF5 storage.
 
 ### FAISS Storage Layout
 

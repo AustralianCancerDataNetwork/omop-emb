@@ -255,10 +255,15 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         *,
         session: Session,
         model_name: str,
+        provider_type: ProviderType,
         index_type: IndexType,
         storage_manager: EmbeddingStorageManager,
     ) -> None:
-        embedding_table = self.get_embedding_table(model_name=model_name, index_type=index_type)
+        embedding_table = self.get_embedding_table(
+            model_name=model_name,
+            provider_type=provider_type,
+            index_type=index_type,
+        )
         registry_count = session.scalar(select(func.count()).select_from(embedding_table))
         storage_count = storage_manager.get_count()
         if registry_count != storage_count:
@@ -332,6 +337,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         self._validate_storage_consistency(
             session=session,
             model_name=model_name,
+            provider_type=provider_type,
             index_type=index_type,
             storage_manager=storage_manager,
         )
@@ -386,6 +392,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         self._validate_storage_consistency(
             session=session,
             model_name=model_name,
+            provider_type=provider_type,
             index_type=index_type,
             storage_manager=storage_manager,
         )
@@ -463,18 +470,22 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         *,
         session: Session,
         model_name: str,
+        provider_type: ProviderType,
         metric_types: Optional[Sequence[MetricType]] = None,
         batch_size: int = 100_000,
     ) -> None:
         records = self.embedding_model_registry.get_registered_models_from_db(
             backend_type=self.backend_type,
             model_name=model_name,
+            provider_type=provider_type,
         )
         if not records:
-            raise ValueError(f"Embedding model '{model_name}' is not registered in the FAISS backend.")
+            raise ValueError(
+                f"Embedding model '{model_name}' for provider '{provider_type.value}' is not registered in the FAISS backend."
+            )
         if len(records) > 1:
             raise ValueError(
-                f"Multiple FAISS registrations exist for model '{model_name}'. "
+                f"Multiple FAISS registrations exist for model '{model_name}' and provider '{provider_type.value}'. "
                 "Use a unique model name before rebuilding indexes."
             )
         model_record = records[0]
@@ -487,6 +498,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         self._validate_storage_consistency(
             session=session,
             model_name=model_name,
+            provider_type=provider_type,
             index_type=model_record.index_type,
             storage_manager=storage_manager,
         )

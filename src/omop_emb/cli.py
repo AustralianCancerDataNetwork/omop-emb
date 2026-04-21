@@ -332,6 +332,7 @@ def _warm_search_backend(
     matching_models = backend.embedding_model_registry.get_registered_models_from_db(
         backend_type=backend.backend_type,
         model_name=model_name,
+        provider_type=interface.provider_type,
     )
     if not matching_models:
         raise RuntimeError(f"Embedding model '{model_name}' is not registered.")
@@ -396,8 +397,9 @@ def _run_search_query(
     matches = backend.get_nearest_concepts(
         session=session,
         model_name=model_name,
+        provider_type=interface.provider_type,
         index_type=model_record.index_type,
-        query_embedding=query_embeddings,
+        query_embeddings=query_embeddings,
         metric_type=metric_type,
         concept_filter=concept_filter,
     )

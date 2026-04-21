@@ -15,7 +15,7 @@ from .pgvector_sql import (
     create_pg_embedding_table,
     add_embeddings_to_registered_table,
 )
-from omop_emb.config import BackendType, MetricType, IndexType
+from omop_emb.config import BackendType, MetricType, IndexType, ProviderType
 from ..base import EmbeddingBackend, require_registered_model
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
@@ -55,32 +55,15 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     @require_registered_model
     def upsert_embeddings(
         self,
-        model_name: str,
-        index_type: IndexType,
         *,
         session: Session,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
         concept_ids: Sequence[int],
         embeddings: ndarray,
         _model_record: EmbeddingModelRecord,
     ) -> None:
-        """
-        Insert or update embeddings for OMOP concept IDs.
-
-        Parameters
-        ----------
-        model_name : str
-            Registered name of the embedding model.
-        index_type : IndexType
-            Storage index type used for this model's embeddings.
-        session : Session
-            SQLAlchemy session bound to the OMOP CDM database.
-        concept_ids : Sequence[int]
-            Concept IDs aligned with the rows of ``embeddings``.
-        embeddings : ndarray
-            Embedding matrix of shape ``(n_concepts, D)``.
-        _model_record : EmbeddingModelRecord
-            Internal registered-model record injected by ``@require_registered_model``.
-        """
         concept_id_tuple = tuple(concept_ids)
 
         self.validate_embeddings_and_concept_ids(
@@ -92,6 +75,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         table = self.get_embedding_table(
             model_name=model_name,
             index_type=index_type,
+            provider_type=provider_type,
         )
 
         try:
@@ -110,30 +94,14 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     @require_registered_model
     def get_embeddings_by_concept_ids(
         self,
-        model_name: str,
-        index_type: IndexType,
         *,
         session: Session,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
         concept_ids: Sequence[int],
         _model_record: EmbeddingModelRecord,
     ) -> Mapping[int, Sequence[float]]:
-        """
-        Return embeddings for the requested concept IDs.
-
-        Parameters
-        ----------
-        model_name : str
-            Registered name of the embedding model.
-        index_type : IndexType
-            Storage index type used for this model's embeddings.
-        session : Session
-            SQLAlchemy session bound to the OMOP CDM database.
-        concept_ids : Sequence[int]
-            Concept IDs to fetch from backend storage.
-        _model_record : EmbeddingModelRecord
-            Internal registered-model record injected by ``@require_registered_model``.
-        """
-
         concept_id_tuple = tuple(concept_ids)
         if not concept_id_tuple:
             return {}
@@ -141,6 +109,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         embedding_table = self.get_embedding_table(
             model_name=model_name,
             index_type=index_type,
+            provider_type=provider_type,
         )
         query = q_embedding_vectors_by_concept_ids(
             embedding_table=embedding_table,
@@ -162,40 +131,20 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     @require_registered_model
     def get_nearest_concepts(
         self,
-        model_name: str,
-        index_type: IndexType,
         *,
         session: Session,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
         query_embeddings: ndarray,
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         _model_record: EmbeddingModelRecord,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:           
-        """
-        Return nearest stored concepts for query embeddings.
-
-        Parameters
-        ----------
-        model_name : str
-            Registered name of the embedding model.
-        index_type : IndexType
-            Storage index type used for this model's embeddings.
-        session : Session
-            SQLAlchemy session bound to the OMOP CDM database.
-        query_embeddings : ndarray
-            Query embedding matrix of shape ``(Q, D)``.
-        metric_type : MetricType
-            Similarity or distance metric for nearest-neighbor search.
-        concept_filter : Optional[EmbeddingConceptFilter], optional
-            Optional filter restricting which OMOP concepts are considered.
-        k : int, optional
-            Number of nearest matches to return per query.
-        _model_record : EmbeddingModelRecord
-            Internal registered-model record injected by ``@require_registered_model``.
-        """
         embedding_table = self.get_embedding_table(
             model_name=model_name,
             index_type=index_type,
+            provider_type=provider_type,
         )
         self.validate_embeddings(embeddings=query_embeddings, dimensions=_model_record.dimensions)
 
@@ -239,7 +188,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         matches_tuple = tuple(tuple(matches) for matches in results)
 
         k = concept_filter.limit
-        assert k is not None, "Internal error: concept_filter.limit should have been set to a non-None value by this point."
+        if k is None:
+            raise RuntimeError("Internal error: concept_filter.limit should have been set to a non-None value by this point.")
         self.validate_nearest_concepts_output(matches_tuple, k, query_embeddings=query_embeddings)
         return matches_tuple
 

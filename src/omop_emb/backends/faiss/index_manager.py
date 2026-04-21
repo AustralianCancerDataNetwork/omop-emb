@@ -229,13 +229,19 @@ class BaseIndexManager(abc.ABC):
             self.save()
 
     def validate_embedding_vector(self, vector: np.ndarray):
-        assert isinstance(vector, np.ndarray), f"Expected query_vector to be a numpy array, got {type(vector)}"
-        assert vector.ndim == 2, f"Expected query_vector to be 2D, got {vector.ndim}D"
-        assert vector.shape[1] == self.dimension, f"Expected query_vector to have dimension {self.dimension}, got {vector.shape[1]}"
+        if not isinstance(vector, np.ndarray):
+            raise TypeError(f"Expected query_vector to be a numpy array, got {type(vector)}")
+        if vector.ndim != 2:
+            raise ValueError(f"Expected query_vector to be 2D, got {vector.ndim}D")
+        if vector.shape[1] != self.dimension:
+            raise ValueError(f"Expected query_vector to have dimension {self.dimension}, got {vector.shape[1]}")
 
     def validate_concept_ids(self, concept_ids: np.ndarray):
-        assert isinstance(concept_ids, np.ndarray), f"Expected concept_ids to be a numpy array, got {type(concept_ids)}"
-        assert concept_ids.ndim == 1, f"Expected concept_ids to be 1D, got {concept_ids.ndim}D"
+        if not isinstance(concept_ids, np.ndarray):
+            raise TypeError(f"Expected concept_ids to be a numpy array, got {type(concept_ids)}")
+        if concept_ids.ndim != 1:
+            raise ValueError(f"Expected concept_ids to be 1D, got {concept_ids.ndim}D")
+
         
 
 class FlatIndexManager(BaseIndexManager):

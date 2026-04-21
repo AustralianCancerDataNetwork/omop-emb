@@ -18,11 +18,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from omop_alchemy.cdm.model.vocabulary import Concept
 from orm_loader.helpers import Base
-from omop_llm import LLMClient
+from omop_emb.embeddings import EmbeddingClient
 
 from omop_emb.backends.faiss import FaissEmbeddingBackend
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
-from omop_emb.interface import EmbeddingInterface
+from omop_emb.interface import EmbeddingWriterInterface, EmbeddingReaderInterface
+from omop_emb.config import BackendType, ProviderType, IndexType
 
 if TYPE_CHECKING:
     from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
@@ -239,26 +240,32 @@ def session(pg_engine) -> Generator[Session, None, None]:
 
 @pytest.fixture
 def mock_llm_client() -> Mock:
-    """Mock LLMClient with deterministic, low-dimensional embeddings."""
-    client = Mock(spec=LLMClient)
+    """Mock EmbeddingClient with deterministic, low-dimensional embeddings."""
+    client = Mock(spec=EmbeddingClient)
     client.embedding_dim = EMBEDDING_DIM
-    
+    client.canonical_model_name = MODEL_NAME
+
+    mock_provider = Mock()
+    mock_provider.canonical_model_name.side_effect = lambda name: name  # Return input as-is
+    mock_provider.provider_type = ProviderType.OLLAMA
+    client.provider = mock_provider
+
     def create_embeddings(concept_names: list[str] | str, batch_size: Optional[int] = None) -> np.ndarray:
         if isinstance(concept_names, str):
             concept_names = [concept_names]
         else:
             concept_names = list(concept_names)
-        
+
         embeddings: list[np.ndarray] = [CONCEPTS[name].embeddings for name in concept_names]
         return np.vstack(embeddings).astype(np.float32)
-    
+
     client.embeddings = Mock(side_effect=create_embeddings)
     return client
 
 
 @pytest.fixture
 def temp_storage_dir():
-    """Temporary directory for FAISS indices."""
+    """Temporary directory for embedding registry"""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
 
@@ -280,14 +287,38 @@ def pgvector_backend(session, temp_storage_dir) -> PGVectorEmbeddingBackend:
 
 
 @pytest.fixture
-def embedding_interface(session, mock_llm_client, faiss_backend) -> EmbeddingInterface:
+def embedding_reader_interface(session, temp_storage_dir) -> EmbeddingReaderInterface:
+    """Read-only embedding interface sharing the same local registry as writer fixtures."""
+    reader = EmbeddingReaderInterface(
+        canonical_model_name=MODEL_NAME,
+        provider_name_or_type=PROVIDER_TYPE,
+        backend_name_or_type=BackendType.FAISS,
+        storage_base_dir=str(temp_storage_dir),
+    )
+    reader.initialise_store(session.bind)
+    return reader
+
+
+@pytest.fixture
+def embedding_writer_interface(session, mock_llm_client, temp_storage_dir) -> EmbeddingWriterInterface:
     """Full embedding interface ready for testing."""
-    interface = EmbeddingInterface(
+    interface = EmbeddingWriterInterface(
         embedding_client=mock_llm_client,
-        backend=faiss_backend,
+        backend_name_or_type=BackendType.FAISS,
+        storage_base_dir=temp_storage_dir,
     )
     interface.initialise_store(session.bind)
     return interface
+
+
+@pytest.fixture
+def registered_embedding_writer_interface(session, embedding_writer_interface: EmbeddingWriterInterface) -> EmbeddingWriterInterface:
+    """Embedding interface with a pre-registered model for testing read operations."""
+    embedding_writer_interface.register_model(
+        engine=session.bind,
+        index_type=IndexType.FLAT,
+    )
+    return embedding_writer_interface
 
 
 # ================ Test Data ================
@@ -345,7 +376,9 @@ CONCEPTS: Dict[str, TestConcept] = {
 TEST_CONCEPT_EMB = np.array([[-1.0]], dtype=np.float32)
 
 
-MODEL_NAME = "test-model"
+MODEL_NAME = "test-model:v1"
+PROVIDER = "ollama"
+PROVIDER_TYPE = ProviderType(PROVIDER)
 EMBEDDING_DIM = 1
 
 

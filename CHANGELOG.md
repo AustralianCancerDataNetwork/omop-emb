@@ -1,3 +1,10 @@
+# [0.4.0](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.3.3...v0.4.0) (2026-04-20)
+
+
+### Features
+
+* EmbeddingClient and Providers in omop-emb, fix non-canonical model naming without tags ([#6](https://github.com/AustralianCancerDataNetwork/omop-emb/issues/6)) ([1aaf8e7](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/1aaf8e732c12eadbe79c288118d9ec8ec2e25575))
+
 ## [0.3.3](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.3.2...v0.3.3) (2026-04-15)
 
 

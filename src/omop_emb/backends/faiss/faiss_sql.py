@@ -73,9 +73,10 @@ def add_concept_ids_to_faiss_registry(
     sqlalchemy.exc.IntegrityError
         If there is an attempt to add a concept_id that already exists in the registry, which indicates a mismatch between the registry and the actual contents of the FAISS index. This is a safeguard as partial updates and overwrites are not yet supported.
     """
-
-    assert session.bind is not None, "Session must be bound to an engine"
-    assert session.bind.dialect.name == "postgresql", "This function is only implemented for PostgreSQL databases"
+    if session.bind is None:
+        raise ValueError("Session must be bound to an engine to add concept IDs to FAISS registry.")
+    if session.bind.dialect.name != "postgresql":
+        raise ValueError(f"This function is only implemented for PostgreSQL databases, but got {session.bind.dialect.name}.")
 
     stmt = insert(registered_table).values(list({"concept_id": cid} for cid in concept_ids))
     session.execute(stmt)

@@ -15,7 +15,7 @@ from omop_emb.utils.errors import (
     UnknownEmbeddingBackendError,
 )
 
-def normalize_backend_name(backend_name: Optional[str | BackendType]) -> BackendType:
+def normalize_backend_name(backend_name_or_type: Optional[str | BackendType]) -> BackendType:
     """
     Normalize an embedding backend name from an explicit argument or env var.
 
@@ -24,22 +24,22 @@ def normalize_backend_name(backend_name: Optional[str | BackendType]) -> Backend
     2. ``OMOP_EMB_BACKEND`` environment variable
     """
 
-    backend_name = backend_name or os.getenv(ENV_OMOP_EMB_BACKEND)
-    if backend_name is None:
+    backend_name_or_type = backend_name_or_type or os.getenv(ENV_OMOP_EMB_BACKEND)
+    if backend_name_or_type is None:
         raise AttributeError(f"No embedding backend specified. Provide an explicit backend_name or set the {ENV_OMOP_EMB_BACKEND} environment variable.")
     else:
         try:
-            backend_type = parse_backend_type(backend_name)
+            backend_type = parse_backend_type(backend_name_or_type)
         except ValueError:
             raise UnknownEmbeddingBackendError(
-                f"Unknown embedding backend {backend_name!r}. "
+                f"Unknown embedding backend {backend_name_or_type!r}. "
                 f"Expected one of {[member.value for member in BackendType]}."
             )
         return backend_type
 
 
 def get_embedding_backend(
-    backend_name: Optional[str | BackendType] = None,
+    backend_name_or_type: Optional[str | BackendType] = None,
     storage_base_dir: Optional[str] = None,
     registry_db_name: Optional[str] = None,
 ) -> EmbeddingBackend:
@@ -51,8 +51,8 @@ def get_embedding_backend(
 
     Resolution
     ----------
-    ``backend_name`` is resolved via :func:`normalize_backend_name`:
-    1. explicit ``backend_name`` argument
+    ``backend_name_or_type`` is resolved via :func:`normalize_backend_name`:
+    1. explicit ``backend_name_or_type`` argument
     2. ``OMOP_EMB_BACKEND`` environment variable
 
     ``storage_base_dir`` is forwarded to backend constructors, where each
@@ -60,7 +60,7 @@ def get_embedding_backend(
     ``OMOP_EMB_BASE_STORAGE_DIR``, then backend default path).
     """
 
-    resolved = normalize_backend_name(backend_name)
+    resolved = normalize_backend_name(backend_name_or_type)
 
     if resolved == BackendType.PGVECTOR:
         try:

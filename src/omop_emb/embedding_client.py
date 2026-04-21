@@ -7,6 +7,8 @@ from typing import List, Optional, Protocol, Sequence, Tuple, Union
 import numpy as np
 import requests
 
+from omop_emb.embeddings import get_provider_for_api_base
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,6 +35,15 @@ class OpenAICompatibleEmbeddingClient:
     encoding_format: str = "float"
     request_timeout: float = 120.0
     _embedding_dim: Optional[int] = field(default=None, init=False, repr=False)
+
+    @property
+    def provider(self):
+        resolved_api_key = self.api_key or "ollama"
+        return get_provider_for_api_base(self.api_base, resolved_api_key)
+
+    @property
+    def canonical_model_name(self) -> str:
+        return self.provider.canonical_model_name(self.model)
 
     @property
     def endpoint_url(self) -> str:

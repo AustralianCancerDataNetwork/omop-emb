@@ -6,17 +6,19 @@ import numpy as np
 from omop_emb.config import IndexType, MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.utils.errors import ModelRegistrationConflictError
-from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM, TEST_CONCEPT_EMB
+from omop_emb.backends import EmbeddingBackend
+from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM, TEST_CONCEPT_EMB, PROVIDER_TYPE
 
 
 class SharedBackendTests:
     """Base class containing backend-parity tests via a generic ``backend`` fixture."""
 
-    def test_backend_registration(self, session, backend, index_type: IndexType = IndexType.FLAT):
+    def test_backend_registration(self, session, backend: EmbeddingBackend, index_type: IndexType = IndexType.FLAT):
         """Test registering model with the backend."""
         model = backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -24,25 +26,27 @@ class SharedBackendTests:
         assert model.model_name == MODEL_NAME
         assert model.dimensions == EMBEDDING_DIM
 
-    def test_get_registered_model(self, session, backend, index_type: IndexType = IndexType.FLAT):
+    def test_get_registered_model(self, session, backend: EmbeddingBackend, index_type: IndexType = IndexType.FLAT):
         """Test retrieving registered model."""
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
 
-        retrieved = backend.get_registered_model(model_name=MODEL_NAME, index_type=index_type)
+        retrieved = backend.get_registered_model(model_name=MODEL_NAME, index_type=index_type, provider_type=PROVIDER_TYPE)
 
         assert retrieved is not None
         assert retrieved.model_name == MODEL_NAME
 
-    def test_duplicate_registration_identical_success(self, session, backend, index_type: IndexType = IndexType.FLAT):
+    def test_duplicate_registration_identical_success(self, session, backend: EmbeddingBackend, index_type: IndexType = IndexType.FLAT):
         """Test that idempotent model registration returns the existing record."""
         params = {
             "engine": session.bind,
             "model_name": MODEL_NAME,
+            "provider_type": PROVIDER_TYPE,
             "dimensions": EMBEDDING_DIM,
             "index_type": index_type,
             "metadata": {"version": "1.0"},
@@ -54,11 +58,12 @@ class SharedBackendTests:
         assert model1.storage_identifier == model2.storage_identifier
         assert model2.metadata["version"] == "1.0"
 
-    def test_registration_metadata_conflict_raises_error(self, session, backend, index_type: IndexType = IndexType.FLAT):
+    def test_registration_metadata_conflict_raises_error(self, session, backend: EmbeddingBackend, index_type: IndexType = IndexType.FLAT):
         """Test conflicting metadata on re-registration raises conflict error."""
         params = {
             "engine": session.bind,
             "model_name": MODEL_NAME,
+            "provider_type": PROVIDER_TYPE,
             "dimensions": EMBEDDING_DIM,
             "index_type": index_type,
             "metadata": {"version": "1.0"},
@@ -73,11 +78,12 @@ class SharedBackendTests:
 
         assert excinfo.value.conflict_field == "metadata"
 
-    def test_upsert_embeddings(self, session, backend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
+    def test_upsert_embeddings(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
         """Test upserting embeddings."""
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -89,18 +95,20 @@ class SharedBackendTests:
         backend.upsert_embeddings(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
         )
 
-        assert backend.has_any_embeddings(session=session, model_name=MODEL_NAME, index_type=index_type)
+        assert backend.has_any_embeddings(session=session, model_name=MODEL_NAME, index_type=index_type, provider_type=PROVIDER_TYPE)
 
-    def test_get_embeddings_by_ids(self, session, backend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
+    def test_get_embeddings_by_ids(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
         """Test retrieving embeddings by concept IDs."""
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -112,6 +120,7 @@ class SharedBackendTests:
         backend.upsert_embeddings(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
@@ -120,6 +129,7 @@ class SharedBackendTests:
         retrieved = backend.get_embeddings_by_concept_ids(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             concept_ids=concept_ids,
             index_type=index_type,
         )
@@ -127,11 +137,12 @@ class SharedBackendTests:
         assert len(retrieved) == 2
         assert set(retrieved.keys()) == set(concept_ids)
 
-    def test_nearest_neighbor_search(self, session, backend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
+    def test_nearest_neighbor_search(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
         """Test exact top-1 nearest-neighbor retrieval with deterministic embeddings."""
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -143,6 +154,7 @@ class SharedBackendTests:
         backend.upsert_embeddings(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
@@ -152,6 +164,7 @@ class SharedBackendTests:
         results = backend.get_nearest_concepts(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             query_embeddings=query_embeddings,
             metric_type=MetricType.L2,
@@ -162,11 +175,12 @@ class SharedBackendTests:
         assert len(results[0]) == 1
         assert results[0][0].concept_id == CONCEPTS["Hypertension"].concept_id
 
-    def test_nearest_neighbor_with_domain_filter(self, session, backend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
+    def test_nearest_neighbor_with_domain_filter(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
         """Test nearest neighbor search with domain filter."""
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -178,6 +192,7 @@ class SharedBackendTests:
         backend.upsert_embeddings(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
@@ -185,6 +200,7 @@ class SharedBackendTests:
         results = backend.get_nearest_concepts(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             query_embeddings=TEST_CONCEPT_EMB,
             concept_filter=EmbeddingConceptFilter(domains=("Condition",), limit=10),
@@ -195,11 +211,12 @@ class SharedBackendTests:
         assert len(results) == 1
         assert set(m.concept_id for m in results[0]) == expected_ids
 
-    def test_nearest_neighbor_with_vocabulary_filter(self, session, backend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
+    def test_nearest_neighbor_with_vocabulary_filter(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
         """Test nearest neighbor search with vocabulary filter."""
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -211,6 +228,7 @@ class SharedBackendTests:
         backend.upsert_embeddings(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
@@ -219,6 +237,7 @@ class SharedBackendTests:
         results = backend.get_nearest_concepts(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             query_embeddings=TEST_CONCEPT_EMB,
             concept_filter=EmbeddingConceptFilter(vocabularies=("RxNorm",), limit=10),
@@ -229,11 +248,12 @@ class SharedBackendTests:
         assert len(results[0]) == 1
         assert results[0][0].concept_id == CONCEPTS["Aspirin"].concept_id
 
-    def test_get_concepts_without_embedding(self, session, backend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
+    def test_get_concepts_without_embedding(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
         """Test retrieving concepts without embeddings."""
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -245,6 +265,7 @@ class SharedBackendTests:
         backend.upsert_embeddings(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
@@ -253,6 +274,7 @@ class SharedBackendTests:
         unembedded = backend.get_concepts_without_embedding(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
         )
 
@@ -260,9 +282,9 @@ class SharedBackendTests:
         assert CONCEPTS["Diabetes"].concept_id in unembedded
         assert CONCEPTS["Hypertension"].concept_id not in unembedded
 
-    def test_l2_similarity_exact_values(self, session, backend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
+    def test_l2_similarity_exact_values(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
         """Test L2 distance calculations yield expected similarity scores.
-        
+
         With deterministic embeddings:
         - TEST_CONCEPT_EMB = [-1.0]
         - Hypertension = [-10.0] → L2 distance = 9.0 → similarity = 1/(1+9) = 0.1
@@ -272,6 +294,7 @@ class SharedBackendTests:
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -283,6 +306,7 @@ class SharedBackendTests:
         backend.upsert_embeddings(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
@@ -291,6 +315,7 @@ class SharedBackendTests:
         results = backend.get_nearest_concepts(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             query_embeddings=TEST_CONCEPT_EMB,
             metric_type=MetricType.L2,
@@ -311,21 +336,22 @@ class SharedBackendTests:
                 rtol=1e-5,
             )
 
-    def test_cosine_similarity_exact_values(self, session, backend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
+    def test_cosine_similarity_exact_values(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
         """Test cosine distance calculations yield expected similarity scores.
-        
+
         With deterministic embeddings (1D vectors):
         - TEST_CONCEPT_EMB = [-1.0] → normalized: [-1.0]
         - Hypertension = [-10.0] → normalized: [-1.0] → cosine similarity = 1.0 → normalized similarity = 1.0
         - Diabetes = [0.0] → zero vector (special case, skip exact check)
         - Aspirin = [10.0] → normalized: [1.0] → cosine similarity = -1.0 → normalized similarity = 0.0
-        
+
         Cosine distance in pgvector: 1 - cosine_similarity
         Final normalized similarity returned: 1 - distance / 2 = (1 + cos_sim) / 2
         """
         backend.register_model(
             engine=session.bind,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             dimensions=EMBEDDING_DIM,
         )
@@ -337,6 +363,7 @@ class SharedBackendTests:
         backend.upsert_embeddings(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
@@ -345,6 +372,7 @@ class SharedBackendTests:
         results = backend.get_nearest_concepts(
             session=session,
             model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
             index_type=index_type,
             query_embeddings=TEST_CONCEPT_EMB,
             metric_type=MetricType.COSINE,

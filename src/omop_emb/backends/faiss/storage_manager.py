@@ -173,11 +173,14 @@ class EmbeddingStorageManager:
         metric_type: Optional[MetricType] = None
     ):
         """Appends new vectors directly to the disk without loading old ones into RAM."""
-        
-        assert embeddings.shape[1] == self.dimensions, f"Embeddings dimension {embeddings.shape[1]} does not match expected {self.dimensions}"
-        assert embeddings.shape[0] == concept_ids.shape[0], "Number of embeddings must match number of concept_ids"
-        assert embeddings.ndim == 2, "Embeddings must be a 2D array"
 
+        if embeddings.shape[1] != self.dimensions:
+            raise ValueError(f"Embeddings dimension {embeddings.shape[1]} does not match expected {self.dimensions}")
+        if embeddings.shape[0] != concept_ids.shape[0]:
+            raise ValueError("Number of embeddings must match number of concept_ids")
+        if embeddings.ndim != 2:
+            raise ValueError("Embeddings must be a 2D array")
+    
         unique = np.unique(concept_ids)
         if len(unique) != len(concept_ids):
             raise ValueError("Duplicate concept_ids found in the input. Please ensure all concept_ids are unique to prevent data corruption.")
@@ -232,7 +235,8 @@ class EmbeddingStorageManager:
             The concept_ids of the nearest neighbors. Size q x k.
         """
         index_manager = self.get_index_manager(index_type=index_type, metric_type=metric_type)
-        assert index_manager is not None, "Index manager should have been created by now."
+        if index_manager is None:
+            raise ValueError(f"No index manager found for index type {index_type} and metric type {metric_type}. Cannot perform search.")
         return index_manager.search(
             query_vector=query_vector,
             k=k,
@@ -328,5 +332,7 @@ class EmbeddingStorageManager:
                 yield batch_ids, batch_embeddings
 
     def validate_concept_ids(self, concept_ids: np.ndarray):
-        assert isinstance(concept_ids, np.ndarray), f"Expected concept_ids to be a numpy array, got {type(concept_ids)}"
-        assert concept_ids.ndim == 1, f"Expected concept_ids to be 1D, got {concept_ids.ndim}D"
+        if not isinstance(concept_ids, np.ndarray):
+            raise TypeError(f"Expected concept_ids to be a numpy array, got {type(concept_ids)}")
+        if concept_ids.ndim != 1:
+            raise ValueError(f"Expected concept_ids to be 1D, got {concept_ids.ndim}D")

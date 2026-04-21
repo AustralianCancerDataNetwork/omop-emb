@@ -4,6 +4,10 @@ from typing import Dict, Tuple
 ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
 ENV_BASE_STORAGE_DIR = "OMOP_EMB_BASE_STORAGE_DIR"  # For backends that use file-based storage, e.g. FAISS with on-disk indices or registry metadata storage
 
+class ProviderType(StrEnum):
+    """Enum for supported embedding model providers."""
+    OLLAMA = "ollama"
+    OPENAI = "openai"
 
 class BackendType(StrEnum):
     """Enum for supported embedding backends."""

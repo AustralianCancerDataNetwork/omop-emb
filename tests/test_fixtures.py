@@ -64,7 +64,7 @@ class TestFixtures:
         assert emb1.shape == (1, mock_llm_client.embedding_dim)
     
     
-    def test_embedding_interface_initializes(self, embedding_interface, session):
+    def test_embedding_interface_initializes(self, embedding_writer_interface, session):
         """Verify EmbeddingInterface initializes with mocks."""
-        assert embedding_interface is not None
-        assert embedding_interface.embedding_dim == EMBEDDING_DIM
+        assert embedding_writer_interface is not None
+        assert embedding_writer_interface.embedding_dim == EMBEDDING_DIM

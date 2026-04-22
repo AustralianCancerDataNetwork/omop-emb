@@ -3,6 +3,14 @@ from typing import Dict, Tuple
 
 ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
 ENV_BASE_STORAGE_DIR = "OMOP_EMB_BASE_STORAGE_DIR"  # For backends that use file-based storage, e.g. FAISS with on-disk indices or registry metadata storage
+ENV_OMOP_EMB_METADATA_SCHEMA = "OMOP_EMB_METADATA_SCHEMA"
+ENV_DOCUMENT_EMBEDDING_PREFIX = "OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX"
+ENV_QUERY_EMBEDDING_PREFIX = "OMOP_EMB_QUERY_EMBEDDING_PREFIX"
+ENV_OMOP_DATABASE_URL = "OMOP_DATABASE_URL"
+ENV_OMOP_EMB_MODEL = "OMOP_EMB_MODEL"
+ENV_OMOP_EMB_API_KEY = "OMOP_EMB_API_KEY"
+ENV_OMOP_EMB_EMBEDDING_DIM = "OMOP_EMB_EMBEDDING_DIM"
+ENV_OMOP_EMB_EMBEDDING_PATH = "OMOP_EMB_EMBEDDING_PATH"
 
 class ProviderType(StrEnum):
     """Enum for supported embedding model providers."""
@@ -90,7 +98,8 @@ SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tup
     },
     # Check here: https://github.com/facebookresearch/faiss/wiki/Faiss-indexes
     BackendType.FAISS: {
-        IndexType.FLAT: (MetricType.L2, MetricType.COSINE)
+        IndexType.FLAT: (MetricType.L2, MetricType.COSINE),
+        IndexType.HNSW: (MetricType.L2, MetricType.COSINE),
     }
 }
 
@@ -106,3 +115,7 @@ def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) 
 def get_supported_index_types_for_backend(backend: BackendType) -> Tuple[IndexType, ...]:
     supported_indices_and_metrics = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
     return tuple(supported_indices_and_metrics.keys())
+
+def get_supported_metrics_for_backend_index(backend: BackendType, index: IndexType) -> Tuple[MetricType, ...]:
+    supported_indices_and_metrics = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
+    return supported_indices_and_metrics.get(index, ())

@@ -4,6 +4,7 @@ This module is closely tied to the storage manager, as it needs to know how to r
 import faiss
 import numpy as np
 import abc
+import time
 from pathlib import Path
 from typing import Optional, Generator, Tuple
 
@@ -14,8 +15,10 @@ logger = logging.getLogger(__name__)
 def logger_warning_partial_index_population(filepath: Path):
     logger.warning(
         "Current implementation does not guarantee that indices on disk are fully populated "
-        "or consistent with the raw embedding storage.\nIf you want to "
-        f"re-populate from storage, please delete the existing index file at `{filepath}` first.\n\n"
+        "or consistent with the raw embedding storage in embeddings.h5.\n"
+        "If you want to rebuild from HDF5, run `omop-emb rebuild-index` for the relevant "
+        "model, backend, and metric.\n"
+        f"Loaded existing index file: `{filepath}`.\n"
     )
 
 class BaseIndexManager(abc.ABC):
@@ -112,7 +115,18 @@ class BaseIndexManager(abc.ABC):
         """
         query = self._prepare_vectors(query_vector)
         params = self._create_search_parameters(subset_concept_ids)
+        started_at = time.monotonic()
         distances, concept_ids = self.index.search(query, k=k, params=params)  # type: ignore
+        elapsed_seconds = time.monotonic() - started_at
+        logger.info(
+            "Completed FAISS search: index_type=%s metric=%s queries=%s k=%s subset_size=%s elapsed=%.3fs",
+            self.supported_index_type.value,
+            self.metric_type.value,
+            query.shape[0],
+            k,
+            None if subset_concept_ids is None else int(len(subset_concept_ids)),
+            elapsed_seconds,
+        )
 
         if self.metric_type == MetricType.L2:
             # https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances#metric_l2
@@ -126,11 +140,31 @@ class BaseIndexManager(abc.ABC):
 
     def save(self):
         """Saves the index to disk."""
+        ntotal = getattr(self.index, "ntotal", "unknown")
+        logger.info(
+            "Writing FAISS index to disk at %s (index_type=%s metric=%s ntotal=%s).",
+            self.index_filepath,
+            self.supported_index_type.value,
+            self.metric_type.value,
+            ntotal,
+        )
         faiss.write_index(self.index, str(self.index_filepath))
+        logger.info("Completed writing FAISS index to disk at %s.", self.index_filepath)
 
     def load(self):
         """Loads an index from disk."""
+        started_at = time.monotonic()
         self._index = faiss.read_index(str(self.index_filepath))
+        elapsed_seconds = time.monotonic() - started_at
+        ntotal = getattr(self._index, "ntotal", "unknown")
+        logger.info(
+            "Loaded FAISS index from disk at %s (index_type=%s metric=%s ntotal=%s elapsed=%.3fs).",
+            self.index_filepath,
+            self.supported_index_type.value,
+            self.metric_type.value,
+            ntotal,
+            elapsed_seconds,
+        )
 
     def load_or_populate(self, data_stream: Generator[Tuple[np.ndarray, np.ndarray], None, None]):
         """Loads the index from disk if it exists, otherwise populates it from the provided data stream."""
@@ -141,6 +175,14 @@ class BaseIndexManager(abc.ABC):
         else:
             logger.info(f"No index file found at {self.index_filepath}, populating index from storage.")
             self._populate_from_storage(data_stream)
+
+    def rebuild_from_storage(self, data_stream: Generator[Tuple[np.ndarray, np.ndarray], None, None]):
+        """Delete any persisted index file and rebuild it from the provided storage stream."""
+        if self.has_index_on_disk():
+            logger.info("Deleting existing FAISS index before rebuild: %s", self.index_filepath)
+            self.index_filepath.unlink()
+        self._index = None
+        self._populate_from_storage(data_stream)
 
     def _populate_from_storage(
         self, 
@@ -160,8 +202,30 @@ class BaseIndexManager(abc.ABC):
             logger_warning_partial_index_population(self.index_filepath)
         else:
             logger.info(f"Populating {self.supported_index_type.value} from storage with data stream. This may take a while for large datasets...")
+            started_at = time.monotonic()
+            processed_vectors = 0
+            batch_count = 0
             for concept_ids, embeddings in data_stream:
                 self.add(concept_ids, embeddings)
+                batch_count += 1
+                processed_vectors += int(len(concept_ids))
+                if batch_count == 1 or batch_count % 10 == 0:
+                    elapsed_seconds = time.monotonic() - started_at
+                    logger.info(
+                        "FAISS index build progress: index_type=%s metric=%s batches=%s vectors=%s elapsed=%.1fs",
+                        self.supported_index_type.value,
+                        self.metric_type.value,
+                        batch_count,
+                        processed_vectors,
+                        elapsed_seconds,
+                    )
+            logger.info(
+                "Completed populating FAISS index in memory: index_type=%s metric=%s batches=%s vectors=%s. Saving index to disk next.",
+                self.supported_index_type.value,
+                self.metric_type.value,
+                batch_count,
+                processed_vectors,
+            )
             self.save()
 
     def validate_embedding_vector(self, vector: np.ndarray):
@@ -220,23 +284,45 @@ class HNSWIndexManager(BaseIndexManager):
         dimension: int, 
         metric_type: MetricType,
         base_index_dir: str | Path,
-        num_neighbors: int = 32
+        num_neighbors: int = 32,
+        ef_search: int = 64,
+        ef_construction: int = 200,
     ):
-        super().__init__(dimension, metric_type, base_index_dir)
         self.num_neighbors = num_neighbors
-        
-    #def _create_index(self) -> faiss.Index:
-    #    if self.metric == MetricType.L2:
-    #        return faiss.IndexHNSWFlat(self.dimension, self.num_neighbors)
-    #    elif self.metric == MetricType.COSINE:
-    #        # Inner Product for Cosine similarity after normalization
-    #        return faiss.IndexHNSWFlat(self.dimension, self.num_neighbors, faiss.METRIC_INNER_PRODUCT)  
-    #    else:
-    #        raise ValueError(f"Unsupported metric {self.metric} for HNSW index.")
+        self.ef_search = ef_search
+        self.ef_construction = ef_construction
+        super().__init__(dimension, metric_type, base_index_dir)
+
+    def _create_index(self) -> faiss.Index:
+        if self.metric_type == MetricType.L2:
+            index = faiss.IndexHNSWFlat(self.dimension, self.num_neighbors, faiss.METRIC_L2)
+        elif self.metric_type == MetricType.COSINE:
+            index = faiss.IndexHNSWFlat(self.dimension, self.num_neighbors, faiss.METRIC_INNER_PRODUCT)
+        else:
+            raise ValueError(f"Unsupported metric {self.metric_type} for HNSW index.")
+
+        index.hnsw.efConstruction = self.ef_construction  # type: ignore[attr-defined]
+        index.hnsw.efSearch = self.ef_search  # type: ignore[attr-defined]
+        return index
         
     @property
     def supported_index_type(self) -> IndexType:
         return IndexType.HNSW
+
+    def _create_search_parameters(self, concept_id_subset: np.ndarray | None = None):
+        if hasattr(faiss, "SearchParametersHNSW"):
+            params = faiss.SearchParametersHNSW()  # type: ignore[attr-defined]
+            params.efSearch = self.ef_search  # type: ignore[attr-defined]
+            if concept_id_subset is not None:
+                self.validate_concept_ids(concept_id_subset)
+                params.sel = faiss.IDSelectorBatch(concept_id_subset)  # type: ignore[attr-defined]
+            return params
+
+        if concept_id_subset is not None:
+            self.validate_concept_ids(concept_id_subset)
+            id_selector = faiss.IDSelectorBatch(concept_id_subset)  # type: ignore
+            return faiss.SearchParameters(sel=id_selector)  # type: ignore
+        return faiss.SearchParameters()
     
 class IVFIndexManager(BaseIndexManager):
     def __init__(

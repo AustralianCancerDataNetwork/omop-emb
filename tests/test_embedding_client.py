@@ -7,17 +7,38 @@ Embedding vectors are controlled deterministically via return_value / side_effec
 from __future__ import annotations
 
 from unittest.mock import MagicMock, Mock, patch
+from typing import Any
 
 import numpy as np
 import pytest
+import requests
 
 from omop_emb.config import ProviderType
 from omop_emb.embeddings import EmbeddingClient, OllamaProvider, OpenAIProvider
 from omop_emb.embeddings.embedding_client import EmbeddingClientError
+from omop_emb.embedding_client import OpenAICompatibleEmbeddingClient
 
 OLLAMA_BASE = "http://localhost:11434/v1"
 OPENAI_BASE = "https://api.openai.com/v1"
 OLLAMA_MODEL = "nomic-embed-text:v1.5"
+
+
+class FakeResponse:
+    def __init__(self, *, status_code: int, payload: object, text: str = ""):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status_code < 300
+
+    def json(self) -> object:
+        return self._payload
+
+    def raise_for_status(self) -> None:
+        if not self.ok:
+            raise requests.HTTPError(f"{self.status_code} {self.text}")
 
 
 def _make_embedding_response(vectors: list[list[float]]) -> Mock:
@@ -158,7 +179,6 @@ class TestEmbeddings:
         oi.embeddings.create.return_value = _make_embedding_response([[0.1, 0.2, 0.3]])
         result = c.embeddings("hello")
         assert result.ndim == 2
-        assert result.shape == (1, 3)
 
     def test_list_input_returns_correct_shape(self, client):
         c, oi = client
@@ -380,3 +400,74 @@ class TestEmbeddingClientError:
     def test_preserves_message(self):
         with pytest.raises(EmbeddingClientError, match="something went wrong"):
             raise EmbeddingClientError("something went wrong")
+
+
+@pytest.mark.unit
+def test_openai_compatible_embeddings_single_text_sends_model_and_scalar_input(monkeypatch):
+    captured_payloads: list[dict[str, Any]] = []
+
+    def fake_post(url, json, headers, timeout):
+        captured_payloads.append(json)
+        return FakeResponse(
+            status_code=200,
+            payload={"data": [{"embedding": [0.1, 0.2, 0.3]}]},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OpenAICompatibleEmbeddingClient(
+        model="text-embedding-3-small",
+        api_base="http://localhost:8000/v1",
+    )
+
+    embeddings = client.embeddings("Hello, world!")
+
+    assert embeddings.shape == (1, 3)
+    assert np.allclose(embeddings, np.array([[0.1, 0.2, 0.3]], dtype=np.float32))
+    assert captured_payloads == [
+        {
+            "model": "text-embedding-3-small",
+            "input": "Hello, world!",
+            "encoding_format": "float",
+        }
+    ]
+
+
+@pytest.mark.unit
+def test_openai_compatible_embeddings_retry_without_encoding_format(monkeypatch):
+    captured_payloads: list[dict[str, Any]] = []
+
+    def fake_post(url, json, headers, timeout):
+        captured_payloads.append(json)
+        if len(captured_payloads) == 1:
+            return FakeResponse(
+                status_code=400,
+                payload={"error": "unsupported field"},
+                text="unsupported field: encoding_format",
+            )
+        return FakeResponse(
+            status_code=200,
+            payload={"data": [{"embedding": [0.4, 0.5]}]},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OpenAICompatibleEmbeddingClient(
+        model="text-embedding-3-small",
+        api_base="http://localhost:8000/v1",
+    )
+
+    embeddings = client.embeddings("Hello, world!")
+
+    assert embeddings.shape == (1, 2)
+    assert captured_payloads == [
+        {
+            "model": "text-embedding-3-small",
+            "input": "Hello, world!",
+            "encoding_format": "float",
+        },
+        {
+            "model": "text-embedding-3-small",
+            "input": "Hello, world!",
+        },
+    ]

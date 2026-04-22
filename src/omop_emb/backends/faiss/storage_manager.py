@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from omop_emb.config import BackendType, IndexType, MetricType
-from .index_manager import FlatIndexManager, BaseIndexManager
+from .index_manager import FlatIndexManager, HNSWIndexManager, BaseIndexManager
 
 class EmbeddingStorageManager:
     """Storage manager for raw embeddings and concept_ids using HDF5 files for FAISS backend. 
@@ -33,7 +33,9 @@ class EmbeddingStorageManager:
         file_dir: str | Path, 
         dimensions: int,
         backend_type: BackendType,
-        # NOTE: Add neighbours/clusters here as param if differently support index types
+        hnsw_num_neighbors: int = 32,
+        hnsw_ef_search: int = 64,
+        hnsw_ef_construction: int = 200,
     ):
         # Sanity check
         if backend_type != BackendType.FAISS:
@@ -41,6 +43,9 @@ class EmbeddingStorageManager:
 
         self.base_dir = Path(file_dir)
         self.dimensions = dimensions
+        self.hnsw_num_neighbors = hnsw_num_neighbors
+        self.hnsw_ef_search = hnsw_ef_search
+        self.hnsw_ef_construction = hnsw_ef_construction
         self._init_embedding_storage_if_missing()
         self._index_managers: Dict[IndexType, Dict[MetricType, BaseIndexManager]] = {}
 
@@ -64,6 +69,38 @@ class EmbeddingStorageManager:
             )
             self._index_managers[index_type][metric_type] = index_manager
         return self._index_managers[index_type][metric_type]
+
+    def _instantiate_index_manager(
+        self,
+        *,
+        index_type: IndexType,
+        metric_type: MetricType,
+    ) -> BaseIndexManager:
+        if index_type == IndexType.FLAT:
+            index_manager_cls = FlatIndexManager
+        elif index_type == IndexType.HNSW:
+            index_manager_cls = HNSWIndexManager
+        else:
+            raise ValueError(
+                f"Unsupported index type {index_type} for FAISS backend. "
+                f"Supported indices are {IndexType.FLAT} and {IndexType.HNSW}."
+            )
+
+        if index_type == IndexType.HNSW:
+            return index_manager_cls(
+                dimension=self.dimensions,
+                metric_type=metric_type,
+                base_index_dir=self.base_dir,
+                num_neighbors=self.hnsw_num_neighbors,
+                ef_search=self.hnsw_ef_search,
+                ef_construction=self.hnsw_ef_construction,
+            )
+
+        return index_manager_cls(
+            dimension=self.dimensions,
+            metric_type=metric_type,
+            base_index_dir=self.base_dir,
+        )
     
     def create_index_manager(
         self,
@@ -71,17 +108,10 @@ class EmbeddingStorageManager:
         metric_type: MetricType,
         batch_size: int = 100_000
     ) -> BaseIndexManager:
-        if index_type == IndexType.FLAT:
-            index_manager_cls = FlatIndexManager
-        else:
-            raise ValueError(f"Unsupported index type {index_type} for FAISS backend. Only {IndexType.FLAT} is supported currently.")
-        
-        index_manager = index_manager_cls(
-            dimension=self.dimensions,
+        index_manager = self._instantiate_index_manager(
+            index_type=index_type,
             metric_type=metric_type,
-            base_index_dir=self.base_dir
         )
-
         index_manager.load_or_populate(
             self.stream_concept_ids_and_embeddings(batch_size=batch_size)
         )
@@ -155,10 +185,6 @@ class EmbeddingStorageManager:
         if len(unique) != len(concept_ids):
             raise ValueError("Duplicate concept_ids found in the input. Please ensure all concept_ids are unique to prevent data corruption.")
 
-        existing_concept_ids = self.get_concept_ids()
-        if np.intersect1d(existing_concept_ids, concept_ids).size > 0:
-            raise ValueError("Some concept_ids already exist in storage. Appending duplicate concept_ids would corrupt the data. Please ensure all concept_ids are unique and do not already exist in storage.")
-
         with self.open_all(mode="a") as (emb_ds, cid_ds):
             # 1. Calculate new sizes
             old_size = emb_ds.shape[0]
@@ -171,6 +197,7 @@ class EmbeddingStorageManager:
             # 3. Write the new data into the newly created empty space at the end
             emb_ds[old_size:new_size] = embeddings.astype('float32')
             cid_ds[old_size:new_size] = concept_ids.astype('int64')
+            emb_ds.file.flush()
 
         if index_type is not None and metric_type is not None:
             index_manager = self.get_index_manager(index_type=index_type, metric_type=metric_type)
@@ -214,6 +241,26 @@ class EmbeddingStorageManager:
             query_vector=query_vector,
             k=k,
             subset_concept_ids=subset_concept_ids
+        )
+
+    def rebuild_index(
+        self,
+        *,
+        index_type: IndexType,
+        metric_type: MetricType,
+        batch_size: int = 100_000,
+    ) -> None:
+        if index_type not in self._index_managers:
+            self._index_managers[index_type] = {}
+        index_manager = self._index_managers[index_type].get(metric_type)
+        if index_manager is None:
+            index_manager = self._instantiate_index_manager(
+                index_type=index_type,
+                metric_type=metric_type,
+            )
+            self._index_managers[index_type][metric_type] = index_manager
+        index_manager.rebuild_from_storage(
+            self.stream_concept_ids_and_embeddings(batch_size=batch_size)
         )
     
     def get_embeddings_by_concept_ids(self, concept_ids: np.ndarray) -> Mapping[int, Sequence[float]]:

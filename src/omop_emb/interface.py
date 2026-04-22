@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Mapping, Optional, Sequence, Tuple, List
+import os
+from typing import Literal, Mapping, Optional, Sequence, Tuple, List
 
 import numpy as np
 from numpy import ndarray
@@ -12,7 +13,14 @@ from omop_emb.embeddings import EmbeddingClient, get_provider_from_provider_type
 from .backends import get_embedding_backend
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.model_registry import EmbeddingModelRecord
-from .config import BackendType, IndexType, MetricType, ProviderType
+from .config import (
+    BackendType,
+    IndexType,
+    MetricType,
+    ProviderType,
+    ENV_DOCUMENT_EMBEDDING_PREFIX,
+    ENV_QUERY_EMBEDDING_PREFIX,
+)
 
 
 
@@ -658,4 +666,292 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             query_embedding=query_embeddings,
             metric_type=metric_type,
             concept_filter=concept_filter,
+        )
+
+
+class EmbeddingInterface(EmbeddingWriterInterface):
+    """Compatibility facade over the provider-aware reader/writer interfaces.
+
+    This preserves the older branch-local API while delegating storage and
+    registry behavior to the upstream provider-aware implementation.
+    """
+
+    def __init__(
+        self,
+        embedding_client: Optional[EmbeddingClient] = None,
+        backend=None,
+        storage_base_dir: Optional[str] = None,
+        registry_db_name: Optional[str] = None,
+        backend_name: Optional[str | BackendType] = None,
+    ):
+        if embedding_client is None and backend is None and backend_name is None:
+            raise ValueError("EmbeddingInterface requires an embedding_client or backend/backend_name.")
+
+        if backend is not None:
+            self._embedding_client = embedding_client
+            self._backend = backend
+            self._backend_type = backend.backend_type
+            self._provider_type = embedding_client.provider.provider_type if embedding_client is not None else ProviderType.OLLAMA
+            self._canonical_model_name = embedding_client.canonical_model_name if embedding_client is not None else ""
+            return
+
+        if embedding_client is None:
+            self._embedding_client = None
+            self._backend = get_embedding_backend(
+                backend_name_or_type=backend_name,
+                storage_base_dir=storage_base_dir,
+                registry_db_name=registry_db_name,
+            )
+            self._backend_type = self._backend.backend_type
+            self._provider_type = ProviderType.OLLAMA
+            self._canonical_model_name = ""
+            return
+
+        super().__init__(
+            embedding_client=embedding_client,
+            backend_name_or_type=backend_name,
+            storage_base_dir=storage_base_dir,
+            registry_db_name=registry_db_name,
+        )
+
+    @property
+    def backend(self):
+        return self._backend
+
+    @property
+    def embedding_client(self) -> EmbeddingClient:
+        return self._embedding_client
+
+    @classmethod
+    def from_backend_name(
+        cls,
+        embedding_client: Optional[EmbeddingClient] = None,
+        backend_name: Optional[str | BackendType] = None,
+        storage_base_dir: Optional[str] = None,
+        registry_db_name: Optional[str] = None,
+    ) -> "EmbeddingInterface":
+        return cls(
+            embedding_client=embedding_client,
+            backend_name=backend_name,
+            storage_base_dir=storage_base_dir,
+            registry_db_name=registry_db_name,
+        )
+
+    def initialise_tables(self, engine: Engine) -> None:
+        self.initialise_store(engine)
+
+    @staticmethod
+    def _embedding_prefix_for_role(text_role: Literal["document", "query"]) -> str:
+        if text_role == "query":
+            return os.getenv(ENV_QUERY_EMBEDDING_PREFIX, "")
+        return os.getenv(ENV_DOCUMENT_EMBEDDING_PREFIX, "")
+
+    @classmethod
+    def _apply_embedding_prefix(
+        cls,
+        texts: str | Tuple[str, ...] | List[str],
+        *,
+        text_role: Literal["document", "query"],
+    ) -> str | Tuple[str, ...] | List[str]:
+        prefix = cls._embedding_prefix_for_role(text_role)
+        if not prefix:
+            return texts
+        if isinstance(texts, str):
+            return f"{prefix}{texts}"
+        if isinstance(texts, tuple):
+            return tuple(f"{prefix}{text}" for text in texts)
+        if isinstance(texts, list):
+            return [f"{prefix}{text}" for text in texts]
+        raise ValueError(f"Invalid type for texts: {type(texts)}. Expected str, list, or tuple.")
+
+    def ensure_model_registered(
+        self,
+        *,
+        engine: Engine,
+        session: Session,
+        model_name: str,
+        dimensions: int,
+        index_type: IndexType,
+        metadata: Mapping[str, object] = {},
+        overwrite_existing_conflicts: bool = False,
+    ) -> EmbeddingModelRecord:
+        if overwrite_existing_conflicts:
+            self.backend.delete_model(
+                engine=engine,
+                session=session,
+                model_name=model_name,
+                provider_type=self.provider_type,
+            )
+            return self.backend.register_model(
+                engine=engine,
+                model_name=model_name,
+                provider_type=self.provider_type,
+                dimensions=dimensions,
+                index_type=index_type,
+                metadata=metadata,
+            )
+
+        existing = self.backend.get_registered_model(
+            model_name=model_name,
+            provider_type=self.provider_type,
+            index_type=index_type,
+        )
+        if existing is None and self.backend.has_stale_model_artifacts(model_name):
+            raise RuntimeError(
+                f"Backend artifacts already exist for model '{model_name}' but no matching "
+                "SQL registration was found. Re-run with "
+                "`--overwrite-model-registration` to force a clean rebuild."
+            )
+        if existing is not None:
+            if existing.dimensions != dimensions:
+                raise RuntimeError(
+                    f"Model '{model_name}' is already registered with dimensions "
+                    f"{existing.dimensions}, not {dimensions}."
+                )
+            if existing.metadata != metadata:
+                raise RuntimeError(
+                    f"Model '{model_name}' is already registered with different metadata."
+                )
+            return existing
+
+        return self.backend.register_model(
+            engine=engine,
+            model_name=model_name,
+            provider_type=self.provider_type,
+            dimensions=dimensions,
+            index_type=index_type,
+            metadata=metadata,
+        )
+
+    def embed_texts(
+        self,
+        texts: str | Tuple[str, ...] | List[str],
+        *,
+        embedding_client: Optional[EmbeddingClient] = None,
+        batch_size: Optional[int] = None,
+        text_role: Literal["document", "query"] = "document",
+    ) -> np.ndarray:
+        client = embedding_client or self.embedding_client
+        if client is None:
+            raise RuntimeError(f"No embedding client is configured for {self.__class__.__name__}.")
+        prefixed_texts = self._apply_embedding_prefix(texts, text_role=text_role)
+        return client.embeddings(prefixed_texts, batch_size=batch_size)
+
+    def upsert_concept_embeddings(
+        self,
+        *,
+        session: Session,
+        model_name: str,
+        index_type: IndexType,
+        concept_ids: Sequence[int],
+        embeddings: ndarray,
+    ) -> None:
+        self.backend.upsert_embeddings(
+            session=session,
+            model_name=model_name,
+            provider_type=self.provider_type,
+            index_type=index_type,
+            concept_ids=concept_ids,
+            embeddings=embeddings,
+        )
+
+    def embed_and_upsert_concepts(
+        self,
+        *,
+        session: Session,
+        model_name: str,
+        index_type: IndexType,
+        concept_ids: Sequence[int],
+        concept_texts: Sequence[str],
+        embedding_client: Optional[EmbeddingClient] = None,
+        batch_size: Optional[int] = None,
+    ) -> ndarray:
+        embeddings = self.embed_texts(
+            list(concept_texts),
+            embedding_client=embedding_client,
+            batch_size=batch_size,
+            text_role="document",
+        )
+        self.upsert_concept_embeddings(
+            session=session,
+            model_name=model_name,
+            index_type=index_type,
+            concept_ids=concept_ids,
+            embeddings=embeddings,
+        )
+        return embeddings
+
+    def get_nearest_concepts_by_texts(
+        self,
+        session: Session,
+        embedding_model_name: str,
+        index_type: IndexType,
+        query_texts: str | Tuple[str, ...] | List[str],
+        *,
+        metric_type: MetricType,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        batch_size: Optional[int] = None,
+    ) -> Tuple[Mapping[int, float], ...]:
+        query_embeddings = self.embed_texts(
+            query_texts,
+            batch_size=batch_size,
+            text_role="query",
+        )
+        return self.get_nearest_concepts(
+            session=session,
+            index_type=index_type,
+            query_embedding=query_embeddings,
+            metric_type=metric_type,
+            concept_filter=concept_filter,
+        )
+
+    def get_concepts_without_embedding_count(
+        self,
+        *,
+        session: Session,
+        model_name: str,
+        index_type: IndexType,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+    ) -> int:
+        return super().get_concepts_without_embedding_count(
+            session=session,
+            index_type=index_type,
+            concept_filter=concept_filter,
+        )
+
+    def get_concepts_without_embedding_query(
+        self,
+        *,
+        session: Session,
+        model_name: str,
+        index_type: IndexType,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        limit: Optional[int] = None,
+    ) -> Select:
+        del session
+        return super().q_get_concepts_without_embedding(
+            index_type=index_type,
+            concept_filter=concept_filter,
+            limit=limit,
+        )
+
+    def rebuild_model_indexes(
+        self,
+        *,
+        session: Session,
+        model_name: str,
+        metric_types: Optional[Sequence[MetricType]] = None,
+        batch_size: int = 100_000,
+    ) -> None:
+        rebuild = getattr(self.backend, "rebuild_model_indexes", None)
+        if rebuild is None:
+            raise NotImplementedError(
+                f"Backend {self.backend.backend_name!r} does not implement explicit index rebuilds."
+            )
+        rebuild(
+            session=session,
+            model_name=model_name,
+            provider_type=self.provider_type,
+            metric_types=metric_types,
+            batch_size=batch_size,
         )

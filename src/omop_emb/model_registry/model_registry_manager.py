@@ -12,7 +12,6 @@ from omop_emb.config import (
     BackendType,
     ProviderType
 )
-from omop_emb.embeddings import EmbeddingProvider, OllamaProvider, OpenAIProvider
 from .model_registry_cdm import ModelRegistry, ensure_model_registry_schema
 from .model_registry_types import EmbeddingModelRecord
 from omop_emb.utils.errors import ModelRegistrationConflictError
@@ -162,6 +161,30 @@ class ModelRegistryManager:
             session.commit()
         return self._registry_entry_to_model_record(new_entry)
 
+    def delete_model(
+        self,
+        *,
+        provider_type: ProviderType,
+        backend_type: BackendType,
+        model_name: str,
+        index_type: IndexType,
+    ) -> bool:
+        with Session(self._engine, expire_on_commit=False) as session:
+            row = session.scalar(
+                select(ModelRegistry).where(
+                    and_(
+                        ModelRegistry.model_name == model_name,
+                        ModelRegistry.provider_type == provider_type,
+                        ModelRegistry.backend_type == backend_type,
+                        ModelRegistry.index_type == index_type,
+                    )
+                )
+            )
+            if row is None:
+                return False
+            session.delete(row)
+            session.commit()
+            return True
     @staticmethod
     def safe_model_name(model_name: str) -> str:
         name = model_name.lower().strip()

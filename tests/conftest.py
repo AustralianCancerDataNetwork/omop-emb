@@ -24,6 +24,7 @@ from omop_emb.backends.faiss import FaissEmbeddingBackend
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 from omop_emb.interface import EmbeddingWriterInterface, EmbeddingReaderInterface
 from omop_emb.config import BackendType, ProviderType, IndexType
+from omop_emb.embeddings import EmbeddingRole
 
 
 TEST_DB_NAME = os.getenv("TEST_DATABASE_NAME", "test_omop_emb")
@@ -178,7 +179,11 @@ def mock_llm_client() -> Mock:
     mock_provider.provider_type = ProviderType.OLLAMA
     client.provider = mock_provider
 
-    def create_embeddings(concept_names: list[str] | str, batch_size: Optional[int] = None) -> np.ndarray:
+    def create_embeddings(
+        concept_names: list[str] | str,
+        embedding_role: EmbeddingRole,
+        batch_size: Optional[int] = None
+    ) -> np.ndarray:
         if isinstance(concept_names, str):
             concept_names = [concept_names]
         else:

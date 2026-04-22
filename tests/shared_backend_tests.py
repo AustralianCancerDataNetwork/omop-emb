@@ -7,6 +7,7 @@ from omop_emb.config import IndexType, MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.utils.errors import ModelRegistrationConflictError
 from omop_emb.backends import EmbeddingBackend
+from omop_emb.embeddings import EmbeddingRole
 from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM, TEST_CONCEPT_EMB, PROVIDER_TYPE
 
 
@@ -90,7 +91,7 @@ class SharedBackendTests:
 
         test_concept = CONCEPTS["Hypertension"]
         concept_ids = (test_concept.concept_id,)
-        embeddings = mock_llm_client.embeddings(test_concept.concept_name)
+        embeddings = mock_llm_client.embeddings(test_concept.concept_name, embedding_role=EmbeddingRole.DOCUMENT)
 
         backend.upsert_embeddings(
             session=session,
@@ -115,7 +116,7 @@ class SharedBackendTests:
 
         test_concepts = [CONCEPTS["Hypertension"], CONCEPTS["Diabetes"]]
         concept_ids = [c.concept_id for c in test_concepts]
-        embeddings = mock_llm_client.embeddings([c.concept_name for c in test_concepts])
+        embeddings = mock_llm_client.embeddings([c.concept_name for c in test_concepts], embedding_role=EmbeddingRole.DOCUMENT)
 
         backend.upsert_embeddings(
             session=session,
@@ -149,7 +150,7 @@ class SharedBackendTests:
 
         test_concepts = list(CONCEPTS.values())
         concept_ids = [c.concept_id for c in test_concepts]
-        embeddings = mock_llm_client.embeddings([c.concept_name for c in test_concepts])
+        embeddings = mock_llm_client.embeddings([c.concept_name for c in test_concepts], embedding_role=EmbeddingRole.DOCUMENT)
 
         backend.upsert_embeddings(
             session=session,
@@ -160,7 +161,7 @@ class SharedBackendTests:
             embeddings=embeddings,
         )
 
-        query_embeddings = mock_llm_client.embeddings("Hypertension")
+        query_embeddings = mock_llm_client.embeddings("Hypertension", embedding_role=EmbeddingRole.QUERY)
         results = backend.get_nearest_concepts(
             session=session,
             model_name=MODEL_NAME,
@@ -187,7 +188,7 @@ class SharedBackendTests:
 
         test_concepts = list(CONCEPTS.values())
         concept_ids = [c.concept_id for c in test_concepts]
-        embeddings = mock_llm_client.embeddings([c.concept_name for c in test_concepts])
+        embeddings = mock_llm_client.embeddings([c.concept_name for c in test_concepts], embedding_role=EmbeddingRole.DOCUMENT)
 
         backend.upsert_embeddings(
             session=session,
@@ -223,7 +224,7 @@ class SharedBackendTests:
 
         test_concepts = list(CONCEPTS.values())
         concept_ids = [c.concept_id for c in test_concepts]
-        embeddings = mock_llm_client.embeddings([c.concept_name for c in test_concepts])
+        embeddings = mock_llm_client.embeddings([c.concept_name for c in test_concepts], embedding_role=EmbeddingRole.DOCUMENT)
 
         backend.upsert_embeddings(
             session=session,
@@ -260,7 +261,7 @@ class SharedBackendTests:
 
         test_concept = CONCEPTS["Hypertension"]
         concept_ids = (test_concept.concept_id,)
-        embeddings = mock_llm_client.embeddings(test_concept.concept_name)
+        embeddings = mock_llm_client.embeddings(test_concept.concept_name, embedding_role=EmbeddingRole.DOCUMENT)
 
         backend.upsert_embeddings(
             session=session,
@@ -301,7 +302,7 @@ class SharedBackendTests:
 
         test_concepts = list(CONCEPTS.values())
         concept_ids = [c.concept_id for c in test_concepts]
-        embeddings = mock_llm_client.embeddings([c.concept_name for c in test_concepts])
+        embeddings = mock_llm_client.embeddings([c.concept_name for c in test_concepts], embedding_role=EmbeddingRole.DOCUMENT)
 
         backend.upsert_embeddings(
             session=session,
@@ -358,7 +359,7 @@ class SharedBackendTests:
 
         test_concepts = list(CONCEPTS.values())
         concept_ids = [c.concept_id for c in test_concepts]
-        embeddings = mock_llm_client.embeddings([c.concept_name for c in test_concepts])
+        embeddings = mock_llm_client.embeddings([c.concept_name for c in test_concepts], embedding_role=EmbeddingRole.DOCUMENT)
 
         backend.upsert_embeddings(
             session=session,

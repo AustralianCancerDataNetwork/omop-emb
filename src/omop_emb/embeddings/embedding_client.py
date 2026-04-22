@@ -9,16 +9,25 @@ in the omop-emb registry.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple, TypeAlias, Union
+logger = logging.getLogger(__name__)
+import os
+from typing import Any, List, Optional, Tuple, Union, Dict
+from enum import StrEnum
 
 import numpy as np
 from openai import OpenAI
 
 from .embedding_providers import EmbeddingProvider, get_provider_for_api_base
+from omop_emb.config import (
+    ENV_DOCUMENT_EMBEDDING_PREFIX,
+    ENV_QUERY_EMBEDDING_PREFIX,
+)
 
-logger = logging.getLogger(__name__)
 
-CHAT_MESSAGE_DICT: TypeAlias = Dict[str, str]
+class EmbeddingRole(StrEnum):
+    """Enum for embedding roles, used to apply different prefixes to texts based on their role."""
+    DOCUMENT = "document"
+    QUERY = "query"
 
 
 class EmbeddingClientError(RuntimeError):
@@ -63,7 +72,17 @@ class EmbeddingClient:
         self._embedding_batch_size = embedding_batch_size
         self._embedding_dim: Optional[int] = None
         self._base_client = OpenAI(base_url=api_base, api_key=api_key)
-        logger.info(f"EmbeddingClient initialised for model={self._model!r}")
+        doc_prefix, query_prefix = self.load_embedding_prefixes()
+
+        self._embedding_prefixes = {
+            EmbeddingRole.DOCUMENT: doc_prefix,
+            EmbeddingRole.QUERY: query_prefix,
+        }
+
+        logger.info(
+            f"{EmbeddingClient.__name__} initialised for model={self._model!r}.\n"
+            f"URL: {self._base_client.base_url} | Provider: {type(self._provider).__name__}"
+        )
 
     @property
     def provider(self) -> EmbeddingProvider:
@@ -88,6 +107,11 @@ class EmbeddingClient:
     @property
     def base_client(self) -> OpenAI:
         return self._base_client
+    
+    def embedding_role_prefixes(self) -> Dict[EmbeddingRole, str]:
+        """Return a mapping of embedding roles to their configured prefixes."""
+        return self._embedding_prefixes
+
 
     @property
     def embedding_dim(self) -> int:
@@ -115,6 +139,7 @@ class EmbeddingClient:
     def embeddings(
         self,
         text: Union[str, List[str], Tuple[str, ...]],
+        embedding_role: EmbeddingRole,
         batch_size: Optional[int] = None,
     ) -> np.ndarray:
         """Generate embeddings for one or more texts.
@@ -123,6 +148,8 @@ class EmbeddingClient:
         ----------
         text : str | list[str] | tuple[str, ...]
             Input text(s) to embed.
+        embedding_role : EmbeddingRole
+            Role of the input text(s), used to apply different prefixes based on the role.
         batch_size : int, optional
             Overrides ``embedding_batch_size`` for this call.
 
@@ -138,6 +165,8 @@ class EmbeddingClient:
             text = (text,)
         elif isinstance(text, list):
             text = tuple(text)
+            
+        text = self._apply_embedding_prefix(text, text_role=embedding_role)
 
         buffer: list[list[float]] = []
         for start in range(0, len(text), batch_size):
@@ -159,18 +188,20 @@ class EmbeddingClient:
         self,
         terms: Union[str, List[str], np.ndarray],
         terms_to_match: Union[str, List[str], np.ndarray],
+        terms_role: EmbeddingRole,
+        terms_to_match_role: EmbeddingRole,
         **kwargs: Any,
     ) -> np.ndarray:
         """Cosine-similarity matrix between two sets of terms or embeddings."""
         if isinstance(terms, (str, list)):
-            terms = self.embeddings(terms, **kwargs)
+            terms = self.embeddings(terms, embedding_role=terms_role, **kwargs)
         if isinstance(terms_to_match, (str, list)):
-            terms_to_match = self.embeddings(terms_to_match, **kwargs)
+            terms_to_match = self.embeddings(terms_to_match, embedding_role=terms_to_match_role, **kwargs)
         return self.cosine_similarity(terms, terms_to_match)
 
     @staticmethod
     def cosine_similarity(vecs_a: np.ndarray, vecs_b: np.ndarray) -> np.ndarray:
-        """Cosine similarity between row-vector matrices (M×D, N×D → M×N)."""
+        """Cosine similarity between row-vector matrices (MxD, NxD → MxN)."""
         if vecs_a.ndim != 2 or vecs_b.ndim != 2:
             raise RuntimeError(f"Expected 2-D arrays, got shapes {vecs_a.shape} and {vecs_b.shape}")
         norm_a = np.linalg.norm(vecs_a, axis=1, keepdims=True)
@@ -179,8 +210,75 @@ class EmbeddingClient:
         norm_b[norm_b == 0] = 1e-10
         return np.dot(vecs_a / norm_a, (vecs_b / norm_b).T)
 
-    def euclidean_distance(self, text1: str, text2: str) -> float:
+    @staticmethod
+    def l2_norm(vecs_a: np.ndarray, vecs_b: np.ndarray) -> float:
+        """L2 norm between row-vector matrices (MxD, NxD → MxN)."""
+        return float(np.linalg.norm(vecs_a - vecs_b))
+    
+
+    def euclidean_distance(
+        self,
+        text1: str,
+        text2: str,
+        text1_role: EmbeddingRole,
+        text2_role: EmbeddingRole,
+    ) -> float:
         """Euclidean distance between embeddings of two texts."""
-        a = self.embeddings(text1)
-        b = self.embeddings(text2)
+        a = self.embeddings(text1, embedding_role=text1_role)
+        b = self.embeddings(text2, embedding_role=text2_role)
         return float(np.linalg.norm(a - b))
+        
+
+    @staticmethod
+    def load_embedding_prefixes() -> Tuple[str, str]:
+        """Load embedding prefixes for document and query roles from environment variables.
+
+        Returns
+        -------
+        Tuple[str, str]
+            A tuple containing the document embedding prefix and the query embedding prefix.
+        """
+        document_embedding_prefix = os.getenv(ENV_DOCUMENT_EMBEDDING_PREFIX, "")
+        query_embedding_prefix = os.getenv(ENV_QUERY_EMBEDDING_PREFIX, "")
+
+        for role, prefix, var_name in [
+            (EmbeddingRole.DOCUMENT, document_embedding_prefix, ENV_DOCUMENT_EMBEDDING_PREFIX),
+            (EmbeddingRole.QUERY, query_embedding_prefix, ENV_QUERY_EMBEDDING_PREFIX),
+        ]:
+            if prefix:
+                logger.info(
+                    f"{role.value.capitalize()} embedding prefix loaded from {var_name}={prefix!r}. "
+                    f"All {role.value} texts will be prepended with this prefix."
+                )
+            else:
+                logger.warning(
+                    f"{role.value.capitalize()} embedding prefix is not set ({var_name} is empty). "
+                    f"This is fine for symmetric models. For asymmetric models (e.g. nomic-embed-text, "
+                    f"E5, BGE), set {var_name} to the required task prefix.\n"
+                    f"Example (nomic-embed-text): {ENV_DOCUMENT_EMBEDDING_PREFIX}='search_document: ' for {EmbeddingRole.DOCUMENT.value} "
+                    f"and {ENV_QUERY_EMBEDDING_PREFIX}='search_query: ' for {EmbeddingRole.QUERY.value}."
+                )
+
+        return document_embedding_prefix, query_embedding_prefix
+    
+    def _apply_embedding_prefix(
+        self,
+        texts: str | Tuple[str, ...] | List[str],
+        *,
+        text_role: EmbeddingRole,
+    ) -> str | Tuple[str, ...] | List[str]:
+        
+        try:
+            prefix = self._embedding_prefixes[text_role]
+        except KeyError:
+            raise ValueError(f"Invalid embedding role {text_role!r}. Expected one of {[role.value for role in EmbeddingRole]}.")
+        
+        if not prefix:
+            return texts
+        if isinstance(texts, str):
+            return f"{prefix}{texts}"
+        if isinstance(texts, tuple):
+            return tuple(f"{prefix}{text}" for text in texts)
+        if isinstance(texts, list):
+            return [f"{prefix}{text}" for text in texts]
+        raise ValueError(f"Invalid type for texts: {type(texts)}. Expected str, list, or tuple.")

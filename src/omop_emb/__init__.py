@@ -16,6 +16,11 @@ from .config import (
     parse_index_type,
     parse_metric_type,
 )
+from .backends.faiss import (
+    IndexConfig,
+    FlatIndexConfig, 
+    HNSWIndexConfig, 
+)
 from .backends.factory import get_embedding_backend
 
 __all__ = [
@@ -37,4 +42,7 @@ __all__ = [
     "get_embedding_backend",
     "list_registered_models",
     "migrate_legacy_registry_row",
+    "IndexConfig",
+    "FlatIndexConfig",
+    "HNSWIndexConfig",
 ]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Type, Optional, TYPE_CHECKING
 import logging
-from sqlalchemy import  Engine, text, select, Select, case, literal
+from sqlalchemy import  Engine, text, select, Select, case, literal, delete
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
 
@@ -57,6 +57,21 @@ def create_faiss_embedding_registry_table(
 
     return mapping_table
 
+def delete_faiss_embedding_registry_table(
+    engine: Engine,
+    model_record: EmbeddingModelRecord,
+):
+    """Deletes the registry table that tracks which concept_ids are present in the FAISS/H5 storage for a specific model."""
+    tablename = model_record.storage_identifier
+    cache_key = tablename
+
+    embedding_table = _FAISS_REGISTRY_TABLE_CACHE.pop(cache_key, None)
+    if embedding_table is not None:
+        with engine.begin() as conn:
+            stmt = delete(embedding_table)
+            conn.execute(stmt)
+            logger.info(f"Dropped SQL embedding registry table '{embedding_table.__tablename__}' for model '{model_record.model_name}'.")
+
 def add_concept_ids_to_faiss_registry(
     concept_ids: tuple[int, ...],
     session: Session,
@@ -77,6 +92,30 @@ def add_concept_ids_to_faiss_registry(
     stmt = insert(registered_table).values(list({"concept_id": cid} for cid in concept_ids))
     session.execute(stmt)
     session.commit()
+
+def q_concept_ids_with_embeddings_without_metadata(
+    embedding_table: Type[FAISSConceptIDEmbeddingRegistry],
+    concept_filter: EmbeddingConceptFilter,
+) -> Select:
+    """Lightweight query: concept_id only, all filter conditions applied, no row limit.
+
+    Used to build the FAISS subset array without pulling metadata into memory.
+    The join to Concept is required for domain/vocabulary/standard WHERE conditions.
+    """
+    stmt = (
+        select(embedding_table.concept_id)
+        .join(Concept, Concept.concept_id == embedding_table.concept_id)
+    )
+    if concept_filter.concept_ids is not None:
+        stmt = stmt.where(Concept.concept_id.in_(concept_filter.concept_ids))
+    if concept_filter.domains is not None:
+        stmt = stmt.where(Concept.domain_id.in_(concept_filter.domains))
+    if concept_filter.vocabularies is not None:
+        stmt = stmt.where(Concept.vocabulary_id.in_(concept_filter.vocabularies))
+    if concept_filter.require_standard:
+        stmt = stmt.where(Concept.standard_concept.in_(["S", "C"]))
+    return stmt
+
 
 def q_concept_ids_with_embeddings(
     embedding_table: Type[FAISSConceptIDEmbeddingRegistry],

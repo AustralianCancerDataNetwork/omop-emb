@@ -92,7 +92,8 @@ SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tup
     },
     # Check here: https://github.com/facebookresearch/faiss/wiki/Faiss-indexes
     BackendType.FAISS: {
-        IndexType.FLAT: (MetricType.L2, MetricType.COSINE)
+        IndexType.FLAT: (MetricType.L2, MetricType.COSINE),
+        IndexType.HNSW: (MetricType.L2, MetricType.COSINE),
     }
 }
 

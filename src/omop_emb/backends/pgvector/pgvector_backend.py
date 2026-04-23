@@ -16,7 +16,7 @@ from .pgvector_sql import (
     add_embeddings_to_registered_table,
 )
 from omop_emb.config import BackendType, MetricType, IndexType, ProviderType
-from ..base import EmbeddingBackend, require_registered_model
+from omop_emb.backends.base_backend import EmbeddingBackend, require_registered_model
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,

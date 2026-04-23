@@ -1,5 +1,5 @@
 from .interface import EmbeddingWriterInterface, EmbeddingReaderInterface, list_registered_models, migrate_legacy_registry_row
-from .backends.base import EmbeddingConceptFilter
+from .backends.base_backend import EmbeddingConceptFilter
 from .embeddings import (
     EmbeddingClient,
     EmbeddingProvider,
@@ -16,7 +16,7 @@ from .config import (
     parse_index_type,
     parse_metric_type,
 )
-from .backends.faiss import (
+from .backends import (
     IndexConfig,
     FlatIndexConfig, 
     HNSWIndexConfig, 

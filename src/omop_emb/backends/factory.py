@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from .base import EmbeddingBackend
+from .base_backend import EmbeddingBackend
 from ..config import (
     BackendType, 
     ENV_OMOP_EMB_BACKEND,

@@ -1,4 +1,4 @@
-from .base import (
+from .base_backend import (
     EmbeddingBackend,
 )
 from .factory import (

@@ -8,7 +8,7 @@ from omop_emb.interface import EmbeddingWriterInterface
 from omop_emb.embeddings import EmbeddingRole
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.config import IndexType, MetricType
-from omop_emb.backends.base import NearestConceptMatch
+from omop_emb.backends.base_backend import NearestConceptMatch
 from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM
 
 

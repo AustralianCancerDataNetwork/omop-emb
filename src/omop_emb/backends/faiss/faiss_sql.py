@@ -10,7 +10,7 @@ from orm_loader.helpers import Base
 from omop_alchemy.cdm.model.vocabulary import Concept
 
 from omop_emb.model_registry import EmbeddingModelRecord
-from ..base import ConceptIDEmbeddingBase
+from omop_emb.backends.base_backend import ConceptIDEmbeddingBase
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)

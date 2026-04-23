@@ -32,7 +32,7 @@ from omop_emb.backends.index_config import (
     index_config_from_index_type_and_metadata
 )
 from omop_emb.backends.faiss.storage_manager import EmbeddingStorageManager
-from omop_emb.backends.base import EmbeddingBackend, require_registered_model
+from omop_emb.backends.base_backend import EmbeddingBackend, require_registered_model
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,

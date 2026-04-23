@@ -13,7 +13,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from omop_emb.config import BackendType, IndexType, MetricType
-from .index_config import IndexConfig, FlatIndexConfig, HNSWIndexConfig
+from ..index_config import IndexConfig, FlatIndexConfig, HNSWIndexConfig
 from .index_manager import FlatIndexManager, HNSWIndexManager, BaseIndexManager
 
 _INDEX_MANAGER_FOR_CONFIG: dict[type[IndexConfig], Callable[..., BaseIndexManager]] = {
@@ -220,6 +220,7 @@ class EmbeddingStorageManager:
             cid_ds.resize((new_size,))
             emb_ds[old_size:new_size] = embeddings.astype('float32')
             cid_ds[old_size:new_size] = concept_ids.astype('int64')
+            emb_ds.file.flush()
 
         if index_config is not None and metric_type is not None:
             index_manager = self._get_or_create_index_manager(index_config)

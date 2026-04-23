@@ -27,13 +27,12 @@ from .faiss_sql import (
     q_concept_ids_with_embeddings_without_metadata,
 )
 from omop_emb.config import BackendType, IndexType, MetricType, ProviderType
-from .index_config import (
+from omop_emb.backends.index_config import (
     IndexConfig,
-    index_config_from_index_type_and_metadata,
-    INDEX_CONFIG_METADATA_KEY
+    index_config_from_index_type_and_metadata
 )
-from .storage_manager import EmbeddingStorageManager
-from ..base import EmbeddingBackend, require_registered_model
+from omop_emb.backends.faiss.storage_manager import EmbeddingStorageManager
+from omop_emb.backends.base import EmbeddingBackend, require_registered_model
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,
@@ -86,6 +85,9 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
 
     def _create_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> Type[FAISSConceptIDEmbeddingRegistry]:
         return create_faiss_embedding_registry_table(engine=engine, model_record=model_record)
+    
+    def _delete_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> None:
+        delete_faiss_embedding_registry_table(engine=engine, model_record=model_record)
 
     def get_safe_model_dir(self, model_name: str) -> Path:
         return self.storage_base_dir / self._embedding_model_registry.safe_model_name(model_name)
@@ -139,20 +141,14 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         reconstructed faithfully after a process restart — without the caller
         having to supply them again.
 
-        The DB write happens first; the model directory is only created on success.
         """
-        metadata = metadata or {}
-        persisted_metadata: dict[str, object] = {
-            INDEX_CONFIG_METADATA_KEY: index_config.to_dict(),
-            **(self._validate_external_metadata(metadata)),
-        }
         record = super().register_model(
             engine=engine,
             model_name=model_name,
             provider_type=provider_type,
             dimensions=dimensions,
-            index_type=index_config.index_type,
-            metadata=persisted_metadata,
+            index_config=index_config,
+            metadata=metadata,
         )
 
         model_dir = self.get_safe_model_dir(model_name)
@@ -170,43 +166,19 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         provider_type: ProviderType,
         index_type: IndexType,
     ) -> None:
-        """Fully remove a registered model and all its artifacts.
-
-        Drops the SQL embedding-registry table, deletes the HDF5 and FAISS files
-        from disk, removes all in-memory caches, and deletes the registry row.
-        """
-        record = self.get_registered_model(
+    
+        super().delete_model(
+            engine=engine,
             model_name=model_name,
             provider_type=provider_type,
             index_type=index_type,
         )
-        if record is None:
-            raise ValueError(
-                f"Model '{model_name}' with provider='{provider_type.value}' and "
-                f"index_type='{index_type.value}' is not registered."
-            )
-
-        # Drop OMOP CDM embedding table
-        cache_key = self._get_embedding_table_cache_key(model_name, provider_type, index_type)
-        embedding_table = self._embedding_table_cache.pop(cache_key, None)
-        if embedding_table is not None:
-            delete_faiss_embedding_registry_table(engine, record)
-
 
         # Evict in-memory manager and delete all associated files (HDF5 + FAISS indices)
         self._embedding_storage_managers.pop(model_name, None)
         model_dir = self.get_safe_model_dir(model_name)
         if model_dir.exists():
             shutil.rmtree(model_dir)
-
-        # Remove registry row
-        self._embedding_model_registry.delete_model(
-            model_name=model_name,
-            provider_type=provider_type,
-            backend_type=self.backend_type,
-            index_type=index_type,
-        )
-        logger.info(f"Deleted model '{model_name}' from registry.")
 
     def update_model_index_configuration(
         self,
@@ -216,31 +188,15 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         index_type: IndexType,
         index_config: IndexConfig,
     ) -> EmbeddingModelRecord:
-        """Persist updated index configuration parameters for an existing model.
-
-        Only metadata (e.g. HNSW ``num_neighbors``, ``ef_search``) is changed.
-        The in-memory storage manager is evicted so the next access re-creates 
-        it with the new config. Callers should follow up with ``rebuild_model_indexes`` 
-        to apply the new parameters to the on-disk FAISS index files.
-        """
-        if index_config.index_type != index_type:
-            raise ValueError(
-                f"index_config.index_type ({index_config.index_type!r}) must match "
-                f"the registered index_type ({index_type!r}). "
-                "Use delete_model + register_model to change the index type."
-            )
-
-        new_metadata = {INDEX_CONFIG_METADATA_KEY: index_config.to_dict()}
-        new_record = self._embedding_model_registry.update_model_metadata(
+        new_record = super().update_model_index_configuration(
             model_name=model_name,
             provider_type=provider_type,
-            backend_type=self.backend_type,
             index_type=index_type,
-            metadata=new_metadata,
+            index_config=index_config,
         )
-
-        # Evict — will be re-created (with new config) on next get_storage_manager call
+        # Delete and re-register
         self._embedding_storage_managers.pop(model_name, None)
+        self.get_storage_manager(new_record)
         return new_record
 
     # ------------------------------------------------------------------
@@ -320,16 +276,6 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                 batch_size=batch_size,
             )
 
-    @staticmethod
-    def _validate_external_metadata(metadata: Mapping[str, Any]) -> Mapping[str, Any]:
-        if not isinstance(metadata, Mapping):
-            raise ValueError(f"Expected metadata to be a mapping type, got {type(metadata)}")
-        
-        reserved_keys = {INDEX_CONFIG_METADATA_KEY}
-        if any(key in reserved_keys for key in metadata):
-            raise ValueError(f"Metadata contains reserved keys: {reserved_keys & metadata.keys()}")
-        return metadata
-
     # ------------------------------------------------------------------
     # Core read/write operations
     # ------------------------------------------------------------------
@@ -347,35 +293,33 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         _model_record: EmbeddingModelRecord,
         metric_type: Optional[MetricType] = None,
     ) -> None:
-        """Insert or update vector embeddings for a collection of OMOP concept IDs.
-
-        Parameters
-        ----------
-        session : Session
-            SQLAlchemy session bound to the OMOP CDM database.
-        model_name : str
-            Registered name of the embedding model.
-        provider_type : ProviderType
-            Provider type for the embedding model.
-        index_type : IndexType
-            Storage index type used for this model's embeddings.
-        concept_ids : Sequence[int]
-            Concept IDs aligned with the rows of ``embeddings``.
-        embeddings : numpy.ndarray
-            Embedding matrix of shape ``(n_concepts, D)``.
-        _model_record : EmbeddingModelRecord
-            Injected by ``@require_registered_model``.
-        metric_type : MetricType, optional
-            If provided, the FAISS index for this metric is created/updated.
-            Without a metric the raw embeddings are stored but no index is built;
-            nearest-neighbor search will trigger index construction on first call.
-        """
         concept_id_tuple = tuple(concept_ids)
         self.validate_embeddings_and_concept_ids(
             concept_ids=concept_id_tuple,
             embeddings=embeddings,
             dimensions=_model_record.dimensions,
         )
+
+        config = index_config_from_index_type_and_metadata(
+            _model_record.index_type, _model_record.metadata
+        )
+        storage_manager = self.get_storage_manager(_model_record)
+        previous_count = storage_manager.get_count()
+
+        storage_manager.append(
+            concept_ids=np.array(concept_id_tuple, dtype=np.int64),
+            embeddings=embeddings,
+            index_config=config if metric_type is not None else None,
+            metric_type=metric_type,
+        )
+
+        actual_count = storage_manager.get_count()
+        expected_count = previous_count + len(concept_id_tuple)
+        if actual_count != expected_count:
+            raise RuntimeError(
+                f"HDF5 append failed for model '{model_name}': expected {expected_count} "
+                f"stored vectors after append, found {actual_count}. SQL registry was not updated."
+            )
 
         try:
             add_concept_ids_to_faiss_registry(
@@ -394,17 +338,6 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                 "This may be due to duplicate concept IDs or a database constraint violation. "
                 f"Original error: {e}"
             ) from e
-
-        config = index_config_from_index_type_and_metadata(
-            _model_record.index_type, _model_record.metadata
-        )
-        storage_manager = self.get_storage_manager(_model_record)
-        storage_manager.append(
-            concept_ids=np.array(concept_id_tuple, dtype=np.int64),
-            embeddings=embeddings,
-            index_config=config if metric_type is not None else None,
-            metric_type=metric_type,
-        )
 
     @require_registered_model
     def get_nearest_concepts(
@@ -440,7 +373,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             provider_type=provider_type,
         )
 
-        if concept_filter is None:
+        if concept_filter is None or concept_filter.is_empty():
             permitted_concept_ids: Optional[np.ndarray] = None
             k = self.DEFAULT_K_NEAREST
         else:

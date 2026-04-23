@@ -39,6 +39,14 @@ class EmbeddingConceptFilter:
             query = query.where(Concept.standard_concept.in_(["S", "C"]))
 
         return query.limit(self.limit)
+    
+    def is_empty(self) -> bool:
+        return (
+            self.concept_ids is None and
+            self.domains is None and
+            self.vocabularies is None and
+            not self.require_standard
+        )
 
 
 @dataclass(frozen=True)

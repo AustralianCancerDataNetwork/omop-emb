@@ -5,6 +5,8 @@ from typing import Mapping, Optional, Sequence, Union, Type, TypeVar, Generic, D
 from pathlib import Path
 from functools import wraps
 import os
+import logging
+logger = logging.getLogger(__name__)
 
 from numpy import ndarray
 from sqlalchemy import Engine, select, Integer, ForeignKey, func, Select, text
@@ -17,6 +19,10 @@ from ..config import BackendType, IndexType, MetricType, ENV_BASE_STORAGE_DIR, P
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter, 
     NearestConceptMatch, 
+)
+from .index_config import (
+    IndexConfig,
+    INDEX_CONFIG_METADATA_KEY
 )
 
 def require_registered_model(func: Callable) -> Callable:
@@ -166,6 +172,20 @@ class EmbeddingBackend(ABC, Generic[T]):
         model_record : EmbeddingModelRecord
             Registered model metadata used to build backend storage.
         """
+
+    @abstractmethod
+    def _delete_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> None:
+        """
+        Backend-specific logic to drop the dynamic SQLAlchemy table and any associated resources (e.g., FAISS index files).
+
+        Parameters
+        ----------
+        engine : Engine
+            SQLAlchemy engine for OMOP CDM database storage.
+        model_record : EmbeddingModelRecord
+            Registered model metadata used to identify which backend storage to delete.
+        """
+        ...
 
     def initialise_store(self, engine: Engine) -> None:
         """
@@ -322,7 +342,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         model_name: str,
         dimensions: int,
         provider_type: ProviderType,
-        index_type: IndexType,
+        index_config: IndexConfig,
         metadata: Optional[Mapping[str, object]] = None,
     ) -> EmbeddingModelRecord:
         """
@@ -343,17 +363,97 @@ class EmbeddingBackend(ABC, Generic[T]):
         metadata : Optional[Mapping[str, object]]
             Optional metadata persisted with the model registration.
         """
+
+        metadata = metadata or {}
+        persisted_metadata: dict[str, object] = {
+            INDEX_CONFIG_METADATA_KEY: index_config.to_dict(),
+            **(self._validate_external_metadata(metadata)),
+        }
+
         model_record = self._embedding_model_registry.register_model(
             model_name=model_name,
             provider_type=provider_type,
             dimensions=dimensions,
             backend_type=self.backend_type,
-            index_type=index_type,
-            metadata=metadata or {},
+            index_type=index_config.index_type,
+            metadata=persisted_metadata,
         )
         # Local caching
         self._cache_model_record(engine=engine, model_record=model_record)
         return model_record
+    
+    def delete_model(
+        self,
+        engine: Engine,
+        model_name: str,
+        *,
+        provider_type: ProviderType,
+        index_type: IndexType,
+    ) -> None:
+        """Delete a registered model and all associated embeddings.
+        The operation is irreversible, so use with caution. This will:
+        1. Remove the model's registry entry from the local model registry database.
+        2. Drop the dynamic embedding table associated with the model.
+        3. For backends that use external files (e.g., FAISS), also delete any associated index files from disk.
+        """
+
+        record = self.get_registered_model(
+            model_name=model_name,
+            provider_type=provider_type,
+            index_type=index_type,
+        )
+        if record is None:
+            raise ValueError(
+                f"Model '{model_name}' with provider='{provider_type.value}' and "
+                f"index_type='{index_type.value}' is not registered."
+            )
+
+        # Drop OMOP CDM embedding table
+        cache_key = self._get_embedding_table_cache_key(model_name, provider_type, index_type)
+        embedding_table = self._embedding_table_cache.pop(cache_key, None)
+        if embedding_table is not None:
+            self._delete_storage_table(engine=engine, model_record=record)
+
+        # Remove registry row
+        self._embedding_model_registry.delete_model(
+            model_name=model_name,
+            provider_type=provider_type,
+            backend_type=self.backend_type,
+            index_type=index_type,
+        )
+        logger.info(f"Deleted model '{model_name}' from registry.")
+
+    def update_model_index_configuration(
+        self,
+        model_name: str,
+        *,
+        provider_type: ProviderType,
+        index_type: IndexType,
+        index_config: IndexConfig,
+    ) -> EmbeddingModelRecord:
+        """Persist updated index configuration parameters for an existing model.
+
+        Only metadata (e.g. HNSW ``num_neighbors``, ``ef_search``) is changed.
+        The in-memory storage manager is evicted so the next access re-creates 
+        it with the new config. Callers should follow up with ``rebuild_model_indexes`` 
+        to apply the new parameters to the on-disk FAISS index files.
+        """
+        if index_config.index_type != index_type:
+            raise ValueError(
+                f"index_config.index_type ({index_config.index_type!r}) must match "
+                f"the registered index_type ({index_type!r}). "
+                "Use delete_model + register_model to change the index type."
+            )
+
+        new_metadata = {INDEX_CONFIG_METADATA_KEY: index_config.to_dict()}
+        new_record = self._embedding_model_registry.update_model_metadata(
+            model_name=model_name,
+            provider_type=provider_type,
+            backend_type=self.backend_type,
+            index_type=index_type,
+            metadata=new_metadata,
+        )
+        return new_record
 
     @abstractmethod
     @require_registered_model
@@ -367,13 +467,14 @@ class EmbeddingBackend(ABC, Generic[T]):
         concept_ids: Sequence[int],
         embeddings: ndarray,
         _model_record: EmbeddingModelRecord,
+        metric_type: Optional[MetricType] = None,
     ) -> None:
-        """
+        """"
         Insert or update vector embeddings for a collection of OMOP concept IDs.
-        
+
         Parameters
         ----------
-        session : sqlalchemy.orm.Session
+        session : Session
             SQLAlchemy session bound to the OMOP CDM database.
         model_name : str
             Registered name of the embedding model.
@@ -384,9 +485,13 @@ class EmbeddingBackend(ABC, Generic[T]):
         concept_ids : Sequence[int]
             Concept IDs aligned with the rows of ``embeddings``.
         embeddings : numpy.ndarray
-            Embedding matrix of shape ``(n_concepts, D)``, where $D$ is the embedding dimensionality defined in the model registration.
+            Embedding matrix of shape ``(n_concepts, D)``.
         _model_record : EmbeddingModelRecord
-            Internal registered-model record injected by ``@require_registered_model``.
+            Injected by ``@require_registered_model``.
+        metric_type : MetricType, optional
+            If provided, the FAISS index for this metric is created/updated.
+            Without a metric the raw embeddings are stored but no index is built;
+            nearest-neighbor search will trigger index construction on first call.
 
         Returns
         -------
@@ -444,7 +549,7 @@ class EmbeddingBackend(ABC, Generic[T]):
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
-        query_embedding: ndarray,
+        query_embeddings: ndarray,
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         _model_record: EmbeddingModelRecord,
@@ -462,7 +567,7 @@ class EmbeddingBackend(ABC, Generic[T]):
             Provider type for the embedding model.
         index_type : IndexType
             Storage index type used for this model's embeddings.
-        query_embedding : ndarray
+        query_embeddings : ndarray
             Query embedding matrix of shape ``(Q, D)``, with $Q$ query vectors and embedding dimensionality $D$ matching the model configuration.
         metric_type : MetricType
             Similarity or distance metric for nearest-neighbor search.
@@ -495,6 +600,16 @@ class EmbeddingBackend(ABC, Generic[T]):
                 f"Expected nearest concepts for {query_embeddings.shape[0]} query embeddings, "
                 f"but got {len(nearest_concepts)}."
             )
+        
+    @staticmethod
+    def _validate_external_metadata(metadata: Mapping[str, Any]) -> Mapping[str, Any]:
+        if not isinstance(metadata, Mapping):
+            raise ValueError(f"Expected metadata to be a mapping type, got {type(metadata)}")
+        
+        reserved_keys = {INDEX_CONFIG_METADATA_KEY}
+        if any(key in reserved_keys for key in metadata):
+            raise ValueError(f"Metadata contains reserved keys: {reserved_keys & metadata.keys()}")
+        return metadata
 
     def has_any_embeddings(
         self, 

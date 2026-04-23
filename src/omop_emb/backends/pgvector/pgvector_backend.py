@@ -63,6 +63,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         concept_ids: Sequence[int],
         embeddings: ndarray,
         _model_record: EmbeddingModelRecord,
+        metric_type: Optional[MetricType] = None,
     ) -> None:
         concept_id_tuple = tuple(concept_ids)
 

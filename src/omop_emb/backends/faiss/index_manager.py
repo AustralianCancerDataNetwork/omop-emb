@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Generic, Optional, Generator, Tuple, TypeVar, Dict
 
 from omop_emb.config import IndexType, MetricType
-from omop_emb.backends.faiss.index_config import (
+from omop_emb.backends.index_config import (
     IndexConfig,
     FlatIndexConfig,
     HNSWIndexConfig,

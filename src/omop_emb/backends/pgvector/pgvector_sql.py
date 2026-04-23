@@ -1,4 +1,4 @@
-from sqlalchemy import select, case, literal, Select, text, Engine, inspect, Integer
+from sqlalchemy import select, case, literal, Select, text, Engine, inspect, Integer, delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.sql import column, values, cast
 from sqlalchemy.sql.elements import ColumnElement
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 _PGVECTOR_TABLE_CACHE: dict[str, type["PGVectorConceptIDEmbeddingTable"]] = {}
+EMBEDDING_COLUMN_NAME = "embedding"
 
 
 class PGVectorConceptIDEmbeddingTable(ConceptIDEmbeddingBase, Base):
@@ -46,7 +47,7 @@ def create_pg_embedding_table(
         (PGVectorConceptIDEmbeddingTable,),
         {
             "__tablename__": tablename,
-            "embedding": mapped_column(Vector(dimensions), nullable=False, index=False),
+            EMBEDDING_COLUMN_NAME: mapped_column(Vector(dimensions), nullable=False, index=False),
             "__table_args__": {"extend_existing": True},
             "__module__": __name__,
         }
@@ -61,6 +62,21 @@ def create_pg_embedding_table(
     )
 
     return table
+
+def delete_pg_embedding_table(
+    engine: Engine,
+    model_record: EmbeddingModelRecord,
+) -> None:
+    """Deletes the pgvector embedding table for the specified model. Note that this only drops the table from the database; any associated metadata in the model registry should be handled separately."""
+    tablename = model_record.storage_identifier
+    cache_key = tablename
+
+    embedding_table = _PGVECTOR_TABLE_CACHE.pop(cache_key, None)
+    if embedding_table is not None:
+        with engine.begin() as conn:
+            stmt = delete(embedding_table)
+            conn.execute(stmt)
+            logger.info(f"Dropped SQL embedding registry table '{embedding_table.__tablename__}' for model '{model_record.model_name}'.")
 
 def add_embeddings_to_registered_table(
     concept_ids: tuple[int, ...],

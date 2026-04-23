@@ -13,6 +13,7 @@ from .pgvector_sql import (
     q_embedding_vectors_by_concept_ids,
     PGVectorConceptIDEmbeddingTable,
     create_pg_embedding_table,
+    delete_pg_embedding_table,
     add_embeddings_to_registered_table,
 )
 from omop_emb.config import BackendType, MetricType, IndexType, ProviderType
@@ -51,7 +52,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         return create_pg_embedding_table(engine=engine, model_record=model_record)
 
     def _delete_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> None:
-        pass  # pgvector tables are dropped via the ORM metadata; no extra cleanup needed
+        delete_pg_embedding_table(engine=engine, model_record=model_record)
 
     # ------------------------------------------------------------------
     # Store lifecycle

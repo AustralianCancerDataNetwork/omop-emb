@@ -7,6 +7,7 @@ from omop_emb.config import IndexType, MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.utils.errors import ModelRegistrationConflictError
 from omop_emb.backends import EmbeddingBackend
+from omop_emb.backends.index_config import index_config_from_index_type_and_metadata
 from omop_emb.embeddings import EmbeddingRole
 from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM, TEST_CONCEPT_EMB, PROVIDER_TYPE
 
@@ -20,7 +21,7 @@ class SharedBackendTests:
             engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
+            index_config=index_config_from_index_type_and_metadata(index_type),
             dimensions=EMBEDDING_DIM,
         )
 
@@ -33,7 +34,7 @@ class SharedBackendTests:
             engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
+            index_config=index_config_from_index_type_and_metadata(index_type),
             dimensions=EMBEDDING_DIM,
         )
 
@@ -49,7 +50,7 @@ class SharedBackendTests:
             "model_name": MODEL_NAME,
             "provider_type": PROVIDER_TYPE,
             "dimensions": EMBEDDING_DIM,
-            "index_type": index_type,
+            "index_config": index_config_from_index_type_and_metadata(index_type),
             "metadata": {"version": "1.0"},
         }
 
@@ -66,7 +67,7 @@ class SharedBackendTests:
             "model_name": MODEL_NAME,
             "provider_type": PROVIDER_TYPE,
             "dimensions": EMBEDDING_DIM,
-            "index_type": index_type,
+            "index_config": index_config_from_index_type_and_metadata(index_type),
             "metadata": {"version": "1.0"},
         }
         backend.register_model(**params)
@@ -85,7 +86,7 @@ class SharedBackendTests:
             engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
+            index_config=index_config_from_index_type_and_metadata(index_type),
             dimensions=EMBEDDING_DIM,
         )
 
@@ -110,7 +111,7 @@ class SharedBackendTests:
             engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
+            index_config=index_config_from_index_type_and_metadata(index_type),
             dimensions=EMBEDDING_DIM,
         )
 
@@ -144,7 +145,7 @@ class SharedBackendTests:
             engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
+            index_config=index_config_from_index_type_and_metadata(index_type),
             dimensions=EMBEDDING_DIM,
         )
 
@@ -182,7 +183,7 @@ class SharedBackendTests:
             engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
+            index_config=index_config_from_index_type_and_metadata(index_type),
             dimensions=EMBEDDING_DIM,
         )
 
@@ -218,7 +219,7 @@ class SharedBackendTests:
             engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
+            index_config=index_config_from_index_type_and_metadata(index_type),
             dimensions=EMBEDDING_DIM,
         )
 
@@ -255,7 +256,7 @@ class SharedBackendTests:
             engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
+            index_config=index_config_from_index_type_and_metadata(index_type),
             dimensions=EMBEDDING_DIM,
         )
 
@@ -296,7 +297,7 @@ class SharedBackendTests:
             engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
+            index_config=index_config_from_index_type_and_metadata(index_type),
             dimensions=EMBEDDING_DIM,
         )
 
@@ -353,7 +354,7 @@ class SharedBackendTests:
             engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
+            index_config=index_config_from_index_type_and_metadata(index_type),
             dimensions=EMBEDDING_DIM,
         )
 

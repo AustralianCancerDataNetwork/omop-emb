@@ -25,20 +25,23 @@ from omop_emb.model_registry import EmbeddingModelRecord
 
 logger = logging.getLogger(__name__)
 
+
 class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]):
-    """
-    pgvector-backed embedding backend for postgresql databases.
+    """pgvector-backed embedding backend for PostgreSQL databases.
 
-    This class is intentionally a thin structural layer over the existing
-    ``omop_emb`` implementation. It is not wired into the current accessor or
-    CLI yet, but it demonstrates how the present behavior maps onto the new
-    backend abstraction.
+    Stores and retrieves embedding vectors using the ``pgvector`` Postgres
+    extension.  All nearest-neighbor search is delegated to the database via
+    SQL, so no in-process index is maintained.
 
-    Backend selection is controlled externally (explicit backend argument or
-    ``OMOP_EMB_BACKEND`` env var in the factory). ``storage_base_dir`` remains
-    relevant for local registry metadata even though vectors themselves are stored
-    in PostgreSQL.
+    Notes
+    -----
+    ``storage_base_dir`` is still used for the local model-registry metadata
+    database even though the vectors themselves live in Postgres.
     """
+
+    # ------------------------------------------------------------------
+    # Backend identity
+    # ------------------------------------------------------------------
 
     @property
     def backend_type(self) -> BackendType:
@@ -47,10 +50,21 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     def _create_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> Type[PGVectorConceptIDEmbeddingTable]:
         return create_pg_embedding_table(engine=engine, model_record=model_record)
 
+    def _delete_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> None:
+        pass  # pgvector tables are dropped via the ORM metadata; no extra cleanup needed
+
+    # ------------------------------------------------------------------
+    # Store lifecycle
+    # ------------------------------------------------------------------
+
     def pre_initialise_store(self, engine: Engine) -> None:
         with Session(engine, expire_on_commit=False) as session:
             session.execute(text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;"))
             session.commit()
+
+    # ------------------------------------------------------------------
+    # Core read/write operations
+    # ------------------------------------------------------------------
 
     @require_registered_model
     def upsert_embeddings(
@@ -141,7 +155,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         _model_record: EmbeddingModelRecord,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:           
+    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         embedding_table = self.get_embedding_table(
             model_name=model_name,
             index_type=index_type,
@@ -151,11 +165,13 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
 
         # Guarantee that concept_filter has a limit set for K nearest neighbors
         if concept_filter is None or concept_filter.limit is None:
-            logger.debug(f"No concept filter or concept filter limit provided. Setting number of returned nearest concepts (k) to default: {self.DEFAULT_K_NEAREST}")
-            
+            logger.debug(
+                f"No concept filter or concept filter limit provided. "
+                f"Setting number of returned nearest concepts (k) to default: {self.DEFAULT_K_NEAREST}"
+            )
             if concept_filter is None:
                 concept_filter = EmbeddingConceptFilter(limit=self.DEFAULT_K_NEAREST)
-            elif concept_filter.limit is None:
+            else:
                 concept_filter = EmbeddingConceptFilter(
                     concept_ids=concept_filter.concept_ids,
                     domains=concept_filter.domains,
@@ -193,4 +209,3 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
             raise RuntimeError("Internal error: concept_filter.limit should have been set to a non-None value by this point.")
         self.validate_nearest_concepts_output(matches_tuple, k, query_embeddings=query_embeddings)
         return matches_tuple
-

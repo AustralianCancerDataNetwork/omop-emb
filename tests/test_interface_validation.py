@@ -1,6 +1,6 @@
 """Validation tests for strict EmbeddingInterface input contracts."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, MagicMock
 
 import numpy as np
 import pytest
@@ -94,7 +94,7 @@ class TestCanonicalModelName:
         ))
 
         interface.register_model(
-            engine=Mock(),
+            engine=MagicMock(), # allows context manager for engine.begin()
             index_config=FlatIndexConfig()
         )
 

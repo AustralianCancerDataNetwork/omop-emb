@@ -38,6 +38,8 @@ from omop_emb.model_registry import EmbeddingModelRecord
 
 logger = logging.getLogger(__name__)
 
+_PGVECTOR_MAX_VECTOR_DIMENSIONS = 2_000  # pgvector 'vector' type hard limit
+
 _INDEX_MANAGER_FOR_CONFIG: dict[type[IndexConfig], type[PGVectorBaseIndexManager]] = {
     FlatIndexConfig: PGVectorFlatIndexManager,
     HNSWIndexConfig: PGVectorHNSWIndexManager,
@@ -89,13 +91,41 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         delete_pg_embedding_table(engine=engine, model_record=model_record)
 
     # ------------------------------------------------------------------
+    # Model registration
+    # ------------------------------------------------------------------
+
+    def register_model(
+        self,
+        *,
+        engine: Engine,
+        model_name: str,
+        dimensions: int,
+        provider_type: ProviderType,
+        index_config: IndexConfig,
+        metadata=None,
+    ) -> "EmbeddingModelRecord":
+        if dimensions > _PGVECTOR_MAX_VECTOR_DIMENSIONS:
+            raise ValueError(
+                f"pgvector 'vector' type supports at most {_PGVECTOR_MAX_VECTOR_DIMENSIONS:,} dimensions, "
+                f"but model '{model_name}' requests {dimensions}. "
+                "'halfvec' or 'bit' are not yet supported."
+            )
+        return super().register_model(
+            engine=engine,
+            model_name=model_name,
+            dimensions=dimensions,
+            provider_type=provider_type,
+            index_config=index_config,
+            metadata=metadata,
+        )
+
+    # ------------------------------------------------------------------
     # Store lifecycle
     # ------------------------------------------------------------------
 
     def pre_initialise_store(self, engine: Engine) -> None:
-        with Session(engine, expire_on_commit=False) as session:
-            session.execute(text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;"))
-            session.commit()
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;"))
 
     # ------------------------------------------------------------------
     # Index manager lifecycle

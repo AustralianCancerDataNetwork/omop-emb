@@ -11,12 +11,13 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import inspect
 
-from omop_emb.config import IndexType, MetricType
+from omop_emb.config import IndexType, MetricType, ProviderType
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.pgvector.pgvector_index_manager import (
     PGVectorFlatIndexManager,
     PGVectorHNSWIndexManager,
 )
+from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 
 
 # ---------------------------------------------------------------------------
@@ -40,16 +41,6 @@ def hnsw_table(pg_engine):
     yield
     with pg_engine.begin() as conn:
         conn.execute(sa.text(f"DROP TABLE IF EXISTS {TABLENAME} CASCADE"))
-
-
-@pytest.fixture
-def flat_manager(pg_engine, hnsw_table) -> PGVectorFlatIndexManager:
-    return PGVectorFlatIndexManager(
-        engine=pg_engine,
-        tablename=TABLENAME,
-        embedding_column=EMBEDDING_COL,
-        index_config=FlatIndexConfig(),
-    )
 
 
 @pytest.fixture
@@ -78,18 +69,22 @@ class TestPGVectorFlatIndexManagerUnit:
         mgr._index_config = FlatIndexConfig()
         assert mgr.supported_index_type == IndexType.FLAT
 
-    def test_has_index_always_true(self, flat_manager):
-        assert flat_manager.has_index(MetricType.L2) is True
-        assert flat_manager.has_index(MetricType.COSINE) is True
+    def test_has_index_always_true(self):
+        mgr = PGVectorFlatIndexManager(engine=None, tablename="t", embedding_column="e", index_config=FlatIndexConfig())  # type: ignore[arg-type]
+        assert mgr.has_index(MetricType.L2) is True
+        assert mgr.has_index(MetricType.COSINE) is True
 
-    def test_create_index_noop(self, flat_manager):
-        flat_manager.create_index(MetricType.L2)  # must not raise or create anything
+    def test_create_index_noop(self):
+        mgr = PGVectorFlatIndexManager(engine=None, tablename="t", embedding_column="e", index_config=FlatIndexConfig())  # type: ignore[arg-type]
+        mgr.create_index(MetricType.L2)  # must not raise or create anything
 
-    def test_drop_index_noop(self, flat_manager):
-        flat_manager.drop_index(MetricType.L2)  # must not raise or drop anything
+    def test_drop_index_noop(self):
+        mgr = PGVectorFlatIndexManager(engine=None, tablename="t", embedding_column="e", index_config=FlatIndexConfig())  # type: ignore[arg-type]
+        mgr.drop_index(MetricType.L2)  # must not raise or drop anything
 
-    def test_create_index_ddl_returns_none(self, flat_manager):
-        assert flat_manager._create_index_ddl(MetricType.L2) is None
+    def test_create_index_ddl_returns_none(self):
+        mgr = PGVectorFlatIndexManager(engine=None, tablename="t", embedding_column="e", index_config=FlatIndexConfig())  # type: ignore[arg-type]
+        assert mgr._create_index_ddl(MetricType.L2) is None
 
     def test_wrong_index_config_raises(self):
         with pytest.raises(ValueError, match="index_type"):
@@ -137,10 +132,9 @@ class TestPGVectorHNSWIndexManagerDDL:
         ddl = mgr._create_index_ddl(MetricType.L1)
         assert "vector_l1_ops" in ddl
 
-    def test_ddl_hamming_raises_for_vector_col(self, mgr):
-        # HAMMING/JACCARD only valid for bit vectors — our embedding column is vector
-        # _ops_for_metric maps them to bit_* ops; DDL will fail at DB level,
-        # so we just verify the method returns a string (not None)
+    def test_ddl_hamming_generates_bit_ops_ddl(self, mgr):
+        # HAMMING/JACCARD only valid for bit vectors — our embedding column is vector.
+        # _ops_for_metric still generates DDL with bit_hamming_ops; failure is at DB level.
         ddl = mgr._create_index_ddl(MetricType.HAMMING)
         assert ddl is not None
         assert "bit_hamming_ops" in ddl
@@ -231,3 +225,33 @@ class TestPGVectorHNSWIndexManagerIntegration:
         assert "m = 8" in ddl_a
         assert "m = 64" in ddl_b
         assert ddl_a != ddl_b
+
+
+# ---------------------------------------------------------------------------
+# PGVectorEmbeddingBackend — dimension validation (pure unit, no DB)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestPGVectorDimensionValidation:
+
+    def test_register_model_rejects_oversized_dimensions(self, tmp_path):
+        backend = PGVectorEmbeddingBackend(storage_base_dir=tmp_path)
+        with pytest.raises(ValueError, match="2,000"):
+            backend.register_model(
+                engine=None,  # type: ignore[arg-type]
+                model_name="big-model:v1",
+                dimensions=2001,
+                provider_type=ProviderType.OLLAMA,
+                index_config=FlatIndexConfig(),
+            )
+
+    def test_register_model_error_mentions_alternatives(self, tmp_path):
+        backend = PGVectorEmbeddingBackend(storage_base_dir=tmp_path)
+        with pytest.raises(ValueError, match="halfvec"):
+            backend.register_model(
+                engine=None,  # type: ignore[arg-type]
+                model_name="big-model:v1",
+                dimensions=4096,
+                provider_type=ProviderType.OLLAMA,
+                index_config=FlatIndexConfig(),
+            )

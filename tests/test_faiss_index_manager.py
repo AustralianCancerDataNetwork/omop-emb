@@ -245,6 +245,14 @@ class TestFaissHNSWIndexManager:
                 index_config=FlatIndexConfig(), # type: ignore
             )
 
+    def test_has_index_false_before_create(self, manager):
+        assert not manager.has_index(MetricType.L2)
+        assert not manager.has_index(MetricType.COSINE)
+
+    def test_drop_index_is_idempotent(self, manager):
+        manager.drop_index(MetricType.L2)  # nothing exists yet — must not raise
+        manager.drop_index(MetricType.L2)
+
     def test_add_and_search_l2(self, manager):
         ids = _random_ids()
         vecs = _random_vecs()

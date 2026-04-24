@@ -14,7 +14,7 @@ from omop_emb.embeddings import (
     EmbeddingRole
 )
 
-from .backends import get_embedding_backend
+from .backends import get_embedding_backend, IndexConfig
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.model_registry import EmbeddingModelRecord
 from .config import BackendType, IndexType, MetricType, ProviderType
@@ -474,47 +474,22 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
     def embedding_dim(self) -> int:
         """Get embedding dimension from the client."""
         return self._embedding_client.embedding_dim
-
-    def setup_and_register_model(
-        self,
-        engine: Engine,
-        index_type: IndexType,
-        metadata: Optional[Mapping[str, object]] = None,
-    ) -> None:
-        """Register the embedding model and initialize the store.
-
-        Register FIRST, then initialize — ensures atomic state.
-
-        Parameters
-        ----------
-        engine : Engine
-            SQLAlchemy engine for the target database.
-        index_type : IndexType
-            Backend-specific index type to register.
-        metadata : Optional[Mapping[str, object]]
-            Arbitrary metadata to attach to the registry entry.
-        """
-        self.register_model(
-            engine=engine,
-            index_type=index_type,
-            metadata=metadata,
-        )
-        self.initialise_store(engine)
+        
 
     def register_model(
         self,
         engine: Engine,
-        index_type: IndexType,
+        index_config: IndexConfig,
         metadata: Optional[Mapping[str, object]] = None,
     ) -> EmbeddingModelRecord:
-        """Register an embedding model in the backend registry.
+        """Register an embedding model in the backend registry. Also setup the cache and local storage.
 
         Parameters
         ----------
         engine : Engine
             SQLAlchemy engine for the target database.
-        index_type : IndexType
-            Backend-specific index type.
+        index_config : IndexConfig
+            Backend-specific index configuration to create the indices with.
         metadata : Optional[Mapping[str, object]]
             Arbitrary metadata to attach to the registry entry.
 
@@ -523,14 +498,17 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         EmbeddingModelRecord
             The newly created or existing registry entry.
         """
-        return self._backend.register_model(
+        model_record = self._backend.register_model(
             engine=engine,
             model_name=self.canonical_model_name,
             provider_type=self._embedding_client.provider.provider_type,
             dimensions=self.embedding_dim,
-            index_type=index_type,
-            metadata=metadata or {},
+            index_config=index_config,
+            metadata=metadata,
         )
+
+        self.initialise_store(engine)
+        return model_record
 
     def add_to_db(
         self,

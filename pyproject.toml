@@ -89,6 +89,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
   "unit: Unit tests",
+  "integration: Integration tests",
   "faiss: FAISS backend tests",
   "pgvector: pgvector backend tests",
 ]

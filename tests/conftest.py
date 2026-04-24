@@ -20,8 +20,11 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 from orm_loader.helpers import Base
 from omop_emb.embeddings import EmbeddingClient
 
-from omop_emb.backends.faiss import FaissEmbeddingBackend
-from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
+from omop_emb.backends import (
+    FaissEmbeddingBackend, 
+    PGVectorEmbeddingBackend,
+    FlatIndexConfig
+)
 from omop_emb.interface import EmbeddingWriterInterface, EmbeddingReaderInterface
 from omop_emb.config import BackendType, ProviderType, IndexType
 from omop_emb.embeddings import EmbeddingRole
@@ -159,12 +162,11 @@ def session(pg_engine) -> Generator[Session, None, None]:
     Session = sessionmaker(bind=pg_engine, future=True)
     db_session = Session()
 
-    # Add data
-    add_concepts_to_db(db_session)
-    
-    yield db_session
-
-    db_session.close()
+    try:
+        add_concepts_to_db(db_session)
+        yield db_session
+    finally:
+        db_session.close()
 
 
 @pytest.fixture
@@ -249,7 +251,7 @@ def registered_embedding_writer_interface(session, embedding_writer_interface: E
     """Embedding interface with a pre-registered model for testing read operations."""
     embedding_writer_interface.register_model(
         engine=session.bind,
-        index_type=IndexType.FLAT,
+        index_config=FlatIndexConfig()
     )
     return embedding_writer_interface
 

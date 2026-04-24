@@ -6,7 +6,7 @@ from .shared_backend_tests import SharedBackendTests
 
 
 @pytest.mark.pgvector
-@pytest.mark.unit
+@pytest.mark.integration
 class TestPGVectorBackend(SharedBackendTests):
     """Test pgvector embedding backend."""
 

@@ -46,11 +46,11 @@ Extended documentation can be found [here](https://AustralianCancerDataNetwork.g
 
 - [x] Interface for PostgreSQL storage of vectors
 - [x] Interface for FAISS storage of embeddings
+- [x] HNSW index support for FAISS and pgvector (approximate nearest-neighbour with configurable `M`, `ef_construction`, `ef_search`)
 - [x] Extensive unit testing
     - [x] Backend testing
     - [x] Corruption and restoration of DB testing
 - [ ] Support importing and exporting of calculated embeddings
-- [ ] Support non-Flat indices for each backend
 - [ ] `faiss` GPU support
 - [ ] [`pgvectorscale`](https://github.com/timescale/pgvectorscale) support
 - [ ] Vector-quantisation for more efficient storage

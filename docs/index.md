@@ -8,9 +8,9 @@ The package currently supports:
   - model metadata is stored locally in SQLite (`metadata.db`)
   - multiple embedding models can be tracked per backend and index type
 - embedding and lookup for OMOP concepts
-- supports various storage backends
-  - [pgvector](https://github.com/pgvector/pgvector): storage in the original OMOP database
-  - [FAISS](https://github.com/facebookresearch/faiss): on-disk vector storage and index files
+- supports various storage backends and index types
+  - [pgvector](https://github.com/pgvector/pgvector): storage in the original OMOP database (FLAT sequential scan or HNSW SQL index)
+  - [FAISS](https://github.com/facebookresearch/faiss): on-disk vector storage with FLAT or HNSW file-based indices
 - Extension to [`omop-alchemy`](https://AustralianCancerDataNetwork.github.io/OMOP_Alchemy/) to support new tables
 - CLI scripts to add embeddings to an already existing OMOP CDM
 

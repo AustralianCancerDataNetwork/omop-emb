@@ -14,11 +14,11 @@ logger = logging.getLogger(__name__)
 
 from omop_emb.config import BackendType, IndexType, MetricType
 from ..index_config import IndexConfig, FlatIndexConfig, HNSWIndexConfig
-from .index_manager import FlatIndexManager, HNSWIndexManager, BaseIndexManager
+from .faiss_index_manager import FaissFlatIndexManager, FaissHNSWIndexManager, FaissBaseIndexManager
 
-_INDEX_MANAGER_FOR_CONFIG: dict[type[IndexConfig], Callable[..., BaseIndexManager]] = {
-    FlatIndexConfig: FlatIndexManager,
-    HNSWIndexConfig: HNSWIndexManager,
+_INDEX_MANAGER_FOR_CONFIG: dict[type[IndexConfig], Callable[..., FaissBaseIndexManager]] = {
+    FlatIndexConfig: FaissFlatIndexManager,
+    HNSWIndexConfig: FaissHNSWIndexManager,
 }
 
 
@@ -49,7 +49,7 @@ class EmbeddingStorageManager:
         self.base_dir = Path(file_dir)
         self.dimensions = dimensions
         self._init_embedding_storage_if_missing()
-        self._index_managers: Dict[IndexType, BaseIndexManager] = {}
+        self._index_managers: Dict[IndexType, FaissBaseIndexManager] = {}
 
     @property
     def embeddings_filepath(self) -> Path:
@@ -70,7 +70,7 @@ class EmbeddingStorageManager:
         """
         logger.info(f"Rebuilding {index_config.index_type.value}/{metric_type.value} from HDF5 storage.")
         index_manager = self._get_or_create_index_manager(index_config)
-        index_manager.rebuild_index_for_metric(
+        index_manager.rebuild_index(
             metric_type=metric_type,
             data_stream=self.stream_concept_ids_and_embeddings(batch_size=batch_size),
             expected_count=self.get_count(),
@@ -93,14 +93,14 @@ class EmbeddingStorageManager:
         """
         logger.info(f"Initialising {index_config.index_type.value}/{metric_type.value} index.")
         index_manager = self._get_or_create_index_manager(index_config)
-        index_manager.load_or_populate(
+        index_manager.load_or_create(
             data_stream=self.stream_concept_ids_and_embeddings(batch_size=batch_size),
             metric_type=metric_type,
             expected_count=self.get_count(),
         )
         logger.info(f"Finished initialising {index_config.index_type.value}/{metric_type.value} index.")
 
-    def _get_or_create_index_manager(self, index_config: IndexConfig) -> BaseIndexManager:
+    def _get_or_create_index_manager(self, index_config: IndexConfig) -> FaissBaseIndexManager:
         """Return the cached manager for this index type, creating it from *index_config* if absent."""
         existing = self._index_managers.get(index_config.index_type)
         if existing is not None:
@@ -109,7 +109,7 @@ class EmbeddingStorageManager:
         manager_cls = _INDEX_MANAGER_FOR_CONFIG.get(type(index_config))
         if manager_cls is None:
             raise ValueError(f"Unsupported index config type: {type(index_config)}")
-        manager: BaseIndexManager = manager_cls(
+        manager: FaissBaseIndexManager = manager_cls(
             dimension=self.dimensions,
             base_index_dir=self.base_dir,
             index_config=index_config,
@@ -117,7 +117,7 @@ class EmbeddingStorageManager:
         self._index_managers[index_config.index_type] = manager
         return manager
 
-    def get_index_manager(self, index_type: IndexType) -> BaseIndexManager:
+    def get_index_manager(self, index_type: IndexType) -> FaissBaseIndexManager:
         """Return the cached manager for *index_type*, or raise if none has been created yet."""
         manager = self._index_managers.get(index_type)
         if manager is None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Mapping, Optional, Sequence, Type, Tuple
+from typing import Dict, Mapping, Optional, Sequence, Type, Tuple
 
 from numpy import ndarray
 import logging
@@ -12,12 +12,24 @@ from .pgvector_sql import (
     q_embedding_nearest_concepts,
     q_embedding_vectors_by_concept_ids,
     PGVectorConceptIDEmbeddingTable,
+    EMBEDDING_COLUMN_NAME,
     create_pg_embedding_table,
     delete_pg_embedding_table,
     add_embeddings_to_registered_table,
 )
+from .pgvector_index_manager import (
+    PGVectorBaseIndexManager,
+    PGVectorFlatIndexManager,
+    PGVectorHNSWIndexManager,
+)
 from omop_emb.config import BackendType, MetricType, IndexType, ProviderType
 from omop_emb.backends.base_backend import EmbeddingBackend, require_registered_model
+from omop_emb.backends.index_config import (
+    IndexConfig,
+    FlatIndexConfig,
+    HNSWIndexConfig,
+    index_config_from_index_type_and_metadata,
+)
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,
@@ -26,19 +38,36 @@ from omop_emb.model_registry import EmbeddingModelRecord
 
 logger = logging.getLogger(__name__)
 
+_INDEX_MANAGER_FOR_CONFIG: dict[type[IndexConfig], type[PGVectorBaseIndexManager]] = {
+    FlatIndexConfig: PGVectorFlatIndexManager,
+    HNSWIndexConfig: PGVectorHNSWIndexManager,
+}
+
 
 class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]):
     """pgvector-backed embedding backend for PostgreSQL databases.
 
     Stores and retrieves embedding vectors using the ``pgvector`` Postgres
     extension.  All nearest-neighbor search is delegated to the database via
-    SQL, so no in-process index is maintained.
+    SQL.  SQL index lifecycle (HNSW ``CREATE / DROP / REBUILD``) is managed by
+    per-model ``PGVectorBaseIndexManager`` instances.
 
     Notes
     -----
-    ``storage_base_dir`` is still used for the local model-registry metadata
-    database even though the vectors themselves live in Postgres.
+    ``storage_base_dir`` is used for the local model-registry metadata database
+    even though the vectors themselves live in Postgres.
     """
+
+    def __init__(
+        self,
+        storage_base_dir=None,
+        registry_db_name=None,
+    ):
+        super().__init__(
+            storage_base_dir=storage_base_dir,
+            registry_db_name=registry_db_name,
+        )
+        self._pgvector_index_managers: Dict[str, PGVectorBaseIndexManager] = {}
 
     # ------------------------------------------------------------------
     # Backend identity
@@ -48,10 +77,15 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
     def backend_type(self) -> BackendType:
         return BackendType.PGVECTOR
 
-    def _create_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> Type[PGVectorConceptIDEmbeddingTable]:
-        return create_pg_embedding_table(engine=engine, model_record=model_record)
+    def _create_storage_table(
+        self, engine: Engine, model_record: EmbeddingModelRecord
+    ) -> Type[PGVectorConceptIDEmbeddingTable]:
+        table = create_pg_embedding_table(engine=engine, model_record=model_record)
+        self._register_index_manager(engine=engine, model_record=model_record)
+        return table
 
     def _delete_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> None:
+        self._pgvector_index_managers.pop(model_record.model_name, None)
         delete_pg_embedding_table(engine=engine, model_record=model_record)
 
     # ------------------------------------------------------------------
@@ -62,6 +96,120 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         with Session(engine, expire_on_commit=False) as session:
             session.execute(text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;"))
             session.commit()
+
+    # ------------------------------------------------------------------
+    # Index manager lifecycle
+    # ------------------------------------------------------------------
+
+    def _register_index_manager(
+        self, engine: Engine, model_record: EmbeddingModelRecord
+    ) -> None:
+        """Create and cache a pgvector index manager for *model_record* if not already present."""
+        if model_record.model_name in self._pgvector_index_managers:
+            return
+
+        index_config = index_config_from_index_type_and_metadata(
+            model_record.index_type, model_record.metadata
+        )
+        manager_cls = _INDEX_MANAGER_FOR_CONFIG.get(type(index_config))
+        if manager_cls is None:
+            raise ValueError(
+                f"No pgvector index manager for index config type {type(index_config).__name__}."
+            )
+        manager = manager_cls(
+            engine=engine,
+            tablename=model_record.storage_identifier,
+            embedding_column=EMBEDDING_COLUMN_NAME,
+            index_config=index_config,
+        )
+        self._pgvector_index_managers[model_record.model_name] = manager
+        logger.info(
+            f"Registered pgvector index manager for '{model_record.model_name}' "
+            f"({index_config.index_type.value})."
+        )
+
+    def get_index_manager(self, model_name: str) -> PGVectorBaseIndexManager:
+        """Return the cached index manager for *model_name*, or raise if not registered."""
+        manager = self._pgvector_index_managers.get(model_name)
+        if manager is None:
+            raise ValueError(
+                f"No pgvector index manager for model '{model_name}'. "
+                "Ensure the store is initialised and the model is registered."
+            )
+        return manager
+
+    def update_model_index_configuration(
+        self,
+        model_name: str,
+        *,
+        provider_type: ProviderType,
+        index_type: IndexType,
+        index_config: IndexConfig,
+    ) -> EmbeddingModelRecord:
+        """Persist updated index configuration and refresh the in-memory index manager.
+
+        The base implementation updates the registry metadata.  This override
+        additionally evicts the stale in-memory manager so the next call to
+        ``rebuild_indexes`` creates a fresh manager from the new config.
+        """
+        new_record = super().update_model_index_configuration(
+            model_name=model_name,
+            provider_type=provider_type,
+            index_type=index_type,
+            index_config=index_config,
+        )
+        self._pgvector_index_managers.pop(model_name, None)
+        return new_record
+
+    @require_registered_model
+    def initialise_indexes(
+        self,
+        *,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
+        metric_types: Sequence[MetricType],
+        _model_record: EmbeddingModelRecord,
+    ) -> None:
+        """Ensure SQL indices exist for each metric in *metric_types*.
+
+        Idempotent: already-existing indices are skipped.  Call this on process
+        startup to create any missing indices after model registration.
+        """
+        manager = self.get_index_manager(model_name)
+        for metric_type in metric_types:
+            manager.load_or_create(metric_type)
+
+    @require_registered_model
+    def rebuild_indexes(
+        self,
+        *,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
+        metric_types: Sequence[MetricType],
+        _model_record: EmbeddingModelRecord,
+        engine: Optional[Engine] = None,
+    ) -> None:
+        """Drop and recreate SQL indices for each metric in *metric_types*.
+
+        Use this after calling ``update_model_index_configuration`` to apply
+        new HNSW parameters (``m``, ``ef_construction``) to the on-disk index.
+        Postgres rebuilds index content from the table automatically.
+
+        If the in-memory manager was evicted by ``update_model_index_configuration``,
+        pass *engine* so a fresh manager can be created from the updated config.
+        """
+        if model_name not in self._pgvector_index_managers:
+            if engine is None:
+                raise ValueError(
+                    f"No in-memory index manager for model '{model_name}'. "
+                    "Pass engine= so a fresh manager can be created from the updated config."
+                )
+            self._register_index_manager(engine=engine, model_record=_model_record)
+        manager = self.get_index_manager(model_name)
+        for metric_type in metric_types:
+            manager.rebuild_index(metric_type)
 
     # ------------------------------------------------------------------
     # Core read/write operations
@@ -104,7 +252,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         except IntegrityError as e:
             session.rollback()
             raise ValueError(
-                f"Failed to upsert embeddings for model '{model_name}'. This may be due to a mismatch between the provided concept_ids and the existing entries in the database. Original error: {str(e)}"
+                f"Failed to upsert embeddings for model '{model_name}'. "
+                f"Original error: {e}"
             ) from e
 
     @require_registered_model
@@ -164,11 +313,19 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
         )
         self.validate_embeddings(embeddings=query_embeddings, dimensions=_model_record.dimensions)
 
+        # Set ef_search for HNSW queries so the session uses the configured value.
+        if index_type == IndexType.HNSW:
+            manager = self.get_index_manager(model_name)
+            if isinstance(manager, PGVectorHNSWIndexManager):
+                session.execute(
+                    text(f"SET hnsw.ef_search = {manager.index_config.ef_search}")
+                )
+
         # Guarantee that concept_filter has a limit set for K nearest neighbors
         if concept_filter is None or concept_filter.limit is None:
             logger.debug(
-                f"No concept filter or concept filter limit provided. "
-                f"Setting number of returned nearest concepts (k) to default: {self.DEFAULT_K_NEAREST}"
+                f"No concept filter limit provided. "
+                f"Setting k to default: {self.DEFAULT_K_NEAREST}"
             )
             if concept_filter is None:
                 concept_filter = EmbeddingConceptFilter(limit=self.DEFAULT_K_NEAREST)
@@ -207,6 +364,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
 
         k = concept_filter.limit
         if k is None:
-            raise RuntimeError("Internal error: concept_filter.limit should have been set to a non-None value by this point.")
+            raise RuntimeError(
+                "Internal error: concept_filter.limit should have been set by this point."
+            )
         self.validate_nearest_concepts_output(matches_tuple, k, query_embeddings=query_embeddings)
         return matches_tuple

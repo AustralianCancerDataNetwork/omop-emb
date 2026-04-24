@@ -1,4 +1,4 @@
-from sqlalchemy import select, case, literal, Select, text, Engine, inspect, Integer, delete
+from sqlalchemy import select, case, literal, Select, Engine, Integer, delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.sql import column, values, cast
 from sqlalchemy.sql.elements import ColumnElement
@@ -11,7 +11,7 @@ from typing import Type, Tuple, Optional, TYPE_CHECKING, List, Union
 import logging
 from numpy import ndarray
 
-from omop_emb.config import BackendType, IndexType, MetricType
+from omop_emb.config import MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.backends.base_backend import ConceptIDEmbeddingBase
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, get_similarity_from_distance
@@ -39,9 +39,8 @@ def create_pg_embedding_table(
     cached_table = _PGVECTOR_TABLE_CACHE.get(tablename)
     if cached_table is not None:
         Base.metadata.create_all(engine, tables=[cached_table.__table__])  # type: ignore[arg-type]
-        create_indices_for_embedding_table(engine, model_record)
         return cached_table
-    
+
     table = type(
         f"PGVectorConceptIDEmbeddingTable_{tablename}",
         (PGVectorConceptIDEmbeddingTable,),
@@ -55,12 +54,10 @@ def create_pg_embedding_table(
     Base.metadata.create_all(engine, tables=[table.__table__])  # type: ignore[arg-type]
     _PGVECTOR_TABLE_CACHE[tablename] = table
 
-    create_indices_for_embedding_table(engine, model_record)
-
     logger.debug(
-        f"Initialized {PGVectorConceptIDEmbeddingTable.__name__} table for model '{model_record.model_name}' with dimensions {model_record.dimensions} using index_method={model_record.index_type}",
+        f"Initialized PGVectorConceptIDEmbeddingTable for model '{model_record.model_name}' "
+        f"(dim={dimensions}, index_type={model_record.index_type.value})"
     )
-
     return table
 
 def delete_pg_embedding_table(
@@ -113,29 +110,6 @@ def add_embeddings_to_registered_table(
     #session.execute(upsert_stmt)
     session.commit()
 
-
-def create_indices_for_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) -> None:
-    with engine.connect() as conn:
-        inspector = inspect(conn)
-        existing_indexes = [idx['name'] for idx in inspector.get_indexes(model_record.storage_identifier)]
-        
-        if _index_from_storage_identifier(model_record.storage_identifier) not in existing_indexes:
-            query = q_create_index_sql(
-                model_record.storage_identifier,
-               model_record.index_type,
-            )
-            if query is not None:
-                conn.execute(text(query))
-                conn.commit()
-
-def q_create_index_sql(table_name: str, index_type: IndexType) -> Optional[str]:
-    if index_type == IndexType.FLAT:
-        pass # No additional index needed for flat, as the vector column itself can be used for sequential scan
-    else:
-        raise ValueError(f"Unsupported resolved index method: {index_type.value}")
-
-def _index_from_storage_identifier(storage_identifier: str) -> str:
-    return "idx_" + storage_identifier
 
 def q_embedding_nearest_concepts(
     embedding_table: Type[PGVectorConceptIDEmbeddingTable],

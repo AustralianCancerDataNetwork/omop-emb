@@ -358,7 +358,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         storage_manager = self.get_storage_manager(_model_record)
 
         if storage_manager.get_count() == 0:
-            return ()
+            return tuple(() for _ in range(query_embeddings.shape[0]))
 
         storage_manager.create_index_for_metric(
             metric_type=metric_type,

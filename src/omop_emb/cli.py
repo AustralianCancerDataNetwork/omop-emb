@@ -177,9 +177,9 @@ def add_embeddings(
 
     # Ensure OMOP metadata tables exist, then initialize the embedding store.
     create_db(engine)
-    embedding_writer.setup_and_register_model(
+    embedding_writer.register_model(
         engine=engine,
-        index_type=index_type,
+        index_config=index_config,
     )
 
     with Session(engine) as reader, Session(engine) as writer:

@@ -45,7 +45,8 @@ class EmbeddingConceptFilter:
             self.concept_ids is None and
             self.domains is None and
             self.vocabularies is None and
-            not self.require_standard
+            not self.require_standard and
+            self.limit is None
         )
 
 

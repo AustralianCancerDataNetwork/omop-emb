@@ -6,9 +6,8 @@ from unittest.mock import Mock
 
 from omop_emb.interface import EmbeddingWriterInterface
 from omop_emb.embeddings import EmbeddingRole
-from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
-from omop_emb.config import IndexType, MetricType
-from omop_emb.backends.base_backend import NearestConceptMatch
+from omop_emb.config import IndexType
+from omop_emb.backends import FlatIndexConfig
 from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM
 
 
@@ -20,7 +19,7 @@ class TestInterface:
         """Test registering an embedding model."""
         model = embedding_writer_interface.register_model(
             engine=session.bind,
-            index_type=IndexType.FLAT,
+            index_config=FlatIndexConfig()
         )
 
         assert model.model_name == MODEL_NAME
@@ -30,12 +29,12 @@ class TestInterface:
         """Test registering same model twice returns existing."""
         m1 = embedding_writer_interface.register_model(
             engine=session.bind,
-            index_type=index_type,
+            index_config=FlatIndexConfig()
         )
 
         m2 = embedding_writer_interface.register_model(
             engine=session.bind,
-            index_type=index_type,
+            index_config=FlatIndexConfig()
         )
 
         assert m1.storage_identifier == m2.storage_identifier
@@ -46,7 +45,7 @@ class TestInterface:
 
         embedding_writer_interface.register_model(
             engine=session.bind,
-            index_type=index_type,
+            index_config=FlatIndexConfig()
         )
 
         assert embedding_writer_interface.is_model_registered(index_type=index_type)
@@ -69,7 +68,7 @@ class TestInterface:
         """Test embedding and upserting concepts."""
         embedding_writer_interface.register_model(
             engine=session.bind,
-            index_type=index_type,
+            index_config=FlatIndexConfig()
         )
 
         test_concepts = [CONCEPTS["Hypertension"], CONCEPTS["Diabetes"]]
@@ -90,7 +89,7 @@ class TestInterface:
         """Test retrieving stored embeddings."""
         embedding_writer_interface.register_model(
             engine=session.bind,
-            index_type=index_type,
+            index_config=FlatIndexConfig()
         )
 
         test_concepts = [CONCEPTS["Hypertension"], CONCEPTS["Diabetes"]]

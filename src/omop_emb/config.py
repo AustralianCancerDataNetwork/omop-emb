@@ -84,11 +84,11 @@ def parse_metric_type(value: str | MetricType) -> MetricType:
             f"{[member.value for member in MetricType]}."
         ) from exc
 
-# TODO: Support non-flat indices in the future
 SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tuple[MetricType, ...]]] = {
     #https://github.com/pgvector/pgvector?tab=readme-ov-file#querying
     BackendType.PGVECTOR: {
         IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1, MetricType.HAMMING, MetricType.JACCARD),
+        IndexType.HNSW: (MetricType.L2, MetricType.COSINE, MetricType.L1),
     },
     # Check here: https://github.com/facebookresearch/faiss/wiki/Faiss-indexes
     BackendType.FAISS: {

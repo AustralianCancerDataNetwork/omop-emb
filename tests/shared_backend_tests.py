@@ -336,7 +336,7 @@ class SharedBackendTests:
                 match.similarity,
                 expected_similarities[match.concept_id],
                 rtol=1e-5,
-            )
+            ), f"Similarity for concept_id {match.concept_id} differs from expected. Got {match.similarity}, expected {expected_similarities[match.concept_id]}"
 
     def test_cosine_similarity_exact_values(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
         """Test cosine distance calculations yield expected similarity scores.

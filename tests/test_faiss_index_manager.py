@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from pathlib import Path
 from unittest.mock import patch
+from typing import Generator, Tuple, cast
 
 from omop_emb.config import IndexType, MetricType
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
@@ -85,6 +86,17 @@ class TestFaissFlatIndexManager:
         distances, returned_ids = manager.search(query, MetricType.COSINE, k=1)
         assert returned_ids[0, 0] == ids[0]
 
+    def test_cosine_search_does_not_mutate_input(self, manager):
+        ids = _random_ids()
+        vecs = _random_vecs()
+        manager.create_index(MetricType.COSINE)
+        manager.add(ids, vecs, MetricType.COSINE)
+
+        query = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+        original = query.copy()
+        manager.search(query, MetricType.COSINE, k=1)
+        np.testing.assert_array_equal(query, original, err_msg="_prepare_vectors mutated caller's buffer")
+
     def test_unsupported_metric_raises(self, manager):
         with pytest.raises(ValueError, match="Unsupported metric"):
             manager.create_index(MetricType.L1)
@@ -144,8 +156,9 @@ class TestFaissFlatIndexManager:
         fresh = FaissFlatIndexManager(
             dimension=DIM, base_index_dir=tmp_path, index_config=FlatIndexConfig()
         )
-        
-        fresh.load_or_create(MetricType.L2, data_stream=iter([]), expected_count=N)
+
+        empty_stream = cast(Generator[Tuple[np.ndarray, np.ndarray], None, None], (x for x in []))
+        fresh.load_or_create(MetricType.L2, data_stream=empty_stream, expected_count=N)
         _, returned_ids = fresh.search(vecs[:1], MetricType.L2, k=1)
         assert returned_ids[0, 0] == ids[0]
 
@@ -249,6 +262,17 @@ class TestFaissHNSWIndexManager:
 
         _, returned_ids = manager.search(vecs[:1], MetricType.COSINE, k=1)
         assert returned_ids[0, 0] == ids[0]
+
+    def test_cosine_search_does_not_mutate_input(self, manager):
+        ids = _random_ids()
+        vecs = _random_vecs()
+        manager.create_index(MetricType.COSINE)
+        manager.add(ids, vecs, MetricType.COSINE)
+
+        query = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+        original = query.copy()
+        manager.search(query, MetricType.COSINE, k=1)
+        np.testing.assert_array_equal(query, original, err_msg="_prepare_vectors mutated caller's buffer")
 
     def test_ef_search_applied_in_params(self, manager, config):
         params = manager._create_search_parameters()

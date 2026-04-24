@@ -301,6 +301,10 @@ class FaissBaseIndexManager(BaseIndexManager[C], Generic[C]):
         self.validate_embedding_vector(vectors)
         vecs = np.ascontiguousarray(vectors, dtype=np.float32)
         if self.metric_requires_norm(metric_type):
+            # faiss.normalize_L2 is in-place; copy first so we never mutate the caller's buffer.
+            # np.ascontiguousarray returns the same object when the input is already C-contiguous
+            # float32, so without this copy the caller's array would be silently modified.
+            vecs = vecs.copy()
             faiss.normalize_L2(vecs)
         return vecs
 

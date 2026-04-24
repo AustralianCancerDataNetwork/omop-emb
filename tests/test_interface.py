@@ -5,6 +5,7 @@ import numpy as np
 from unittest.mock import Mock
 
 from omop_emb.interface import EmbeddingWriterInterface
+from omop_emb.embeddings import EmbeddingRole
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.config import IndexType, MetricType
 from omop_emb.backends.base import NearestConceptMatch
@@ -52,7 +53,7 @@ class TestInterface:
 
     def test_embed_texts(self, embedding_writer_interface: EmbeddingWriterInterface):
         """Test embedding generation."""
-        embeddings = embedding_writer_interface.embed_texts(CONCEPTS["Hypertension"].concept_name)
+        embeddings = embedding_writer_interface.embed_texts(CONCEPTS["Hypertension"].concept_name, embedding_role=EmbeddingRole.DOCUMENT)
 
         assert embeddings.shape == (1, EMBEDDING_DIM)
         assert embeddings.dtype == np.float32
@@ -60,7 +61,7 @@ class TestInterface:
     def test_embed_multiple_texts(self, embedding_writer_interface: EmbeddingWriterInterface):
         """Test embedding multiple texts."""
         texts = [c.concept_name for c in CONCEPTS.values()]
-        embeddings = embedding_writer_interface.embed_texts(texts)
+        embeddings = embedding_writer_interface.embed_texts(texts, embedding_role=EmbeddingRole.DOCUMENT)
 
         assert embeddings.shape == (len(texts), EMBEDDING_DIM)
 

@@ -1,20 +1,23 @@
 from __future__ import annotations
 
-from typing import Mapping, Optional, Sequence, Tuple, List
+from typing import Mapping, Optional, Sequence, Tuple, List, TypeAlias, Literal
+import os
 
 import numpy as np
 from numpy import ndarray
 from sqlalchemy import Engine, Select
 from sqlalchemy.orm import Session
 
-from omop_emb.embeddings import EmbeddingClient, get_provider_from_provider_type
+from omop_emb.embeddings import (
+    EmbeddingClient, 
+    get_provider_from_provider_type,
+    EmbeddingRole
+)
 
 from .backends import get_embedding_backend
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.model_registry import EmbeddingModelRecord
 from .config import BackendType, IndexType, MetricType, ProviderType
-
-
 
 def list_registered_models(
     backend_name_or_type: Optional[str | BackendType] = None,
@@ -171,7 +174,7 @@ class EmbeddingReaderInterface:
         else:
             raise ValueError(
                 f"Invalid provider_name_or_type: expected str or ProviderType, got {type(provider_name_or_type).__name__}."
-             )
+                )
         
         provider = get_provider_from_provider_type(provider_type)
         if canonical_model_name != provider.canonical_model_name(canonical_model_name):
@@ -290,6 +293,64 @@ class EmbeddingReaderInterface:
         return tuple(
             {match.concept_id: match.similarity for match in matches_per_query}
             for matches_per_query in nearest_concepts
+        )
+    
+    def get_nearest_concepts_from_query_texts(
+        self,
+        session: Session,
+        index_type: IndexType,
+        query_texts: str | Tuple[str, ...] | List[str],
+        embedding_client: EmbeddingClient,
+        *,
+        metric_type: MetricType,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        batch_size: Optional[int] = None,
+    ):
+        """Return nearest stored concepts for query texts.
+
+        Convenience wrapper that embeds the query texts before performing
+        the nearest neighbor search.
+
+        Parameters
+        ----------
+        session : Session
+            SQLAlchemy session for any required relational access.
+        index_type : IndexType
+            The type of vector index used to store the embeddings.
+        query_texts : str | Tuple[str, ...] | List[str]
+            The text(s) to embed and search with.
+        metric_type : MetricType
+            The similarity or distance metric to use.
+        concept_filter : Optional[EmbeddingConceptFilter], optional
+            A filter to specify which concepts to consider.
+        batch_size : Optional[int], optional
+            Batch size for embedding generation.
+
+        Returns
+        -------
+        Tuple[Mapping[int, float], ...]
+            A tuple of dictionaries containing nearest concept matches.
+        """
+        if isinstance(query_texts, str):
+            query_texts = (query_texts,)
+        elif isinstance(query_texts, (list, tuple)):
+            query_texts = tuple(query_texts)
+        else:
+            raise ValueError(
+                f"Invalid type for query_texts: {type(query_texts)}. "
+                f"Expected str, list, or tuple."
+            )
+        query_embeddings = embedding_client.embeddings(
+            query_texts, 
+            batch_size=batch_size,
+            embedding_role=EmbeddingRole.QUERY,
+        )
+        return self.get_nearest_concepts(
+            session=session,
+            index_type=index_type,
+            query_embedding=query_embeddings,
+            metric_type=metric_type,
+            concept_filter=concept_filter,
         )
 
     def get_embeddings_by_concept_ids(
@@ -513,6 +574,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         self,
         texts: str | Tuple[str, ...] | List[str],
         *,
+        embedding_role: EmbeddingRole,
         batch_size: Optional[int] = None,
     ) -> np.ndarray:
         """Generate embeddings for texts.
@@ -529,7 +591,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         np.ndarray
             Embedding matrix of shape (n_texts, dimensions).
         """
-        return self._embedding_client.embeddings(texts, batch_size=batch_size)
+        return self._embedding_client.embeddings(texts, batch_size=batch_size, embedding_role=embedding_role)
 
     def upsert_concept_embeddings(
         self,
@@ -598,6 +660,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         embeddings = self.embed_texts(
             list(concept_texts),
             batch_size=batch_size,
+            embedding_role=EmbeddingRole.DOCUMENT,
         )
         self.upsert_concept_embeddings(
             session=session,
@@ -607,7 +670,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         )
         return embeddings
 
-    def get_nearest_concepts_by_texts(
+    def get_nearest_concepts_from_query_texts(
         self,
         session: Session,
         index_type: IndexType,
@@ -617,45 +680,12 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         batch_size: Optional[int] = None,
     ) -> Tuple[Mapping[int, float], ...]:
-        """Return nearest stored concepts for query texts.
-
-        Convenience wrapper that embeds the query texts before performing
-        the nearest neighbor search.
-
-        Parameters
-        ----------
-        session : Session
-            SQLAlchemy session for any required relational access.
-        index_type : IndexType
-            The type of vector index used to store the embeddings.
-        query_texts : str | Tuple[str, ...] | List[str]
-            The text(s) to embed and search with.
-        metric_type : MetricType
-            The similarity or distance metric to use.
-        concept_filter : Optional[EmbeddingConceptFilter], optional
-            A filter to specify which concepts to consider.
-        batch_size : Optional[int], optional
-            Batch size for embedding generation.
-
-        Returns
-        -------
-        Tuple[Mapping[int, float], ...]
-            A tuple of dictionaries containing nearest concept matches.
-        """
-        if isinstance(query_texts, str):
-            query_texts = (query_texts,)
-        elif isinstance(query_texts, (list, tuple)):
-            query_texts = tuple(query_texts)
-        else:
-            raise ValueError(
-                f"Invalid type for query_texts: {type(query_texts)}. "
-                f"Expected str, list, or tuple."
-            )
-        query_embeddings = self.embed_texts(query_texts, batch_size=batch_size)
-        return self.get_nearest_concepts(
+        return super().get_nearest_concepts_from_query_texts(
             session=session,
             index_type=index_type,
-            query_embedding=query_embeddings,
+            query_texts=query_texts,
+            embedding_client=self._embedding_client,
             metric_type=metric_type,
             concept_filter=concept_filter,
+            batch_size=batch_size,
         )

@@ -35,6 +35,10 @@ Common environment variables:
 - `OMOP_EMB_BACKEND`: backend name (`pgvector` or `faiss`) used by the backend factory.
 - `OMOP_EMB_BASE_STORAGE_DIR`: local base directory for `omop-emb` artifacts, including local metadata (`metadata.db`) and FAISS files. If unset, `omop-emb` defaults to `./.omop_emb` in the current working directory.
 - `OMOP_DATABASE_URL`: SQLAlchemy URL for the OMOP CDM database.
+- `OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX`: task prefix prepended to concept texts at index time. Required for asymmetric models (e.g. `search_document: ` for nomic-embed-text, `passage: ` for E5).
+- `OMOP_EMB_QUERY_EMBEDDING_PREFIX`: task prefix prepended to search queries at query time. Required for asymmetric models (e.g. `search_query: ` for nomic-embed-text, `query: ` for E5).
+
+The prefix variables default to `""` and are safe to omit for symmetric models. See [Asymmetric Embeddings](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/asymmetric-embeddings/) for details.
 
 Extended documentation can be found [here](https://AustralianCancerDataNetwork.github.io/omop-emb).
 

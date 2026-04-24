@@ -4,6 +4,7 @@ import pytest
 import sqlalchemy as sa
 from omop_alchemy.cdm.model.vocabulary import Concept
 from .conftest import CONCEPTS, EMBEDDING_DIM
+from omop_emb.embeddings import EmbeddingRole
 
 
 @pytest.mark.unit
@@ -54,8 +55,8 @@ class TestFixtures:
     
     def test_mock_llm_client_generates_embeddings(self, mock_llm_client):
         """Verify mock LLM client generates consistent embeddings."""
-        emb1 = mock_llm_client.embeddings(CONCEPTS["Hypertension"].concept_name)
-        emb2 = mock_llm_client.embeddings(CONCEPTS["Hypertension"].concept_name)
+        emb1 = mock_llm_client.embeddings(CONCEPTS["Hypertension"].concept_name, embedding_role=EmbeddingRole.DOCUMENT)
+        emb2 = mock_llm_client.embeddings(CONCEPTS["Hypertension"].concept_name, embedding_role=EmbeddingRole.DOCUMENT)
         
         # Should be deterministic
         assert (emb1 == emb2).all()

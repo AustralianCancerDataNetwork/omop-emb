@@ -57,7 +57,12 @@ interface.embed_and_upsert_concepts(
 )
 
 # Or generate and upsert separately
-embeddings = interface.embed_texts(["Hypertension", "Diabetes"])
+from omop_emb.embeddings import EmbeddingRole
+
+embeddings = interface.embed_texts(
+    ["Hypertension", "Diabetes"],
+    embedding_role=EmbeddingRole.DOCUMENT,
+)
 interface.upsert_concept_embeddings(
     session=session,
     index_type=IndexType.FLAT,
@@ -65,6 +70,9 @@ interface.upsert_concept_embeddings(
     embeddings=embeddings,
 )
 ```
+
+!!! info "Asymmetric embedding models"
+    `embed_and_upsert_concepts` always applies the **document** role, and `get_nearest_concepts_from_query_texts` always applies the **query** role. When calling `embed_texts` directly you must pass `embedding_role` explicitly. See [Asymmetric Embeddings](asymmetric-embeddings.md) for how to configure task prefixes.
 
 ### Query nearest concepts
 

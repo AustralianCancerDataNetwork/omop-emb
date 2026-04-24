@@ -2,7 +2,9 @@ from enum import StrEnum
 from typing import Dict, Tuple
 
 ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
-ENV_BASE_STORAGE_DIR = "OMOP_EMB_BASE_STORAGE_DIR"  # For backends that use file-based storage, e.g. FAISS with on-disk indices or registry metadata storage
+ENV_BASE_STORAGE_DIR = "OMOP_EMB_BASE_STORAGE_DIR"
+ENV_DOCUMENT_EMBEDDING_PREFIX = "OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX"
+ENV_QUERY_EMBEDDING_PREFIX = "OMOP_EMB_QUERY_EMBEDDING_PREFIX"
 
 class ProviderType(StrEnum):
     """Enum for supported embedding model providers."""

@@ -12,8 +12,9 @@ import numpy as np
 import pytest
 
 from omop_emb.config import ProviderType
-from omop_emb.embeddings import EmbeddingClient, OllamaProvider, OpenAIProvider
+from omop_emb.embeddings import EmbeddingClient, EmbeddingRole, OllamaProvider, OpenAIProvider
 from omop_emb.embeddings.embedding_client import EmbeddingClientError
+from omop_emb.config import ENV_DOCUMENT_EMBEDDING_PREFIX, ENV_QUERY_EMBEDDING_PREFIX
 
 OLLAMA_BASE = "http://localhost:11434/v1"
 OPENAI_BASE = "https://api.openai.com/v1"
@@ -156,26 +157,26 @@ class TestEmbeddings:
     def test_single_string_returns_2d_array(self, client):
         c, oi = client
         oi.embeddings.create.return_value = _make_embedding_response([[0.1, 0.2, 0.3]])
-        result = c.embeddings("hello")
+        result = c.embeddings("hello", embedding_role=EmbeddingRole.DOCUMENT)
         assert result.ndim == 2
         assert result.shape == (1, 3)
 
     def test_list_input_returns_correct_shape(self, client):
         c, oi = client
         oi.embeddings.create.return_value = _make_embedding_response([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]])
-        result = c.embeddings(["a", "b", "c"])
+        result = c.embeddings(["a", "b", "c"], embedding_role=EmbeddingRole.DOCUMENT)
         assert result.shape == (3, 2)
 
     def test_tuple_input_is_accepted(self, client):
         c, oi = client
         oi.embeddings.create.return_value = _make_embedding_response([[1.0, 0.0]])
-        result = c.embeddings(("only",))
+        result = c.embeddings(("only",), embedding_role=EmbeddingRole.DOCUMENT)
         assert result.shape == (1, 2)
 
     def test_values_preserved_in_output(self, client):
         c, oi = client
         oi.embeddings.create.return_value = _make_embedding_response([[1.0, 2.0]])
-        result = c.embeddings("text")
+        result = c.embeddings("text", embedding_role=EmbeddingRole.DOCUMENT)
         np.testing.assert_array_almost_equal(result[0], [1.0, 2.0])
 
     def test_batching_splits_texts_into_chunks(self, mock_openai):
@@ -187,7 +188,7 @@ class TestEmbeddings:
             _make_embedding_response([[1.0, 0.0], [0.0, 1.0]]),
             _make_embedding_response([[0.5, 0.5]]),
         ]
-        result = c.embeddings(["a", "b", "c"])
+        result = c.embeddings(["a", "b", "c"], embedding_role=EmbeddingRole.DOCUMENT)
         assert oi.embeddings.create.call_count == 2
         assert result.shape == (3, 2)
 
@@ -197,7 +198,7 @@ class TestEmbeddings:
             model=OLLAMA_MODEL, api_base=OLLAMA_BASE, embedding_batch_size=3, provider=OllamaProvider()
         )
         oi.embeddings.create.return_value = _make_embedding_response([[1.0], [2.0], [3.0]])
-        result = c.embeddings(["a", "b", "c"])
+        result = c.embeddings(["a", "b", "c"], embedding_role=EmbeddingRole.DOCUMENT)
         assert oi.embeddings.create.call_count == 1
         assert result.shape == (3, 1)
 
@@ -210,7 +211,7 @@ class TestEmbeddings:
             _make_embedding_response([[1.0]]),
             _make_embedding_response([[0.0]]),
         ]
-        result = c.embeddings(["a", "b"], batch_size=1)
+        result = c.embeddings(["a", "b"], embedding_role=EmbeddingRole.DOCUMENT, batch_size=1)
         assert oi.embeddings.create.call_count == 2
         assert result.shape == (2, 1)
 
@@ -223,7 +224,7 @@ class TestEmbeddings:
             _make_embedding_response([[1.0, 0.0]]),
             _make_embedding_response([[0.0, 1.0]]),
         ]
-        result = c.embeddings(["first", "second"])
+        result = c.embeddings(["first", "second"], embedding_role=EmbeddingRole.DOCUMENT)
         np.testing.assert_array_almost_equal(result[0], [1.0, 0.0])
         np.testing.assert_array_almost_equal(result[1], [0.0, 1.0])
 
@@ -289,7 +290,7 @@ class TestSimilarity:
     def test_string_inputs_trigger_embedding_calls(self, client):
         c, oi = client
         oi.embeddings.create.return_value = _make_embedding_response([[1.0, 0.0]])
-        c.similarity("foo", "bar")
+        c.similarity("foo", "bar", EmbeddingRole.QUERY, EmbeddingRole.DOCUMENT)
         assert oi.embeddings.create.call_count == 2
 
     def test_list_inputs_trigger_embedding_calls(self, client):
@@ -298,27 +299,29 @@ class TestSimilarity:
             _make_embedding_response([[1.0, 0.0], [0.0, 1.0]]),
             _make_embedding_response([[1.0, 0.0]]),
         ]
-        c.similarity(["a", "b"], ["c"])
+        c.similarity(["a", "b"], ["c"], EmbeddingRole.QUERY, EmbeddingRole.DOCUMENT)
         assert oi.embeddings.create.call_count == 2
 
     def test_array_inputs_bypass_embedding_calls(self, client):
         c, oi = client
         a = np.array([[1.0, 0.0]])
         b = np.array([[0.0, 1.0]])
-        c.similarity(a, b)
+        c.similarity(a, b, EmbeddingRole.QUERY, EmbeddingRole.DOCUMENT)
         oi.embeddings.create.assert_not_called()
 
     def test_array_inputs_return_correct_similarity(self, client):
         c, _ = client
         a = np.array([[1.0, 0.0]])
         b = np.array([[1.0, 0.0]])
-        np.testing.assert_almost_equal(c.similarity(a, b)[0, 0], 1.0)
+        np.testing.assert_almost_equal(
+            c.similarity(a, b, EmbeddingRole.QUERY, EmbeddingRole.DOCUMENT)[0, 0], 1.0
+        )
 
     def test_mixed_str_and_array_input(self, client):
         c, oi = client
         oi.embeddings.create.return_value = _make_embedding_response([[1.0, 0.0]])
         b = np.array([[1.0, 0.0]])
-        result = c.similarity("text", b)
+        result = c.similarity("text", b, EmbeddingRole.QUERY, EmbeddingRole.DOCUMENT)
         assert oi.embeddings.create.call_count == 1
         assert result.shape == (1, 1)
 
@@ -333,7 +336,7 @@ class TestEuclideanDistance:
         _, oi = mock_openai
         c = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
         oi.embeddings.create.return_value = _make_embedding_response([[1.0, 2.0, 3.0]])
-        assert c.euclidean_distance("hello", "hello") == pytest.approx(0.0)
+        assert c.euclidean_distance("hello", "hello", EmbeddingRole.QUERY, EmbeddingRole.QUERY) == pytest.approx(0.0)
 
     def test_known_3_4_5_distance(self, mock_openai):
         _, oi = mock_openai
@@ -342,13 +345,13 @@ class TestEuclideanDistance:
             _make_embedding_response([[0.0, 0.0]]),
             _make_embedding_response([[3.0, 4.0]]),
         ]
-        assert c.euclidean_distance("a", "b") == pytest.approx(5.0)
+        assert c.euclidean_distance("a", "b", EmbeddingRole.QUERY, EmbeddingRole.DOCUMENT) == pytest.approx(5.0)
 
     def test_returns_python_float(self, mock_openai):
         _, oi = mock_openai
         c = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
         oi.embeddings.create.return_value = _make_embedding_response([[1.0]])
-        assert isinstance(c.euclidean_distance("x", "x"), float)
+        assert isinstance(c.euclidean_distance("x", "x", EmbeddingRole.QUERY, EmbeddingRole.QUERY), float)
 
     def test_distance_is_symmetric(self, mock_openai):
         _, oi = mock_openai
@@ -359,8 +362,8 @@ class TestEuclideanDistance:
             _make_embedding_response([[0.0, 1.0]]),
             _make_embedding_response([[1.0, 0.0]]),
         ]
-        d_ab = c.euclidean_distance("a", "b")
-        d_ba = c.euclidean_distance("b", "a")
+        d_ab = c.euclidean_distance("a", "b", EmbeddingRole.QUERY, EmbeddingRole.DOCUMENT)
+        d_ba = c.euclidean_distance("b", "a", EmbeddingRole.DOCUMENT, EmbeddingRole.QUERY)
         assert d_ab == pytest.approx(d_ba)
 
 
@@ -380,3 +383,140 @@ class TestEmbeddingClientError:
     def test_preserves_message(self):
         with pytest.raises(EmbeddingClientError, match="something went wrong"):
             raise EmbeddingClientError("something went wrong")
+
+
+# ---------------------------------------------------------------------------
+# load_embedding_prefixes(): env var loading and startup logging
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestLoadEmbeddingPrefixes:
+    def test_returns_empty_strings_when_env_not_set(self, monkeypatch):
+        monkeypatch.delenv(ENV_DOCUMENT_EMBEDDING_PREFIX, raising=False)
+        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        doc_prefix, query_prefix = EmbeddingClient.load_embedding_prefixes()
+        assert doc_prefix == ""
+        assert query_prefix == ""
+
+    def test_returns_configured_prefixes(self, monkeypatch):
+        monkeypatch.setenv(ENV_DOCUMENT_EMBEDDING_PREFIX, "search_document: ")
+        monkeypatch.setenv(ENV_QUERY_EMBEDDING_PREFIX, "search_query: ")
+        doc_prefix, query_prefix = EmbeddingClient.load_embedding_prefixes()
+        assert doc_prefix == "search_document: "
+        assert query_prefix == "search_query: "
+
+    def test_logs_info_when_document_prefix_is_set(self, monkeypatch, caplog):
+        monkeypatch.setenv(ENV_DOCUMENT_EMBEDDING_PREFIX, "passage: ")
+        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        import logging
+        with caplog.at_level(logging.INFO, logger="omop_emb.embeddings.embedding_client"):
+            EmbeddingClient.load_embedding_prefixes()
+        assert any(
+            "passage: " in r.message and r.levelname == "INFO"
+            for r in caplog.records
+        )
+
+    def test_logs_info_when_query_prefix_is_set(self, monkeypatch, caplog):
+        monkeypatch.delenv(ENV_DOCUMENT_EMBEDDING_PREFIX, raising=False)
+        monkeypatch.setenv(ENV_QUERY_EMBEDDING_PREFIX, "search_query: ")
+        import logging
+        with caplog.at_level(logging.INFO, logger="omop_emb.embeddings.embedding_client"):
+            EmbeddingClient.load_embedding_prefixes()
+        assert any(
+            "search_query: " in r.message and r.levelname == "INFO"
+            for r in caplog.records
+        )
+
+    def test_logs_warning_when_document_prefix_not_set(self, monkeypatch, caplog):
+        monkeypatch.delenv(ENV_DOCUMENT_EMBEDDING_PREFIX, raising=False)
+        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        import logging
+        with caplog.at_level(logging.WARNING, logger="omop_emb.embeddings.embedding_client"):
+            EmbeddingClient.load_embedding_prefixes()
+        warning_messages = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert any(ENV_DOCUMENT_EMBEDDING_PREFIX in m for m in warning_messages)
+
+    def test_logs_warning_when_query_prefix_not_set(self, monkeypatch, caplog):
+        monkeypatch.delenv(ENV_DOCUMENT_EMBEDDING_PREFIX, raising=False)
+        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        import logging
+        with caplog.at_level(logging.WARNING, logger="omop_emb.embeddings.embedding_client"):
+            EmbeddingClient.load_embedding_prefixes()
+        warning_messages = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert any(ENV_QUERY_EMBEDDING_PREFIX in m for m in warning_messages)
+
+
+# ---------------------------------------------------------------------------
+# _apply_embedding_prefix(): prefix application per role
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestApplyEmbeddingPrefix:
+    @pytest.fixture
+    def client_with_prefixes(self, monkeypatch, mock_openai):
+        monkeypatch.setenv(ENV_DOCUMENT_EMBEDDING_PREFIX, "doc: ")
+        monkeypatch.setenv(ENV_QUERY_EMBEDDING_PREFIX, "query: ")
+        return EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
+
+    @pytest.fixture
+    def client_no_prefixes(self, monkeypatch, mock_openai):
+        monkeypatch.delenv(ENV_DOCUMENT_EMBEDDING_PREFIX, raising=False)
+        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        return EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
+
+    def test_document_prefix_prepended_to_string(self, client_with_prefixes):
+        c = client_with_prefixes
+        result = c._apply_embedding_prefix("Hypertension", text_role=EmbeddingRole.DOCUMENT)
+        assert result == "doc: Hypertension"
+
+    def test_query_prefix_prepended_to_string(self, client_with_prefixes):
+        c = client_with_prefixes
+        result = c._apply_embedding_prefix("high blood pressure", text_role=EmbeddingRole.QUERY)
+        assert result == "query: high blood pressure"
+
+    def test_document_and_query_produce_different_prefixed_texts(self, client_with_prefixes):
+        c = client_with_prefixes
+        doc = c._apply_embedding_prefix("Hypertension", text_role=EmbeddingRole.DOCUMENT)
+        query = c._apply_embedding_prefix("Hypertension", text_role=EmbeddingRole.QUERY)
+        assert doc != query
+
+    def test_prefix_applied_to_all_items_in_tuple(self, client_with_prefixes):
+        c = client_with_prefixes
+        result = c._apply_embedding_prefix(("a", "b"), text_role=EmbeddingRole.DOCUMENT)
+        assert result == ("doc: a", "doc: b")
+
+    def test_prefix_applied_to_all_items_in_list(self, client_with_prefixes):
+        c = client_with_prefixes
+        result = c._apply_embedding_prefix(["a", "b"], text_role=EmbeddingRole.DOCUMENT)
+        assert result == ["doc: a", "doc: b"]
+
+    def test_no_prefix_returns_texts_unchanged_string(self, client_no_prefixes):
+        c = client_no_prefixes
+        result = c._apply_embedding_prefix("Hypertension", text_role=EmbeddingRole.DOCUMENT)
+        assert result == "Hypertension"
+
+    def test_no_prefix_returns_texts_unchanged_list(self, client_no_prefixes):
+        c = client_no_prefixes
+        result = c._apply_embedding_prefix(["a", "b"], text_role=EmbeddingRole.QUERY)
+        assert result == ["a", "b"]
+
+    def test_prefix_reflected_in_api_call(self, monkeypatch, mock_openai):
+        """Verify the prefixed text reaches the OpenAI API call."""
+        _, oi = mock_openai
+        monkeypatch.setenv(ENV_DOCUMENT_EMBEDDING_PREFIX, "passage: ")
+        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        c = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
+        oi.embeddings.create.return_value = _make_embedding_response([[0.1, 0.2]])
+        c.embeddings("diabetes", embedding_role=EmbeddingRole.DOCUMENT)
+        call_input = oi.embeddings.create.call_args.kwargs["input"]
+        assert call_input == ("passage: diabetes",)
+
+    def test_no_prefix_passes_text_verbatim_to_api(self, monkeypatch, mock_openai):
+        _, oi = mock_openai
+        monkeypatch.delenv(ENV_DOCUMENT_EMBEDDING_PREFIX, raising=False)
+        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        c = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
+        oi.embeddings.create.return_value = _make_embedding_response([[0.1, 0.2]])
+        c.embeddings("diabetes", embedding_role=EmbeddingRole.DOCUMENT)
+        call_input = oi.embeddings.create.call_args.kwargs["input"]
+        assert call_input == ("diabetes",)

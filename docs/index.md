@@ -31,11 +31,17 @@ At runtime, backend choice should also be explicit. The intended direction is:
 - install-time choice via extras
 - runtime choice via config such as `OMOP_EMB_BACKEND=pgvector` or `OMOP_EMB_BACKEND=faiss` or passing it as an argument to the respective interface (e.g. see [CLI reference](usage/cli.md))
 
-Recommended runtime environment variables:
+## Environment Variables { data-toc-label="Environment Variables" }
 
-- **`OMOP_EMB_BACKEND`**: `pgvector` or `faiss`
-- **`OMOP_EMB_BASE_STORAGE_DIR`**: base directory for local metadata and FAISS artifacts; defaults to `omop_emb/.omop_emb` the root direcotry of hte package.
-- **`OMOP_DATABASE_URL`**: OMOP CDM database URL
+| Variable | Description | Details |
+|---|---|---|
+| `OMOP_EMB_BACKEND` | Backend to use: `pgvector` or `faiss` | [Embedding Storage](usage/backend-selection.md) |
+| `OMOP_EMB_BASE_STORAGE_DIR` | Base directory for `metadata.db` and FAISS artifacts | [Installation](usage/installation.md) |
+| `OMOP_DATABASE_URL` | SQLAlchemy URL for the OMOP CDM database | [Installation](usage/installation.md) |
+| `OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX` | Task prefix prepended to concept texts at index time | [Asymmetric Embeddings](usage/asymmetric-embeddings.md) |
+| `OMOP_EMB_QUERY_EMBEDDING_PREFIX` | Task prefix prepended to search queries at query time | [Asymmetric Embeddings](usage/asymmetric-embeddings.md) |
+
+The prefix variables are optional and default to `""`. They are only needed for asymmetric embedding models (e.g. nomic-embed-text, E5, BGE) that require different task prefixes for indexing versus searching.
 
 
 !!! info "Important caveats"

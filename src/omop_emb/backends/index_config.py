@@ -20,6 +20,20 @@ class IndexConfig:
         return asdict(self)
 
     @classmethod
+    def from_kwargs(cls, **kwargs: Any) -> Self:
+        """Instantiate from arbitrary kwargs, silently ignoring unknown keys.
+
+        Each concrete subclass only picks up the fields it declares, so a
+        caller can safely splat all CLI kwargs without knowing which config
+        class is in use.  Missing required fields (no default) will still
+        raise a TypeError from the dataclass __init__.
+        """
+        if not is_dataclass(cls):
+            raise TypeError(f"Must be called on a dataclass, not {cls.__name__}")
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in kwargs.items() if k in known})
+
+    @classmethod
     def from_metadata(cls, metadata: Mapping[str, Any]) -> Self:
         """
         Strictly instantiates the config from a JSON metadata dictionary.
@@ -62,6 +76,25 @@ class HNSWIndexConfig(IndexConfig):
     ef_search: int = 16
     ef_construction: int = 64
     index_type: IndexType = IndexType.HNSW
+
+
+def index_config_from_index_type(
+    index_type: IndexType,
+    **kwargs: Any,
+) -> IndexConfig:
+    """Build an IndexConfig for a new index from raw kwargs.
+
+    Each concrete config class only consumes the fields it declares via
+    ``from_kwargs``, so callers (e.g. the CLI) can pass all known kwargs
+    without filtering per index type.  Missing required fields raise TypeError.
+    """
+    if index_type == IndexType.FLAT:
+        return FlatIndexConfig()
+    if index_type == IndexType.HNSW:
+        return HNSWIndexConfig.from_kwargs(**kwargs)
+    raise ValueError(
+        f"No IndexConfig defined for index type {index_type!r}."
+    )
 
 
 def index_config_from_index_type_and_metadata(

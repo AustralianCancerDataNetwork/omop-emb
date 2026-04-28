@@ -28,8 +28,8 @@ class IndexType(StrEnum):
     """
     FLAT = "flat"  # Exact search, no index
     HNSW = "hnsw"  # Hierarchical Navigable Small World graph
-    IVF = "ivf" # Inverted File Index
-    IVF_PQ = "ivf_pq" # IVF with Product Quantization
+    #IVF = "ivf" # Inverted File Index
+    #IVF_PQ = "ivf_pq" # IVF with Product Quantization
 
 class MetricType(StrEnum):
     """Defines the distance type used for nearest neighbor search. 

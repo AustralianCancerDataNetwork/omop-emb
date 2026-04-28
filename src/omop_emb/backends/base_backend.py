@@ -57,20 +57,10 @@ T = TypeVar("T", bound=ConceptIDEmbeddingBase)
 class EmbeddingBackend(ABC, Generic[T]):
     """Abstract interface for swappable embedding storage and retrieval backends.
 
-    Design goals
-    ------------
-    - Keep embedding generation separate from embedding persistence.
-    - Support multiple storage/retrieval implementations behind one contract.
-    - Local storage of model registry metadata, but allow flexible storage of
-      the actual embeddings (e.g. relational tables, FAISS indices, object storage).
-
     Notes
     -----
-    This interface intentionally still accepts SQLAlchemy ``Engine`` and
-    ``Session`` objects. Even with a non-Postgres embedding index such as
-    FAISS, the implementation will usually still need OMOP relational access
-    to validate models, resolve concept metadata, and apply domain/vocabulary
-    filters.
+    - The `engine` and `session` parameters refer to the OMOP CDM database connection; the model_registry on disk has its own engine
+        and is managed separately by the ModelRegistryManager.
     """
 
     DEFAULT_BASE_STORAGE_DIR = Path.home() / ".omop_emb"
@@ -135,6 +125,11 @@ class EmbeddingBackend(ABC, Generic[T]):
     def storage_base_dir(self) -> Path:
         """Base directory for any local storage needs of the backend."""
         return self._storage_base_dir
+    
+    @property
+    def embedding_model_registry(self) -> ModelRegistryManager:
+        """Access the model registry manager for this backend."""
+        return self._embedding_model_registry
 
     # ------------------------------------------------------------------
     # Store lifecycle
@@ -233,8 +228,13 @@ class EmbeddingBackend(ABC, Generic[T]):
 
         cache_key = self._get_embedding_table_cache_key(model_name, provider_type, index_type)
         embedding_table = self._embedding_table_cache.pop(cache_key, None)
-        if embedding_table is not None:
-            self._delete_storage_table(engine=engine, model_record=record)
+        if embedding_table is None:
+            logger.warning(
+                f"Embedding table for model '{model_name}' with provider='{provider_type.value}' and "
+                f"index_type='{index_type.value}' not found in cache during deletion. "
+                "Proceeding with registry deletion and storage cleanup, but this may indicate that the storage was not properly initialised or that the model was not registered correctly."
+            )
+        self._delete_storage_table(engine=engine, model_record=record)
 
         self._embedding_model_registry.delete_model(
             model_name=model_name,

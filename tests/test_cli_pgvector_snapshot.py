@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from omop_emb.cli import migrate_legacy_pgvector_registry
+from omop_emb.cli.cli_maintenance import migrate_legacy_pgvector_registry
 from omop_emb.config import BackendType, IndexType, ProviderType
 from omop_emb.interface import list_registered_models
 

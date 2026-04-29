@@ -12,7 +12,7 @@ from typing import (
 from dotenv import load_dotenv
 import h5py
 import sqlalchemy as sa
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
 import logging
 logger = logging.getLogger(__name__)
 import os
@@ -294,16 +294,16 @@ def load_embeddings_from_hdf5(
             raise RuntimeError(f"Embedding dimension in HDF5 file '{hdf5_file}' ({dimensions}) does not match expected embedding dimension for model '{model}' ({embedding_client.embedding_dim}).")
         
         
-        for i in tqdm(range(0, len(embeddings), batch_size), desc="Loading embeddings"):
-            # The 'with' block keeps the file handle open while we stream
-            embeddings_batch = embeddings[i : i + batch_size]
-            concept_ids_batch = concept_ids[i : i + batch_size]
+        n_batches = (len(embeddings) + batch_size - 1) // batch_size
 
-            with session_maker() as session:
-                writer.upsert_concept_embeddings(
-                    session=session,
-                    index_type=index_type,
-                    concept_ids=concept_ids_batch.tolist(),
-                    embeddings=embeddings_batch,
-                    metric_type=metric_type,
-                )
+        def _batches():
+            for i in range(0, len(embeddings), batch_size):
+                yield concept_ids[i : i + batch_size], embeddings[i : i + batch_size]
+
+        with session_maker() as session:
+            writer.bulk_upsert_concept_embeddings(
+                session=session,
+                index_type=index_type,
+                batches=tqdm(_batches(), total=n_batches, desc="Loading embeddings", unit="batch"),
+                metric_type=metric_type,
+            )

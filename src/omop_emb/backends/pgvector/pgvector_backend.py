@@ -6,7 +6,6 @@ from numpy import ndarray
 import logging
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 
 from .pgvector_sql import (
     q_embedding_nearest_concepts,
@@ -272,19 +271,19 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
             provider_type=provider_type,
         )
 
-        try:
-            add_embeddings_to_registered_table(
-                session=session,
-                concept_ids=concept_id_tuple,
-                embeddings=embeddings,
-                registered_table=table,
-            )
-        except IntegrityError as e:
-            session.rollback()
+        existing = self._get_existing_concept_ids(session, concept_id_tuple, table)
+        if existing:
             raise ValueError(
-                f"Failed to upsert embeddings for model '{model_name}'. "
-                f"Original error: {e}"
-            ) from e
+                f"concept_ids already present in registry for model '{model_name}': {existing}. "
+                "Existing concept_ids cannot be overwritten."
+            )
+
+        add_embeddings_to_registered_table(
+            session=session,
+            concept_ids=concept_id_tuple,
+            embeddings=embeddings,
+            registered_table=table,
+        )
 
     @require_registered_model
     def get_embeddings_by_concept_ids(

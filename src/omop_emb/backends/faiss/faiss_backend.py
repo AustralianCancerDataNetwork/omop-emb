@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import (
-    Mapping, 
-    Optional, 
-    Sequence, 
-    Type, 
-    Dict, 
+    Iterable,
+    Mapping,
+    Optional,
+    Sequence,
+    Type,
+    Dict,
     Tuple,
     Any
 )
@@ -300,6 +301,19 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             dimensions=_model_record.dimensions,
         )
 
+        embedding_table = self.get_embedding_table(
+            model_name=model_name,
+            index_type=index_type,
+            provider_type=provider_type,
+        )
+
+        existing = self._get_existing_concept_ids(session, concept_id_tuple, embedding_table)
+        if existing:
+            raise ValueError(
+                f"concept_ids already present in registry for model '{model_name}': {existing}. "
+                "Existing concept_ids cannot be overwritten."
+            )
+
         config = index_config_from_index_type_and_metadata(
             _model_record.index_type, _model_record.metadata
         )
@@ -325,19 +339,94 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             add_concept_ids_to_faiss_registry(
                 concept_ids=concept_id_tuple,
                 session=session,
-                registered_table=self.get_embedding_table(
-                    model_name=model_name,
-                    index_type=index_type,
-                    provider_type=provider_type,
-                ),
+                registered_table=embedding_table,
             )
         except Exception as e:
             session.rollback()
             raise ValueError(
                 f"Failed to add concept IDs to FAISS registry for model '{model_name}'. "
-                "This may be due to duplicate concept IDs or a database constraint violation. "
                 f"Original error: {e}"
             ) from e
+
+    @require_registered_model
+    def bulk_upsert_embeddings(
+        self,
+        *,
+        session: Session,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
+        batches: Iterable[Tuple[Sequence[int], ndarray]],
+        metric_type: Optional[MetricType] = None,
+        _model_record: EmbeddingModelRecord,
+    ) -> None:
+        """Bulk-load embeddings using a single HDF5 open, one index rebuild, and one SQL insert.
+
+        Parameters
+        ----------
+        session : Session
+            Active SQLAlchemy session bound to the OMOP CDM database.
+        model_name : str
+            Registered canonical name of the embedding model.
+        provider_type : ProviderType
+            Provider that produced the embeddings.
+        index_type : IndexType
+            Index type the model was registered with.
+        batches : Iterable[Tuple[Sequence[int], ndarray]]
+            Lazy iterable of ``(concept_ids, embeddings)`` pairs. ``embeddings``
+            must be float32 of shape ``(batch_size, D)``, rows aligned to
+            ``concept_ids``. Wrap with ``tqdm`` for a progress bar.
+        metric_type : MetricType, optional
+            When provided the FAISS index for this metric is rebuilt once all
+            batches are written. Omit to defer index creation.
+        _model_record : EmbeddingModelRecord
+            Injected by ``@require_registered_model``; do not pass explicitly.
+
+        Notes
+        -----
+        Skips per-batch duplicate checks and FAISS saves. The SQL registry
+        primary-key constraint catches cross-batch duplicates at commit time.
+        """
+        config = index_config_from_index_type_and_metadata(
+            _model_record.index_type, _model_record.metadata
+        )
+        storage_manager = self.get_storage_manager(_model_record)
+
+        def _validated_batches() -> Iterable[Tuple[np.ndarray, np.ndarray]]:
+            for concept_ids, embeddings in batches:
+                arr_ids = np.array(tuple(concept_ids), dtype=np.int64)
+                self.validate_embeddings_and_concept_ids(
+                    concept_ids=arr_ids,
+                    embeddings=embeddings,
+                    dimensions=_model_record.dimensions,
+                )
+                yield arr_ids, embeddings
+
+        all_concept_ids = storage_manager._bulk_write(_validated_batches())
+
+        if metric_type is not None and all_concept_ids:
+            storage_manager.rebuild_index_for_metric(
+                metric_type=metric_type,
+                index_config=config,
+            )
+
+        if all_concept_ids:
+            try:
+                add_concept_ids_to_faiss_registry(
+                    concept_ids=tuple(all_concept_ids),
+                    session=session,
+                    registered_table=self.get_embedding_table(
+                        model_name=model_name,
+                        index_type=index_type,
+                        provider_type=provider_type,
+                    ),
+                )
+            except Exception as e:
+                session.rollback()
+                raise ValueError(
+                    f"Failed to register concept IDs after bulk load for model '{model_name}'. "
+                    f"Original error: {e}"
+                ) from e
 
     @require_registered_model
     def get_nearest_concepts(

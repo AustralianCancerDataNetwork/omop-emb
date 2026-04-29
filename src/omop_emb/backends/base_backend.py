@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Mapping, Optional, Sequence, Union, Type, TypeVar, Generic, Any, Callable, Tuple
+from typing import Iterable, Mapping, Optional, Sequence, Union, Type, TypeVar, Generic, Any, Callable, Tuple
 from pathlib import Path
 from functools import wraps
 import os
@@ -388,6 +388,42 @@ class EmbeddingBackend(ABC, Generic[T]):
     # Core read/write operations
     # ------------------------------------------------------------------
 
+    def _get_existing_concept_ids(
+        self,
+        session: Session,
+        concept_ids: tuple[int, ...],
+        table: Type[T],
+    ) -> set[int]:
+        """Return the subset of *concept_ids* already present in *table*.
+
+        Parameters
+        ----------
+        session : Session
+            Active SQLAlchemy session bound to the OMOP CDM database.
+        concept_ids : tuple[int, ...]
+            Candidate concept IDs to check.
+        table : Type[T]
+            ORM class for the backend's concept-ID registry table (subclass of
+            ``ConceptIDEmbeddingBase``).
+
+        Returns
+        -------
+        set[int]
+            Already-stored concept IDs; empty set when none exist.
+
+        Notes
+        -----
+        Uses an indexed PK lookup — O(batch_size). Call before any INSERT to
+        get a clear ``ValueError`` instead of a transaction-aborting
+        ``IntegrityError`` that rolls back the entire batch.
+        """
+        if not concept_ids:
+            return set()
+        result = session.execute(
+            select(table.concept_id).where(table.concept_id.in_(concept_ids))
+        )
+        return {row[0] for row in result}
+
     @abstractmethod
     @require_registered_model
     def upsert_embeddings(
@@ -424,6 +460,53 @@ class EmbeddingBackend(ABC, Generic[T]):
             When provided the backend should also update its nearest-neighbor
             index for this metric (FAISS only; ignored by pgvector).
         """
+
+    def bulk_upsert_embeddings(
+        self,
+        *,
+        session: Session,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
+        batches: Iterable[Tuple[Sequence[int], ndarray]],
+        metric_type: Optional[MetricType] = None,
+    ) -> None:
+        """Upsert embeddings from a lazy iterable of ``(concept_ids, embeddings)`` batches.
+
+        Parameters
+        ----------
+        session : Session
+            Active SQLAlchemy session bound to the OMOP CDM database.
+        model_name : str
+            Registered canonical name of the embedding model.
+        provider_type : ProviderType
+            Provider that produced the embeddings.
+        index_type : IndexType
+            Index type the model was registered with.
+        batches : Iterable[Tuple[Sequence[int], ndarray]]
+            Lazy iterable of ``(concept_ids, embeddings)`` pairs. ``embeddings``
+            must be float32 of shape ``(batch_size, D)``, rows aligned to
+            ``concept_ids``. Wrap with ``tqdm`` for a progress bar.
+        metric_type : MetricType, optional
+            When provided the backend updates its nearest-neighbour index for
+            this metric. Ignored by pgvector.
+
+        Notes
+        -----
+        Default implementation calls ``upsert_embeddings`` once per batch.
+        Backends may override for an optimised bulk path.
+        """
+        for concept_ids, embeddings in batches:
+            self.upsert_embeddings(
+                session=session,
+                model_name=model_name,
+                provider_type=provider_type,
+                index_type=index_type,
+                concept_ids=concept_ids,
+                embeddings=embeddings,
+                metric_type=metric_type,
+            )
+        
 
     @abstractmethod
     @require_registered_model

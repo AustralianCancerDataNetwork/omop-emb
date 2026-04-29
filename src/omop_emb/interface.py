@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Mapping, Optional, Sequence, Tuple, List, Union
+from typing import Iterable, Mapping, Optional, Sequence, Tuple, List, Union
 
 
 import numpy as np
@@ -616,6 +616,46 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
+            metric_type=metric_type,
+        )
+
+    def bulk_upsert_concept_embeddings(
+        self,
+        *,
+        session: Session,
+        index_type: IndexType,
+        batches: Iterable[Tuple[Sequence[int], ndarray]],
+        metric_type: Optional[MetricType] = None,
+    ) -> None:
+        """Bulk-upsert concept embeddings from a lazy ``(concept_ids, embeddings)`` iterable.
+
+        Prefer over repeated ``upsert_concept_embeddings`` calls for large loads.
+
+        Parameters
+        ----------
+        session : Session
+            Active SQLAlchemy session bound to the OMOP CDM database.
+        index_type : IndexType
+            Index type the model was registered with.
+        batches : Iterable[Tuple[Sequence[int], ndarray]]
+            Lazy iterable of ``(concept_ids, embeddings)`` pairs. ``embeddings``
+            must be float32 of shape ``(batch_size, D)``, rows aligned to
+            ``concept_ids``. Wrap with ``tqdm`` for a progress bar.
+        metric_type : MetricType, optional
+            When provided the backend updates its nearest-neighbour index for
+            this metric. Ignored by pgvector.
+
+        Notes
+        -----
+        FAISS opens the HDF5 file once and rebuilds the search index once at
+        the end. pgvector falls back to sequential per-batch upserts.
+        """
+        self._backend.bulk_upsert_embeddings(
+            session=session,
+            model_name=self.canonical_model_name,
+            provider_type=self._embedding_client.provider.provider_type,
+            index_type=index_type,
+            batches=batches,
             metric_type=metric_type,
         )
 

@@ -8,7 +8,7 @@ import numpy as np
 import shutil
 from pathlib import Path
 from contextlib import contextmanager
-from typing import Callable, cast, Generator, Tuple, Optional, Mapping, Sequence, Dict
+from typing import Callable, cast, Generator, Iterable, Tuple, Optional, Mapping, Sequence, Dict
 import logging
 logger = logging.getLogger(__name__)
 
@@ -174,6 +174,47 @@ class EmbeddingStorageManager:
             concept_ids: h5py.Dataset = cast(h5py.Dataset, f[self.HDF5_DATASET_NAME_CONCEPT_IDS])
             yield embeddings, concept_ids
 
+    def _bulk_write(
+        self,
+        batches: Iterable[Tuple[np.ndarray, np.ndarray]],
+    ) -> list[int]:
+        """Write ``(concept_ids, embeddings)`` batches to HDF5 in a single file open.
+
+        Parameters
+        ----------
+        batches : Iterable[Tuple[np.ndarray, np.ndarray]]
+            Lazy iterable of ``(concept_ids, embeddings)`` pairs. ``concept_ids``
+            must be 1-D int64; ``embeddings`` float32 of shape ``(batch_size, D)``.
+            Wrap with ``tqdm`` for a progress bar.
+
+        Returns
+        -------
+        list[int]
+            All concept IDs written, in order. Pass to the SQL registry insert
+            to keep HDF5 and database in sync.
+
+        Notes
+        -----
+        No duplicate check and no FAISS operations — caller's responsibility.
+        Call ``rebuild_index_for_metric`` separately after this returns.
+        """
+        all_ids: list[int] = []
+        with self.open_all(mode="a") as (emb_ds, cid_ds):
+            for concept_ids, embeddings in batches:
+                if embeddings.shape[1] != self.dimensions:
+                    raise ValueError(
+                        f"Embeddings dimension {embeddings.shape[1]} does not match expected {self.dimensions}"
+                    )
+                old_size = emb_ds.shape[0]
+                new_size = old_size + len(concept_ids)
+                emb_ds.resize((new_size, self.dimensions))
+                cid_ds.resize((new_size,))
+                emb_ds[old_size:new_size] = embeddings.astype("float32")
+                cid_ds[old_size:new_size] = concept_ids.astype("int64")
+                all_ids.extend(concept_ids.tolist())
+            emb_ds.file.flush()
+        return all_ids
+
     def append(
         self,
         concept_ids: np.ndarray,
@@ -182,6 +223,10 @@ class EmbeddingStorageManager:
         metric_type: Optional[MetricType] = None,
     ) -> None:
         """Append new vectors to HDF5 and optionally update a FAISS index.
+
+        Notes
+        -----
+        - This method does not check for duplicates across different calls. It is the caller's responsibility to ensure that the same concept_id is not appended multiple times across different calls, as this would lead to data corruption and incorrect search results. 
 
         Parameters
         ----------
@@ -208,10 +253,6 @@ class EmbeddingStorageManager:
         unique = np.unique(concept_ids)
         if len(unique) != len(concept_ids):
             raise ValueError("Duplicate concept_ids found in the input. Please ensure all concept_ids are unique to prevent data corruption.")
-
-        existing_concept_ids = self.get_concept_ids()
-        if np.intersect1d(existing_concept_ids, concept_ids).size > 0:
-            raise ValueError("Some concept_ids already exist in storage. Appending duplicate concept_ids would corrupt the data. Please ensure all concept_ids are unique and do not already exist in storage.")
 
         with self.open_all(mode="a") as (emb_ds, cid_ds):
             old_size = emb_ds.shape[0]

@@ -28,8 +28,8 @@ class IndexType(StrEnum):
     """
     FLAT = "flat"  # Exact search, no index
     HNSW = "hnsw"  # Hierarchical Navigable Small World graph
-    IVF = "ivf" # Inverted File Index
-    IVF_PQ = "ivf_pq" # IVF with Product Quantization
+    #IVF = "ivf" # Inverted File Index
+    #IVF_PQ = "ivf_pq" # IVF with Product Quantization
 
 class MetricType(StrEnum):
     """Defines the distance type used for nearest neighbor search. 
@@ -84,15 +84,16 @@ def parse_metric_type(value: str | MetricType) -> MetricType:
             f"{[member.value for member in MetricType]}."
         ) from exc
 
-# TODO: Support non-flat indices in the future
 SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tuple[MetricType, ...]]] = {
     #https://github.com/pgvector/pgvector?tab=readme-ov-file#querying
     BackendType.PGVECTOR: {
         IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1, MetricType.HAMMING, MetricType.JACCARD),
+        IndexType.HNSW: (MetricType.L2, MetricType.COSINE, MetricType.L1),
     },
     # Check here: https://github.com/facebookresearch/faiss/wiki/Faiss-indexes
     BackendType.FAISS: {
-        IndexType.FLAT: (MetricType.L2, MetricType.COSINE)
+        IndexType.FLAT: (MetricType.L2, MetricType.COSINE),
+        IndexType.HNSW: (MetricType.L2, MetricType.COSINE),
     }
 }
 

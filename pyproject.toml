@@ -81,7 +81,7 @@ build-backend = "hatchling.build"
 packages = ["src/omop_emb"]
 
 [project.scripts]
-omop-emb = "omop_emb.cli:app"
+omop-emb = "omop_emb.cli.cli_app:app"
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py"]
@@ -89,6 +89,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
   "unit: Unit tests",
+  "integration: Integration tests",
   "faiss: FAISS backend tests",
   "pgvector: pgvector backend tests",
 ]

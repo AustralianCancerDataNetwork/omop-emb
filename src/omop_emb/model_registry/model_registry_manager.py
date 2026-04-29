@@ -177,6 +177,60 @@ class ModelRegistryManager:
     ) -> str:
         return f"{backend_type.value.lower()}_{safe_model_name}_{index_type.value}"
     
+    def delete_model(
+        self,
+        model_name: str,
+        *,
+        provider_type: ProviderType,
+        backend_type: BackendType,
+        index_type: IndexType,
+    ) -> None:
+        """Remove a model registration from the registry database."""
+        with Session(self._engine) as session:
+            row = session.scalar(
+                select(ModelRegistry).where(
+                    and_(
+                        ModelRegistry.model_name == model_name,
+                        ModelRegistry.provider_type == provider_type,
+                        ModelRegistry.backend_type == backend_type,
+                        ModelRegistry.index_type == index_type,
+                    )
+                )
+            )
+            if row is not None:
+                session.delete(row)
+                session.commit()
+
+    def update_model_metadata(
+        self,
+        model_name: str,
+        *,
+        provider_type: ProviderType,
+        backend_type: BackendType,
+        index_type: IndexType,
+        metadata: Mapping[str, object],
+    ) -> EmbeddingModelRecord:
+        """Replace the metadata (details) for an existing model registration."""
+        with Session(self._engine, expire_on_commit=False) as session:
+            row = session.scalar(
+                select(ModelRegistry).where(
+                    and_(
+                        ModelRegistry.model_name == model_name,
+                        ModelRegistry.provider_type == provider_type,
+                        ModelRegistry.backend_type == backend_type,
+                        ModelRegistry.index_type == index_type,
+                    )
+                )
+            )
+            if row is None:
+                raise ValueError(
+                    f"Model '{model_name}' with provider='{provider_type}', "
+                    f"backend='{backend_type}', index='{index_type}' not found in registry."
+                )
+            row.details = dict(metadata)
+            session.commit()
+            return self._registry_entry_to_model_record(row)
+
     @staticmethod
     def _coerce_registry_metadata(value: object) -> Mapping[str, object]:
         if isinstance(value, Mapping):

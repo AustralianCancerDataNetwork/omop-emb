@@ -1,15 +1,23 @@
-from .base import (
+from .base_backend import (
     EmbeddingBackend,
 )
 from .factory import (
     get_embedding_backend,
     normalize_backend_name,
 )
+from .index_config import (
+    IndexConfig,
+    FlatIndexConfig,
+    HNSWIndexConfig,
+)
 
 __all__ = [
     "EmbeddingBackend",
     "get_embedding_backend",
     "normalize_backend_name",
+    "IndexConfig",
+    "FlatIndexConfig",
+    "HNSWIndexConfig",
     "FaissEmbeddingBackend",
     "PGVectorEmbeddingBackend",
 ]

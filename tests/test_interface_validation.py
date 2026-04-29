@@ -1,6 +1,6 @@
 """Validation tests for strict EmbeddingInterface input contracts."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, MagicMock
 
 import numpy as np
 import pytest
@@ -8,6 +8,7 @@ import pytest
 from omop_emb.config import IndexType, MetricType, BackendType, ProviderType
 from omop_emb.embeddings import OllamaProvider
 from omop_emb.interface import EmbeddingWriterInterface
+from omop_emb.backends import FlatIndexConfig
 
 
 def _make_mock_client(model_name: str = "test-model:v1") -> Mock:
@@ -93,8 +94,8 @@ class TestCanonicalModelName:
         ))
 
         interface.register_model(
-            engine=Mock(),
-            index_type=IndexType.FLAT,
+            engine=MagicMock(), # allows context manager for engine.begin()
+            index_config=FlatIndexConfig()
         )
 
         call_kwargs = interface._backend.register_model.call_args.kwargs

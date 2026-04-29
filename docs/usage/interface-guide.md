@@ -32,18 +32,41 @@ interface = EmbeddingWriterInterface(
 ### Register and initialise
 
 ```python
-from omop_emb import IndexType
+from omop_emb.backends import FlatIndexConfig, HNSWIndexConfig
 
-# One-shot: register then initialise storage
-interface.setup_and_register_model(
+# FLAT index — sequential scan, no warm-up needed
+interface.register_model(engine=db_engine, index_config=FlatIndexConfig())
+interface.initialise_store(db_engine)
+
+# HNSW index — approximate nearest-neighbour, configurable
+interface.register_model(
     engine=db_engine,
-    index_type=IndexType.FLAT,
+    index_config=HNSWIndexConfig(
+        num_neighbors=32,
+        ef_construction=64,
+        ef_search=16,
+    ),
 )
-
-# Or separately:
-interface.register_model(engine=db_engine, index_type=IndexType.FLAT)
 interface.initialise_store(db_engine)
 ```
+
+`register_model` persists the model and its index configuration in the local registry. `initialise_store` loads all registered models into memory.
+
+!!! info "pgvector HNSW: explicit index creation"
+    For the pgvector backend with HNSW, the SQL index must be created separately after embeddings are inserted:
+
+    ```python
+    from omop_emb import MetricType, IndexType
+
+    interface._backend.initialise_indexes(
+        model_name=interface.canonical_model_name,
+        provider_type=interface.provider_type,
+        index_type=IndexType.HNSW,
+        metric_types=[MetricType.L2],
+    )
+    ```
+
+    Without this call, pgvector falls back to a sequential scan. This step is idempotent — calling it when the index already exists is safe. See [Index Types](backend-selection.md#index-types) for details.
 
 ### Generate and store embeddings
 

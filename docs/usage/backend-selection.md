@@ -52,6 +52,53 @@ The factory currently exposes:
 - `get_embedding_backend(...)`
 - `normalize_backend_name(...)`
 
+## Index Types
+
+Each backend supports two index types controlled by an `IndexConfig` object passed at model registration.
+
+```python
+from omop_emb.backends import FlatIndexConfig, HNSWIndexConfig
+```
+
+### FLAT
+
+Sequential scan — no index structure is built. Every query compares the vector against all stored embeddings. Correct by construction and requires no warm-up step.
+
+```python
+FlatIndexConfig()  # no parameters
+```
+
+Use FLAT when the corpus is small (tens of thousands of concepts), or when exact results are required.
+
+### HNSW
+
+Hierarchical Navigable Small World graph. Approximate nearest-neighbour search with sub-linear query time. Configurable via three parameters:
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `num_neighbors` | `32` | Graph connectivity (`M`). Higher = better recall, larger index. |
+| `ef_construction` | `64` | Build quality. Higher = better recall at index time, slower build. |
+| `ef_search` | `16` | Query recall. Higher = better recall at query time, slower query. |
+
+```python
+HNSWIndexConfig(
+    num_neighbors=32,
+    ef_construction=64,
+    ef_search=16,
+)
+```
+
+Use HNSW when the corpus is large and query latency matters.
+
+!!! info "Backend differences"
+    - **FAISS**: the HNSW index is stored as a `.faiss` file alongside the HDF5 embedding data. It is built from the stored data the first time it is needed, or via `backend.initialise_indexes(...)`.
+    - **pgvector**: the HNSW index is a SQL `CREATE INDEX USING hnsw` object. Call `backend.initialise_indexes(...)` after inserting data to create it; without this, pgvector falls back to a sequential scan automatically. `ef_search` is applied per session via `SET hnsw.ef_search = <value>` at query time.
+
+!!! warning "pgvector dimension limit"
+    The pgvector `vector` column type supports **at most 2,000 dimensions**. Registering a model with more than 2,000 dimensions raises `ValueError` immediately. Use `halfvec` (up to 4,000 dims) or `bit` (up to 64,000 dims) column types for larger embeddings — these are planned for a future release.
+
+---
+
 ## Why explicit selection is necessary
 
 Explicit backend selection improves clarity in a multi-backend world:

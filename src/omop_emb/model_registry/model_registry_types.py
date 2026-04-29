@@ -8,6 +8,10 @@ from omop_emb.config import (
     BackendType,
     ProviderType
 )
+from omop_emb.backends.index_config import (
+    IndexConfig,
+    index_config_from_index_type_and_metadata
+)
 
 @dataclass(frozen=True)
 class EmbeddingModelRecord:
@@ -29,3 +33,7 @@ class EmbeddingModelRecord:
     index_type: IndexType
     storage_identifier: str
     metadata: Mapping[str, object] = field(default_factory=dict)
+
+    @property
+    def index_config(self) -> IndexConfig:
+        return index_config_from_index_type_and_metadata(self.index_type, self.metadata)

@@ -250,7 +250,10 @@ class TestFaissHNSWBackend:
             index_config=new_config,
         )
         hnsw_backend.rebuild_model_indexes(
-            model_record=updated_record,
+            updated_record.model_name,
+            updated_record.provider_type,
+            updated_record.index_type,
+            engine=session.bind,
             metric_types=[MetricType.L2],
         )
 

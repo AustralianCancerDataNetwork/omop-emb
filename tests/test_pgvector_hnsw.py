@@ -159,10 +159,11 @@ class TestPGVectorHNSWBackend:
         manager = hnsw_pgvector_backend.get_index_manager(MODEL_NAME)
         assert manager.has_index(MetricType.L2)
 
-        hnsw_pgvector_backend.rebuild_indexes(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=IndexType.HNSW,
+        hnsw_pgvector_backend.rebuild_model_indexes(
+            MODEL_NAME,
+            PROVIDER_TYPE,
+            IndexType.HNSW,
+            engine=session.bind,
             metric_types=[MetricType.L2],
         )
         assert manager.has_index(MetricType.L2)
@@ -189,7 +190,7 @@ class TestPGVectorHNSWBackend:
         )
 
         new_config = HNSWIndexConfig(num_neighbors=8, ef_search=32, ef_construction=64)
-        hnsw_pgvector_backend.update_model_index_configuration(
+        updated_record = hnsw_pgvector_backend.update_model_index_configuration(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
             index_type=IndexType.HNSW,
@@ -198,12 +199,12 @@ class TestPGVectorHNSWBackend:
         # Manager was evicted — rebuild must re-register with new config
         assert MODEL_NAME not in hnsw_pgvector_backend._pgvector_index_managers
 
-        hnsw_pgvector_backend.rebuild_indexes(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=IndexType.HNSW,
-            metric_types=[MetricType.L2],
+        hnsw_pgvector_backend.rebuild_model_indexes(
+            updated_record.model_name,
+            updated_record.provider_type,
+            updated_record.index_type,
             engine=session.bind,
+            metric_types=[MetricType.L2],
         )
 
         new_manager = hnsw_pgvector_backend.get_index_manager(MODEL_NAME)

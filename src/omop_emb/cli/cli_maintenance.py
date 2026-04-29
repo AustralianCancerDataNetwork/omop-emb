@@ -22,14 +22,16 @@ app = typer.Typer(help="Legacy commands for omop-emb CLI. These commands are dep
 
 from .utils import configure_logging_level, resolve_engine
 from omop_emb.config import (
-    IndexType, 
-    BackendType, 
+    IndexType,
+    BackendType,
     ProviderType,
     MetricType,
     ENV_OMOP_EMB_BACKEND,
+    SUPPORTED_INDICES_AND_METRICS_PER_BACKEND,
 )
 from omop_emb.interface import migrate_legacy_registry_row, EmbeddingWriterInterface
 from omop_emb.embeddings import EmbeddingClient
+from omop_emb.backends import get_embedding_backend
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.backends.faiss.storage_manager import EmbeddingStorageManager
 
@@ -307,3 +309,193 @@ def load_embeddings_from_hdf5(
                 batches=tqdm(_batches(), total=n_batches, desc="Loading embeddings", unit="batch"),
                 metric_type=metric_type,
             )
+
+@app.command(help="Rebuild indexes for a registered model")
+def rebuild_index(
+    model: Annotated[str, typer.Option(
+        "--model", "-m",
+        help="Registered embedding model name to rebuild indexes for.",
+    )],
+    backend_type: Annotated[BackendType, typer.Option(
+        "--backend",
+        help=f"Embedding backend to use. Can be replaced by the `{ENV_OMOP_EMB_BACKEND}` environment variable.",
+        rich_help_panel="Storage Options",
+    )] = BackendType.FAISS,
+    provider_type: Annotated[ProviderType, typer.Option(
+        "--provider-type",
+        help="Provider type the model was registered with.",
+    )] = ProviderType.OLLAMA,
+    index_type: Annotated[IndexType, typer.Option(
+        "--index-type",
+        help="Index type the model was registered with.",
+        rich_help_panel="Index Options",
+    )] = IndexType.FLAT,
+    storage_base_dir: Annotated[Optional[str], typer.Option(
+        "--storage-base-dir",
+        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to ./.omop_emb in the current working directory.",
+        rich_help_panel="Storage Options",
+    )] = None,
+    registry_db_name: Annotated[str, typer.Option(
+        "--registry-db-name",
+        help="Filename for the local metadata registry SQLite database.",
+        rich_help_panel="Storage Options",
+    )] = "metadata.db",
+    metric_types: Annotated[Optional[list[MetricType]], typer.Option(
+        "--metric-type",
+        help="Metric(s) to rebuild. Repeat to rebuild multiple metrics. Defaults to all metrics supported by the registered index type.",
+        rich_help_panel="Index Options",
+    )] = None,
+    batch_size: Annotated[int, typer.Option(
+        "--batch-size", "-b",
+        help="Batch size when streaming embeddings from storage during rebuild. Meaningful for FAISS; ignored by pgvector.",
+    )] = 100_000,
+    verbosity: Annotated[int, typer.Option(
+        "--verbose", "-v", count=True,
+        help="Increase verbosity (up to two levels)",
+    )] = 0,
+):
+    configure_logging_level(verbosity)
+    load_dotenv()
+
+    engine = resolve_engine()
+    backend = get_embedding_backend(
+        backend_name_or_type=backend_type,
+        storage_base_dir=storage_base_dir,
+        registry_db_name=registry_db_name,
+    )
+    backend.initialise_store(engine)
+
+    resolved_metric_types: tuple[MetricType, ...]
+    if metric_types:
+        resolved_metric_types = tuple(metric_types)
+    else:
+        resolved_metric_types = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend_type, {}).get(index_type, ())
+
+    backend.rebuild_model_indexes(
+        model,
+        provider_type,
+        index_type,
+        engine=engine,
+        metric_types=resolved_metric_types,
+        batch_size=batch_size,
+    )
+    logger.info("Completed index rebuild for model '%s'.", model)
+
+
+@app.command(help="Switch index type for a registered model.")
+def switch_index_type(
+    model: Annotated[str, typer.Option(
+        "--model", "-m",
+        help="Registered embedding model name to add the new index for.",
+    )],
+    new_index_type: Annotated[IndexType, typer.Option(
+        "--new-index-type",
+        help="New index type to register and build for the model.",
+        rich_help_panel="Index Options",
+    )] = IndexType.HNSW,
+    backend_type: Annotated[BackendType, typer.Option(
+        "--backend",
+        help=f"Embedding backend to use. Can be replaced by the `{ENV_OMOP_EMB_BACKEND}` environment variable.",
+        rich_help_panel="Storage Options",
+    )] = BackendType.FAISS,
+    provider_type: Annotated[ProviderType, typer.Option(
+        "--provider-type",
+        help="Provider type the model was registered with.",
+    )] = ProviderType.OLLAMA,
+    storage_base_dir: Annotated[Optional[str], typer.Option(
+        "--storage-base-dir",
+        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to ./.omop_emb in the current working directory.",
+        rich_help_panel="Storage Options",
+    )] = None,
+    registry_db_name: Annotated[str, typer.Option(
+        "--registry-db-name",
+        help="Filename for the local metadata registry SQLite database.",
+        rich_help_panel="Storage Options",
+    )] = "metadata.db",
+    metric_types: Annotated[Optional[list[MetricType]], typer.Option(
+        "--metric-type",
+        help="Metric(s) to build after registering. Defaults to all metrics supported by the new index type.",
+        rich_help_panel="Index Options",
+    )] = None,
+    index_hnsw_num_neighbors: Annotated[Optional[int], typer.Option(
+        "--index-hnsw-num-neighbors",
+        help="HNSW: number of neighbors per graph node.",
+        rich_help_panel="Index Options",
+    )] = None,
+    index_hnsw_ef_search: Annotated[Optional[int], typer.Option(
+        "--index-hnsw-ef-search",
+        help="HNSW: ef parameter controlling recall during search.",
+        rich_help_panel="Index Options",
+    )] = None,
+    index_hnsw_ef_construction: Annotated[Optional[int], typer.Option(
+        "--index-ef-construction",
+        help="HNSW: ef parameter controlling graph quality during construction.",
+        rich_help_panel="Index Options",
+    )] = None,
+    batch_size: Annotated[int, typer.Option(
+        "--batch-size", "-b",
+        help="Batch size when streaming embeddings from storage during rebuild. Meaningful for FAISS; ignored by pgvector.",
+    )] = 100_000,
+    rebuild: Annotated[bool, typer.Option(
+        "--rebuild/--no-rebuild",
+        help="Build the new index immediately after registration. Pass --no-rebuild to defer.",
+    )] = True,
+    verbosity: Annotated[int, typer.Option(
+        "--verbose", "-v", count=True,
+        help="Increase verbosity (up to two levels)",
+    )] = 0,
+):
+    configure_logging_level(verbosity)
+    load_dotenv()
+
+    engine = resolve_engine()
+    backend = get_embedding_backend(
+        backend_name_or_type=backend_type,
+        storage_base_dir=storage_base_dir,
+        registry_db_name=registry_db_name,
+    )
+    backend.initialise_store(engine)
+
+    existing = backend.get_registered_models(model_name=model, provider_type=provider_type)
+    if not existing:
+        raise RuntimeError(
+            f"No registration found for model '{model}' with provider '{provider_type.value}'. "
+            "Register the model first via the main embedding CLI."
+        )
+
+    new_index_config = index_config_from_index_type(
+        new_index_type,
+        num_neighbors=index_hnsw_num_neighbors,
+        ef_search=index_hnsw_ef_search,
+        ef_construction=index_hnsw_ef_construction,
+    )
+    backend.register_model(
+        engine=engine,
+        model_name=model,
+        dimensions=existing[0].dimensions,
+        provider_type=provider_type,
+        index_config=new_index_config,
+    )
+    logger.info(f"Registered model '{model}' with index_type={new_index_type.value}.")
+
+    if rebuild:
+        resolved_metric_types: tuple[MetricType, ...]
+        if metric_types:
+            resolved_metric_types = tuple(metric_types)
+        else:
+            resolved_metric_types = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(
+                backend_type, {}
+            ).get(new_index_type, ())
+        backend.rebuild_model_indexes(
+            model,
+            provider_type,
+            new_index_type,
+            engine=engine,
+            metric_types=resolved_metric_types,
+            batch_size=batch_size,
+        )
+
+    logger.info(
+        f"Registered model '{model}' with index_type={new_index_type.value}."
+        + (" Built indexes." if rebuild else "")
+    )

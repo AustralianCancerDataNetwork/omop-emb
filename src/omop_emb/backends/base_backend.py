@@ -255,8 +255,8 @@ class EmbeddingBackend(ABC, Generic[T]):
         """Persist updated index configuration parameters for an existing model.
 
         Only metadata (e.g. HNSW ``num_neighbors``, ``ef_search``) is changed.
-        Callers should follow up with ``rebuild_model_indexes`` to apply the new
-        parameters to the on-disk index files.
+        Callers should follow up with :meth:`rebuild_model_indexes` to apply the
+        new parameters to the on-disk index files.
         """
         if index_config.index_type != index_type:
             raise ValueError(
@@ -272,6 +272,39 @@ class EmbeddingBackend(ABC, Generic[T]):
             index_type=index_type,
             metadata=new_metadata,
         )
+
+    @abstractmethod
+    @require_registered_model
+    def rebuild_model_indexes(
+        self,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
+        *,
+        engine: Engine,
+        metric_types: Sequence[MetricType],
+        batch_size: int = 100_000,
+    ) -> None:
+        """Rebuild backend-specific indexes for *metric_types*.
+
+        Parameters
+        ----------
+        model_name : str
+            Registered canonical name of the embedding model.
+        provider_type : ProviderType
+            Provider type the model was registered with.
+        index_type : IndexType
+            Index type the model was registered with.
+        engine : Engine
+            SQLAlchemy engine for the OMOP CDM database. May be needed by
+            backends that store index state in the database (e.g. pgvector).
+        metric_types : Sequence[MetricType]
+            Metrics for which indexes should be rebuilt.
+        batch_size : int, optional
+            Chunk size when streaming vectors from storage. Meaningful for
+            file-backed backends (FAISS); ignored by SQL-native backends.
+        """
+        pass
 
     # ------------------------------------------------------------------
     # Model registry queries

@@ -30,7 +30,7 @@ from .faiss_sql import (
 from omop_emb.config import BackendType, IndexType, MetricType, ProviderType
 from omop_emb.backends.index_config import (
     IndexConfig,
-    index_config_from_index_type_and_metadata
+    index_config_from_index_type_and_metadata,
 )
 from omop_emb.backends.faiss.storage_manager import EmbeddingStorageManager
 from omop_emb.backends.base_backend import EmbeddingBackend, require_registered_model
@@ -254,11 +254,17 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                 batch_size=batch_size,
             )
 
+    @require_registered_model
     def rebuild_model_indexes(
         self,
-        model_record: EmbeddingModelRecord,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
+        *,
+        engine: Engine,
         metric_types: Sequence[MetricType],
         batch_size: int = 100_000,
+        _model_record: EmbeddingModelRecord,
     ) -> None:
         """Delete and rebuild the FAISS index files for the given metric types.
 
@@ -266,10 +272,8 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         new parameters, or any time the HDF5 embeddings have changed in a way that
         makes the existing index stale.
         """
-        config = index_config_from_index_type_and_metadata(
-            model_record.index_type, model_record.metadata
-        )
-        storage_manager = self.get_storage_manager(model_record)
+        config = index_config_from_index_type_and_metadata(_model_record.index_type, _model_record.metadata)
+        storage_manager = self.get_storage_manager(_model_record)
         for metric_type in metric_types:
             storage_manager.rebuild_index_for_metric(
                 metric_type=metric_type,

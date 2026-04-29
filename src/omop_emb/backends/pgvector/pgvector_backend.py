@@ -210,31 +210,25 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[PGVectorConceptIDEmbeddingTable]
             manager.load_or_create(metric_type)
 
     @require_registered_model
-    def rebuild_indexes(
+    def rebuild_model_indexes(
         self,
-        *,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
+        *,
+        engine: Engine,
         metric_types: Sequence[MetricType],
+        batch_size: int = 100_000,
         _model_record: EmbeddingModelRecord,
-        engine: Optional[Engine] = None,
     ) -> None:
         """Drop and recreate SQL indices for each metric in *metric_types*.
 
         Use this after calling ``update_model_index_configuration`` to apply
         new HNSW parameters (``m``, ``ef_construction``) to the on-disk index.
         Postgres rebuilds index content from the table automatically.
-
-        If the in-memory manager was evicted by ``update_model_index_configuration``,
-        pass *engine* so a fresh manager can be created from the updated config.
+        ``batch_size`` is accepted for interface compatibility but unused.
         """
         if model_name not in self._pgvector_index_managers:
-            if engine is None:
-                raise ValueError(
-                    f"No in-memory index manager for model '{model_name}'. "
-                    "Pass engine= so a fresh manager can be created from the updated config."
-                )
             self._register_index_manager(engine=engine, model_record=_model_record)
         manager = self.get_index_manager(model_name)
         for metric_type in metric_types:

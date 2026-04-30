@@ -43,7 +43,7 @@ class PGVectorBaseIndexManager(BaseIndexManager[C], Generic[C]):
 
     def __init__(
         self,
-        engine: Engine,
+        omop_cdm_engine: Engine,
         tablename: str,
         embedding_column: str,
         index_config: C,
@@ -53,7 +53,7 @@ class PGVectorBaseIndexManager(BaseIndexManager[C], Generic[C]):
                 f"index_config has index_type {index_config.index_type!r} but this manager "
                 f"supports {self.supported_index_type!r}."
             )
-        self._engine = engine
+        self._omop_cdm_engine = omop_cdm_engine
         self._tablename = tablename
         self._embedding_column = embedding_column
         self._index_config = index_config
@@ -72,7 +72,7 @@ class PGVectorBaseIndexManager(BaseIndexManager[C], Generic[C]):
 
     def has_index(self, metric_type: MetricType) -> bool:
         """Return True if the SQL index for *metric_type* exists in the database."""
-        with self._engine.connect() as conn:
+        with self._omop_cdm_engine.connect() as conn:
             existing = {
                 idx["name"]
                 for idx in inspect(conn).get_indexes(self._tablename)
@@ -89,7 +89,7 @@ class PGVectorBaseIndexManager(BaseIndexManager[C], Generic[C]):
         sql = self._create_index_ddl(metric_type)
         if sql is None:
             return
-        with self._engine.begin() as conn:
+        with self._omop_cdm_engine.begin() as conn:
             conn.execute(text(sql))
         logger.info(
             f"Created pgvector index '{self._index_name(metric_type)}' "
@@ -100,7 +100,7 @@ class PGVectorBaseIndexManager(BaseIndexManager[C], Generic[C]):
         """Drop the SQL index for *metric_type* if it exists."""
         name = self._index_name(metric_type)
         existed = self.has_index(metric_type)
-        with self._engine.begin() as conn:
+        with self._omop_cdm_engine.begin() as conn:
             conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
         if existed:
             logger.info(f"Dropped pgvector index '{name}'.")

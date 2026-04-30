@@ -15,7 +15,6 @@ from typing import (
 import numpy as np
 from numpy import ndarray
 from sqlalchemy import Engine, select, func
-from sqlalchemy.orm import Session
 import logging
 import shutil
 
@@ -23,7 +22,7 @@ from .faiss_sql import (
     FAISSConceptIDEmbeddingRegistry,
     create_faiss_embedding_registry_table,
     delete_faiss_embedding_registry_table,
-    add_concept_ids_to_faiss_registry,
+    q_add_concept_ids_to_faiss_registry,
     q_concept_ids_with_embeddings,
     q_concept_ids_with_embeddings_without_metadata,
 )
@@ -71,10 +70,12 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
 
     def __init__(
         self,
+        omop_cdm_engine: Engine,
         storage_base_dir: Optional[str | Path] = None,
         registry_db_name: Optional[str] = None,
     ):
         super().__init__(
+            omop_cdm_engine=omop_cdm_engine,
             storage_base_dir=storage_base_dir,
             registry_db_name=registry_db_name,
         )
@@ -84,11 +85,11 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     def backend_type(self) -> BackendType:
         return BackendType.FAISS
 
-    def _create_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> Type[FAISSConceptIDEmbeddingRegistry]:
-        return create_faiss_embedding_registry_table(engine=engine, model_record=model_record)
-    
-    def _delete_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> None:
-        delete_faiss_embedding_registry_table(engine=engine, model_record=model_record)
+    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> Type[FAISSConceptIDEmbeddingRegistry]:
+        return create_faiss_embedding_registry_table(engine=self.cdm_engine, model_record=model_record)
+
+    def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
+        delete_faiss_embedding_registry_table(engine=self.cdm_engine, model_record=model_record)
 
     def get_safe_model_dir(self, model_name: str) -> Path:
         return self.storage_base_dir / self._embedding_model_registry.safe_model_name(model_name)
@@ -108,19 +109,34 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     def register_storage_manager(self, model_record: EmbeddingModelRecord) -> None:
         """Ensure an in-memory storage manager exists for *model_record* obtained from the ModelRegistry.
         If it doesn't exist yet, create a new one using the persisted index configuration from the registry metadata.
+
+        Raises ``ValueError`` when a manager already exists for the same model name but the
+        new registration declares a different embedding dimension.  Two registrations sharing
+        a model name (e.g. different index types) must agree on dimensions because they share
+        the same HDF5 file.
         """
         existing = self._embedding_storage_managers.get(model_record.model_name)
 
-        if not existing:
-            logger.info(
-                f"Registering storage manager for '{model_record.model_name}' "
-                f"(dimensions={model_record.dimensions})"
-            )
-            self._embedding_storage_managers[model_record.model_name] = EmbeddingStorageManager(
-                file_dir=self.get_safe_model_dir(model_record.model_name),
-                dimensions=model_record.dimensions,
-                backend_type=self.backend_type,
-            )
+        if existing is not None:
+            if existing.dimensions != model_record.dimensions:
+                raise ValueError(
+                    f"Dimension mismatch for model '{model_record.model_name}': "
+                    f"the existing storage manager was created with dimensions={existing.dimensions} "
+                    f"but the new registration declares dimensions={model_record.dimensions}. "
+                    "Registrations that share a model name must have the same embedding dimension "
+                    "because they share the same HDF5 storage file."
+                )
+            return
+
+        logger.info(
+            f"Registering storage manager for '{model_record.model_name}' "
+            f"(dimensions={model_record.dimensions})"
+        )
+        self._embedding_storage_managers[model_record.model_name] = EmbeddingStorageManager(
+            file_dir=self.get_safe_model_dir(model_record.model_name),
+            dimensions=model_record.dimensions,
+            backend_type=self.backend_type,
+        )
 
     # ------------------------------------------------------------------
     # Model registration / deletion / configuration update
@@ -128,7 +144,6 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
 
     def register_model(
         self,
-        engine: Engine,
         model_name: str,
         dimensions: int,
         *,
@@ -142,44 +157,71 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         reconstructed faithfully after a process restart — without the caller
         having to supply them again.
 
+        The model directory is created *before* the registry row is written so that
+        a filesystem failure cannot produce an orphaned metadata entry with no
+        corresponding storage directory.
         """
-        record = super().register_model(
-            engine=engine,
-            model_name=model_name,
-            provider_type=provider_type,
-            dimensions=dimensions,
-            index_config=index_config,
-            metadata=metadata,
-        )
-
         model_dir = self.get_safe_model_dir(model_name)
         model_dir.mkdir(parents=False, exist_ok=True)
         logger.info(f"Created model directory: {model_dir}")
+
+        try:
+            record = super().register_model(
+                model_name=model_name,
+                provider_type=provider_type,
+                dimensions=dimensions,
+                index_config=index_config,
+                metadata=metadata,
+            )
+        except Exception:
+            if model_dir.exists() and not any(model_dir.iterdir()):
+                model_dir.rmdir()
+                logger.debug(f"Rolled back empty model directory {model_dir} after registry write failure.")
+            raise
 
         self.register_storage_manager(record)
         return record
 
     def delete_model(
         self,
-        engine: Engine,
         model_name: str,
         *,
         provider_type: ProviderType,
         index_type: IndexType,
     ) -> None:
-    
+        # Snapshot surviving registrations *before* the delete so we know
+        # whether other index-type rows still share the same model directory.
+        all_registrations = self.get_registered_models(model_name=model_name)
+        other_registrations = [
+            r for r in all_registrations
+            if not (r.provider_type == provider_type and r.index_type == index_type)
+        ]
+
         super().delete_model(
-            engine=engine,
             model_name=model_name,
             provider_type=provider_type,
             index_type=index_type,
         )
 
-        # Evict in-memory manager and delete all associated files (HDF5 + FAISS indices)
         self._embedding_storage_managers.pop(model_name, None)
         model_dir = self.get_safe_model_dir(model_name)
-        if model_dir.exists():
+
+        if other_registrations:
+            # The HDF5 and other index files are shared — only remove the
+            # on-disk FAISS index files that belong to this specific index_type.
+            if model_dir.exists():
+                index_dir = model_dir / f"index_{index_type.value}"
+                if index_dir.exists():
+                    shutil.rmtree(index_dir)
+                    logger.info(
+                        f"Deleted index directory '{index_dir}' for model '{model_name}' "
+                        f"(index_type={index_type.value}). "
+                        f"{len(other_registrations)} other registration(s) still active; "
+                        "HDF5 storage preserved."
+                    )
+        elif model_dir.exists():
             shutil.rmtree(model_dir)
+            logger.info(f"Deleted model directory '{model_dir}' for model '{model_name}'.")
 
     def update_model_index_configuration(
         self,
@@ -195,8 +237,18 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             index_type=index_type,
             index_config=index_config,
         )
-        # Delete and re-register
-        self._embedding_storage_managers.pop(model_name, None)
+        # Evict the stale in-memory manager.
+        old_manager = self._embedding_storage_managers.pop(model_name, None)
+        if old_manager is not None:
+            # Delete the on-disk FAISS index files for this index_type so a
+            # subsequent search cannot silently load them with the old parameters.
+            old_manager.cleanup(index_type)
+            logger.info(
+                f"Deleted stale on-disk FAISS index files for model '{model_name}' "
+                f"(index_type={index_type.value}) after config update. "
+                "Call rebuild_model_indexes() to rebuild with the new parameters."
+            )
+        # Reconstruct a fresh storage manager from the updated record.
         self.get_storage_manager(new_record)
         return new_record
 
@@ -206,7 +258,6 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
 
     def _validate_storage_consistency(
         self,
-        session: Session,
         model_record: EmbeddingModelRecord,
     ) -> None:
         """Raise if the SQL registry row count differs from the HDF5 vector count."""
@@ -215,9 +266,12 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             provider_type=model_record.provider_type,
             index_type=model_record.index_type,
         )
-        db_count: int = session.scalar(
-            select(func.count()).select_from(embedding_table)
-        ) or 0
+
+        with self.session_factory() as session:
+            db_count: int = session.scalar(
+                select(func.count()).select_from(embedding_table)
+            ) or 0
+
         hdf5_count = self.get_storage_manager(model_record).get_count()
         if db_count != hdf5_count:
             raise RuntimeError(
@@ -242,11 +296,21 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         Call this on process start to warm up indexes before the first search query.
         If index files already exist on disk they are loaded; otherwise they are
         built from the HDF5 embeddings and saved.
+
+        Skips index creation when HDF5 storage is empty to avoid writing an empty
+        index file that would appear valid on reload but return no results.
         """
+        storage_manager = self.get_storage_manager(_model_record)
+        if storage_manager.get_count() == 0:
+            logger.warning(
+                f"Skipping index initialisation for model '{model_name}' "
+                f"(index_type={index_type.value}): HDF5 storage contains no embeddings. "
+                "Upsert embeddings first, then call initialise_indexes() again."
+            )
+            return
         config = index_config_from_index_type_and_metadata(
             _model_record.index_type, _model_record.metadata
         )
-        storage_manager = self.get_storage_manager(_model_record)
         for metric_type in metric_types:
             storage_manager.create_index_for_metric(
                 metric_type=metric_type,
@@ -254,17 +318,12 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                 batch_size=batch_size,
             )
 
-    @require_registered_model
-    def rebuild_model_indexes(
+    def _rebuild_model_indexes_impl(
         self,
-        model_name: str,
-        provider_type: ProviderType,
-        index_type: IndexType,
+        model_record: EmbeddingModelRecord,
         *,
-        engine: Engine,
         metric_types: Sequence[MetricType],
         batch_size: int = 100_000,
-        _model_record: EmbeddingModelRecord,
     ) -> None:
         """Delete and rebuild the FAISS index files for the given metric types.
 
@@ -272,8 +331,8 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         new parameters, or any time the HDF5 embeddings have changed in a way that
         makes the existing index stale.
         """
-        config = index_config_from_index_type_and_metadata(_model_record.index_type, _model_record.metadata)
-        storage_manager = self.get_storage_manager(_model_record)
+        config = index_config_from_index_type_and_metadata(model_record.index_type, model_record.metadata)
+        storage_manager = self.get_storage_manager(model_record)
         for metric_type in metric_types:
             storage_manager.rebuild_index_for_metric(
                 metric_type=metric_type,
@@ -285,43 +344,38 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
     # Core read/write operations
     # ------------------------------------------------------------------
 
-    @require_registered_model
-    def upsert_embeddings(
+    def _upsert_embeddings_impl(
         self,
         *,
-        session: Session,
-        model_name: str,
-        provider_type: ProviderType,
-        index_type: IndexType,
+        model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
         embeddings: ndarray,
-        _model_record: EmbeddingModelRecord,
         metric_type: Optional[MetricType] = None,
     ) -> None:
         concept_id_tuple = tuple(concept_ids)
         self.validate_embeddings_and_concept_ids(
             concept_ids=concept_id_tuple,
             embeddings=embeddings,
-            dimensions=_model_record.dimensions,
+            dimensions=model_record.dimensions,
         )
 
         embedding_table = self.get_embedding_table(
-            model_name=model_name,
-            index_type=index_type,
-            provider_type=provider_type,
+            model_name=model_record.model_name,
+            index_type=model_record.index_type,
+            provider_type=model_record.provider_type,
         )
 
-        existing = self._get_existing_concept_ids(session, concept_id_tuple, embedding_table)
+        existing = self._get_existing_concept_ids(concept_id_tuple, embedding_table)
         if existing:
             raise ValueError(
-                f"concept_ids already present in registry for model '{model_name}': {existing}. "
+                f"concept_ids already present in registry for model '{model_record.model_name}': {existing}. "
                 "Existing concept_ids cannot be overwritten."
             )
 
         config = index_config_from_index_type_and_metadata(
-            _model_record.index_type, _model_record.metadata
+            model_record.index_type, model_record.metadata
         )
-        storage_manager = self.get_storage_manager(_model_record)
+        storage_manager = self.get_storage_manager(model_record)
         previous_count = storage_manager.get_count()
 
         storage_manager.append(
@@ -335,28 +389,29 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         expected_count = previous_count + len(concept_id_tuple)
         if actual_count != expected_count:
             raise RuntimeError(
-                f"HDF5 append failed for model '{model_name}': expected {expected_count} "
+                f"HDF5 append failed for model '{model_record.model_name}': expected {expected_count} "
                 f"stored vectors after append, found {actual_count}. SQL registry was not updated."
             )
 
+        query = q_add_concept_ids_to_faiss_registry(
+            concept_ids=concept_id_tuple,
+            registered_table=embedding_table,
+        )
+
         try:
-            add_concept_ids_to_faiss_registry(
-                concept_ids=concept_id_tuple,
-                session=session,
-                registered_table=embedding_table,
-            )
+            with self.session_factory.begin() as session:
+                session.execute(query)
+
         except Exception as e:
-            session.rollback()
-            raise ValueError(
-                f"Failed to add concept IDs to FAISS registry for model '{model_name}'. "
-                f"Original error: {e}"
-            ) from e
+            # Revert HDF5 to pre-append state to maintain consistency with the SQL registry, which was not updated due to the exception.
+            storage_manager._truncate_to(previous_count)
+            logger.error(f"Failed to add concept IDs to FAISS registry for model '{model_record.model_name}'. Rolled back HDF5 storage to previous count of {previous_count}. Error: {e}")
+            raise e
 
     @require_registered_model
     def bulk_upsert_embeddings(
         self,
         *,
-        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
@@ -368,8 +423,6 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
 
         Parameters
         ----------
-        session : Session
-            Active SQLAlchemy session bound to the OMOP CDM database.
         model_name : str
             Registered canonical name of the embedding model.
         provider_type : ProviderType
@@ -406,6 +459,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
                 )
                 yield arr_ids, embeddings
 
+        pre_write_count = storage_manager.get_count()
         all_concept_ids = storage_manager._bulk_write(_validated_batches())
 
         if metric_type is not None and all_concept_ids:
@@ -415,40 +469,38 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             )
 
         if all_concept_ids:
-            try:
-                add_concept_ids_to_faiss_registry(
-                    concept_ids=tuple(all_concept_ids),
-                    session=session,
-                    registered_table=self.get_embedding_table(
-                        model_name=model_name,
-                        index_type=index_type,
-                        provider_type=provider_type,
-                    ),
+            query = q_add_concept_ids_to_faiss_registry(
+                concept_ids=tuple(all_concept_ids),
+                registered_table=self.get_embedding_table(
+                    model_name=model_name,
+                    index_type=index_type,
+                    provider_type=provider_type,
                 )
+            )
+            try:
+                with self.session_factory.begin() as session:
+                    session.execute(query)
             except Exception as e:
-                session.rollback()
+                # Roll back HDF5 to its pre-write state so HDF5 and SQL stay in sync.
+                storage_manager._truncate_to(pre_write_count)
                 raise ValueError(
                     f"Failed to register concept IDs after bulk load for model '{model_name}'. "
+                    "HDF5 storage has been rolled back to its pre-write state. "
                     f"Original error: {e}"
                 ) from e
 
-    @require_registered_model
-    def get_nearest_concepts(
+    def _get_nearest_concepts_impl(
         self,
         *,
-        session: Session,
-        model_name: str,
-        provider_type: ProviderType,
-        index_type: IndexType,
-        query_embeddings: np.ndarray,
+        model_record: EmbeddingModelRecord,
+        query_embeddings: ndarray,
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-        _model_record: EmbeddingModelRecord,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         config = index_config_from_index_type_and_metadata(
-            _model_record.index_type, _model_record.metadata
+            model_record.index_type, model_record.metadata
         )
-        storage_manager = self.get_storage_manager(_model_record)
+        storage_manager = self.get_storage_manager(model_record)
 
         if storage_manager.get_count() == 0:
             return tuple(() for _ in range(query_embeddings.shape[0]))
@@ -458,21 +510,26 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
             index_config=config,
         )
 
-        self.validate_embeddings(embeddings=query_embeddings, dimensions=_model_record.dimensions)
+        self.validate_embeddings(embeddings=query_embeddings, dimensions=model_record.dimensions)
 
         embedding_table = self.get_embedding_table(
-            model_name=model_name,
-            index_type=index_type,
-            provider_type=provider_type,
+            model_name=model_record.model_name,
+            index_type=model_record.index_type,
+            provider_type=model_record.provider_type,
         )
 
         if concept_filter is None or concept_filter.is_empty():
             permitted_concept_ids: Optional[np.ndarray] = None
             k = self.DEFAULT_K_NEAREST
         else:
-            permitted_rows = session.execute(
-                q_concept_ids_with_embeddings_without_metadata(embedding_table, concept_filter)
-            ).all()
+
+            query = q_concept_ids_with_embeddings_without_metadata(
+                embedding_table=embedding_table,
+                concept_filter=concept_filter,
+            )
+            with self.session_factory() as session:
+                permitted_rows = session.execute(query).all()
+
             permitted_concept_ids = np.array(
                 [row.concept_id for row in permitted_rows], dtype=np.int64
             )
@@ -481,7 +538,7 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         distances, returned_ids = storage_manager.search(
             query_vector=query_embeddings,
             metric_type=metric_type,
-            index_type=index_type,
+            index_type=model_record.index_type,
             k=k,
             subset_concept_ids=permitted_concept_ids,
         )
@@ -491,9 +548,10 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         concept_meta = {}
         if unique_returned.size > 0:
             meta_filter = EmbeddingConceptFilter(concept_ids=tuple(int(x) for x in unique_returned))
-            meta_rows = session.execute(
-                q_concept_ids_with_embeddings(embedding_table, meta_filter)
-            ).all()
+            with self.session_factory() as session:
+                meta_rows = session.execute(
+                    q_concept_ids_with_embeddings(embedding_table, meta_filter)
+                ).all()
             concept_meta = {row.concept_id: row for row in meta_rows}
 
         matches = []
@@ -525,22 +583,16 @@ class FaissEmbeddingBackend(EmbeddingBackend[FAISSConceptIDEmbeddingRegistry]):
         self.validate_nearest_concepts_output(matches_tuple, k, query_embeddings=query_embeddings)
         return matches_tuple
 
-    @require_registered_model
-    def get_embeddings_by_concept_ids(
+    def _get_embeddings_by_concept_ids_impl(
         self,
-        *,
-        session: Session,
-        model_name: str,
-        provider_type: ProviderType,
-        index_type: IndexType,
+        model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
-        _model_record: EmbeddingModelRecord,
     ) -> Mapping[int, Sequence[float]]:
         concept_id_tuple = tuple(concept_ids)
         if not concept_id_tuple:
             return {}
 
-        storage_manager = self.get_storage_manager(_model_record)
+        storage_manager = self.get_storage_manager(model_record)
         return storage_manager.get_embeddings_by_concept_ids(
             concept_ids=np.array(concept_id_tuple, dtype=np.int64)
         )

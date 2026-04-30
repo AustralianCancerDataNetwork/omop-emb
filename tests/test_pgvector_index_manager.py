@@ -46,7 +46,7 @@ def hnsw_table(pg_engine):
 @pytest.fixture
 def hnsw_manager(pg_engine, hnsw_table) -> PGVectorHNSWIndexManager:
     mgr = PGVectorHNSWIndexManager(
-        engine=pg_engine,
+        omop_cdm_engine=pg_engine,
         tablename=TABLENAME,
         embedding_column=EMBEDDING_COL,
         index_config=DEFAULT_HNSW_CONFIG,
@@ -70,26 +70,26 @@ class TestPGVectorFlatIndexManagerUnit:
         assert mgr.supported_index_type == IndexType.FLAT
 
     def test_has_index_always_true(self):
-        mgr = PGVectorFlatIndexManager(engine=None, tablename="t", embedding_column="e", index_config=FlatIndexConfig())  # type: ignore[arg-type]
+        mgr = PGVectorFlatIndexManager(omop_cdm_engine=None, tablename="t", embedding_column="e", index_config=FlatIndexConfig())  # type: ignore[arg-type]
         assert mgr.has_index(MetricType.L2) is True
         assert mgr.has_index(MetricType.COSINE) is True
 
     def test_create_index_noop(self):
-        mgr = PGVectorFlatIndexManager(engine=None, tablename="t", embedding_column="e", index_config=FlatIndexConfig())  # type: ignore[arg-type]
+        mgr = PGVectorFlatIndexManager(omop_cdm_engine=None, tablename="t", embedding_column="e", index_config=FlatIndexConfig())  # type: ignore[arg-type]
         mgr.create_index(MetricType.L2)  # must not raise or create anything
 
     def test_drop_index_noop(self):
-        mgr = PGVectorFlatIndexManager(engine=None, tablename="t", embedding_column="e", index_config=FlatIndexConfig())  # type: ignore[arg-type]
+        mgr = PGVectorFlatIndexManager(omop_cdm_engine=None, tablename="t", embedding_column="e", index_config=FlatIndexConfig())  # type: ignore[arg-type]
         mgr.drop_index(MetricType.L2)  # must not raise or drop anything
 
     def test_create_index_ddl_returns_none(self):
-        mgr = PGVectorFlatIndexManager(engine=None, tablename="t", embedding_column="e", index_config=FlatIndexConfig())  # type: ignore[arg-type]
+        mgr = PGVectorFlatIndexManager(omop_cdm_engine=None, tablename="t", embedding_column="e", index_config=FlatIndexConfig())  # type: ignore[arg-type]
         assert mgr._create_index_ddl(MetricType.L2) is None
 
     def test_wrong_index_config_raises(self):
         with pytest.raises(ValueError, match="index_type"):
             PGVectorFlatIndexManager(
-                engine=None,  # type: ignore
+                omop_cdm_engine=None,  # type: ignore
                 tablename="t",
                 embedding_column="e",
                 index_config=HNSWIndexConfig() # type: ignore
@@ -107,7 +107,7 @@ class TestPGVectorHNSWIndexManagerDDL:
     def mgr(self) -> PGVectorHNSWIndexManager:
         # engine not needed for DDL-string tests
         m = PGVectorHNSWIndexManager.__new__(PGVectorHNSWIndexManager)
-        m._engine = None  # type: ignore
+        m._omop_cdm_engine = None  # type: ignore
         m._tablename = "my_table"
         m._embedding_column = "embedding"
         m._index_config = HNSWIndexConfig(num_neighbors=32, ef_search=64, ef_construction=128)
@@ -145,7 +145,7 @@ class TestPGVectorHNSWIndexManagerDDL:
     def test_wrong_config_type_raises(self):
         with pytest.raises(ValueError, match="index_type"):
             PGVectorHNSWIndexManager(
-                engine=None,  # type: ignore
+                omop_cdm_engine=None,  # type: ignore
                 tablename="t",
                 embedding_column="e",
                 index_config=FlatIndexConfig() # type: ignore
@@ -213,11 +213,11 @@ class TestPGVectorHNSWIndexManagerIntegration:
 
     def test_new_config_produces_different_ddl(self, pg_engine, hnsw_table):
         mgr_a = PGVectorHNSWIndexManager(
-            engine=pg_engine, tablename=TABLENAME, embedding_column=EMBEDDING_COL,
+            omop_cdm_engine=pg_engine, tablename=TABLENAME, embedding_column=EMBEDDING_COL,
             index_config=HNSWIndexConfig(num_neighbors=8, ef_search=16, ef_construction=32),
         )
         mgr_b = PGVectorHNSWIndexManager(
-            engine=pg_engine, tablename=TABLENAME, embedding_column=EMBEDDING_COL,
+            omop_cdm_engine=pg_engine, tablename=TABLENAME, embedding_column=EMBEDDING_COL,
             index_config=HNSWIndexConfig(num_neighbors=64, ef_search=128, ef_construction=256),
         )
         ddl_a = mgr_a._create_index_ddl(MetricType.L2)

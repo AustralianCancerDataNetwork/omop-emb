@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Engine, create_engine, and_, select
+from sqlalchemy import Engine, create_engine, and_, select, event
 from sqlalchemy.orm import Session
 import logging
 from typing import Optional, Mapping
@@ -20,6 +20,13 @@ from omop_emb.utils.errors import ModelRegistrationConflictError
 logger = logging.getLogger(__name__)
 
 
+def _set_sqlite_pragmas(dbapi_conn, _connection_record) -> None:
+    """Apply per-connection SQLite settings: WAL mode for concurrent readers/writers."""
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
+
 
 class ModelRegistryManager:
     """Manages model registry (metadata) for embedding models locally in a separate SQLite database."""
@@ -34,8 +41,16 @@ class ModelRegistryManager:
         if self._db_path.suffix != ".db":
             raise ValueError(f"Database file must have .db extension, got '{self._db_path.suffix}'.")
         self._engine = create_engine(f"sqlite:///{self._db_path}")
-
+        event.listen(self._engine, "connect", _set_sqlite_pragmas)
         ensure_model_registry_schema(self._engine)
+
+    def dispose(self) -> None:
+        """Release all pooled SQLite connections.
+
+        Call this when the registry is no longer needed (e.g. at CLI teardown)
+        to avoid holding file locks on metadata.db between invocations.
+        """
+        self._engine.dispose()
 
     def get_registered_models_from_db(
         self,
@@ -122,19 +137,28 @@ class ModelRegistryManager:
                 )
             )
             if existing_row is not None:
-                # Model + provider + backend + index combo already registered
-                # Check only the fields that can actually differ (provider/backend/index are filtered by WHERE)
+                # Model + provider + backend + index combo already registered.
+                # Check only the fields that can actually differ (provider/backend/index
+                # are already filtered by the WHERE clause above).
                 if existing_row.dimensions != dimensions:
                     raise ModelRegistrationConflictError(
-                        f"Model '{model_name}' is already registered with dimensions "
-                        f"{existing_row.dimensions}, not {dimensions}.",
-                        conflict_field="dimensions"
+                        f"Model '{model_name}' (provider={provider_type.value}, "
+                        f"backend={backend_type.value}, index={index_type.value}) "
+                        f"is already registered with dimensions={existing_row.dimensions}, "
+                        f"but the new call specifies dimensions={dimensions}. "
+                        "To re-register with different dimensions, delete the existing "
+                        "registration first (e.g. via the 'purge-model' CLI command).",
+                        conflict_field="dimensions",
                     )
                 if existing_row.details != (metadata or {}):
                     raise ModelRegistrationConflictError(
-                        f"Model '{model_name}' is already registered with different "
-                        f"metadata. Reuse the existing model name or choose a new one.",
-                        conflict_field="metadata"
+                        f"Model '{model_name}' (provider={provider_type.value}, "
+                        f"backend={backend_type.value}, index={index_type.value}) "
+                        "is already registered with different metadata. "
+                        "To apply new metadata, delete the existing registration first "
+                        "(e.g. via the 'purge-model' CLI command) and re-register, "
+                        "or call update_model_metadata() to patch it in place.",
+                        conflict_field="metadata",
                     )
                 return self._registry_entry_to_model_record(existing_row)
 
@@ -175,8 +199,19 @@ class ModelRegistryManager:
         index_type: IndexType,
         backend_type: BackendType
     ) -> str:
-        return f"{backend_type.value.lower()}_{safe_model_name}_{index_type.value}"
+        return f"{backend_type.value}_{safe_model_name}_{index_type.value}"
     
+    @staticmethod
+    def storage_name_to_backend_index_and_model(storage_name: str) -> tuple[BackendType, IndexType, str]:
+        parts = storage_name.split("_")
+        if len(parts) < 3:
+            raise ValueError(f"Invalid storage name format: '{storage_name}'. Expected format: '<backend>_<model_name>_<index>'.")
+        backend_part, index_part = parts[0], parts[-1]
+        safe_model_name_part = "_".join(parts[1:-1])
+        backend_type = BackendType(backend_part)
+        index_type = IndexType(index_part)
+        return backend_type, index_type, safe_model_name_part
+
     def delete_model(
         self,
         model_name: str,

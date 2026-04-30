@@ -195,25 +195,50 @@ class EmbeddingStorageManager:
 
         Notes
         -----
-        No duplicate check and no FAISS operations — caller's responsibility.
+        No FAISS operations — caller's responsibility.
         Call ``rebuild_index_for_metric`` separately after this returns.
+        Raises ``ValueError`` if any concept_id appears more than once across
+        all batches (cross-batch deduplication).
         """
         all_ids: list[int] = []
+        seen_ids: set[int] = set()
         with self.open_all(mode="a") as (emb_ds, cid_ds):
             for concept_ids, embeddings in batches:
                 if embeddings.shape[1] != self.dimensions:
                     raise ValueError(
                         f"Embeddings dimension {embeddings.shape[1]} does not match expected {self.dimensions}"
                     )
+                batch_ids = concept_ids.tolist()
+                duplicates = seen_ids.intersection(batch_ids)
+                if duplicates:
+                    raise ValueError(
+                        f"Duplicate concept_ids detected across batches: {duplicates}. "
+                        "Each concept_id may appear at most once per bulk upsert."
+                    )
+                seen_ids.update(batch_ids)
                 old_size = emb_ds.shape[0]
                 new_size = old_size + len(concept_ids)
                 emb_ds.resize((new_size, self.dimensions))
                 cid_ds.resize((new_size,))
                 emb_ds[old_size:new_size] = embeddings.astype("float32")
                 cid_ds[old_size:new_size] = concept_ids.astype("int64")
-                all_ids.extend(concept_ids.tolist())
+                all_ids.extend(batch_ids)
             emb_ds.file.flush()
         return all_ids
+
+    def _truncate_to(self, count: int) -> None:
+        """Shrink HDF5 storage back to *count* vectors.
+
+        Used to roll back a ``_bulk_write`` when the subsequent SQL commit fails,
+        keeping HDF5 and the SQL registry in sync.
+        """
+        with self.open_all(mode="a") as (emb_ds, cid_ds):
+            emb_ds.resize((count, self.dimensions))
+            cid_ds.resize((count,))
+            emb_ds.file.flush()
+        logger.warning(
+            f"HDF5 storage truncated to {count} vectors (rollback after failed SQL commit)."
+        )
 
     def append(
         self,

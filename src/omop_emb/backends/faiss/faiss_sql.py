@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Type, Optional, TYPE_CHECKING
 import logging
 from sqlalchemy import  Engine, text, select, Select, case, literal, delete
-from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
 
 from orm_loader.helpers import Base
@@ -72,9 +71,8 @@ def delete_faiss_embedding_registry_table(
             conn.execute(stmt)
             logger.info(f"Dropped SQL embedding registry table '{embedding_table.__tablename__}' for model '{model_record.model_name}'.")
 
-def add_concept_ids_to_faiss_registry(
+def q_add_concept_ids_to_faiss_registry(
     concept_ids: tuple[int, ...],
-    session: Session,
     registered_table: type[FAISSConceptIDEmbeddingRegistry],
 ):
     r"""Adds the given concept_ids to the FAISS registry table for the specified model. This is used to keep track of which concept_ids are present in the FAISS/H5 storage, as we don't have direct access to the contents of the index like we do with a SQL database.
@@ -84,14 +82,8 @@ def add_concept_ids_to_faiss_registry(
     sqlalchemy.exc.IntegrityError
         If there is an attempt to add a concept_id that already exists in the registry, which indicates a mismatch between the registry and the actual contents of the FAISS index. This is a safeguard as partial updates and overwrites are not yet supported.
     """
-    if session.bind is None:
-        raise ValueError("Session must be bound to an engine to add concept IDs to FAISS registry.")
-    if session.bind.dialect.name != "postgresql":
-        raise ValueError(f"This function is only implemented for PostgreSQL databases, but got {session.bind.dialect.name}.")
-
     stmt = insert(registered_table).values(list({"concept_id": cid} for cid in concept_ids))
-    session.execute(stmt)
-    session.commit()
+    return stmt
 
 def q_concept_ids_with_embeddings_without_metadata(
     embedding_table: Type[FAISSConceptIDEmbeddingRegistry],

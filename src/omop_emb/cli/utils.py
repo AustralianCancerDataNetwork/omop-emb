@@ -18,7 +18,7 @@ def configure_logging_level(verbosity: int) -> None:
         force=True,
     )
 
-def resolve_engine() -> sa.Engine:
+def resolve_omop_cdm_engine() -> sa.Engine:
     engine_string = os.getenv('OMOP_DATABASE_URL')
     if engine_string is None:
         raise RuntimeError("OMOP_DATABASE_URL environment variable not set. Please set it in your .env file to point to your database.")
@@ -29,11 +29,13 @@ def resolve_engine() -> sa.Engine:
     return engine
 
 def build_pgvector_reader(
+    omop_cdm_engine: sa.Engine,
     canonical_model_name: str,
     storage_base_dir: Optional[str], 
     provider_type: ProviderType = ProviderType.OLLAMA
 ) -> EmbeddingReaderInterface:
     reader = EmbeddingReaderInterface(
+        omop_cdm_engine=omop_cdm_engine,
         canonical_model_name=canonical_model_name,
         backend_name_or_type=BackendType.PGVECTOR,
         provider_name_or_type=provider_type,

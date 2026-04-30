@@ -206,51 +206,54 @@ def temp_storage_dir():
 
 
 @pytest.fixture
-def faiss_backend(session, temp_storage_dir) -> FaissEmbeddingBackend:
+def faiss_backend(engine: sa.Engine, temp_storage_dir) -> FaissEmbeddingBackend:
     """FAISS backend with model registry initialized."""
-    backend = FaissEmbeddingBackend(storage_base_dir=temp_storage_dir)
-    backend.initialise_store(session.bind)
+    backend = FaissEmbeddingBackend(
+        omop_cdm_engine=engine,
+        storage_base_dir=temp_storage_dir
+    )
     return backend
 
 
 @pytest.fixture
-def pgvector_backend(session, temp_storage_dir) -> PGVectorEmbeddingBackend:
+def pgvector_backend(engine: sa.Engine, temp_storage_dir) -> PGVectorEmbeddingBackend:
     """PGVector backend with vector extension and model registry initialized."""
-    backend = PGVectorEmbeddingBackend(storage_base_dir=temp_storage_dir)
-    backend.initialise_store(session.bind)
+    backend = PGVectorEmbeddingBackend(
+        omop_cdm_engine=engine,
+        storage_base_dir=temp_storage_dir
+    )
     return backend
 
 
 @pytest.fixture
-def embedding_reader_interface(session, temp_storage_dir) -> EmbeddingReaderInterface:
+def embedding_reader_interface(engine: sa.Engine, temp_storage_dir) -> EmbeddingReaderInterface:
     """Read-only embedding interface sharing the same local registry as writer fixtures."""
     reader = EmbeddingReaderInterface(
+        omop_cdm_engine=engine,
         canonical_model_name=MODEL_NAME,
         provider_name_or_type=PROVIDER_TYPE,
         backend_name_or_type=BackendType.FAISS,
         storage_base_dir=str(temp_storage_dir),
     )
-    reader.initialise_store(session.bind)
     return reader
 
 
 @pytest.fixture
-def embedding_writer_interface(session, mock_llm_client, temp_storage_dir) -> EmbeddingWriterInterface:
+def embedding_writer_interface(engine: sa.Engine, mock_llm_client, temp_storage_dir) -> EmbeddingWriterInterface:
     """Full embedding interface ready for testing."""
     interface = EmbeddingWriterInterface(
+        omop_cdm_engine=engine,
         embedding_client=mock_llm_client,
         backend_name_or_type=BackendType.FAISS,
         storage_base_dir=temp_storage_dir,
     )
-    interface.initialise_store(session.bind)
     return interface
 
 
 @pytest.fixture
-def registered_embedding_writer_interface(session, embedding_writer_interface: EmbeddingWriterInterface) -> EmbeddingWriterInterface:
+def registered_embedding_writer_interface(embedding_writer_interface: EmbeddingWriterInterface) -> EmbeddingWriterInterface:
     """Embedding interface with a pre-registered model for testing read operations."""
     embedding_writer_interface.register_model(
-        engine=session.bind,
         index_config=FlatIndexConfig()
     )
     return embedding_writer_interface

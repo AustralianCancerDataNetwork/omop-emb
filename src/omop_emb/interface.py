@@ -6,7 +6,6 @@ from typing import Iterable, Mapping, Optional, Sequence, Tuple, List, Union
 import numpy as np
 from numpy import ndarray
 from sqlalchemy import Engine, Select
-from sqlalchemy.orm import Session
 
 from omop_emb.embeddings import (
     EmbeddingClient, 
@@ -17,11 +16,11 @@ from omop_emb.embeddings import (
 from .embeddings.embedding_providers import get_provider_for_api_base
 from .backends import get_embedding_backend, IndexConfig, EmbeddingBackend
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
-from omop_emb.model_registry import EmbeddingModelRecord
+from omop_emb.model_registry import EmbeddingModelRecord, ModelRegistryManager
 from .config import BackendType, IndexType, MetricType, ProviderType
 
 def list_registered_models(
-    backend_name_or_type: Optional[str | BackendType] = None,
+    backend_type: Optional[BackendType] = None,
     provider_type: Optional[ProviderType] = None,
     model_name: Optional[str] = None,
     index_type: Optional[IndexType] = None,
@@ -35,16 +34,16 @@ def list_registered_models(
 
     Parameters
     ----------
-    backend_name_or_type : str | BackendType, optional
-        Backend to query. Falls back to ``OMOP_EMB_BACKEND`` env var.
+    backend_type : BackendType, optional
+        Backend to query. If not provided, queries all backends in the registry.
     provider_type : ProviderType, optional
-        Filter by provider type.
+        Filter by provider type. If not provided, queries all providers in the registry.
     model_name : str, optional
-        Filter by model name.
+        Filter by model name. If not provided, queries all model names in the registry.
     index_type : IndexType, optional
-        Filter by index type.
+        Filter by index type. If not provided, queries all index types in the registry.
     storage_base_dir : str, optional
-        Base directory for backend storage.
+        Base directory for backend storage. See :class:`~omop_emb.backends.EmbeddingBackend` for resolution order.
     registry_db_name : str, optional
         Custom model registry database filename.
 
@@ -53,18 +52,20 @@ def list_registered_models(
     tuple[EmbeddingModelRecord, ...]
         Matching registered models (empty tuple if none found).
     """
-    backend = get_embedding_backend(
-        backend_name_or_type=backend_name_or_type,
-        storage_base_dir=storage_base_dir,
-        registry_db_name=registry_db_name,
+    resolved_storage_dir = EmbeddingBackend._resolve_storage_path(storage_base_dir)
+    model_registry_manager = ModelRegistryManager(
+        base_dir=resolved_storage_dir,
+        db_file=registry_db_name,
     )
-    return backend.get_registered_models(
+    return model_registry_manager.get_registered_models_from_db(
+        backend_type=backend_type,
+        provider_type=provider_type,
         model_name=model_name,
         index_type=index_type,
-        provider_type=provider_type,
     )
 
 def migrate_legacy_registry_row(
+    omop_cdm_engine: Engine,
     backend_type: BackendType,
     provider_type: ProviderType,
     model_name: str,
@@ -84,6 +85,8 @@ def migrate_legacy_registry_row(
 
     Parameters
     ----------
+    omop_cdm_engine : Engine
+        SQLAlchemy engine for the OMOP CDM database.
     backend_type : BackendType
         Target backend type.
     provider_type : ProviderType
@@ -107,6 +110,7 @@ def migrate_legacy_registry_row(
         The newly created registry entry.
     """
     backend = get_embedding_backend(
+        omop_cdm_engine=omop_cdm_engine,
         backend_name_or_type=backend_type,
         storage_base_dir=storage_base_dir,
     )
@@ -138,6 +142,7 @@ class EmbeddingReaderInterface:
 
     def __init__(
         self,
+        omop_cdm_engine: Engine,
         model: Optional[str] = None,
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -151,6 +156,8 @@ class EmbeddingReaderInterface:
 
         Parameters
         ----------
+        omop_cdm_engine : Engine
+            SQLAlchemy engine for the OMOP CDM database.  
         model : str, optional
             Raw model name for provider lookup and canonicalization. Optional if ``canonical_model_name`` is provided directly.
         api_base : str, optional
@@ -158,7 +165,7 @@ class EmbeddingReaderInterface:
         api_key : str, optional
             API key for provider lookup. Optional if ``provider_name_or_type`` is provided directly
         canonical_model_name : str, optional
-            Canonical name of the embedding model. Not required if ``model`` is provided, as it can be derived via the provider's canonicalization method. 
+            Canonical name of the embedding model. Not required if ``model`` is provided, as it can be derived via the provider's canonicalization method.
         provider_name_or_type : str | ProviderType, optional
             Provider type used for model lookups (OLLAMA, OPENAI, etc.), required if not derivable from API base or model name.
         backend_name_or_type : str | BackendType, optional
@@ -199,6 +206,7 @@ class EmbeddingReaderInterface:
             )
 
         self._backend = get_embedding_backend(
+            omop_cdm_engine=omop_cdm_engine,
             backend_name_or_type=backend_name_or_type,
             storage_base_dir=storage_base_dir,
             registry_db_name=registry_db_name,
@@ -222,15 +230,6 @@ class EmbeddingReaderInterface:
         """Provider type for this reader."""
         return self._provider_type
     
-    @property
-    def backend(self) -> EmbeddingBackend:
-        """Access the underlying backend instance for advanced use cases."""
-        return self._backend
-
-    def initialise_store(self, engine: Engine) -> None:
-        """Initialize the backend store."""
-        self._backend.initialise_store(engine)
-
     def get_model_table_name(
         self,
         index_type: IndexType,
@@ -256,12 +255,10 @@ class EmbeddingReaderInterface:
 
     def has_any_embeddings(
         self,
-        session: Session,
         index_type: IndexType,
     ) -> bool:
         """Check if any embeddings exist for a model."""
         return self._backend.has_any_embeddings(
-            session=session,
             model_name=self.canonical_model_name,
             provider_type=self.provider_type,
             index_type=index_type,
@@ -269,7 +266,6 @@ class EmbeddingReaderInterface:
 
     def get_nearest_concepts(
         self,
-        session: Session,
         index_type: IndexType,
         query_embedding: np.ndarray,
         *,
@@ -280,8 +276,6 @@ class EmbeddingReaderInterface:
 
         Parameters
         ----------
-        session : Session
-            SQLAlchemy session for any required relational access.
         index_type : IndexType
             The type of vector index used to store the embeddings.
         query_embedding : ndarray
@@ -302,7 +296,6 @@ class EmbeddingReaderInterface:
                 f"metric_type must be MetricType, got {type(metric_type).__name__}."
             )
         return self._backend.get_nearest_concepts(
-            session=session,
             model_name=self.canonical_model_name,
             provider_type=self.provider_type,
             index_type=index_type,
@@ -313,7 +306,6 @@ class EmbeddingReaderInterface:
     
     def get_nearest_concepts_from_query_texts(
         self,
-        session: Session,
         index_type: IndexType,
         query_texts: str | Tuple[str, ...] | List[str],
         embedding_client: EmbeddingClient,
@@ -329,8 +321,6 @@ class EmbeddingReaderInterface:
 
         Parameters
         ----------
-        session : Session
-            SQLAlchemy session for any required relational access.
         index_type : IndexType
             The type of vector index used to store the embeddings.
         query_texts : str | Tuple[str, ...] | List[str]
@@ -362,7 +352,6 @@ class EmbeddingReaderInterface:
             embedding_role=EmbeddingRole.QUERY,
         )
         return self.get_nearest_concepts(
-            session=session,
             index_type=index_type,
             query_embedding=query_embeddings,
             metric_type=metric_type,
@@ -371,13 +360,11 @@ class EmbeddingReaderInterface:
 
     def get_embeddings_by_concept_ids(
         self,
-        session: Session,
         index_type: IndexType,
         concept_ids: Tuple[int, ...],
     ) -> Mapping[int, Sequence[float]]:
         """Get embeddings for specific concept IDs."""
         return self._backend.get_embeddings_by_concept_ids(
-            session=session,
             model_name=self.canonical_model_name,
             index_type=index_type,
             concept_ids=concept_ids,
@@ -387,47 +374,40 @@ class EmbeddingReaderInterface:
     def get_concepts_without_embedding(
         self,
         *,
-        session: Session,
         index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-        limit: Optional[int] = None,
     ) -> Mapping[int, str]:
         """Get concept IDs and names for concepts without embeddings."""
         return self._backend.get_concepts_without_embedding(
-            session=session,
             model_name=self.canonical_model_name,
             provider_type=self.provider_type,
             index_type=index_type,
             concept_filter=concept_filter,
-            limit=limit,
         )
-
-    def q_get_concepts_without_embedding(
+    
+    def get_concepts_without_embedding_batched(
         self,
         *,
         index_type: IndexType,
+        batch_size: int,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-        limit: Optional[int] = None,
-    ) -> Select:
-        """Query for concepts without embeddings."""
-        return self._backend.q_get_concepts_without_embedding(
+    ) -> Iterable[Mapping[int, str]]:
+        return self._backend.get_concepts_without_embedding_batched(
             model_name=self.canonical_model_name,
             provider_type=self.provider_type,
             index_type=index_type,
             concept_filter=concept_filter,
-            limit=limit,
+            batch_size=batch_size,
         )
 
     def get_concepts_without_embedding_count(
         self,
         *,
-        session: Session,
         index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
     ) -> int:
         """Count concepts without embeddings."""
         return self._backend.get_concepts_without_embedding_count(
-            session=session,
             model_name=self.canonical_model_name,
             provider_type=self.provider_type,
             index_type=index_type,
@@ -457,6 +437,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
 
     def __init__(
         self,
+        omop_cdm_engine: Engine,
         embedding_client: EmbeddingClient,
         backend_name_or_type: Optional[str | BackendType] = None,
         storage_base_dir: Optional[str] = None,
@@ -479,6 +460,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         """
         self._embedding_client = embedding_client
         super().__init__(
+            omop_cdm_engine=omop_cdm_engine,
             canonical_model_name=embedding_client.canonical_model_name,
             backend_name_or_type=backend_name_or_type,
             provider_name_or_type=embedding_client.provider.provider_type,
@@ -494,7 +476,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
 
     def register_model(
         self,
-        engine: Engine,
         index_config: IndexConfig,
         metadata: Optional[Mapping[str, object]] = None,
     ) -> EmbeddingModelRecord:
@@ -502,8 +483,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
 
         Parameters
         ----------
-        engine : Engine
-            SQLAlchemy engine for the target database.
         index_config : IndexConfig
             Backend-specific index configuration to create the indices with.
         metadata : Optional[Mapping[str, object]]
@@ -515,20 +494,29 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             The newly created or existing registry entry.
         """
         model_record = self._backend.register_model(
-            engine=engine,
             model_name=self.canonical_model_name,
             provider_type=self._embedding_client.provider.provider_type,
             dimensions=self.embedding_dim,
             index_config=index_config,
             metadata=metadata,
         )
-
-        self.initialise_store(engine)
         return model_record
+
+    def delete_model(self, index_type: IndexType) -> None:
+        """Delete the registered model and all associated embeddings.
+
+        Irreversible. Removes the registry entry, drops the embedding table,
+        and cleans up any associated on-disk artifacts (FAISS index files,
+        HDF5 storage).
+        """
+        self._backend.delete_model(
+            model_name=self.canonical_model_name,
+            provider_type=self._provider_type,
+            index_type=index_type,
+        )
 
     def add_to_db(
         self,
-        session: Session,
         index_type: IndexType,
         concept_ids: Tuple[int, ...],
         embeddings: ndarray,
@@ -537,8 +525,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
 
         Parameters
         ----------
-        session : Session
-            SQLAlchemy session bound to the OMOP CDM database.
         index_type : IndexType
             Backend-specific index type.
         concept_ids : Tuple[int, ...]
@@ -556,7 +542,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
                 f"number of embeddings ({embeddings.shape[0]})."
             )
         self._backend.upsert_embeddings(
-            session=session,
             model_name=self.canonical_model_name,
             provider_type=self._embedding_client.provider.provider_type,
             index_type=index_type,
@@ -590,7 +575,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
     def upsert_concept_embeddings(
         self,
         *,
-        session: Session,
         index_type: IndexType,
         concept_ids: Sequence[int],
         embeddings: ndarray,
@@ -600,8 +584,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
 
         Parameters
         ----------
-        session : Session
-            SQLAlchemy session.
         index_type : IndexType
             Backend-specific index type.
         concept_ids : Sequence[int]
@@ -610,7 +592,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             Embedding matrix of shape (n_concepts, D).
         """
         self._backend.upsert_embeddings(
-            session=session,
             model_name=self.canonical_model_name,
             provider_type=self._embedding_client.provider.provider_type,
             index_type=index_type,
@@ -622,7 +603,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
     def bulk_upsert_concept_embeddings(
         self,
         *,
-        session: Session,
         index_type: IndexType,
         batches: Iterable[Tuple[Sequence[int], ndarray]],
         metric_type: Optional[MetricType] = None,
@@ -633,8 +613,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
 
         Parameters
         ----------
-        session : Session
-            Active SQLAlchemy session bound to the OMOP CDM database.
         index_type : IndexType
             Index type the model was registered with.
         batches : Iterable[Tuple[Sequence[int], ndarray]]
@@ -651,7 +629,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         the end. pgvector falls back to sequential per-batch upserts.
         """
         self._backend.bulk_upsert_embeddings(
-            session=session,
             model_name=self.canonical_model_name,
             provider_type=self._embedding_client.provider.provider_type,
             index_type=index_type,
@@ -662,7 +639,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
     def embed_and_upsert_concepts(
         self,
         *,
-        session: Session,
         index_type: IndexType,
         concept_ids: Sequence[int],
         concept_texts: Sequence[str],
@@ -672,8 +648,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
 
         Parameters
         ----------
-        session : Session
-            SQLAlchemy session.
         index_type : IndexType
             Backend-specific index type.
         concept_ids : Sequence[int]
@@ -693,13 +667,26 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
                 f"Mismatch between #concept_ids ({len(concept_ids)}) and "
                 f"#concept_texts ({len(concept_texts)})."
             )
+        # Validate dimension against the registered model *before* the API call
+        # so a misconfigured client fails fast rather than wasting API credits.
+        record = self._backend.get_registered_model(
+            model_name=self.canonical_model_name,
+            index_type=index_type,
+            provider_type=self.provider_type,
+        )
+        if record is not None and record.dimensions != self.embedding_dim:
+            raise ValueError(
+                f"Embedding dimension mismatch for model '{self.canonical_model_name}': "
+                f"the embedding client produces {self.embedding_dim}-dimensional vectors "
+                f"but the registered model declares {record.dimensions} dimensions. "
+                "Ensure the client and the registered model use the same model weights."
+            )
         embeddings = self.embed_texts(
             list(concept_texts),
             batch_size=batch_size,
             embedding_role=EmbeddingRole.DOCUMENT,
         )
         self.upsert_concept_embeddings(
-            session=session,
             index_type=index_type,
             concept_ids=concept_ids,
             embeddings=embeddings,
@@ -708,7 +695,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
 
     def get_nearest_concepts_from_query_texts(
         self,
-        session: Session,
         index_type: IndexType,
         query_texts: str | Tuple[str, ...] | List[str],
         *,
@@ -717,7 +703,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         batch_size: Optional[int] = None,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         return super().get_nearest_concepts_from_query_texts(
-            session=session,
             index_type=index_type,
             query_texts=query_texts,
             embedding_client=self._embedding_client,

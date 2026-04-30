@@ -47,7 +47,6 @@ The two high-level methods handle roles automatically. You only need to think ab
 
 ```python
 interface.embed_and_upsert_concepts(
-    session=session,
     index_type=IndexType.FLAT,
     concept_ids=(1, 2, 3),
     concept_texts=("Hypertension", "Diabetes", "Aspirin"),
@@ -60,7 +59,6 @@ interface.embed_and_upsert_concepts(
 
 ```python
 results = interface.get_nearest_concepts_from_query_texts(
-    session=session,
     index_type=IndexType.FLAT,
     query_texts=("high blood pressure",),
     metric_type=MetricType.COSINE,

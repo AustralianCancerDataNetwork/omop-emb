@@ -9,6 +9,8 @@ import numpy as np
 import pytest
 from pathlib import Path
 
+from sqlalchemy import Engine
+
 from omop_emb.config import IndexType, MetricType, ProviderType
 from omop_emb.backends.faiss import FaissEmbeddingBackend
 from omop_emb.backends.index_config import HNSWIndexConfig, FlatIndexConfig
@@ -20,9 +22,11 @@ HNSW_CONFIG = HNSWIndexConfig(num_neighbors=4, ef_search=8, ef_construction=16)
 
 
 @pytest.fixture
-def hnsw_backend(session, temp_storage_dir) -> FaissEmbeddingBackend:
-    backend = FaissEmbeddingBackend(storage_base_dir=temp_storage_dir)
-    backend.initialise_store(session.bind)
+def hnsw_backend(engine: Engine, temp_storage_dir) -> FaissEmbeddingBackend:
+    backend = FaissEmbeddingBackend(
+        omop_cdm_engine=engine,
+        storage_base_dir=temp_storage_dir
+    )
     return backend
 
 
@@ -179,11 +183,12 @@ class TestFaissHNSWBackend:
         assert len(results) == 1
         assert len(results[0]) == 0
 
-    def test_initialise_indexes_cold_start(self, session, temp_storage_dir):
-        backend_a = FaissEmbeddingBackend(storage_base_dir=temp_storage_dir)
-        backend_a.initialise_store(session.bind)
+    def test_initialise_indexes_cold_start(self, engine: Engine, temp_storage_dir):
+        backend_a = FaissEmbeddingBackend(
+            omop_cdm_engine=engine,
+            storage_base_dir=temp_storage_dir
+        )
         backend_a.register_model(
-            engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
             index_config=HNSW_CONFIG,
@@ -192,7 +197,6 @@ class TestFaissHNSWBackend:
         ids = [c.concept_id for c in CONCEPTS.values()]
         vecs = np.vstack([c.embeddings for c in CONCEPTS.values()]).astype(np.float32)
         backend_a.upsert_embeddings(
-            session=session,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
             index_type=IndexType.HNSW,
@@ -202,8 +206,10 @@ class TestFaissHNSWBackend:
         )
 
         # Simulate cold start with a fresh backend pointing at same storage
-        backend_b = FaissEmbeddingBackend(storage_base_dir=temp_storage_dir)
-        backend_b.initialise_store(session.bind)
+        backend_b = FaissEmbeddingBackend(
+            omop_cdm_engine=engine,
+            storage_base_dir=temp_storage_dir
+        )
         backend_b.initialise_indexes(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
@@ -212,7 +218,6 @@ class TestFaissHNSWBackend:
         )
 
         results = backend_b.get_nearest_concepts(
-            session=session,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
             index_type=IndexType.HNSW,

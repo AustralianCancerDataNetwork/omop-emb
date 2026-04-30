@@ -2,7 +2,7 @@ from sqlalchemy import select, case, literal, Select, Engine, Integer, delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.sql import column, values, cast
 from sqlalchemy.sql.elements import ColumnElement
-from sqlalchemy.orm import mapped_column, Mapped, Session
+from sqlalchemy.orm import mapped_column, Mapped
 from pgvector.sqlalchemy import Vector
 from orm_loader.helpers import Base
 from omop_alchemy.cdm.model.vocabulary import Concept
@@ -75,23 +75,13 @@ def delete_pg_embedding_table(
             conn.execute(stmt)
             logger.info(f"Dropped SQL embedding registry table '{embedding_table.__tablename__}' for model '{model_record.model_name}'.")
 
-def add_embeddings_to_registered_table(
+def q_add_embeddings_to_registered_table(
     concept_ids: tuple[int, ...],
     embeddings: ndarray,
-    session: Session,
     registered_table: type[PGVectorConceptIDEmbeddingTable],
 ):
     """Add embeddings to the storage table and update the registry to reflect the new concept_ids present in the index.
-    
-    Raises
-    ------
-    sqlalchemy.exc.IntegrityError
-        If there is duplicate concept_id entries in the input, or if any of the concept_ids violate database constraints.
     """
-    if session.bind is None:
-        raise ValueError("Session must be bound to an engine to add embeddings to PGVector registry.")
-    if session.bind.dialect.name != "postgresql":
-        raise ValueError(f"This function is only implemented for PostgreSQL databases, but got {session.bind.dialect.name}.")
 
     insert_values = [
         {
@@ -102,13 +92,11 @@ def add_embeddings_to_registered_table(
     ]
 
     stmt = insert(registered_table).values(insert_values)
-    session.execute(stmt)
     #upsert_stmt = stmt.on_conflict_do_update(
     #    index_elements=[registered_table.concept_id.key], 
     #    set_={registered_table.embedding.key: stmt.excluded.embedding}
     #)
-    #session.execute(upsert_stmt)
-    session.commit()
+    return stmt
 
 
 def q_embedding_nearest_concepts(

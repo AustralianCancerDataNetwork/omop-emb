@@ -25,6 +25,12 @@ class EmbeddingConceptFilter:
     require_standard: bool = False
     limit: Optional[int] = None
 
+    def __post_init__(self) -> None:
+        if self.limit is not None and self.limit <= 0:
+            raise ValueError(
+                f"EmbeddingConceptFilter.limit must be a positive integer, got {self.limit}."
+            )
+
     def apply(self, query: Select) -> Select:
         if self.concept_ids is not None:
             query = query.where(Concept.concept_id.in_(self.concept_ids))

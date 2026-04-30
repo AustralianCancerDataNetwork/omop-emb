@@ -36,7 +36,6 @@ from omop_emb.backends import FlatIndexConfig, HNSWIndexConfig
 
 # FLAT index — sequential scan, no warm-up needed
 interface.register_model(engine=db_engine, index_config=FlatIndexConfig())
-interface.initialise_store(db_engine)
 
 # HNSW index — approximate nearest-neighbour, configurable
 interface.register_model(
@@ -47,10 +46,9 @@ interface.register_model(
         ef_search=16,
     ),
 )
-interface.initialise_store(db_engine)
 ```
 
-`register_model` persists the model and its index configuration in the local registry. `initialise_store` loads all registered models into memory.
+`register_model` persists the model and its index configuration in the local registry.
 
 !!! info "pgvector HNSW: explicit index creation"
     For the pgvector backend with HNSW, the SQL index must be created separately after embeddings are inserted:
@@ -73,7 +71,6 @@ interface.initialise_store(db_engine)
 ```python
 # Generate embeddings for texts and upsert in one step
 interface.embed_and_upsert_concepts(
-    session=session,
     index_type=IndexType.FLAT,
     concept_ids=(1, 2, 3),
     concept_texts=("Hypertension", "Diabetes", "Aspirin"),
@@ -87,7 +84,6 @@ embeddings = interface.embed_texts(
     embedding_role=EmbeddingRole.DOCUMENT,
 )
 interface.upsert_concept_embeddings(
-    session=session,
     index_type=IndexType.FLAT,
     concept_ids=(1, 2),
     embeddings=embeddings,
@@ -104,7 +100,6 @@ from omop_emb import MetricType
 
 # Query by pre-computed embedding
 results = interface.get_nearest_concepts(
-    session=session,
     index_type=IndexType.FLAT,
     query_embedding=query_vec,   # shape (q, D)
     metric_type=MetricType.COSINE,
@@ -112,7 +107,6 @@ results = interface.get_nearest_concepts(
 
 # Query by text (embeds automatically)
 results = interface.get_nearest_concepts_by_texts(
-    session=session,
     index_type=IndexType.FLAT,
     query_texts=("high blood pressure",),
     metric_type=MetricType.COSINE,
@@ -134,10 +128,8 @@ reader = EmbeddingReaderInterface(
     provider_name_or_type=ProviderType.OLLAMA,   # or "ollama"
     backend_name_or_type="faiss",
 )
-reader.initialise_store(db_engine)
 
 results = reader.get_nearest_concepts(
-    session=session,
     index_type=IndexType.FLAT,
     query_embedding=query_vec,
     metric_type=MetricType.COSINE,

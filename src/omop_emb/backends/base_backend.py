@@ -6,10 +6,11 @@ from pathlib import Path
 from functools import wraps
 import os
 import logging
+from itertools import batched
 
 from numpy import ndarray
 from sqlalchemy import Engine, select, Integer, ForeignKey, func, Select
-from sqlalchemy.orm import Session, mapped_column
+from sqlalchemy.orm import sessionmaker, mapped_column
 
 from omop_alchemy.cdm.model.vocabulary import Concept
 
@@ -68,12 +69,17 @@ class EmbeddingBackend(ABC, Generic[T]):
 
     def __init__(
         self,
+        omop_cdm_engine: Engine,
         storage_base_dir: Optional[str | Path] = None,
         registry_db_name: Optional[str] = None,
     ):
         """
         Parameters
         ----------
+        omop_cdm_engine : Engine
+            SQLAlchemy engine connected to the OMOP CDM database. 
+            Used internally to spawn sessions for registry queries and embedding table operations.
+            Life-cycle is managed in the respective functions utilising the engine and a session.
         storage_base_dir : str | Path, optional
             Local base directory used for backend metadata and file-based assets.
             Resolution order:
@@ -86,26 +92,21 @@ class EmbeddingBackend(ABC, Generic[T]):
         """
         super().__init__()
 
-        storage_base_dir = (
-            storage_base_dir
-            or os.getenv(ENV_BASE_STORAGE_DIR)
-            or self.DEFAULT_BASE_STORAGE_DIR
-        )
-        resolved_storage_base_dir = Path(storage_base_dir).expanduser()
-        if not resolved_storage_base_dir.is_absolute():
-            raise ValueError(
-                "storage_base_dir must be an absolute path. "
-                f"Got '{storage_base_dir}'."
-            )
+        resolved_storage_base_dir = self._resolve_storage_path(storage_base_dir)
+
 
         self._storage_base_dir = resolved_storage_base_dir
         self._storage_base_dir.mkdir(parents=True, exist_ok=True)
 
+        self._cdm_engine = omop_cdm_engine
+        self._session_factory = sessionmaker(omop_cdm_engine)
         self._embedding_table_cache: dict[Tuple[str, ProviderType, BackendType, IndexType], Type[T]] = {}
         self._embedding_model_registry = ModelRegistryManager(
             base_dir=self.storage_base_dir,
             db_file=registry_db_name,
         )
+        self._initialise_store()
+
 
     # ------------------------------------------------------------------
     # Backend identity
@@ -120,36 +121,55 @@ class EmbeddingBackend(ABC, Generic[T]):
     def backend_name(self) -> str:
         """Stable identifier for this backend implementation."""
         return self.backend_type.value
+    
+    @property
+    def cdm_engine(self) -> Engine:
+        """SQLAlchemy engine connected to the OMOP CDM database."""
+        return self._cdm_engine
+    
+    @property
+    def session_factory(self) -> sessionmaker:
+        """SQLAlchemy session factory bound to the OMOP CDM engine."""
+        return self._session_factory
 
     @property
     def storage_base_dir(self) -> Path:
         """Base directory for any local storage needs of the backend."""
         return self._storage_base_dir
     
-    @property
-    def embedding_model_registry(self) -> ModelRegistryManager:
-        """Access the model registry manager for this backend."""
-        return self._embedding_model_registry
-
+    @staticmethod
+    def _resolve_storage_path(base_dir: Optional[Union[str, Path]]) -> Path:
+        storage_base_dir = (
+            base_dir
+            or os.getenv(ENV_BASE_STORAGE_DIR)
+            or EmbeddingBackend.DEFAULT_BASE_STORAGE_DIR
+        )
+        resolved_storage_base_dir = Path(storage_base_dir).expanduser()
+        if not resolved_storage_base_dir.is_absolute():
+            raise ValueError(
+                "storage_base_dir must be an absolute path. "
+                f"Got '{storage_base_dir}'."
+            )
+        return resolved_storage_base_dir
     # ------------------------------------------------------------------
     # Store lifecycle
     # ------------------------------------------------------------------
 
-    def initialise_store(self, engine: Engine) -> None:
+    def _initialise_store(self) -> None:
         """Initialise the model registry and populate the embedding table cache.
 
         Calls ``pre_initialise_store`` first so backends can run setup steps
         (e.g. creating Postgres extensions or staging directories) before the
         registry is queried.
         """
-        self.pre_initialise_store(engine)
+        self.pre_initialise_store()
         registered_models = self._embedding_model_registry.get_registered_models_from_db(
             backend_type=self.backend_type
         )
         for model_record in registered_models:
-            self._cache_model_record(engine=engine, model_record=model_record)
+            self._cache_model_record(model_record=model_record)
 
-    def pre_initialise_store(self, engine: Engine) -> None:
+    def pre_initialise_store(self) -> None:
         """Hook for backend-specific setup that must run before store initialisation."""
         pass
 
@@ -160,7 +180,6 @@ class EmbeddingBackend(ABC, Generic[T]):
     def register_model(
         self,
         *,
-        engine: Engine,
         model_name: str,
         dimensions: int,
         provider_type: ProviderType,
@@ -171,8 +190,6 @@ class EmbeddingBackend(ABC, Generic[T]):
 
         Parameters
         ----------
-        engine : Engine
-            SQLAlchemy engine for OMOP CDM database storage.
         model_name : str
             Canonical name of the embedding model.
         provider_type : ProviderType
@@ -198,12 +215,11 @@ class EmbeddingBackend(ABC, Generic[T]):
             index_type=index_config.index_type,
             metadata=persisted_metadata,
         )
-        self._cache_model_record(engine=engine, model_record=model_record)
+        self._cache_model_record(model_record=model_record)
         return model_record
 
     def delete_model(
         self,
-        engine: Engine,
         model_name: str,
         *,
         provider_type: ProviderType,
@@ -214,6 +230,12 @@ class EmbeddingBackend(ABC, Generic[T]):
         This is irreversible. Removes the registry row, drops the dynamic
         embedding table, and (for file-backed backends such as FAISS) deletes
         any associated index files from disk.
+
+        .. warning::
+            Any reference to the model's embedding table class obtained via
+            ``get_embedding_table`` **before** this call becomes stale
+            immediately after.  Do not query, insert into, or otherwise use
+            such a reference after ``delete_model`` returns.
         """
         record = self.get_registered_model(
             model_name=model_name,
@@ -234,7 +256,7 @@ class EmbeddingBackend(ABC, Generic[T]):
                 f"index_type='{index_type.value}' not found in cache during deletion. "
                 "Proceeding with registry deletion and storage cleanup, but this may indicate that the storage was not properly initialised or that the model was not registered correctly."
             )
-        self._delete_storage_table(engine=engine, model_record=record)
+        self._delete_storage_table(model_record=record)
 
         self._embedding_model_registry.delete_model(
             model_name=model_name,
@@ -273,7 +295,6 @@ class EmbeddingBackend(ABC, Generic[T]):
             metadata=new_metadata,
         )
 
-    @abstractmethod
     @require_registered_model
     def rebuild_model_indexes(
         self,
@@ -281,9 +302,9 @@ class EmbeddingBackend(ABC, Generic[T]):
         provider_type: ProviderType,
         index_type: IndexType,
         *,
-        engine: Engine,
         metric_types: Sequence[MetricType],
         batch_size: int = 100_000,
+        _model_record: EmbeddingModelRecord,
     ) -> None:
         """Rebuild backend-specific indexes for *metric_types*.
 
@@ -295,16 +316,28 @@ class EmbeddingBackend(ABC, Generic[T]):
             Provider type the model was registered with.
         index_type : IndexType
             Index type the model was registered with.
-        engine : Engine
-            SQLAlchemy engine for the OMOP CDM database. May be needed by
-            backends that store index state in the database (e.g. pgvector).
         metric_types : Sequence[MetricType]
             Metrics for which indexes should be rebuilt.
         batch_size : int, optional
             Chunk size when streaming vectors from storage. Meaningful for
             file-backed backends (FAISS); ignored by SQL-native backends.
+        _model_record : EmbeddingModelRecord
+            Injected by ``@require_registered_model``; do not pass explicitly.
         """
-        pass
+        return self._rebuild_model_indexes_impl(
+            model_record=_model_record,
+            metric_types=metric_types,
+            batch_size=batch_size,
+        )
+
+    @abstractmethod
+    def _rebuild_model_indexes_impl(
+        self,
+        model_record: EmbeddingModelRecord,
+        *,
+        metric_types: Sequence[MetricType],
+        batch_size: int = 100_000,
+    ) -> None: ...
 
     # ------------------------------------------------------------------
     # Model registry queries
@@ -373,9 +406,16 @@ class EmbeddingBackend(ABC, Generic[T]):
     ) -> Type[T]:
         """Return the dynamically created ORM class for the model's embedding table.
 
-        Requires ``initialise_store`` to have been called first. Raises
-        ``ValueError`` on a cache miss — this indicates a programming error
-        (e.g. store not initialised, model not registered) rather than bad input.
+        Raises ``ValueError`` on a cache miss — this indicates the model is not
+        registered rather than a setup error (the store is always initialised at
+        construction time).
+
+        .. warning::
+            Do **not** hold a reference to the returned class across a
+            ``delete_model`` call.  The underlying SQL table is dropped by
+            ``delete_model``; any subsequent query against a stale reference
+            will produce an ``OperationalError`` with no connection to the
+            deletion that caused it.
         """
         storage_key = self._get_embedding_table_cache_key(
             model_name=model_name,
@@ -392,8 +432,8 @@ class EmbeddingBackend(ABC, Generic[T]):
             "before attempting to access the embedding table."
         )
 
-    def _cache_model_record(self, engine: Engine, model_record: EmbeddingModelRecord) -> None:
-        dynamic_table = self._create_storage_table(engine=engine, model_record=model_record)
+    def _cache_model_record(self, model_record: EmbeddingModelRecord) -> None:
+        dynamic_table = self._create_storage_table(model_record=model_record)
         storage_key = self._get_embedding_table_cache_key(
             model_name=model_record.model_name,
             provider_type=model_record.provider_type,
@@ -410,11 +450,11 @@ class EmbeddingBackend(ABC, Generic[T]):
         return (model_name, provider_type, self.backend_type, index_type)
 
     @abstractmethod
-    def _create_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> Type[T]:
+    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> Type[T]:
         """Backend-specific logic to create the dynamic SQLAlchemy ORM class."""
 
     @abstractmethod
-    def _delete_storage_table(self, engine: Engine, model_record: EmbeddingModelRecord) -> None:
+    def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
         """Backend-specific logic to drop the dynamic table and any associated resources."""
 
     # ------------------------------------------------------------------
@@ -423,7 +463,6 @@ class EmbeddingBackend(ABC, Generic[T]):
 
     def _get_existing_concept_ids(
         self,
-        session: Session,
         concept_ids: tuple[int, ...],
         table: Type[T],
     ) -> set[int]:
@@ -431,8 +470,6 @@ class EmbeddingBackend(ABC, Generic[T]):
 
         Parameters
         ----------
-        session : Session
-            Active SQLAlchemy session bound to the OMOP CDM database.
         concept_ids : tuple[int, ...]
             Candidate concept IDs to check.
         table : Type[T]
@@ -452,17 +489,16 @@ class EmbeddingBackend(ABC, Generic[T]):
         """
         if not concept_ids:
             return set()
-        result = session.execute(
-            select(table.concept_id).where(table.concept_id.in_(concept_ids))
-        )
-        return {row[0] for row in result}
+        with self.session_factory() as session:
+            result = session.execute(
+                select(table.concept_id).where(table.concept_id.in_(concept_ids))
+            )
+            return {row[0] for row in result}
 
-    @abstractmethod
     @require_registered_model
     def upsert_embeddings(
         self,
         *,
-        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
@@ -475,8 +511,6 @@ class EmbeddingBackend(ABC, Generic[T]):
 
         Parameters
         ----------
-        session : Session
-            SQLAlchemy session bound to the OMOP CDM database.
         model_name : str
             Registered name of the embedding model.
         provider_type : ProviderType
@@ -488,16 +522,31 @@ class EmbeddingBackend(ABC, Generic[T]):
         embeddings : ndarray
             Embedding matrix of shape ``(n_concepts, D)``.
         _model_record : EmbeddingModelRecord
-            Injected by ``@require_registered_model``.
+            Injected by ``@require_registered_model``; do not pass explicitly.
         metric_type : MetricType, optional
             When provided the backend should also update its nearest-neighbor
             index for this metric (FAISS only; ignored by pgvector).
         """
+        return self._upsert_embeddings_impl(
+            model_record=_model_record,
+            concept_ids=concept_ids,
+            embeddings=embeddings,
+            metric_type=metric_type,
+        )
+
+    @abstractmethod
+    def _upsert_embeddings_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+        embeddings: ndarray,
+        metric_type: Optional[MetricType] = None,
+    ) -> None: ...
 
     def bulk_upsert_embeddings(
         self,
         *,
-        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
@@ -508,8 +557,6 @@ class EmbeddingBackend(ABC, Generic[T]):
 
         Parameters
         ----------
-        session : Session
-            Active SQLAlchemy session bound to the OMOP CDM database.
         model_name : str
             Registered canonical name of the embedding model.
         provider_type : ProviderType
@@ -531,7 +578,6 @@ class EmbeddingBackend(ABC, Generic[T]):
         """
         for concept_ids, embeddings in batches:
             self.upsert_embeddings(
-                session=session,
                 model_name=model_name,
                 provider_type=provider_type,
                 index_type=index_type,
@@ -541,12 +587,10 @@ class EmbeddingBackend(ABC, Generic[T]):
             )
         
 
-    @abstractmethod
     @require_registered_model
     def get_embeddings_by_concept_ids(
         self,
         *,
-        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
@@ -560,13 +604,22 @@ class EmbeddingBackend(ABC, Generic[T]):
         Mapping[int, Sequence[float]]
             Dictionary mapping concept IDs to their corresponding embedding vectors.
         """
+        return self._get_embeddings_by_concept_ids_impl(
+            model_record=_model_record,
+            concept_ids=concept_ids,
+        )
 
     @abstractmethod
+    def _get_embeddings_by_concept_ids_impl(
+        self,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+    ) -> Mapping[int, Sequence[float]]: ...
+
     @require_registered_model
     def get_nearest_concepts(
         self,
         *,
-        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
@@ -592,6 +645,80 @@ class EmbeddingBackend(ABC, Generic[T]):
         Tuple[Tuple[NearestConceptMatch, ...], ...]
             Shape ``(Q, k)`` — one inner tuple of matches per query vector.
         """
+        return self._get_nearest_concepts_impl(
+            model_record=_model_record,
+            query_embeddings=query_embeddings,
+            metric_type=metric_type,
+            concept_filter=concept_filter,
+        )
+
+    @abstractmethod
+    def _get_nearest_concepts_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        query_embeddings: ndarray,
+        metric_type: MetricType,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]: ...
+
+    # ------------------------------------------------------------------
+    # Maintenanace
+    # ------------------------------------------------------------------
+    def has_index(
+        self,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
+        metric_type: MetricType,
+    ) -> bool:
+        """Return True if the backend has an index for this model and metric, else False.
+
+        Not yet implemented — placeholder for future maintenance commands.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__}.has_index() is not yet implemented."
+        )
+
+    def get_num_concepts_with_embeddings(
+        self,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
+    ) -> int:
+        """Return the number of concepts with stored embeddings for this model.
+
+        Not yet implemented — placeholder for future maintenance commands.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__}.get_num_concepts_with_embeddings() is not yet implemented."
+        )
+
+    def is_registered_model_in_db(
+        self,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
+    ) -> bool:
+        """Check if a model with the given name, provider, and index type is registered in the database.
+
+        Not yet implemented — placeholder for future maintenance commands.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__}.is_registered_model_in_db() is not yet implemented."
+        )
+
+    def is_omop_cdm_model_in_registry(
+        self,
+        model_name: str,
+    ) -> bool:
+        """Check if a model with the given name is registered in the database, regardless of provider or index type.
+
+        Not yet implemented — placeholder for future maintenance commands.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__}.is_omop_cdm_model_in_registry() is not yet implemented."
+        )
 
     # ------------------------------------------------------------------
     # Concept queries
@@ -599,7 +726,6 @@ class EmbeddingBackend(ABC, Generic[T]):
 
     def has_any_embeddings(
         self,
-        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
@@ -609,35 +735,18 @@ class EmbeddingBackend(ABC, Generic[T]):
             index_type=index_type,
             provider_type=provider_type,
         )
-        return session.query(embedding_table.concept_id).limit(1).first() is not None
+        with self.session_factory() as session:
+            query = select(embedding_table.concept_id).limit(1)
+            return session.execute(query).first() is not None
 
     def get_concepts_without_embedding(
         self,
-        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-        limit: Optional[int] = None,
     ) -> Mapping[int, str]:
         """Return concept IDs and names for concepts that do not yet have embeddings."""
-        query = self.q_get_concepts_without_embedding(
-            model_name=model_name,
-            provider_type=provider_type,
-            index_type=index_type,
-            concept_filter=concept_filter,
-            limit=limit,
-        )
-        return {row.concept_id: row.concept_name for row in session.execute(query)}
-
-    def q_get_concepts_without_embedding(
-        self,
-        model_name: str,
-        provider_type: ProviderType,
-        index_type: IndexType,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
-        limit: Optional[int] = None,
-    ) -> Select:
         embedding_table = self.get_embedding_table(
             model_name=model_name, index_type=index_type, provider_type=provider_type
         )
@@ -645,11 +754,37 @@ class EmbeddingBackend(ABC, Generic[T]):
         query = select(Concept.concept_id, Concept.concept_name).where(~subq.exists())
         if concept_filter is not None:
             query = concept_filter.apply(query)
-        return query.limit(limit)
+    
+        with self.session_factory() as session:
+            return {row.concept_id: row.concept_name for row in session.execute(query)}
+        
+    def get_concepts_without_embedding_batched(
+        self,
+        model_name: str,
+        provider_type: ProviderType,
+        index_type: IndexType,
+        batch_size: int,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+    ) -> Iterable[Mapping[int, str]]:
+        """Lazily return batches of concept IDs and names for concepts that do not yet have embeddings."""
+        embedding_table = self.get_embedding_table(
+            model_name=model_name, index_type=index_type, provider_type=provider_type
+        )
+        subq = select(1).where(embedding_table.concept_id == Concept.concept_id)
+        base_query = select(Concept.concept_id, Concept.concept_name).where(~subq.exists())
+        if concept_filter is not None:
+            base_query = concept_filter.apply(base_query)
+
+        with self.session_factory() as session:
+
+            result_iterator = session.execute(base_query)
+
+            for batch in batched(result_iterator, batch_size):
+                yield {row.concept_id: row.concept_name for row in batch}
+
 
     def get_concepts_without_embedding_count(
         self,
-        session: Session,
         model_name: str,
         provider_type: ProviderType,
         index_type: IndexType,
@@ -662,7 +797,8 @@ class EmbeddingBackend(ABC, Generic[T]):
         query = select(func.count()).select_from(Concept).where(~subq.exists())
         if concept_filter is not None:
             query = concept_filter.apply(query)
-        return session.scalar(query)  # type: ignore
+        with self.session_factory() as session:
+            return session.scalar(query)  # type: ignore
 
     # ------------------------------------------------------------------
     # Validation

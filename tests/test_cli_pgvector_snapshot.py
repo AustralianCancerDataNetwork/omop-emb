@@ -70,7 +70,7 @@ def test_migrate_legacy_pgvector_registry(
 
     # Verify dry run wrote nothing — use standalone list function
     migrated_before = list_registered_models(
-        backend_name_or_type=BackendType.PGVECTOR,
+        backend_type=BackendType.PGVECTOR,
         provider_type=PROVIDER_TYPE,
         model_name="legacy-model:v1",
         index_type=IndexType.FLAT,
@@ -89,7 +89,7 @@ def test_migrate_legacy_pgvector_registry(
 
     # Re-read the registry
     migrated = list_registered_models(
-        backend_name_or_type=BackendType.PGVECTOR,
+        backend_type=BackendType.PGVECTOR,
         provider_type=PROVIDER_TYPE,
         model_name="legacy-model:v1",
         index_type=IndexType.FLAT,

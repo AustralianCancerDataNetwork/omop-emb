@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 import itertools
 import logging
 logger = logging.getLogger(__name__)
-from sqlalchemy.orm import Session
 from tqdm import tqdm
 from typing import Annotated, Optional, List, Union, Generator, Sequence
 import typer
@@ -14,7 +13,7 @@ from orm_loader.helpers import create_db
 
 from .utils import (
     configure_logging_level,
-    resolve_engine
+    resolve_omop_cdm_engine
 )
 from omop_emb.backends.index_config import index_config_from_index_type
 
@@ -147,7 +146,8 @@ def add_embeddings(
     configure_logging_level(verbosity)
     load_dotenv()
 
-    engine = resolve_engine()
+    omop_cdm_engine = resolve_omop_cdm_engine()
+    create_db(omop_cdm_engine)
 
     embedding_client = EmbeddingClient(
         model=model,
@@ -156,15 +156,10 @@ def add_embeddings(
         embedding_batch_size=batch_size
     )
     embedding_writer = EmbeddingWriterInterface(
+        omop_cdm_engine=omop_cdm_engine,
         embedding_client=embedding_client,
         backend_name_or_type=backend_type,
         storage_base_dir=storage_base_dir,
-    )
-
-    concept_filter = EmbeddingConceptFilter(
-        require_standard=standard_only,
-        domains=tuple(domains) if domains else None,
-        vocabularies=tuple(vocabularies) if vocabularies else None,
     )
 
     index_kwargs = {
@@ -179,42 +174,48 @@ def add_embeddings(
     )
 
     # Ensure OMOP metadata tables exist, then initialize the embedding store.
-    create_db(engine)
-    embedding_writer.register_model(
-        engine=engine,
-        index_config=index_config,
+    embedding_writer.register_model(index_config=index_config)
+
+    # Query
+    concept_filter_count = EmbeddingConceptFilter(
+        require_standard=standard_only,
+        domains=tuple(domains) if domains else None,
+        vocabularies=tuple(vocabularies) if vocabularies else None,
     )
 
-    with Session(engine) as reader, Session(engine) as writer:
-        total_concepts_missing_concepts = embedding_writer.get_concepts_without_embedding_count(
-            session=reader,
-            concept_filter=concept_filter,
-            index_type=index_type,
-        )
-        total_concepts = min(total_concepts_missing_concepts, num_embeddings) if num_embeddings is not None else total_concepts_missing_concepts
+    # Get the count first to limit. Quicker then to obtain the embeddings and do count here
+    # Required for TQDM so we know ahead of time how many there are
+    total_concepts_missing_concepts = embedding_writer.get_concepts_without_embedding_count(
+        concept_filter=concept_filter_count,
+        index_type=index_type,
+    )
+    total_concepts = min(total_concepts_missing_concepts, num_embeddings) if num_embeddings is not None else total_concepts_missing_concepts
 
-        concepts_without_embedding = embedding_writer.q_get_concepts_without_embedding(
-            concept_filter=concept_filter,
-            limit=total_concepts,
-            index_type=index_type
-        )
+    # Now limit to the number of embeddings we really need and load lazily
+    concept_filter_embeddings = EmbeddingConceptFilter(
+        require_standard=standard_only,
+        domains=tuple(domains) if domains else None,
+        vocabularies=tuple(vocabularies) if vocabularies else None,
+        limit=total_concepts,
+    )
 
-        logger.info(f"Total concepts to process: {total_concepts}")
-        with tqdm(total=total_concepts, desc="Processing", unit="concept") as pbar:
-            result = reader.execute(concepts_without_embedding)
+    concepts_without_embedding_iteartor = embedding_writer.get_concepts_without_embedding_batched(
+        concept_filter=concept_filter_embeddings,
+        index_type=index_type,
+        batch_size=batch_size,
+    )
 
-            for row_chunk in result.partitions(batch_size):
-                batch_concepts = {row.concept_id: row.concept_name for row in row_chunk}
+    logger.info(f"Total concepts to process: {total_concepts}")
+    with tqdm(total=total_concepts, desc="Processing", unit="concept") as pbar:
+        for batch_concepts in concepts_without_embedding_iteartor:
+            embedding_writer.embed_and_upsert_concepts(
+                concept_ids=tuple(batch_concepts.keys()),
+                concept_texts=tuple(batch_concepts.values()),
+                batch_size=batch_size,
+                index_type=index_type
+            )
 
-                embedding_writer.embed_and_upsert_concepts(
-                    session=writer,
-                    concept_ids=tuple(batch_concepts.keys()),
-                    concept_texts=tuple(batch_concepts.values()),
-                    batch_size=batch_size,
-                    index_type=index_type
-                )
-
-                pbar.update(len(batch_concepts))
+            pbar.update(len(batch_concepts))
 
     logger.info("Completed embedding generation and storage.")
 
@@ -298,9 +299,10 @@ def search(
     load_dotenv()
 
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
-    engine = resolve_engine()
+    engine = resolve_omop_cdm_engine()
 
     embedding_reader = EmbeddingReaderInterface(
+        omop_cdm_engine=engine,
         model=model,
         api_key=api_key,
         api_base=api_base,
@@ -322,28 +324,24 @@ def search(
         limit=k,
     )
 
-    embedding_reader.initialise_store(engine)
+    for batch_id, batched_queries in enumerate(itertools.batched(
+        queries_generator,
+        batch_size
+    )): 
+        batched_matches = embedding_reader.get_nearest_concepts_from_query_texts(
+            query_texts=batched_queries,
+            metric_type=metric_type,
+            concept_filter=concept_filter,
+            embedding_client=embedding_client,
+            index_type=index_type
+        )
 
-    with Session(engine) as session:
-        for batch_id, batched_queries in enumerate(itertools.batched(
-            queries_generator,
-            batch_size
-        )): 
-            batched_matches = embedding_reader.get_nearest_concepts_from_query_texts(
-                session=session,
-                query_texts=batched_queries,
-                metric_type=metric_type,
-                concept_filter=concept_filter,
-                embedding_client=embedding_client,
-                index_type=index_type
-            )
-
-            for query_id, (query_text, matches_per_query) in enumerate(
-                zip(batched_queries, batched_matches)
+        for query_id, (query_text, matches_per_query) in enumerate(
+            zip(batched_queries, batched_matches)
+        ):
+            for row in _render_search_results(
+                query_id=query_id + batch_id * batch_size,
+                query_text=query_text,
+                matches=matches_per_query,
             ):
-                for row in _render_search_results(
-                    query_id=query_id + batch_id * batch_size,
-                    query_text=query_text,
-                    matches=matches_per_query,
-                ):
-                    print(row)
+                print(row)

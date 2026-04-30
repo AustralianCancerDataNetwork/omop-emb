@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import Engine
 
 from omop_emb.config import IndexType, MetricType, ProviderType
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
@@ -21,11 +21,12 @@ HNSW_CONFIG = HNSWIndexConfig(num_neighbors=4, ef_search=8, ef_construction=16)
 
 
 @pytest.fixture
-def hnsw_pgvector_backend(session, temp_storage_dir) -> PGVectorEmbeddingBackend:
-    backend = PGVectorEmbeddingBackend(storage_base_dir=temp_storage_dir)
-    backend.initialise_store(session.bind)
+def hnsw_pgvector_backend(engine: Engine, temp_storage_dir) -> PGVectorEmbeddingBackend:
+    backend = PGVectorEmbeddingBackend(
+        omop_cdm_engine=engine,
+        storage_base_dir=temp_storage_dir
+    )
     return backend
-
 
 def _register_and_upsert(backend, session, *, index_config=HNSW_CONFIG, metric_type=MetricType.L2):
     backend.register_model(

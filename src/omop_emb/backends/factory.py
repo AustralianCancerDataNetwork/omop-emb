@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Optional
+from sqlalchemy import Engine
 
 from .base_backend import EmbeddingBackend
 from ..config import (
@@ -39,6 +40,7 @@ def normalize_backend_name(backend_name_or_type: Optional[str | BackendType]) ->
 
 
 def get_embedding_backend(
+    omop_cdm_engine: Engine,
     backend_name_or_type: Optional[str | BackendType] = None,
     storage_base_dir: Optional[str] = None,
     registry_db_name: Optional[str] = None,
@@ -70,7 +72,11 @@ def get_embedding_backend(
                 "PGVector embedding backend requested but its dependencies are not "
                 "available. Install the package using `pip install omop-emb[pgvector]`."
             ) from exc
-        return PGVectorEmbeddingBackend(storage_base_dir=storage_base_dir, registry_db_name=registry_db_name)
+        return PGVectorEmbeddingBackend(
+            omop_cdm_engine=omop_cdm_engine, 
+            storage_base_dir=storage_base_dir, 
+            registry_db_name=registry_db_name
+        )
 
     if resolved == BackendType.FAISS:
         try:
@@ -80,7 +86,11 @@ def get_embedding_backend(
                 "FAISS embedding backend requested but its dependencies are not "
                 "available. Install the package with the FAISS extra using `pip install omop-emb[faiss]` or omop-emb[faiss-gpu]."
             ) from exc
-        return FaissEmbeddingBackend(storage_base_dir=storage_base_dir, registry_db_name=registry_db_name)
+        return FaissEmbeddingBackend(
+            omop_cdm_engine=omop_cdm_engine,
+            storage_base_dir=storage_base_dir,
+            registry_db_name=registry_db_name
+        )
 
     raise EmbeddingBackendConfigurationError(
         f"Backend factory reached an unexpected state for backend={resolved!r}."

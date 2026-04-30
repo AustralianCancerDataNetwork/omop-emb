@@ -20,7 +20,7 @@ from tqdm import tqdm
 import typer
 app = typer.Typer(help="Legacy commands for omop-emb CLI. These commands are deprecated and may be removed in future versions. Use with caution.")
 
-from .utils import configure_logging_level, resolve_engine
+from .utils import configure_logging_level, resolve_omop_cdm_engine
 from omop_emb.config import (
     IndexType,
     BackendType,
@@ -107,13 +107,13 @@ def migrate_legacy_pgvector_registry(
     configure_logging_level(verbosity)
     load_dotenv()
 
-    source_url = source_database_url or os.getenv("OMOP_DATABASE_URL")
-    if source_url is None:
+    omop_cdm_url = source_database_url or os.getenv("OMOP_DATABASE_URL")
+    if omop_cdm_url is None:
         raise RuntimeError("OMOP_DATABASE_URL is not set. Provide --source-database-url.")
 
-    source_engine = sa.create_engine(source_url, future=True, echo=False)
+    omop_cdm_engine = sa.create_engine(omop_cdm_url, future=True, echo=False)
 
-    legacy_rows = _load_legacy_rows(source_engine, legacy_table=legacy_table)
+    legacy_rows = _load_legacy_rows(omop_cdm_engine, legacy_table=legacy_table)
     if not legacy_rows:
         logger.info("No legacy registry rows found. Nothing to migrate.")
         return
@@ -133,6 +133,7 @@ def migrate_legacy_pgvector_registry(
             continue
 
         migrate_legacy_registry_row(
+            omop_cdm_engine=omop_cdm_engine,
             backend_type=BackendType.PGVECTOR,
             provider_type=provider_type,
             model_name=model_name,
@@ -147,7 +148,7 @@ def migrate_legacy_pgvector_registry(
     logger.info(f"Migrated {migrated} legacy registry rows into local metadata registry.")
 
     if drop_legacy_registry and not dry_run:
-        with source_engine.begin() as conn:
+        with omop_cdm_engine.begin() as conn:
             conn.execute(sa.text(f'DROP TABLE IF EXISTS "{legacy_table}"'))
         logger.info(f"Dropped legacy registry table '{legacy_table}'.")
 
@@ -235,8 +236,9 @@ def load_embeddings_from_hdf5(
         api_base=api_base,
         api_key=api_key,
     )
-
+    engine = resolve_omop_cdm_engine()
     writer = EmbeddingWriterInterface(
+        omop_cdm_engine=engine,
         embedding_client=embedding_client,
         backend_name_or_type=backend_type,
         storage_base_dir=storage_base_dir,
@@ -249,35 +251,20 @@ def load_embeddings_from_hdf5(
         'ef_construction': index_hnsw_ef_construction,
     }
 
-    engine = resolve_engine()
-    session_maker = sessionmaker(engine)
     index_config = index_config_from_index_type(
         index_type,
         **index_kwargs
     )
 
-    writer.initialise_store(engine)
-
-    if writer.backend.is_model_registered(
-        model_name=model,
-        provider_type=provider_type,
-        index_type=index_type,
-    ) and not force_delete:
+    if writer.is_model_registered(index_type=index_type) and not force_delete:
         raise RuntimeError(f"Model '{model}' with provider '{provider_type.value}' and index type '{index_type.value}' is already registered in the local metadata registry. Please choose a different model name or clean up the existing registration before loading new indices.")
-    
-    writer.backend.delete_model(
-        engine=engine,
-        model_name=model,
-        provider_type=provider_type,
-        index_type=index_type,
-    )
+
+    writer.delete_model(index_type=index_type)
 
     # Ensure OMOP metadata tables exist, then initialize the embedding store.
     writer.register_model(
-        engine=engine,
         index_config=index_config,
     )
-    writer.backend.initialise_store(engine)
 
     with h5py.File(hdf5_file, "r") as loaded_file:
         if EmbeddingStorageManager.HDF5_DATASET_NAME_EMBEDDINGS not in loaded_file:
@@ -302,13 +289,11 @@ def load_embeddings_from_hdf5(
             for i in range(0, len(embeddings), batch_size):
                 yield concept_ids[i : i + batch_size], embeddings[i : i + batch_size]
 
-        with session_maker() as session:
-            writer.bulk_upsert_concept_embeddings(
-                session=session,
-                index_type=index_type,
-                batches=tqdm(_batches(), total=n_batches, desc="Loading embeddings", unit="batch"),
-                metric_type=metric_type,
-            )
+        writer.bulk_upsert_concept_embeddings(
+            index_type=index_type,
+            batches=tqdm(_batches(), total=n_batches, desc="Loading embeddings", unit="batch"),
+            metric_type=metric_type,
+        )
 
 @app.command(help="Rebuild indexes for a registered model")
 def rebuild_index(
@@ -357,13 +342,13 @@ def rebuild_index(
     configure_logging_level(verbosity)
     load_dotenv()
 
-    engine = resolve_engine()
+    engine = resolve_omop_cdm_engine()
     backend = get_embedding_backend(
+        omop_cdm_engine=engine,
         backend_name_or_type=backend_type,
         storage_base_dir=storage_base_dir,
         registry_db_name=registry_db_name,
     )
-    backend.initialise_store(engine)
 
     resolved_metric_types: tuple[MetricType, ...]
     if metric_types:
@@ -448,13 +433,13 @@ def switch_index_type(
     configure_logging_level(verbosity)
     load_dotenv()
 
-    engine = resolve_engine()
+    omop_cdm_engine = resolve_omop_cdm_engine()
     backend = get_embedding_backend(
+        omop_cdm_engine=omop_cdm_engine,
         backend_name_or_type=backend_type,
         storage_base_dir=storage_base_dir,
         registry_db_name=registry_db_name,
     )
-    backend.initialise_store(engine)
 
     existing = backend.get_registered_models(model_name=model, provider_type=provider_type)
     if not existing:
@@ -470,7 +455,6 @@ def switch_index_type(
         ef_construction=index_hnsw_ef_construction,
     )
     backend.register_model(
-        engine=engine,
         model_name=model,
         dimensions=existing[0].dimensions,
         provider_type=provider_type,
@@ -487,10 +471,9 @@ def switch_index_type(
                 backend_type, {}
             ).get(new_index_type, ())
         backend.rebuild_model_indexes(
-            model,
-            provider_type,
-            new_index_type,
-            engine=engine,
+            model_name=model,
+            provider_type=provider_type,
+            index_type=new_index_type,
             metric_types=resolved_metric_types,
             batch_size=batch_size,
         )

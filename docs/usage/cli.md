@@ -59,7 +59,7 @@ where `[OPTIONS]` are optional arguments that can be specified as described belo
 
 - `OMOP_DATABASE_URL`: OMOP CDM database connection string.
 - `OMOP_EMB_BACKEND`: backend selector used when `--backend` is not provided.
-- `OMOP_EMB_BASE_STORAGE_DIR`: local storage root for metadata and file-based artifacts. If unset, `omop-emb` defaults to `./.omop_emb` in the current working directory.
+- `OMOP_EMB_BASE_STORAGE_DIR`: local storage root for metadata and file-based artifacts. If unset, `omop-emb` defaults to `~/.omop_emb`.
 
 Paths that include `~` are expanded automatically.
 
@@ -80,7 +80,7 @@ omop-emb migrate-legacy-pgvector-registry [OPTIONS]
 
 | Option | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| **`--storage-base-dir`** | `String` | `None` | Optional path to local metadata registry location. If unset, falls back to `OMOP_EMB_BASE_STORAGE_DIR`, otherwise defaults to `./.omop_emb` in the current working directory. |
+| **`--storage-base-dir`** | `String` | `None` | Optional path to local metadata registry location. If unset, falls back to `OMOP_EMB_BASE_STORAGE_DIR`, otherwise defaults to `~/.omop_emb`. |
 | **`--source-database-url`** | `String` | `OMOP_DATABASE_URL` | Source database URL containing the legacy registry table. |
 | **`--legacy-table`** | `String` | `model_registry` | Name of the legacy registry table in the source database. |
 | **`--dry-run`** | `Boolean` | `False` | Show what would be migrated without writing changes. |

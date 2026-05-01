@@ -123,7 +123,7 @@ class TestEmbeddingDim:
         provider = self._mock_provider(768)
         client = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=provider)
         assert client.embedding_dim == 768
-        provider.get_embedding_dim.assert_called_once()
+        provider.get_embedding_dim.assert_called_once_with(OLLAMA_MODEL, client.base_client.base_url, client.api_key)
 
     def test_cached_after_first_access(self, mock_openai):
         provider = self._mock_provider(384)
@@ -131,14 +131,6 @@ class TestEmbeddingDim:
         _ = client.embedding_dim
         _ = client.embedding_dim
         provider.get_embedding_dim.assert_called_once()
-
-    def test_openai_provider_raises_not_implemented(self, mock_openai):
-        client = EmbeddingClient(
-            model="text-embedding-3-small", api_base=OPENAI_BASE, api_key="sk-x", provider=OpenAIProvider()
-        )
-        with pytest.raises(NotImplementedError):
-            _ = client.embedding_dim
-
 
 # ---------------------------------------------------------------------------
 # embeddings(): batching, shapes, input coercions
@@ -520,3 +512,10 @@ class TestApplyEmbeddingPrefix:
         c.embeddings("diabetes", embedding_role=EmbeddingRole.DOCUMENT)
         call_input = oi.embeddings.create.call_args.kwargs["input"]
         assert call_input == ("diabetes",)
+
+    def test_embeddings_request_float_encoding_format(self, mock_openai):
+        _, oi = mock_openai
+        c = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
+        oi.embeddings.create.return_value = _make_embedding_response([[0.1, 0.2]])
+        c.embeddings("hello", embedding_role=EmbeddingRole.DOCUMENT)
+        assert oi.embeddings.create.call_args.kwargs["encoding_format"] == "float"

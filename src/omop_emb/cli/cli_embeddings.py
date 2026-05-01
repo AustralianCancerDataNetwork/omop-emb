@@ -101,7 +101,7 @@ def add_embeddings(
     )] = None,
     storage_base_dir: Annotated[Optional[str], typer.Option(
         "--storage-base-dir",
-        help=f"Optional base directory for embedding backend storage. Can be set using `{ENV_BASE_STORAGE_DIR}` environment variable. Defaults to ./.omop_emb in the current working directory. Paths with `~` are expanded.",
+        help=f"Optional base directory for embedding backend storage. Can be set using `{ENV_BASE_STORAGE_DIR}` environment variable. Defaults to `~/.omop_emb`. Paths with `~` are expanded.",
         rich_help_panel="Storage Options"
     )] = None,
     standard_only: Annotated[bool, typer.Option(
@@ -261,7 +261,7 @@ def search(
     )] = None,
     storage_base_dir: Annotated[Optional[str], typer.Option(
         "--storage-base-dir",
-        help=f"Optional base directory for embedding backend storage. Can be set using `{ENV_BASE_STORAGE_DIR}` environment variable. Defaults to ./.omop_emb in the current working directory. Paths with `~` are expanded.",
+        help=f"Optional base directory for embedding backend storage. Can be set using `{ENV_BASE_STORAGE_DIR}` environment variable. Defaults to `~/.omop_emb`. Paths with `~` are expanded.",
         rich_help_panel="Storage Options"
     )] = None,
     metric_type: Annotated[MetricType, typer.Option(

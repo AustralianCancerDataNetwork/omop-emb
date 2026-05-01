@@ -17,6 +17,9 @@ from abc import ABC, abstractmethod
 from httpx import URL
 import requests
 
+import logging
+logger = logging.getLogger(__name__)
+
 from omop_emb.config import ProviderType
 
 
@@ -59,7 +62,7 @@ class EmbeddingProvider(ABC):
         ...
 
     @abstractmethod
-    def get_embedding_dim(self, model: str, api_base: URL) -> int:
+    def get_embedding_dim(self, model: str, api_base: URL, api_key: str = "ollama") -> int:
         """Return the embedding dimension for *model* served at *api_base*.
 
         Parameters
@@ -70,6 +73,8 @@ class EmbeddingProvider(ABC):
         api_base : URL
             Base URL of the API endpoint, e.g.
             ``'http://localhost:11434/v1'``.
+        api_key : str, optional
+            API key for providers that require authenticated probe requests.
 
         Returns
         -------
@@ -80,8 +85,6 @@ class EmbeddingProvider(ABC):
         ------
         ValueError
             If the dimension cannot be determined from the API response.
-        NotImplementedError
-            If the provider does not support automatic dimension retrieval.
         """
         ...
 
@@ -140,7 +143,7 @@ class OllamaProvider(EmbeddingProvider):
 
         return name
 
-    def get_embedding_dim(self, model: str, api_base: URL) -> int:
+    def get_embedding_dim(self, model: str, api_base: URL, api_key: str = "ollama") -> int:
         """Query ``POST /api/show`` for the embedding dimension.
 
         Parameters
@@ -149,6 +152,8 @@ class OllamaProvider(EmbeddingProvider):
             Canonical model name (with tag).
         api_base : URL
             Ollama API base URL, e.g. ``'http://localhost:11434/v1'``.
+        api_key : str, optional
+            Ignored for ``/api/show``.
 
         Returns
         -------
@@ -178,11 +183,8 @@ class OllamaProvider(EmbeddingProvider):
 class OpenAIProvider(EmbeddingProvider):
     """Provider for OpenAI-compatible APIs (OpenAI, Azure OpenAI, etc.).
 
-    Model names require no tag normalisation.  Embedding dimensions are not
-    available via a query endpoint, so :meth:`get_embedding_dim` raises
-    :exc:`NotImplementedError` — pass the dimension explicitly via the
-    ``embedding_dim`` parameter of :class:`~omop_emb.embedding_client.EmbeddingClient`
-    instead.
+    Model names require no tag normalisation. Embedding dimensions are
+    discovered by issuing a single probe request to the embeddings endpoint.
     """
 
     @property
@@ -204,13 +206,57 @@ class OpenAIProvider(EmbeddingProvider):
         """
         return name.strip()
 
-    def get_embedding_dim(self, model: str, api_base: str) -> int:
-        raise NotImplementedError(
-            f"Automatic embedding dimension retrieval is not supported for "
-            f"OpenAI-compatible endpoints (api_base='{api_base}'). "
-            f"Pass the dimension explicitly via the 'embedding_dim' parameter "
-            f"when constructing EmbeddingClient."
-        )
+    def get_embedding_dim(self, model: str, api_base: str, api_key: str = "ollama") -> int:
+        """Query a single embedding to obtain dimension.
+
+        Parameters
+        ----------
+        model : str
+            Canonical model name (with tag).
+        api_base : URL
+            Open API base URL.
+        api_key : str, optional
+            API key for authenticated embedding requests.
+
+        Returns
+        -------
+        int
+            Embedding vector dimension.
+
+        Raises
+        ------
+        ValueError
+            If the embedding vector cannot be determined from the probe response.
+        """
+        base_url = str(api_base).rstrip("/")
+        response = requests.post(
+            f"{base_url}/embeddings",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "input": "dimension probe",
+                "encoding_format": "float",
+            },
+        ).json()
+
+        data = response.get("data")
+        if not isinstance(data, list) or not data:
+            raise ValueError(
+                f"Could not determine embedding dimension from OpenAI-compatible "
+                f"response for model '{model}'. Response: {response}"
+            )
+
+        embedding = data[0].get("embedding") if isinstance(data[0], dict) else None
+        if not isinstance(embedding, list):
+            raise ValueError(
+                f"Could not determine embedding dimension from OpenAI-compatible "
+                f"response for model '{model}'. Response: {response}"
+            )
+        logger.info(f"Embedding dimension identified from probe POST: {len(embedding)}")
+        return len(embedding)
 
 
 def get_provider_for_api_base(

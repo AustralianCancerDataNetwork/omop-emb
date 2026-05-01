@@ -1,6 +1,9 @@
 """Unit tests for EmbeddingProvider implementations and the factory."""
 
+from unittest.mock import Mock, patch
+
 import pytest
+from httpx import URL
 
 from omop_emb.config import ProviderType
 from omop_emb.embeddings import (
@@ -59,9 +62,32 @@ class TestOpenAICompatProviderCanonicalModelName:
     def test_strips_whitespace(self):
         assert OpenAIProvider().canonical_model_name("  text-embedding-3-small  ") == "text-embedding-3-small"
 
-    def test_get_embedding_dim_raises(self):
-        with pytest.raises(NotImplementedError):
-            OpenAIProvider().get_embedding_dim("text-embedding-3-small", "https://api.openai.com/v1")
+    def test_get_embedding_dim_probes_embeddings_endpoint(self):
+        response = Mock()
+        response.json.return_value = {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+        with patch("omop_emb.embeddings.embedding_providers.requests.post", return_value=response) as mock_post:
+            dim = OpenAIProvider().get_embedding_dim(
+                "text-embedding-3-small",
+                URL("https://api.openai.com/v1"),
+                "sk-test",
+            )
+        assert dim == 3
+        assert mock_post.call_args.kwargs["json"] == {
+            "model": "text-embedding-3-small",
+            "input": "dimension probe",
+            "encoding_format": "float",
+        }
+
+    def test_get_embedding_dim_sends_bearer_token(self):
+        response = Mock()
+        response.json.return_value = {"data": [{"embedding": [0.1]}]}
+        with patch("omop_emb.embeddings.embedding_providers.requests.post", return_value=response) as mock_post:
+            OpenAIProvider().get_embedding_dim(
+                "text-embedding-3-small",
+                URL("https://api.openai.com/v1"),
+                "sk-test",
+            )
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer sk-test"
 
 
 class TestGetProviderForApiBase:

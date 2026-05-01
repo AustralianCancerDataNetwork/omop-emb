@@ -117,22 +117,16 @@ class EmbeddingClient:
     def embedding_dim(self) -> int:
         """Embedding vector dimension, auto-discovered on first access.
 
-        For Ollama endpoints this queries ``POST /api/show``.  For
-        OpenAI-compatible providers the dimension must be supplied at
-        construction time via a provider that implements
-        :meth:`~omop_emb.config.EmbeddingProvider.get_embedding_dim`.
+        The dimension is discovered lazily via the configured provider.
 
         Raises
         ------
         ValueError
             If the provider cannot determine the dimension from the API.
-        NotImplementedError
-            If the provider requires an explicit dimension
-            (see :class:`~omop_emb.config.OpenAICompatProvider`).
         """
         if self._embedding_dim is None:
             self._embedding_dim = self._provider.get_embedding_dim(
-                self._model, self._base_client.base_url
+                self._model, self._base_client.base_url, self.api_key
             )
         return self._embedding_dim
 
@@ -173,7 +167,9 @@ class EmbeddingClient:
             chunk = text[start : start + batch_size]
             logger.debug(f"Embedding batch [{start}:{start + len(chunk)}]")
             response = self._base_client.embeddings.create(
-                model=self._model, input=chunk
+                model=self._model,
+                input=chunk,
+                encoding_format="float",
             )
             buffer.extend(emb.embedding for emb in response.data)
 

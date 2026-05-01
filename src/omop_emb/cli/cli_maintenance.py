@@ -76,7 +76,7 @@ def _legacy_row_fields(row: dict[str, object]) -> tuple[str, int, IndexType, str
 def migrate_legacy_pgvector_registry(
     storage_base_dir: Annotated[Optional[str], typer.Option(
         "--storage-base-dir",
-        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to ./.omop_emb in the current working directory. Paths with `~` are expanded.",
+        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to `~/.omop_emb`. Paths with `~` are expanded.",
     )] = None,
     provider_type: Annotated[ProviderType, typer.Option(
         "--provider-type",
@@ -193,7 +193,7 @@ def load_embeddings_from_hdf5(
     )] = ProviderType.OLLAMA,
     storage_base_dir: Annotated[Optional[str], typer.Option(
         "--storage-base-dir",
-        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to ./.omop_emb in the current working directory. Paths with `~` are expanded.",
+        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to `~/.omop_emb`. Paths with `~` are expanded.",
     )] = None,
     registry_db_name: Annotated[str, typer.Option(
         "--registry-db-name",
@@ -332,7 +332,7 @@ def rebuild_index(
     )] = IndexType.FLAT,
     storage_base_dir: Annotated[Optional[str], typer.Option(
         "--storage-base-dir",
-        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to ./.omop_emb in the current working directory.",
+        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to `~/.omop_emb`.",
         rich_help_panel="Storage Options",
     )] = None,
     registry_db_name: Annotated[str, typer.Option(
@@ -404,7 +404,7 @@ def switch_index_type(
     )] = ProviderType.OLLAMA,
     storage_base_dir: Annotated[Optional[str], typer.Option(
         "--storage-base-dir",
-        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to ./.omop_emb in the current working directory.",
+        help="Optional base directory for omop-emb metadata registry (metadata.db). Reverts to `OMOP_EMB_BASE_STORAGE_DIR` if not provided, or defaults to `~/.omop_emb`.",
         rich_help_panel="Storage Options",
     )] = None,
     registry_db_name: Annotated[str, typer.Option(

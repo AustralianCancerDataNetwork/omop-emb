@@ -1,0 +1,34 @@
+services:
+  omop-emb-db:
+    image: pgvector/pgvector:pg18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: omop_emb
+      POSTGRES_PASSWORD: omop_emb
+      POSTGRES_DB: omop_emb
+    ports:
+      - "5433:5432"
+    volumes:
+      - omop_emb_data:/var/lib/postgresql/data
+    command: >
+      postgres
+        -c shared_preload_libraries=vector
+        -c maintenance_work_mem=512MB
+        -c max_parallel_maintenance_workers=4
+        -c max_parallel_workers=8
+        -c checkpoint_completion_target=0.9
+        -c wal_level=replica
+    networks:
+      - omop-net
+
+  ollama:
+    image: ollama/ollama:0.14.2
+    networks:
+      - omop-net
+
+networks:
+  omop-net:
+    name: omop-net
+
+volumes:
+  omop_emb_data:

@@ -1,102 +1,88 @@
-from __future__ import annotations
+"""CLI and registry integration snapshot tests."""
 
-from pathlib import Path
+from __future__ import annotations
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session
 
-from omop_emb.cli.cli_maintenance import migrate_legacy_pgvector_registry
-from omop_emb.config import BackendType, IndexType, ProviderType
+from omop_emb.config import IndexType, ProviderType
 from omop_emb.interface import list_registered_models
+from omop_emb.storage import PGVectorEmbeddingBackend
+from omop_emb.storage.index_config import FlatIndexConfig
 
 from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE
 
 
 @pytest.mark.pgvector
-@pytest.mark.unit
-def test_migrate_legacy_pgvector_registry(
-    session: Session,
-    temp_storage_dir: Path,
+@pytest.mark.integration
+def test_list_registered_models_empty(emb_engine: Engine) -> None:
+    """list_registered_models returns empty tuple when no models are registered."""
+    results = list_registered_models(
+        emb_engine=emb_engine,
+        model_name="no-such-model",
+    )
+    assert results == ()
+
+
+@pytest.mark.pgvector
+@pytest.mark.integration
+def test_list_registered_models_after_registration(
+    session,
+    emb_engine: Engine,
+    cdm_engine: Engine,
 ) -> None:
-    engine = session.get_bind()
-    assert isinstance(engine, Engine)
-
-    legacy_table = "model_registry_legacy"
-
-    with engine.begin() as conn:
-        conn.execute(
-            sa.text(
-                f"""
-                CREATE TABLE {legacy_table} (
-                    model_name TEXT NOT NULL,
-                    dimensions INTEGER NOT NULL,
-                    index_type TEXT NOT NULL,
-                    table_name TEXT NOT NULL,
-                    details JSONB
-                )
-                """
-            )
-        )
-        conn.execute(
-            sa.text(
-                f"""
-                INSERT INTO {legacy_table} (model_name, dimensions, index_type, table_name, details)
-                VALUES (:model_name, :dimensions, :index_type, :table_name, CAST(:details AS JSONB))
-                """
-            ),
-            {
-                "model_name": "legacy-model:v1",
-                "dimensions": 1,
-                "index_type": "flat",
-                "table_name": "legacy_table_flat",
-                "details": '{"migrated": true}',
-            },
-        )
-
-    source_url = engine.url.render_as_string(hide_password=False)
-    storage_dir = temp_storage_dir / "migrated_registry"
-    storage_dir.mkdir(parents=True, exist_ok=True)
-
-    # Dry run — nothing should be written to the local registry
-    migrate_legacy_pgvector_registry(
-        storage_base_dir=str(storage_dir),
-        source_database_url=source_url,
-        legacy_table=legacy_table,
-        dry_run=True,
-        drop_legacy_registry=False,
+    """list_registered_models reflects the newly registered model."""
+    backend = PGVectorEmbeddingBackend(
+        emb_engine=emb_engine,
+        omop_cdm_engine=cdm_engine,
     )
-
-    # Verify dry run wrote nothing — use standalone list function
-    migrated_before = list_registered_models(
-        backend_type=BackendType.PGVECTOR,
+    backend.register_model(
+        model_name=MODEL_NAME,
         provider_type=PROVIDER_TYPE,
-        model_name="legacy-model:v1",
-        index_type=IndexType.FLAT,
-        storage_base_dir=str(storage_dir),
-    )
-    assert len(migrated_before) == 0
-
-    # Real migration
-    migrate_legacy_pgvector_registry(
-        storage_base_dir=str(storage_dir),
-        source_database_url=source_url,
-        legacy_table=legacy_table,
-        dry_run=False,
-        drop_legacy_registry=True,
+        index_config=FlatIndexConfig(),
+        dimensions=EMBEDDING_DIM,
     )
 
-    # Re-read the registry
-    migrated = list_registered_models(
-        backend_type=BackendType.PGVECTOR,
+    results = list_registered_models(
+        emb_engine=emb_engine,
+        model_name=MODEL_NAME,
         provider_type=PROVIDER_TYPE,
-        model_name="legacy-model:v1",
         index_type=IndexType.FLAT,
-        storage_base_dir=str(storage_dir),
     )
-    assert len(migrated) == 1
-    assert migrated[0].storage_identifier == "legacy_table_flat"
+    assert len(results) == 1
+    assert results[0].model_name == MODEL_NAME
+    assert results[0].dimensions == EMBEDDING_DIM
 
-    inspector = sa.inspect(engine)
-    assert not inspector.has_table(legacy_table)
+
+@pytest.mark.pgvector
+@pytest.mark.integration
+def test_registry_survives_backend_recreate(
+    session,
+    emb_engine: Engine,
+    cdm_engine: Engine,
+) -> None:
+    """Registry records persisted in Postgres survive backend object recreation."""
+    backend1 = PGVectorEmbeddingBackend(
+        emb_engine=emb_engine,
+        omop_cdm_engine=cdm_engine,
+    )
+    backend1.register_model(
+        model_name=MODEL_NAME,
+        provider_type=PROVIDER_TYPE,
+        index_config=FlatIndexConfig(),
+        dimensions=EMBEDDING_DIM,
+    )
+
+    # Simulate a new backend instance (e.g. after process restart)
+    backend2 = PGVectorEmbeddingBackend(
+        emb_engine=emb_engine,
+        omop_cdm_engine=cdm_engine,
+    )
+    record = backend2.get_registered_model(
+        model_name=MODEL_NAME,
+        provider_type=PROVIDER_TYPE,
+        index_type=IndexType.FLAT,
+    )
+    assert record is not None
+    assert record.model_name == MODEL_NAME

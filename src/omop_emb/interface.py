@@ -1,182 +1,113 @@
+"""Public reader and writer interfaces for omop-emb.
+
+Key changes from the previous design
+--------------------------------------
+* Two mandatory engines instead of one:
+  - ``emb_engine``: the dedicated pgvector Postgres instance
+  - ``omop_cdm_engine``: the user's OMOP CDM (any SQLAlchemy dialect, read-only)
+* No ``backend_name_or_type`` — pgvector is the only production backend.
+* No ``storage_base_dir`` or ``registry_db_name`` — the registry lives in
+  the pgvector instance, not a local SQLite file.
+* The backend is fully initialized inside ``__init__`` (no separate
+  ``initialise_store`` call required by the caller).
+"""
 from __future__ import annotations
 
-from typing import Iterable, Mapping, Optional, Sequence, Tuple, List, Union
-
+from typing import Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from numpy import ndarray
-from sqlalchemy import Engine, Select
+from sqlalchemy import Engine
 
 from omop_emb.embeddings import (
-    EmbeddingClient, 
+    EmbeddingClient,
+    EmbeddingRole,
     get_provider_from_provider_type,
-    EmbeddingRole
 )
-
-from .embeddings.embedding_providers import get_provider_for_api_base
-from .backends import get_embedding_backend, IndexConfig, EmbeddingBackend
+from omop_emb.embeddings.embedding_providers import get_provider_for_api_base
+from omop_emb.storage import EmbeddingBackend, IndexConfig, PGVectorEmbeddingBackend
+from omop_emb.storage.postgres.pg_registry import EmbeddingModelRecord, PostgresRegistryManager
+from omop_emb.config import BackendType, IndexType, MetricType, ProviderType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
-from omop_emb.model_registry import EmbeddingModelRecord, ModelRegistryManager
-from .config import BackendType, IndexType, MetricType, ProviderType
+
+
+# ---------------------------------------------------------------------------
+# Standalone utility functions
+# ---------------------------------------------------------------------------
 
 def list_registered_models(
-    backend_type: Optional[BackendType] = None,
+    emb_engine: Engine,
     provider_type: Optional[ProviderType] = None,
     model_name: Optional[str] = None,
     index_type: Optional[IndexType] = None,
-    storage_base_dir: Optional[str] = None,
-    registry_db_name: Optional[str] = None,
 ) -> tuple[EmbeddingModelRecord, ...]:
-    """List registered models from the backend registry.
-
-    Standalone function for administrative/discovery use (e.g. CLI export).
-    Not scoped to a single model — queries across the registry.
+    """List registered models from the pgvector registry.
 
     Parameters
     ----------
-    backend_type : BackendType, optional
-        Backend to query. If not provided, queries all backends in the registry.
+    emb_engine : Engine
+        Engine for the pgvector instance that holds the registry.
     provider_type : ProviderType, optional
-        Filter by provider type. If not provided, queries all providers in the registry.
+        Filter by provider type.
     model_name : str, optional
-        Filter by model name. If not provided, queries all model names in the registry.
+        Filter by model name.
     index_type : IndexType, optional
-        Filter by index type. If not provided, queries all index types in the registry.
-    storage_base_dir : str, optional
-        Base directory for backend storage. See :class:`~omop_emb.backends.EmbeddingBackend` for resolution order.
-    registry_db_name : str, optional
-        Custom model registry database filename.
+        Filter by index type.
 
     Returns
     -------
     tuple[EmbeddingModelRecord, ...]
         Matching registered models (empty tuple if none found).
     """
-    resolved_storage_dir = EmbeddingBackend._resolve_storage_path(storage_base_dir)
-    model_registry_manager = ModelRegistryManager(
-        base_dir=resolved_storage_dir,
-        db_file=registry_db_name,
-    )
-    return model_registry_manager.get_registered_models_from_db(
-        backend_type=backend_type,
+    registry = PostgresRegistryManager(emb_engine=emb_engine)
+    return registry.get_registered_models_from_db(
+        backend_type=BackendType.PGVECTOR,
         provider_type=provider_type,
         model_name=model_name,
         index_type=index_type,
     )
 
-def migrate_legacy_registry_row(
-    omop_cdm_engine: Engine,
-    backend_type: BackendType,
-    provider_type: ProviderType,
-    model_name: str,
-    dimensions: int,
-    index_type: IndexType,
-    metadata: dict,
-    storage_identifier: str,
-    storage_base_dir: Optional[str] = None,
-) -> EmbeddingModelRecord:
-    """Migrate a single legacy registry row into the local metadata.db.
 
-    Used by CLI migration commands to populate the registry with explicit
-    ``provider_type`` from legacy data or command-line arguments.
+# ---------------------------------------------------------------------------
+# Reader interface
+# ---------------------------------------------------------------------------
 
-    This bypasses model-name validation (legacy names may not satisfy
-    current provider rules, e.g. untagged Ollama names).
+class EmbeddingReaderInterface:
+    """Backend-neutral reader interface for embedding query operations.
 
     Parameters
     ----------
+    emb_engine : Engine
+        SQLAlchemy engine for the **dedicated pgvector Postgres instance**.
+        The embedding tables and model registry live here.
     omop_cdm_engine : Engine
-        SQLAlchemy engine for the OMOP CDM database.
-    backend_type : BackendType
-        Target backend type.
-    provider_type : ProviderType
-        Provider type to assign to the migrated row.
-    model_name : str
-        Model name from the legacy registry (used verbatim).
-    dimensions : int
-        Embedding dimensionality.
-    index_type : IndexType
-        Vector index type.
-    metadata : dict
-        Arbitrary metadata from the legacy row.
-    storage_identifier : str
-        Backend-specific storage identifier (e.g. table name).
-    storage_base_dir : str, optional
-        Base directory for the local metadata registry.
-
-    Returns
-    -------
-    EmbeddingModelRecord
-        The newly created registry entry.
-    """
-    backend = get_embedding_backend(
-        omop_cdm_engine=omop_cdm_engine,
-        backend_name_or_type=backend_type,
-        storage_base_dir=storage_base_dir,
-    )
-    return backend._embedding_model_registry.register_model(
-        model_name=model_name,
-        provider_type=provider_type,
-        dimensions=dimensions,
-        backend_type=backend_type,
-        index_type=index_type,
-        metadata=metadata or {},
-        storage_identifier=storage_identifier,
-    )
-
-
-class EmbeddingReaderInterface:
-    """
-    Backend-neutral reader interface for embedding query operations.
-    This class is designed for read-only operations and does not require an
-    ``EmbeddingClient``. All registry queries use the ``provider_type`` held
-    at construction time.
-
-    Notes
-    -----
-    We are requiring a canonical model name at construction time to ensure that the reader is always
-    pointing to a valid model.
-    For definition of "canonical model name", see the provider's implementation of
-    :class:`~omop_emb.embeddings.EmbeddingProvider.canonical_model_name`.
+        SQLAlchemy engine for the **user's OMOP CDM** (read-only).  May be
+        any SQLAlchemy-supported dialect.
+    model : str, optional
+        Raw model name.  Required unless *canonical_model_name* is provided.
+    api_base : str, optional
+        API base URL for automatic provider detection.
+    api_key : str, optional
+        API key for automatic provider detection.
+    canonical_model_name : str, optional
+        Pre-computed canonical model name.  Supply this to bypass the
+        provider canonicalization round-trip.
+    provider_name_or_type : str | ProviderType, optional
+        Embedding provider.  Required if the provider cannot be inferred
+        from *api_base*.
     """
 
     def __init__(
         self,
+        emb_engine: Engine,
         omop_cdm_engine: Engine,
         model: Optional[str] = None,
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         canonical_model_name: Optional[str] = None,
         provider_name_or_type: Optional[Union[str, ProviderType]] = None,
-        backend_name_or_type: Optional[Union[str, BackendType]] = None,
-        storage_base_dir: Optional[str] = None,
-        registry_db_name: Optional[str] = None,
     ):
-        """Initialize embedding reader.
-
-        Parameters
-        ----------
-        omop_cdm_engine : Engine
-            SQLAlchemy engine for the OMOP CDM database.  
-        model : str, optional
-            Raw model name for provider lookup and canonicalization. Optional if ``canonical_model_name`` is provided directly.
-        api_base : str, optional
-            API base URL for provider lookup. Optional if ``provider_name_or_type`` is provided directly
-        api_key : str, optional
-            API key for provider lookup. Optional if ``provider_name_or_type`` is provided directly
-        canonical_model_name : str, optional
-            Canonical name of the embedding model. Not required if ``model`` is provided, as it can be derived via the provider's canonicalization method.
-        provider_name_or_type : str | ProviderType, optional
-            Provider type used for model lookups (OLLAMA, OPENAI, etc.), required if not derivable from API base or model name.
-        backend_name_or_type : str | BackendType, optional
-            Embedding backend name or type (pgvector, faiss, etc.).
-            Falls back to ``OMOP_EMB_BACKEND`` environment variable.
-        storage_base_dir : Optional[str]
-            Base directory for backend storage
-        registry_db_name : Optional[str]
-            Custom model registry database filename
-        """
-    
+        # Resolve provider type
         if isinstance(provider_name_or_type, str):
             provider_type = ProviderType(provider_name_or_type)
         elif isinstance(provider_name_or_type, ProviderType):
@@ -184,12 +115,14 @@ class EmbeddingReaderInterface:
         elif provider_name_or_type is None:
             if api_base is None or api_key is None:
                 raise ValueError(
-                    "Either 'provider_name_or_type' or both 'api_base' and 'api_key' must be provided."
+                    "Either 'provider_name_or_type' or both 'api_base' and 'api_key' "
+                    "must be provided."
                 )
             provider_type = get_provider_for_api_base(api_base, api_key).provider_type
         else:
             raise ValueError(
-                f"Invalid provider_name_or_type: expected str or ProviderType, got {type(provider_name_or_type).__name__}."
+                f"Invalid provider_name_or_type: expected str or ProviderType, "
+                f"got {type(provider_name_or_type).__name__}."
             )
 
         provider = get_provider_from_provider_type(provider_type)
@@ -199,42 +132,41 @@ class EmbeddingReaderInterface:
                 raise ValueError("Either 'model' or 'canonical_model_name' must be provided.")
             canonical_model_name = provider.canonical_model_name(model)
 
+        # Idempotency check
         if canonical_model_name != provider.canonical_model_name(canonical_model_name):
             raise ValueError(
                 f"Canonical model name validation failed for provider {provider_type}: "
-                f"'{canonical_model_name}' is not valid. Expected form: '{provider.canonical_model_name(canonical_model_name)}'."
+                f"'{canonical_model_name}' is not in canonical form."
             )
 
-        self._backend = get_embedding_backend(
+        self._backend: EmbeddingBackend = PGVectorEmbeddingBackend(
+            emb_engine=emb_engine,
             omop_cdm_engine=omop_cdm_engine,
-            backend_name_or_type=backend_name_or_type,
-            storage_base_dir=storage_base_dir,
-            registry_db_name=registry_db_name,
         )
-        self._backend_type = self._backend.backend_type
         self._provider_type = provider_type
         self._canonical_model_name = canonical_model_name
 
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
     @property
     def backend_type(self) -> BackendType:
-        """Backend type for this reader."""
-        return self._backend_type
-    
+        return self._backend.backend_type
+
     @property
     def canonical_model_name(self) -> str:
-        """Canonical model name for this reader."""
         return self._canonical_model_name
-    
+
     @property
     def provider_type(self) -> ProviderType:
-        """Provider type for this reader."""
         return self._provider_type
-    
-    def get_model_table_name(
-        self,
-        index_type: IndexType,
-    ) -> Optional[str]:
-        """Get the storage identifier (table name) for a registered model."""
+
+    # ------------------------------------------------------------------
+    # Registry queries
+    # ------------------------------------------------------------------
+
+    def get_model_table_name(self, index_type: IndexType) -> Optional[str]:
         record = self._backend.get_registered_model(
             model_name=self.canonical_model_name,
             index_type=index_type,
@@ -242,27 +174,23 @@ class EmbeddingReaderInterface:
         )
         return record.storage_identifier if record is not None else None
 
-    def is_model_registered(
-        self,
-        index_type: IndexType,
-    ) -> bool:
-        """Check if a model is registered in the backend."""
+    def is_model_registered(self, index_type: IndexType) -> bool:
         return self._backend.is_model_registered(
             model_name=self.canonical_model_name,
             index_type=index_type,
             provider_type=self.provider_type,
         )
 
-    def has_any_embeddings(
-        self,
-        index_type: IndexType,
-    ) -> bool:
-        """Check if any embeddings exist for a model."""
+    def has_any_embeddings(self, index_type: IndexType) -> bool:
         return self._backend.has_any_embeddings(
             model_name=self.canonical_model_name,
             provider_type=self.provider_type,
             index_type=index_type,
         )
+
+    # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
 
     def get_nearest_concepts(
         self,
@@ -276,20 +204,17 @@ class EmbeddingReaderInterface:
 
         Parameters
         ----------
-        index_type : IndexType
-            The type of vector index used to store the embeddings.
         query_embedding : ndarray
-            The embedding vector to search with. Expected shape is (q, dimension)
-            where q is the number of query vectors.
+            Shape ``(Q, D)`` — one row per query vector.
         metric_type : MetricType
-            The similarity or distance metric to use for nearest neighbor search.
-        concept_filter : Optional[EmbeddingConceptFilter], optional
-            A filter to specify which concepts to consider as potential nearest neighbors.
+            Distance / similarity metric.
+        concept_filter : EmbeddingConceptFilter, optional
+            Optional constraints (domain, vocabulary, standard flag, limit).
 
         Returns
         -------
         Tuple[Tuple[NearestConceptMatch, ...], ...]
-            A tuple of tuples containing nearest concept matches for each query vector. Shape of Q x K, where Q is the number of query vectors and K is the number of nearest neighbors returned per query.
+            Shape ``(Q, K)``.
         """
         if not isinstance(metric_type, MetricType):
             raise TypeError(
@@ -303,7 +228,7 @@ class EmbeddingReaderInterface:
             concept_filter=concept_filter,
             metric_type=metric_type,
         )
-    
+
     def get_nearest_concepts_from_query_texts(
         self,
         index_type: IndexType,
@@ -313,41 +238,14 @@ class EmbeddingReaderInterface:
         metric_type: MetricType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         batch_size: Optional[int] = None,
-    ):
-        """Return nearest stored concepts for query texts.
-
-        Convenience wrapper that embeds the query texts before performing
-        the nearest neighbor search.
-
-        Parameters
-        ----------
-        index_type : IndexType
-            The type of vector index used to store the embeddings.
-        query_texts : str | Tuple[str, ...] | List[str]
-            The text(s) to embed and search with.
-        metric_type : MetricType
-            The similarity or distance metric to use.
-        concept_filter : Optional[EmbeddingConceptFilter], optional
-            A filter to specify which concepts to consider.
-        batch_size : Optional[int], optional
-            Batch size for embedding generation.
-
-        Returns
-        -------
-        Tuple[Tuple[NearestConceptMatch, ...], ...]
-            A tuple of tuples containing nearest concept matches. Shape of Q x K, where Q is the number of query texts and K is the number of nearest neighbors returned per query.
-        """
+    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+        """Embed *query_texts* then return nearest concepts."""
         if isinstance(query_texts, str):
             query_texts = (query_texts,)
-        elif isinstance(query_texts, (list, tuple)):
-            query_texts = tuple(query_texts)
         else:
-            raise ValueError(
-                f"Invalid type for query_texts: {type(query_texts)}. "
-                f"Expected str, list, or tuple."
-            )
+            query_texts = tuple(query_texts)
         query_embeddings = embedding_client.embeddings(
-            query_texts, 
+            query_texts,
             batch_size=batch_size,
             embedding_role=EmbeddingRole.QUERY,
         )
@@ -363,7 +261,6 @@ class EmbeddingReaderInterface:
         index_type: IndexType,
         concept_ids: Tuple[int, ...],
     ) -> Mapping[int, Sequence[float]]:
-        """Get embeddings for specific concept IDs."""
         return self._backend.get_embeddings_by_concept_ids(
             model_name=self.canonical_model_name,
             index_type=index_type,
@@ -377,14 +274,13 @@ class EmbeddingReaderInterface:
         index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
     ) -> Mapping[int, str]:
-        """Get concept IDs and names for concepts without embeddings."""
         return self._backend.get_concepts_without_embedding(
             model_name=self.canonical_model_name,
             provider_type=self.provider_type,
             index_type=index_type,
             concept_filter=concept_filter,
         )
-    
+
     def get_concepts_without_embedding_batched(
         self,
         *,
@@ -406,7 +302,6 @@ class EmbeddingReaderInterface:
         index_type: IndexType,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
     ) -> int:
-        """Count concepts without embeddings."""
         return self._backend.get_concepts_without_embedding_count(
             model_name=self.canonical_model_name,
             provider_type=self.provider_type,
@@ -414,140 +309,76 @@ class EmbeddingReaderInterface:
             concept_filter=concept_filter,
         )
 
+
+# ---------------------------------------------------------------------------
+# Writer interface
+# ---------------------------------------------------------------------------
+
 class EmbeddingWriterInterface(EmbeddingReaderInterface):
-    """
-    Backend-neutral interface for embedding write and query operations.
+    """Reader interface extended with embedding generation and write operations.
 
-    Extends ``EmbeddingReaderInterface`` with write capabilities. Requires an
-    ``EmbeddingClient`` to validate and generate embeddings.
-
-    Responsibilities
-    ----------------
-    - register embedding models
-    - generate embeddings with an ``EmbeddingClient``
-    - upsert concept embeddings through the backend
-    - provide a reusable in-process cache for query-text embeddings
-    - all reader responsibilities (retrieve, search, list)
-
-    Notes
-    -----
-    All methods that accept a model identifier expect a *canonical* model name.
-    Model name validation is automatic via the ``embedding_client``'s provider.
+    Parameters
+    ----------
+    emb_engine : Engine
+        Engine for the dedicated pgvector Postgres instance.
+    omop_cdm_engine : Engine
+        Engine for the user's OMOP CDM (read-only).
+    embedding_client : EmbeddingClient
+        Required.  Provides the provider, model name, and dimension, and
+        is used to generate embeddings for upsert and query operations.
     """
 
     def __init__(
         self,
+        emb_engine: Engine,
         omop_cdm_engine: Engine,
         embedding_client: EmbeddingClient,
-        backend_name_or_type: Optional[str | BackendType] = None,
-        storage_base_dir: Optional[str] = None,
-        registry_db_name: Optional[str] = None,
     ):
-        """Initialize embedding interface.
-
-        Parameters
-        ----------
-        embedding_client : EmbeddingClient
-            Required. Used to derive the provider for model name validation
-            and to generate embeddings for upsert and query operations.
-        backend_name_or_type : str | BackendType, optional
-            Embedding backend name or type (pgvector, faiss, etc.).
-            Falls back to ``OMOP_EMB_BACKEND`` environment variable.
-        storage_base_dir : Optional[str]
-            Base directory for backend storage
-        registry_db_name : Optional[str]
-            Custom model registry database filename
-        """
         self._embedding_client = embedding_client
         super().__init__(
+            emb_engine=emb_engine,
             omop_cdm_engine=omop_cdm_engine,
             canonical_model_name=embedding_client.canonical_model_name,
-            backend_name_or_type=backend_name_or_type,
             provider_name_or_type=embedding_client.provider.provider_type,
-            storage_base_dir=storage_base_dir,
-            registry_db_name=registry_db_name,
         )
 
     @property
     def embedding_dim(self) -> int:
-        """Get embedding dimension from the client."""
         return self._embedding_client.embedding_dim
-        
+
+    # ------------------------------------------------------------------
+    # Model management
+    # ------------------------------------------------------------------
 
     def register_model(
         self,
         index_config: IndexConfig,
         metadata: Optional[Mapping[str, object]] = None,
     ) -> EmbeddingModelRecord:
-        """Register an embedding model in the backend registry. Also setup the cache and local storage.
+        """Register the embedding model in the pgvector registry.
 
-        Parameters
-        ----------
-        index_config : IndexConfig
-            Backend-specific index configuration to create the indices with.
-        metadata : Optional[Mapping[str, object]]
-            Arbitrary metadata to attach to the registry entry.
-
-        Returns
-        -------
-        EmbeddingModelRecord
-            The newly created or existing registry entry.
+        Idempotent: if the model is already registered with the same
+        dimensions and metadata, the existing record is returned.
         """
-        model_record = self._backend.register_model(
+        return self._backend.register_model(
             model_name=self.canonical_model_name,
             provider_type=self._embedding_client.provider.provider_type,
             dimensions=self.embedding_dim,
             index_config=index_config,
             metadata=metadata,
         )
-        return model_record
 
     def delete_model(self, index_type: IndexType) -> None:
-        """Delete the registered model and all associated embeddings.
-
-        Irreversible. Removes the registry entry, drops the embedding table,
-        and cleans up any associated on-disk artifacts (FAISS index files,
-        HDF5 storage).
-        """
+        """Irreversibly delete the model and all associated embeddings."""
         self._backend.delete_model(
             model_name=self.canonical_model_name,
             provider_type=self._provider_type,
             index_type=index_type,
         )
 
-    def add_to_db(
-        self,
-        index_type: IndexType,
-        concept_ids: Tuple[int, ...],
-        embeddings: ndarray,
-    ) -> None:
-        """Add embeddings to the database.
-
-        Parameters
-        ----------
-        index_type : IndexType
-            Backend-specific index type.
-        concept_ids : Tuple[int, ...]
-            Concept IDs aligned with the rows of embeddings.
-        embeddings : ndarray
-            Embedding matrix of shape (n_concepts, D).
-        """
-        if embeddings.ndim != 2:
-            raise ValueError(
-                f"Expected 2D embedding array, got ndim={embeddings.ndim}."
-            )
-        if len(concept_ids) != embeddings.shape[0]:
-            raise ValueError(
-                f"Number of concept IDs ({len(concept_ids)}) does not match "
-                f"number of embeddings ({embeddings.shape[0]})."
-            )
-        self._backend.upsert_embeddings(
-            model_name=self.canonical_model_name,
-            provider_type=self._embedding_client.provider.provider_type,
-            index_type=index_type,
-            concept_ids=concept_ids,
-            embeddings=embeddings,
-        )
+    # ------------------------------------------------------------------
+    # Embedding generation
+    # ------------------------------------------------------------------
 
     def embed_texts(
         self,
@@ -556,21 +387,13 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         embedding_role: EmbeddingRole,
         batch_size: Optional[int] = None,
     ) -> np.ndarray:
-        """Generate embeddings for texts.
+        return self._embedding_client.embeddings(
+            texts, batch_size=batch_size, embedding_role=embedding_role
+        )
 
-        Parameters
-        ----------
-        texts : str | Tuple[str, ...] | List[str]
-            Text(s) to embed.
-        batch_size : Optional[int]
-            Batch size for embedding generation.
-
-        Returns
-        -------
-        np.ndarray
-            Embedding matrix of shape (n_texts, dimensions).
-        """
-        return self._embedding_client.embeddings(texts, batch_size=batch_size, embedding_role=embedding_role)
+    # ------------------------------------------------------------------
+    # Write operations
+    # ------------------------------------------------------------------
 
     def upsert_concept_embeddings(
         self,
@@ -580,17 +403,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         embeddings: ndarray,
         metric_type: Optional[MetricType] = None,
     ) -> None:
-        """Upsert concept embeddings to the backend.
-
-        Parameters
-        ----------
-        index_type : IndexType
-            Backend-specific index type.
-        concept_ids : Sequence[int]
-            Concept IDs aligned with embeddings.
-        embeddings : ndarray
-            Embedding matrix of shape (n_concepts, D).
-        """
         self._backend.upsert_embeddings(
             model_name=self.canonical_model_name,
             provider_type=self._embedding_client.provider.provider_type,
@@ -607,27 +419,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         batches: Iterable[Tuple[Sequence[int], ndarray]],
         metric_type: Optional[MetricType] = None,
     ) -> None:
-        """Bulk-upsert concept embeddings from a lazy ``(concept_ids, embeddings)`` iterable.
-
-        Prefer over repeated ``upsert_concept_embeddings`` calls for large loads.
-
-        Parameters
-        ----------
-        index_type : IndexType
-            Index type the model was registered with.
-        batches : Iterable[Tuple[Sequence[int], ndarray]]
-            Lazy iterable of ``(concept_ids, embeddings)`` pairs. ``embeddings``
-            must be float32 of shape ``(batch_size, D)``, rows aligned to
-            ``concept_ids``. Wrap with ``tqdm`` for a progress bar.
-        metric_type : MetricType, optional
-            When provided the backend updates its nearest-neighbour index for
-            this metric. Ignored by pgvector.
-
-        Notes
-        -----
-        FAISS opens the HDF5 file once and rebuilds the search index once at
-        the end. pgvector falls back to sequential per-batch upserts.
-        """
+        """Upsert embeddings from a lazy ``(concept_ids, embeddings)`` iterable."""
         self._backend.bulk_upsert_embeddings(
             model_name=self.canonical_model_name,
             provider_type=self._embedding_client.provider.provider_type,
@@ -644,31 +436,16 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         concept_texts: Sequence[str],
         batch_size: Optional[int] = None,
     ) -> ndarray:
-        """Generate embeddings for concepts and upsert them to the backend.
+        """Generate embeddings for concepts and upsert them.
 
-        Parameters
-        ----------
-        index_type : IndexType
-            Backend-specific index type.
-        concept_ids : Sequence[int]
-            Concept IDs.
-        concept_texts : Sequence[str]
-            Text(s) to embed for each concept.
-        batch_size : Optional[int]
-            Batch size for embedding generation.
-
-        Returns
-        -------
-        ndarray
-            Embedding matrix generated.
+        Validates dimension against the registered model *before* the API
+        call so a misconfigured client fails fast rather than wasting credits.
         """
         if len(concept_ids) != len(concept_texts):
             raise ValueError(
                 f"Mismatch between #concept_ids ({len(concept_ids)}) and "
                 f"#concept_texts ({len(concept_texts)})."
             )
-        # Validate dimension against the registered model *before* the API call
-        # so a misconfigured client fails fast rather than wasting API credits.
         record = self._backend.get_registered_model(
             model_name=self.canonical_model_name,
             index_type=index_type,
@@ -677,9 +454,8 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         if record is not None and record.dimensions != self.embedding_dim:
             raise ValueError(
                 f"Embedding dimension mismatch for model '{self.canonical_model_name}': "
-                f"the embedding client produces {self.embedding_dim}-dimensional vectors "
-                f"but the registered model declares {record.dimensions} dimensions. "
-                "Ensure the client and the registered model use the same model weights."
+                f"client produces {self.embedding_dim}-dimensional vectors but the "
+                f"registered model declares {record.dimensions} dimensions."
             )
         embeddings = self.embed_texts(
             list(concept_texts),

@@ -1,45 +1,69 @@
 from enum import StrEnum
 from typing import Dict, Tuple
 
-ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
-ENV_BASE_STORAGE_DIR = "OMOP_EMB_BASE_STORAGE_DIR"
 ENV_DOCUMENT_EMBEDDING_PREFIX = "OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX"
 ENV_QUERY_EMBEDDING_PREFIX = "OMOP_EMB_QUERY_EMBEDDING_PREFIX"
 ENV_EMBEDDING_DIM = "OMOP_EMB_EMBEDDING_DIM"
+
+# Kept for CLI / legacy migration tooling that may still reference it.
+ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
+# Removed: ENV_BASE_STORAGE_DIR — storage is now entirely in Postgres.
+
+ENV_EMB_POSTGRES_URL = "OMOP_EMB_POSTGRES_URL"
+ENV_CDM_DATABASE_URL = "OMOP_DATABASE_URL"
+
 
 class ProviderType(StrEnum):
     """Enum for supported embedding model providers."""
     OLLAMA = "ollama"
     OPENAI = "openai"
 
-class BackendType(StrEnum):
-    """Enum for supported embedding backends."""
 
+class BackendType(StrEnum):
+    """Embedding storage backend.  Currently only pgvector is supported as a
+    production backend; the enum is preserved so that ``EmbeddingModelRecord``
+    and the registry schema remain stable.
+    """
     PGVECTOR = "pgvector"
-    FAISS = "faiss"
+
+
+class VectorColumnType(StrEnum):
+    """Postgres column type used to store embedding vectors.
+
+    ``VECTOR``  – ``pgvector`` ``vector`` type  (float32, ≤ 2 000 dims).
+    ``HALFVEC`` – ``pgvector`` ``halfvec`` type (float16, ≤ 4 000 dims).
+
+    Selected automatically by the backend based on dimensionality:
+    dimensions > 2 000 → HALFVEC, otherwise VECTOR.
+    """
+    VECTOR = "vector"
+    HALFVEC = "halfvec"
+
+
+_VECTOR_MAX_DIMENSIONS = 2_000
+_HALFVEC_MAX_DIMENSIONS = 4_000
+
+
+def vector_column_type_for_dimensions(dimensions: int) -> VectorColumnType:
+    """Return the appropriate Postgres column type for *dimensions*."""
+    if dimensions <= _VECTOR_MAX_DIMENSIONS:
+        return VectorColumnType.VECTOR
+    if dimensions <= _HALFVEC_MAX_DIMENSIONS:
+        return VectorColumnType.HALFVEC
+    raise ValueError(
+        f"pgvector supports at most {_HALFVEC_MAX_DIMENSIONS:,} dimensions "
+        f"(halfvec), but model requests {dimensions:,}."
+    )
+
 
 class IndexType(StrEnum):
-    """Enum for index types used for nearest neighbor search.
-    Index types are specific to backends and have different performance characteristics and supported metrics.
+    """Enum for index types used for nearest neighbor search."""
+    FLAT = "flat"
+    HNSW = "hnsw"
 
-    
-    Notes
-    -----
-    Not each index type is supported by each backend
-    """
-    FLAT = "flat"  # Exact search, no index
-    HNSW = "hnsw"  # Hierarchical Navigable Small World graph
-    #IVF = "ivf" # Inverted File Index
-    #IVF_PQ = "ivf_pq" # IVF with Product Quantization
 
 class MetricType(StrEnum):
-    """Defines the distance type used for nearest neighbor search. 
-
-    Notes
-    -----
-    Not all metrics are supported for all index types and backends.
-    
-    """
+    """Defines the distance metric used for nearest neighbor search."""
     L2 = "l2"
     COSINE = "cosine"
     L1 = "l1"
@@ -48,7 +72,6 @@ class MetricType(StrEnum):
 
 
 def parse_backend_type(value: str | BackendType) -> BackendType:
-    """Normalize a backend value to ``BackendType`` with a clear error message."""
     if isinstance(value, BackendType):
         return value
     try:
@@ -61,7 +84,6 @@ def parse_backend_type(value: str | BackendType) -> BackendType:
 
 
 def parse_index_type(value: str | IndexType) -> IndexType:
-    """Normalize an index value to ``IndexType`` with a clear error message."""
     if isinstance(value, IndexType):
         return value
     try:
@@ -74,7 +96,6 @@ def parse_index_type(value: str | IndexType) -> IndexType:
 
 
 def parse_metric_type(value: str | MetricType) -> MetricType:
-    """Normalize a metric value to ``MetricType`` with a clear error message."""
     if isinstance(value, MetricType):
         return value
     try:
@@ -85,28 +106,27 @@ def parse_metric_type(value: str | MetricType) -> MetricType:
             f"{[member.value for member in MetricType]}."
         ) from exc
 
+
 SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tuple[MetricType, ...]]] = {
-    #https://github.com/pgvector/pgvector?tab=readme-ov-file#querying
+    # https://github.com/pgvector/pgvector?tab=readme-ov-file#querying
     BackendType.PGVECTOR: {
         IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1, MetricType.HAMMING, MetricType.JACCARD),
         IndexType.HNSW: (MetricType.L2, MetricType.COSINE, MetricType.L1),
     },
-    # Check here: https://github.com/facebookresearch/faiss/wiki/Faiss-indexes
-    BackendType.FAISS: {
-        IndexType.FLAT: (MetricType.L2, MetricType.COSINE),
-        IndexType.HNSW: (MetricType.L2, MetricType.COSINE),
-    }
 }
 
+# FAISS cache supports the same metrics as pgvector FLAT/HNSW for L2 and COSINE.
+SUPPORTED_FAISS_CACHE_METRICS: Tuple[MetricType, ...] = (MetricType.L2, MetricType.COSINE)
+
+
 def is_supported_index_metric_combination_for_backend(backend: BackendType, index: IndexType, metric: MetricType) -> bool:
-    supported_indices_and_metrics = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
-    supported_metrics = supported_indices_and_metrics.get(index, ())
-    return metric in supported_metrics
+    supported = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
+    return metric in supported.get(index, ())
+
 
 def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) -> bool:
-    supported_indices_and_metrics = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
-    return index in supported_indices_and_metrics
+    return index in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
+
 
 def get_supported_index_types_for_backend(backend: BackendType) -> Tuple[IndexType, ...]:
-    supported_indices_and_metrics = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
-    return tuple(supported_indices_and_metrics.keys())
+    return tuple(SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {}).keys())

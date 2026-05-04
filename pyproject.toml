@@ -1,7 +1,7 @@
 [project]
 name = "omop-emb"
-version = "0.4.0"
-description = "Embedding extension to omop-graph"
+version = "0.5.0"
+description = "Embedding extension to omop-graph — pgvector source-of-truth with optional FAISS sidecar"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [
@@ -17,6 +17,8 @@ keywords = [
   "sqlalchemy",
   "knowledge-graph",
   "LLM-grounding",
+  "pgvector",
+  "embeddings",
 ]
 
 classifiers = [
@@ -36,24 +38,24 @@ dependencies = [
     "sqlalchemy>=2.0.45",
     "typing-extensions>=4.15.0",
     "psycopg2-binary>=2.9.11",
+    "pgvector",
     "openai",
-    "numpy",
     "requests",
-    "typer"
+    "typer",
 ]
 
 [project.optional-dependencies]
-pgvector = [
-    "pgvector",
-]
 faiss = [
     "faiss-cpu>=1.8.0",
     "h5py",
 ]
+faiss-gpu = [
+    "faiss-gpu>=1.8.0",
+    "h5py",
+]
 all = [
-    "pgvector",
     "faiss-cpu>=1.8.0",
-    "h5py"
+    "h5py",
 ]
 
 [dependency-groups]
@@ -70,7 +72,7 @@ dev = [
     "openai",
     "numpy",
     "requests",
-    "typer"
+    "typer",
 ]
 
 [build-system]
@@ -90,8 +92,8 @@ python_functions = ["test_*"]
 markers = [
   "unit: Unit tests",
   "integration: Integration tests",
-  "faiss: FAISS backend tests",
   "pgvector: pgvector backend tests",
+  "faiss_cache: FAISS sidecar cache tests",
 ]
 testpaths = ["tests"]
 addopts = "-v --tb=short"

@@ -1,5 +1,6 @@
-from .interface import EmbeddingWriterInterface, EmbeddingReaderInterface, list_registered_models, migrate_legacy_registry_row
-from .backends.base_backend import EmbeddingConceptFilter
+from .interface import EmbeddingWriterInterface, EmbeddingReaderInterface, list_registered_models
+from .storage.base import EmbeddingBackend, ConceptIDEmbeddingBase
+from .storage.faiss_cache import FAISSCache
 from .embeddings import (
     EmbeddingClient,
     EmbeddingProvider,
@@ -12,37 +13,54 @@ from .config import (
     IndexType,
     MetricType,
     ProviderType,
+    VectorColumnType,
     parse_backend_type,
     parse_index_type,
     parse_metric_type,
+    vector_column_type_for_dimensions,
 )
-from .backends import (
+from .storage import (
     IndexConfig,
-    FlatIndexConfig, 
-    HNSWIndexConfig, 
+    FlatIndexConfig,
+    HNSWIndexConfig,
+    PGVectorEmbeddingBackend,
+    EmbeddingModelRecord,
 )
-from .backends.factory import get_embedding_backend
+from .utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
 
 __all__ = [
+    # Interfaces
     "EmbeddingWriterInterface",
     "EmbeddingReaderInterface",
-    "EmbeddingConceptFilter",
+    "list_registered_models",
+    # Storage
+    "EmbeddingBackend",
+    "ConceptIDEmbeddingBase",
+    "PGVectorEmbeddingBackend",
+    "FAISSCache",
+    # Index config
+    "IndexConfig",
+    "FlatIndexConfig",
+    "HNSWIndexConfig",
+    # Registry
+    "EmbeddingModelRecord",
+    # Embeddings
     "EmbeddingClient",
-    "BackendType",
-    "IndexType",
-    "MetricType",
-    "ProviderType",
-    "parse_backend_type",
-    "parse_index_type",
-    "parse_metric_type",
+    "EmbeddingConceptFilter",
+    "NearestConceptMatch",
+    # Providers
     "EmbeddingProvider",
     "OllamaProvider",
     "OpenAIProvider",
     "get_provider_for_api_base",
-    "get_embedding_backend",
-    "list_registered_models",
-    "migrate_legacy_registry_row",
-    "IndexConfig",
-    "FlatIndexConfig",
-    "HNSWIndexConfig",
+    # Enums & parsers
+    "BackendType",
+    "IndexType",
+    "MetricType",
+    "ProviderType",
+    "VectorColumnType",
+    "parse_backend_type",
+    "parse_index_type",
+    "parse_metric_type",
+    "vector_column_type_for_dimensions",
 ]

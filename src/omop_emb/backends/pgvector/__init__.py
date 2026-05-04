@@ -1,1 +1,0 @@
-from .pgvector_backend import PGVectorEmbeddingBackend

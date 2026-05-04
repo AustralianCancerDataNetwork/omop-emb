@@ -1,18 +1,16 @@
-"""Integration tests for pgvector HNSW backend.
-
-Requires a running PostgreSQL instance with the pgvector extension.
-"""
+"""Integration tests for pgvector HNSW backend."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
-from sqlalchemy import Engine
+import sqlalchemy as sa
+from sqlalchemy.engine import Engine
 
 from omop_emb.config import IndexType, MetricType, ProviderType
-from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
-from omop_emb.backends.index_config import HNSWIndexConfig, FlatIndexConfig
-from omop_emb.backends.pgvector.pgvector_index_manager import PGVectorHNSWIndexManager
+from omop_emb.storage import PGVectorEmbeddingBackend
+from omop_emb.storage.index_config import HNSWIndexConfig, FlatIndexConfig
+from omop_emb.storage.postgres.pg_index_manager import PGVectorHNSWIndexManager
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM, PROVIDER_TYPE
 
@@ -21,16 +19,15 @@ HNSW_CONFIG = HNSWIndexConfig(num_neighbors=4, ef_search=8, ef_construction=16)
 
 
 @pytest.fixture
-def hnsw_pgvector_backend(engine: Engine, temp_storage_dir) -> PGVectorEmbeddingBackend:
-    backend = PGVectorEmbeddingBackend(
-        omop_cdm_engine=engine,
-        storage_base_dir=temp_storage_dir
+def hnsw_pgvector_backend(emb_engine: Engine, cdm_engine: Engine) -> PGVectorEmbeddingBackend:
+    return PGVectorEmbeddingBackend(
+        emb_engine=emb_engine,
+        omop_cdm_engine=cdm_engine,
     )
-    return backend
 
-def _register_and_upsert(backend, session, *, index_config=HNSW_CONFIG, metric_type=MetricType.L2):
+
+def _register_and_upsert(backend, session, *, index_config=HNSW_CONFIG):
     backend.register_model(
-        engine=session.bind,
         model_name=MODEL_NAME,
         provider_type=PROVIDER_TYPE,
         index_config=index_config,
@@ -39,7 +36,6 @@ def _register_and_upsert(backend, session, *, index_config=HNSW_CONFIG, metric_t
     ids = [c.concept_id for c in CONCEPTS.values()]
     vecs = np.vstack([c.embeddings for c in CONCEPTS.values()]).astype(np.float32)
     backend.upsert_embeddings(
-        session=session,
         model_name=MODEL_NAME,
         provider_type=PROVIDER_TYPE,
         index_type=index_config.index_type,
@@ -55,7 +51,6 @@ class TestPGVectorHNSWBackend:
 
     def test_register_creates_manager_not_sql_index(self, session, hnsw_pgvector_backend):
         hnsw_pgvector_backend.register_model(
-            engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
             index_config=HNSW_CONFIG,
@@ -63,7 +58,6 @@ class TestPGVectorHNSWBackend:
         )
         manager = hnsw_pgvector_backend.get_index_manager(MODEL_NAME)
         assert isinstance(manager, PGVectorHNSWIndexManager)
-        # SQL index must NOT exist yet — it is created only via initialise_indexes
         assert not manager.has_index(MetricType.L2)
         assert not manager.has_index(MetricType.COSINE)
 
@@ -96,9 +90,7 @@ class TestPGVectorHNSWBackend:
 
     def test_search_works_without_hnsw_index_flat_fallback(self, session, hnsw_pgvector_backend):
         _register_and_upsert(hnsw_pgvector_backend, session)
-        # HNSW SQL index not created — pgvector falls back to sequential scan
         results = hnsw_pgvector_backend.get_nearest_concepts(
-            session=session,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
             index_type=IndexType.HNSW,
@@ -118,7 +110,6 @@ class TestPGVectorHNSWBackend:
             metric_types=[MetricType.L2],
         )
         results = hnsw_pgvector_backend.get_nearest_concepts(
-            session=session,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
             index_type=IndexType.HNSW,
@@ -138,7 +129,6 @@ class TestPGVectorHNSWBackend:
             metric_types=[MetricType.COSINE],
         )
         results = hnsw_pgvector_backend.get_nearest_concepts(
-            session=session,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
             index_type=IndexType.HNSW,
@@ -160,18 +150,21 @@ class TestPGVectorHNSWBackend:
         manager = hnsw_pgvector_backend.get_index_manager(MODEL_NAME)
         assert manager.has_index(MetricType.L2)
 
+        record = hnsw_pgvector_backend.get_registered_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_type=IndexType.HNSW,
+        )
         hnsw_pgvector_backend.rebuild_model_indexes(
-            MODEL_NAME,
-            PROVIDER_TYPE,
-            IndexType.HNSW,
-            engine=session.bind,
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_type=IndexType.HNSW,
             metric_types=[MetricType.L2],
+            _model_record=record,
         )
         assert manager.has_index(MetricType.L2)
 
-        # Data must still be searchable
         results = hnsw_pgvector_backend.get_nearest_concepts(
-            session=session,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
             index_type=IndexType.HNSW,
@@ -197,15 +190,14 @@ class TestPGVectorHNSWBackend:
             index_type=IndexType.HNSW,
             index_config=new_config,
         )
-        # Manager was evicted — rebuild must re-register with new config
         assert MODEL_NAME not in hnsw_pgvector_backend._pgvector_index_managers
 
         hnsw_pgvector_backend.rebuild_model_indexes(
-            updated_record.model_name,
-            updated_record.provider_type,
-            updated_record.index_type,
-            engine=session.bind,
+            model_name=updated_record.model_name,
+            provider_type=ProviderType(updated_record.provider_type),
+            index_type=IndexType(updated_record.index_type),
             metric_types=[MetricType.L2],
+            _model_record=updated_record,
         )
 
         new_manager = hnsw_pgvector_backend.get_index_manager(MODEL_NAME)
@@ -214,44 +206,18 @@ class TestPGVectorHNSWBackend:
         assert new_manager.index_config.ef_construction == 64
         assert new_manager.has_index(MetricType.L2)
 
-        # DDL should contain new params
         ddl = new_manager._create_index_ddl(MetricType.L2)
         assert "m = 8" in ddl
         assert "ef_construction = 64" in ddl
 
-    def test_ef_search_set_per_session(self, session, hnsw_pgvector_backend):
-        _register_and_upsert(hnsw_pgvector_backend, session)
-        hnsw_pgvector_backend.initialise_indexes(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=IndexType.HNSW,
-            metric_types=[MetricType.L2],
-        )
-        # After get_nearest_concepts the session should have ef_search set
-        hnsw_pgvector_backend.get_nearest_concepts(
-            session=session,
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=IndexType.HNSW,
-            query_embeddings=CONCEPTS["Hypertension"].embeddings,
-            metric_type=MetricType.L2,
-            concept_filter=EmbeddingConceptFilter(limit=1),
-        )
-        row = session.execute(
-            __import__("sqlalchemy").text("SHOW hnsw.ef_search")
-        ).scalar()
-        assert str(HNSW_CONFIG.ef_search) in str(row)
-
     def test_flat_backend_has_no_sql_index(self, session, hnsw_pgvector_backend):
         hnsw_pgvector_backend.register_model(
-            engine=session.bind,
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
             index_config=FlatIndexConfig(),
             dimensions=EMBEDDING_DIM,
         )
         manager = hnsw_pgvector_backend.get_index_manager(MODEL_NAME)
-        # Flat manager always returns True (sequential scan is implicit)
         assert manager.has_index(MetricType.L2) is True
         assert manager.has_index(MetricType.COSINE) is True
 
@@ -260,7 +226,6 @@ class TestPGVectorHNSWBackend:
         assert MODEL_NAME in hnsw_pgvector_backend._pgvector_index_managers
 
         hnsw_pgvector_backend.delete_model(
-            session.bind,
             MODEL_NAME,
             provider_type=PROVIDER_TYPE,
             index_type=IndexType.HNSW,

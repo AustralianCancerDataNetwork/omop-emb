@@ -6,28 +6,47 @@ from enum import Enum
 
 from omop_emb.config import IndexType
 
+# ---------------------------------------------------------------------------
+# Reserved metadata keys
+# ---------------------------------------------------------------------------
+
 INDEX_CONFIG_METADATA_KEY = "index_config"
+
+FAISS_CACHE_METADATA_KEY = "faiss_cache"
+"""Reserved key in the registry ``details`` JSON for FAISS cache metadata.
+
+Structure when present::
+
+    {
+        "faiss_cache": {
+            "exported_at": "<ISO-8601 timestamp>",
+            "row_count":   <int>,
+            "cache_dir":   "<absolute path>",
+            "metric_types": ["cosine", "l2"],
+            "index_params": {<index_config dict>}
+        }
+    }
+
+Written by :class:`~omop_emb.storage.faiss_cache.FAISSCache.export` and read
+by :meth:`~omop_emb.storage.faiss_cache.FAISSCache.is_stale`.  Users must
+not set this key in external metadata passed to ``register_model``.
+"""
+
+_RESERVED_METADATA_KEYS = frozenset({INDEX_CONFIG_METADATA_KEY, FAISS_CACHE_METADATA_KEY})
 
 
 class IndexConfig:
-    """Base Provider for index configurations."""
+    """Base class for index configurations."""
     index_type: IndexType
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert dataclass to JSON-compatible dict (Enums become strings)."""
         if not is_dataclass(self):
             raise TypeError(f"to_dict() should be called on dataclass instances, not {type(self).__name__}")
         return asdict(self)
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> Self:
-        """Instantiate from arbitrary kwargs, silently ignoring unknown keys.
-
-        Each concrete subclass only picks up the fields it declares, so a
-        caller can safely splat all CLI kwargs without knowing which config
-        class is in use.  Missing required fields (no default) will still
-        raise a TypeError from the dataclass __init__.
-        """
+        """Instantiate from kwargs, silently ignoring unknown keys."""
         if not is_dataclass(cls):
             raise TypeError(f"Must be called on a dataclass, not {cls.__name__}")
         known = {f.name for f in fields(cls)}
@@ -35,10 +54,7 @@ class IndexConfig:
 
     @classmethod
     def from_metadata(cls, metadata: Mapping[str, Any]) -> Self:
-        """
-        Strictly instantiates the config from a JSON metadata dictionary.
-        Handles coercion of strings back into Enums.
-        """
+        """Reconstruct config from a persisted metadata dict (strict)."""
         if not is_dataclass(cls):
             raise TypeError(f"Must be called on a dataclass, not {cls.__name__}")
 
@@ -52,23 +68,22 @@ class IndexConfig:
         for field in fields(cls):
             if field.name not in config_data:
                 raise ValueError(f"Strict Check Failed: '{field.name}' missing in JSON.")
-
             value = config_data[field.name]
             field_type = type_hints[field.name]
-
             if isinstance(field_type, type) and issubclass(field_type, Enum):
                 try:
                     value = field_type(value)
                 except ValueError:
                     raise ValueError(f"Invalid Enum value '{value}' for {field_type.__name__}")
-            
             init_params[field.name] = value
 
         return cls(**init_params)
 
+
 @dataclass(frozen=True)
 class FlatIndexConfig(IndexConfig):
     index_type: IndexType = IndexType.FLAT
+
 
 @dataclass(frozen=True)
 class HNSWIndexConfig(IndexConfig):
@@ -78,40 +93,22 @@ class HNSWIndexConfig(IndexConfig):
     index_type: IndexType = IndexType.HNSW
 
 
-def index_config_from_index_type(
-    index_type: IndexType,
-    **kwargs: Any,
-) -> IndexConfig:
-    """Build an IndexConfig for a new index from raw kwargs.
-
-    Each concrete config class only consumes the fields it declares via
-    ``from_kwargs``, so callers (e.g. the CLI) can pass all known kwargs
-    without filtering per index type.  Missing required fields raise TypeError.
-    """
+def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexConfig:
+    """Build an IndexConfig for a new index from raw kwargs."""
     if index_type == IndexType.FLAT:
         return FlatIndexConfig()
     if index_type == IndexType.HNSW:
         return HNSWIndexConfig.from_kwargs(**kwargs)
-    raise ValueError(
-        f"No IndexConfig defined for index type {index_type!r}."
-    )
+    raise ValueError(f"No IndexConfig defined for index type {index_type!r}.")
 
 
 def index_config_from_index_type_and_metadata(
     index_type: IndexType,
     metadata: Optional[Mapping[str, Any]] = None,
 ) -> IndexConfig:
-    """Reconstruct an IndexConfig from a persisted index type and metadata dict.
-
-    Falls back to the dataclass defaults for any missing metadata key, so this
-    is also safe to call when no metadata was ever written (e.g. legacy FLAT records).
-    """
+    """Reconstruct an IndexConfig from a persisted index type and metadata dict."""
     if index_type == IndexType.FLAT:
         return FlatIndexConfig()
     if index_type == IndexType.HNSW:
-        meta = metadata or {}
-        return HNSWIndexConfig.from_metadata(meta)
-    raise ValueError(
-        f"No IndexConfig defined for index type {index_type!r}. "
-        f"Pass an explicit IndexConfig instead."
-    )
+        return HNSWIndexConfig.from_metadata(metadata or {})
+    raise ValueError(f"No IndexConfig defined for index type {index_type!r}.")

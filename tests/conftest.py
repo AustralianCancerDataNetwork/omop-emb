@@ -4,88 +4,101 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass, field
-from typing import Dict, Any, Generator, Optional
+from typing import Generator
 
-import pytest
 import numpy as np
+import pytest
 import sqlalchemy as sa
-from sqlalchemy.orm import Session, sessionmaker
 
-from omop_alchemy.cdm.model.vocabulary import Concept
-from orm_loader.helpers import Base
-from omop_emb.embeddings import EmbeddingClient, EmbeddingRole
-from omop_emb.storage import PGVectorEmbeddingBackend, FlatIndexConfig
-from omop_emb.storage.index_config import index_config_from_index_type
-from omop_emb.interface import EmbeddingWriterInterface, EmbeddingReaderInterface
-from omop_emb.config import ProviderType, IndexType
+from omop_emb.backends.base_backend import ConceptEmbeddingRecord
+from omop_emb.backends.sqlitevec import SQLiteVecBackend, create_sqlitevec_engine
+from omop_emb.config import MetricType, ProviderType
 
 
 # ---------------------------------------------------------------------------
-# Database configuration from environment
+# Test data constants
 # ---------------------------------------------------------------------------
 
-TEST_DB_NAME = os.getenv("TEST_DATABASE_NAME", "test_omop_emb")
-TEST_USERNAME = os.getenv("TEST_DB_USERNAME", "test")
-TEST_PASSWORD = os.getenv("TEST_DB_PASSWORD", "test")
+MODEL_NAME = "test-model:v1"
+PROVIDER_TYPE = ProviderType.OLLAMA
+EMBEDDING_DIM = 1
 
-DB_HOST = os.getenv("TEST_DB_HOST", None)
-DB_PORT = os.getenv("TEST_DB_PORT", None)
-DB_DRIVER = os.getenv("TEST_DB_DRIVER", "postgresql+psycopg2")
-DB_ADMIN_USER = os.getenv("POSTGRES_USER", "postgres")
-DB_ADMIN_PASS = os.getenv("POSTGRES_PASSWORD", "postgres")
+# Fixed 1-D embeddings: Hypertension=-10, Diabetes=0, Aspirin=+10
+# This makes L2 and cosine tests fully deterministic.
+CONCEPT_RECORDS: tuple[ConceptEmbeddingRecord, ...] = (
+    ConceptEmbeddingRecord(concept_id=1, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True),
+    ConceptEmbeddingRecord(concept_id=2, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True),
+    ConceptEmbeddingRecord(concept_id=3, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True),
+    ConceptEmbeddingRecord(concept_id=4, domain_id="Drug", vocabulary_id="RxNorm", is_standard=False),
+)
+
+CONCEPT_EMBEDDINGS = np.array([[-10.0], [0.0], [10.0], [20.0]], dtype=np.float32)
+
+# Kept for backward compat with tests that reference by name
+HYPERTENSION_ID = 1
+DIABETES_ID = 2
+ASPIRIN_ID = 3
+NON_STANDARD_ID = 4
+
+# Query vector used for similarity math tests: [-1.0]
+# L2 distances from [-1]: Hypertension=9, Diabetes=1, Aspirin=11, NonStandard=21
+# L2 similarities:        0.1,            0.5,        ~0.083,      ~0.045
+QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
 
 
-def _create_test_url() -> sa.URL:
-    if DB_HOST is None or not (DB_PORT is not None and DB_PORT.isdigit()):
-        raise RuntimeError(
-            "TEST_DB_HOST and TEST_DB_PORT must be set in the environment."
-        )
+# ---------------------------------------------------------------------------
+# PostgreSQL config (integration tests only)
+# ---------------------------------------------------------------------------
+
+_DB_HOST = os.getenv("TEST_DB_HOST")
+_DB_PORT = os.getenv("TEST_DB_PORT")
+_DB_NAME = os.getenv("TEST_DATABASE_NAME", "test_omop_emb")
+_DB_USER = os.getenv("TEST_DB_USERNAME", "test")
+_DB_PASS = os.getenv("TEST_DB_PASSWORD", "test")
+_DB_ADMIN_USER = os.getenv("POSTGRES_USER", "postgres")
+_DB_ADMIN_PASS = os.getenv("POSTGRES_PASSWORD", "postgres")
+_DB_DRIVER = os.getenv("TEST_DB_DRIVER", "postgresql+psycopg2")
+
+_pg_available = _DB_HOST is not None and (_DB_PORT is not None and _DB_PORT.isdigit())
+
+
+def _test_db_url() -> sa.URL:
     return sa.URL.create(
-        drivername=DB_DRIVER,
-        username=TEST_USERNAME,
-        password=TEST_PASSWORD,
-        host=DB_HOST,
-        port=int(DB_PORT),
-        database=TEST_DB_NAME,
+        drivername=_DB_DRIVER,
+        username=_DB_USER,
+        password=_DB_PASS,
+        host=_DB_HOST,
+        port=int(_DB_PORT),
+        database=_DB_NAME,
     )
 
 
-def _create_admin_url() -> sa.URL:
-    if DB_HOST is None or not (DB_PORT is not None and DB_PORT.isdigit()):
-        raise RuntimeError(
-            "TEST_DB_HOST and TEST_DB_PORT must be set in the environment."
-        )
+def _admin_db_url() -> sa.URL:
     return sa.URL.create(
-        drivername=DB_DRIVER,
-        username=DB_ADMIN_USER,
-        password=DB_ADMIN_PASS,
-        host=DB_HOST,
-        port=int(DB_PORT),
+        drivername=_DB_DRIVER,
+        username=_DB_ADMIN_USER,
+        password=_DB_ADMIN_PASS,
+        host=_DB_HOST,
+        port=int(_DB_PORT),
         database="postgres",
     )
 
 
-def _create_test_database() -> sa.URL:
-    admin_url = _create_admin_url()
-    test_url = _create_test_url()
-    admin_engine = sa.create_engine(admin_url, future=True)
+def _create_test_db() -> sa.URL:
+    admin_engine = sa.create_engine(_admin_db_url(), future=True)
     try:
         with admin_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}"'))
-            conn.execute(sa.text(f"DROP ROLE IF EXISTS {TEST_USERNAME}"))
-            conn.execute(
-                sa.text(f"CREATE USER {TEST_USERNAME} WITH PASSWORD '{TEST_PASSWORD}' SUPERUSER")
-            )
-            conn.execute(sa.text(f'CREATE DATABASE "{TEST_DB_NAME}" OWNER {TEST_USERNAME}'))
+            conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{_DB_NAME}"'))
+            conn.execute(sa.text(f"DROP ROLE IF EXISTS {_DB_USER}"))
+            conn.execute(sa.text(f"CREATE USER {_DB_USER} WITH PASSWORD '{_DB_PASS}' SUPERUSER"))
+            conn.execute(sa.text(f'CREATE DATABASE "{_DB_NAME}" OWNER {_DB_USER}'))
     finally:
         admin_engine.dispose()
-    return test_url
+    return _test_db_url()
 
 
-def _drop_test_database() -> None:
-    admin_url = _create_admin_url()
-    admin_engine = sa.create_engine(admin_url, future=True)
+def _drop_test_db() -> None:
+    admin_engine = sa.create_engine(_admin_db_url(), future=True)
     try:
         with admin_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(
@@ -93,215 +106,78 @@ def _drop_test_database() -> None:
                     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                     "WHERE datname = :db AND pid <> pg_backend_pid()"
                 ),
-                {"db": TEST_DB_NAME},
+                {"db": _DB_NAME},
             )
-            conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}"'))
-            conn.execute(sa.text(f"DROP ROLE IF EXISTS {TEST_USERNAME}"))
+            conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{_DB_NAME}"'))
+            conn.execute(sa.text(f"DROP ROLE IF EXISTS {_DB_USER}"))
     finally:
         admin_engine.dispose()
 
 
 # ---------------------------------------------------------------------------
-# Session-scoped unified engine (CDM + EMB share the same test DB)
+# Fixtures — SQLiteVec (in-memory, function-scoped)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def svec_engine():
+    """In-memory SQLiteVec engine, fresh per test."""
+    engine = create_sqlitevec_engine(":memory:")
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture
+def svec_backend(svec_engine) -> SQLiteVecBackend:
+    """In-memory SQLiteVecBackend, fresh per test."""
+    return SQLiteVecBackend(emb_engine=svec_engine)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures — pgvector (session-scoped engine, function-scoped backend)
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def pg_engine() -> Generator[sa.Engine, None, None]:
-    """Single PostgreSQL engine for the unified test DB (CDM + EMB tables co-located)."""
-    test_db_url = _create_test_database()
+    """Session-scoped PostgreSQL engine.  Skipped when TEST_DB_HOST is unset."""
+    if not _pg_available:
+        pytest.skip("PostgreSQL not configured (set TEST_DB_HOST and TEST_DB_PORT)")
 
+    url = _create_test_db()
     max_retries = 20
     for attempt in range(max_retries):
         try:
-            engine = sa.create_engine(test_db_url, echo=False, future=True)
+            engine = sa.create_engine(url, echo=False, future=True)
             with engine.connect() as conn:
                 conn.execute(sa.text("SELECT 1"))
-            print(f"\n--- PostgreSQL connection established to {TEST_DB_NAME} ---")
-            Base.metadata.create_all(engine)
             yield engine
             engine.dispose()
-            _drop_test_database()
+            _drop_test_db()
             return
         except Exception as exc:
             if attempt < max_retries - 1:
-                print(f"[{attempt + 1}/{max_retries}] PostgreSQL not ready: {exc}")
                 time.sleep(1)
             else:
-                _drop_test_database()
+                _drop_test_db()
                 raise RuntimeError(
                     f"PostgreSQL never became available after {max_retries} attempts: {exc}"
                 )
 
 
-@pytest.fixture(scope="session")
-def emb_engine(pg_engine: sa.Engine) -> sa.Engine:
-    """Engine for the pgvector embedding store (points to the same unified test DB)."""
-    return pg_engine
-
-
-@pytest.fixture(scope="session")
-def cdm_engine(pg_engine: sa.Engine) -> sa.Engine:
-    """Engine for the OMOP CDM (read-only in production; same unified test DB here)."""
-    return pg_engine
-
-
-# ---------------------------------------------------------------------------
-# Per-test session with rollback
-# ---------------------------------------------------------------------------
-
 @pytest.fixture
-def session(pg_engine: sa.Engine) -> Generator[Session, None, None]:
-    with pg_engine.connect() as conn:
-        with conn.begin():
-            conn.execute(sa.text("TRUNCATE TABLE concept CASCADE"))
+def pg_backend(pg_engine: sa.Engine):
+    """Function-scoped PGVectorEmbeddingBackend with a clean registry per test."""
+    from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 
-    factory = sessionmaker(bind=pg_engine, future=True)
-    db_session = factory()
-    try:
-        add_concepts_to_db(db_session)
-        yield db_session
-    finally:
-        db_session.close()
+    backend = PGVectorEmbeddingBackend(emb_engine=pg_engine)
 
+    yield backend
 
-# ---------------------------------------------------------------------------
-# Backend fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def mock_llm_client() -> EmbeddingClient:
-    from unittest.mock import Mock
-    client = Mock(spec=EmbeddingClient)
-    client.embedding_dim = EMBEDDING_DIM
-    client.canonical_model_name = MODEL_NAME
-
-    mock_provider = Mock()
-    mock_provider.canonical_model_name.side_effect = lambda name: name
-    mock_provider.provider_type = ProviderType.OLLAMA
-    client.provider = mock_provider
-
-    def _create_embeddings(
-        concept_names: list[str] | str,
-        embedding_role: EmbeddingRole,
-        batch_size: Optional[int] = None,
-    ) -> np.ndarray:
-        if isinstance(concept_names, str):
-            concept_names = [concept_names]
-        return np.vstack([CONCEPTS[n].embeddings for n in concept_names]).astype(np.float32)
-
-    client.embeddings = Mock(side_effect=_create_embeddings)
-    return client
-
-
-@pytest.fixture
-def pgvector_backend(emb_engine: sa.Engine, cdm_engine: sa.Engine) -> PGVectorEmbeddingBackend:
-    """PGVector backend with vector extension and model registry initialised."""
-    return PGVectorEmbeddingBackend(
-        emb_engine=emb_engine,
-        omop_cdm_engine=cdm_engine,
-    )
-
-
-@pytest.fixture
-def embedding_reader_interface(
-    emb_engine: sa.Engine, cdm_engine: sa.Engine
-) -> EmbeddingReaderInterface:
-    return EmbeddingReaderInterface(
-        emb_engine=emb_engine,
-        omop_cdm_engine=cdm_engine,
-        canonical_model_name=MODEL_NAME,
-        provider_name_or_type=PROVIDER_TYPE,
-    )
-
-
-@pytest.fixture
-def embedding_writer_interface(
-    emb_engine: sa.Engine, cdm_engine: sa.Engine, mock_llm_client
-) -> EmbeddingWriterInterface:
-    return EmbeddingWriterInterface(
-        emb_engine=emb_engine,
-        omop_cdm_engine=cdm_engine,
-        embedding_client=mock_llm_client,
-    )
-
-
-@pytest.fixture
-def registered_embedding_writer_interface(
-    embedding_writer_interface: EmbeddingWriterInterface,
-) -> EmbeddingWriterInterface:
-    embedding_writer_interface.register_model(index_config=FlatIndexConfig())
-    return embedding_writer_interface
-
-
-# ---------------------------------------------------------------------------
-# Test data
-# ---------------------------------------------------------------------------
-
-@dataclass
-class TestConcept:
-    concept_id: int
-    concept_name: str
-    domain_id: str
-    vocabulary_id: str
-    concept_code: str
-    standard_concept: str
-    concept_class_id: str
-    valid_start_date: str
-    valid_end_date: str
-    embeddings: np.ndarray
-
-    def to_db(self) -> Dict[str, Any]:
-        return {
-            "concept_id": self.concept_id,
-            "concept_name": self.concept_name,
-            "domain_id": self.domain_id,
-            "vocabulary_id": self.vocabulary_id,
-            "concept_code": self.concept_code,
-            "standard_concept": self.standard_concept,
-            "concept_class_id": self.concept_class_id,
-            "valid_start_date": self.valid_start_date,
-            "valid_end_date": self.valid_end_date,
-        }
-
-
-CONCEPTS: Dict[str, TestConcept] = {
-    "Hypertension": TestConcept(
-        concept_id=1, concept_name="Hypertension", domain_id="Condition",
-        vocabulary_id="SNOMED", concept_code="38341003", standard_concept="S",
-        concept_class_id="Clinical Finding",
-        valid_start_date="2000-01-01", valid_end_date="2099-12-31",
-        embeddings=np.array([[-10.0]], dtype=np.float32),
-    ),
-    "Diabetes": TestConcept(
-        concept_id=2, concept_name="Diabetes", domain_id="Condition",
-        vocabulary_id="SNOMED", concept_code="73211009", standard_concept="S",
-        concept_class_id="Clinical Finding",
-        valid_start_date="2000-01-01", valid_end_date="2099-12-31",
-        embeddings=np.array([[0.0]], dtype=np.float32),
-    ),
-    "Aspirin": TestConcept(
-        concept_id=3, concept_name="Aspirin", domain_id="Drug",
-        vocabulary_id="RxNorm", concept_code="1191", standard_concept="S",
-        concept_class_id="Ingredient",
-        valid_start_date="2000-01-01", valid_end_date="2099-12-31",
-        embeddings=np.array([[10.0]], dtype=np.float32),
-    ),
-}
-
-TEST_CONCEPT_EMB = np.array([[-1.0]], dtype=np.float32)
-
-MODEL_NAME = "test-model:v1"
-PROVIDER = "ollama"
-PROVIDER_TYPE = ProviderType(PROVIDER)
-EMBEDDING_DIM = 1
-
-
-def add_concepts_to_db(session: Session) -> None:
-    try:
-        session.execute(sa.text("SET session_replication_role = 'replica';"))
-        for concept_data in CONCEPTS.values():
-            session.add(Concept(**concept_data.to_db()))
-        session.commit()
-    finally:
-        session.execute(sa.text("SET session_replication_role = 'origin';"))
-        session.commit()
+    # Tear down: remove all models registered during the test
+    for record in backend.get_registered_models():
+        try:
+            backend.delete_model(
+                model_name=record.model_name,
+                provider_type=record.provider_type,
+            )
+        except Exception:
+            pass

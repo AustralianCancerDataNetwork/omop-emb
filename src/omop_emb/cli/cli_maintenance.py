@@ -1,23 +1,24 @@
 """Maintenance and management commands for omop-emb."""
 
-from typing import Annotated, Optional
-from dotenv import load_dotenv
 import logging
-logger = logging.getLogger(__name__)
-import typer
-app = typer.Typer(help="Maintenance and management commands for omop-emb.")
+from typing import Annotated, Optional
 
-from .utils import configure_logging_level, resolve_omop_cdm_engine, resolve_emb_engine
+import typer
+from dotenv import load_dotenv
+
+from .utils import configure_logging_level, resolve_backend
+from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.config import (
+    BackendType,
     IndexType,
     MetricType,
     ProviderType,
-    BackendType,
     SUPPORTED_INDICES_AND_METRICS_PER_BACKEND,
 )
-from omop_emb.storage import PGVectorEmbeddingBackend
-from omop_emb.storage.index_config import index_config_from_index_type
 from omop_emb.interface import list_registered_models
+
+logger = logging.getLogger(__name__)
+app = typer.Typer(help="Maintenance and management commands for omop-emb.")
 
 
 @app.command(name="list-models", help="List all registered embedding models.")
@@ -30,10 +31,6 @@ def list_models(
         "--model", "-m",
         help="Filter by model name.",
     )] = None,
-    index_type: Annotated[Optional[IndexType], typer.Option(
-        "--index-type",
-        help="Filter by index type.",
-    )] = None,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
         help="Increase verbosity (up to two levels)",
@@ -42,32 +39,33 @@ def list_models(
     configure_logging_level(verbosity)
     load_dotenv()
 
-    emb_engine = resolve_emb_engine()
+    backend = resolve_backend()
     records = list_registered_models(
-        emb_engine=emb_engine,
+        backend=backend,
         provider_type=provider_type,
         model_name=model,
-        index_type=index_type,
     )
 
     if not records:
         typer.echo("No registered models found.")
         return
 
-    typer.echo(f"{'Model':<40} {'Provider':<10} {'Index':<6} {'Dims':<6} {'Table'}")
-    typer.echo("-" * 90)
+    typer.echo(f"{'Model':<40} {'Provider':<10} {'Metric':<8} {'Index':<6} {'Dims':<6} {'Table'}")
+    typer.echo("-" * 100)
     for r in records:
+        index_str = r.index_type.value if r.index_type else "none"
+        metric_str = r.metric_type.value if r.metric_type else "any"
         typer.echo(
-            f"{r.model_name:<40} {r.provider_type:<10} {r.index_type:<6} "
-            f"{r.dimensions:<6} {r.storage_identifier}"
+            f"{r.model_name:<40} {r.provider_type:<10} {metric_str:<8} "
+            f"{index_str:<6} {r.dimensions:<6} {r.storage_identifier}"
         )
 
 
-@app.command(name="rebuild-index", help="Rebuild pgvector indexes for a registered model.")
+@app.command(name="rebuild-index", help="Build or rebuild the index on an embedding table.")
 def rebuild_index(
     model: Annotated[str, typer.Option(
         "--model", "-m",
-        help="Canonical model name to rebuild indexes for.",
+        help="Canonical model name to rebuild the index for.",
     )],
     provider_type: Annotated[ProviderType, typer.Option(
         "--provider-type",
@@ -75,81 +73,14 @@ def rebuild_index(
     )] = ProviderType.OPENAI,
     index_type: Annotated[IndexType, typer.Option(
         "--index-type",
-        help="Index type the model was registered with.",
+        help="Index type to build (FLAT = exact scan, HNSW = approximate; pgvector only).",
         rich_help_panel="Index Options",
-    )] = IndexType.HNSW,
-    metric_types: Annotated[Optional[list[MetricType]], typer.Option(
+    )] = IndexType.FLAT,
+    metric_type: Annotated[MetricType, typer.Option(
         "--metric-type",
-        help="Metrics to rebuild. Repeat to rebuild multiple. Defaults to all supported metrics.",
+        help="Distance metric. Required and locked in when --index-type is HNSW.",
         rich_help_panel="Index Options",
-    )] = None,
-    batch_size: Annotated[int, typer.Option(
-        "--batch-size", "-b",
-        help="Batch size when streaming embeddings during rebuild.",
-    )] = 100_000,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)",
-    )] = 0,
-):
-    configure_logging_level(verbosity)
-    load_dotenv()
-
-    emb_engine = resolve_emb_engine()
-    omop_cdm_engine = resolve_omop_cdm_engine()
-    backend = PGVectorEmbeddingBackend(emb_engine=emb_engine, omop_cdm_engine=omop_cdm_engine)
-
-    record = backend.get_registered_model(
-        model_name=model,
-        provider_type=provider_type,
-        index_type=index_type,
-    )
-    if record is None:
-        raise typer.BadParameter(
-            f"No registered model found for '{model}' "
-            f"(provider={provider_type.value}, index={index_type.value})."
-        )
-
-    resolved_metrics: tuple[MetricType, ...]
-    if metric_types:
-        resolved_metrics = tuple(metric_types)
-    else:
-        resolved_metrics = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(
-            BackendType.PGVECTOR, {}
-        ).get(index_type, ())
-
-    backend.rebuild_model_indexes(
-        model_name=model,
-        provider_type=provider_type,
-        index_type=index_type,
-        metric_types=resolved_metrics,
-        batch_size=batch_size,
-        _model_record=record,
-    )
-    logger.info("Completed index rebuild for model '%s'.", model)
-    typer.echo(f"Rebuilt {len(resolved_metrics)} index(es) for '{model}' ({index_type.value}).")
-
-
-@app.command(name="switch-index-type", help="Register and build a new index type for an existing model.")
-def switch_index_type(
-    model: Annotated[str, typer.Option(
-        "--model", "-m",
-        help="Canonical model name to add the new index for.",
-    )],
-    new_index_type: Annotated[IndexType, typer.Option(
-        "--new-index-type",
-        help="New index type to register and build.",
-        rich_help_panel="Index Options",
-    )] = IndexType.HNSW,
-    provider_type: Annotated[ProviderType, typer.Option(
-        "--provider-type",
-        help="Provider the model was registered with.",
-    )] = ProviderType.OPENAI,
-    metric_types: Annotated[Optional[list[MetricType]], typer.Option(
-        "--metric-type",
-        help="Metrics to build. Defaults to all supported metrics for the new index type.",
-        rich_help_panel="Index Options",
-    )] = None,
+    )] = MetricType.COSINE,
     index_hnsw_num_neighbors: Annotated[Optional[int], typer.Option(
         "--index-hnsw-num-neighbors",
         help="HNSW: number of neighbors per graph node.",
@@ -165,14 +96,6 @@ def switch_index_type(
         help="HNSW: ef parameter controlling graph quality during construction.",
         rich_help_panel="Index Options",
     )] = None,
-    batch_size: Annotated[int, typer.Option(
-        "--batch-size", "-b",
-        help="Batch size when streaming embeddings during rebuild.",
-    )] = 100_000,
-    rebuild: Annotated[bool, typer.Option(
-        "--rebuild/--no-rebuild",
-        help="Build the new index immediately after registration.",
-    )] = True,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
         help="Increase verbosity (up to two levels)",
@@ -181,88 +104,93 @@ def switch_index_type(
     configure_logging_level(verbosity)
     load_dotenv()
 
-    emb_engine = resolve_emb_engine()
-    omop_cdm_engine = resolve_omop_cdm_engine()
-    backend = PGVectorEmbeddingBackend(emb_engine=emb_engine, omop_cdm_engine=omop_cdm_engine)
+    backend = resolve_backend()
 
-    existing = backend.get_registered_models(model_name=model, provider_type=provider_type)
-    if not existing:
+    record = backend.get_registered_model(
+        model_name=model,
+        provider_type=provider_type,
+    )
+    if record is None:
         raise typer.BadParameter(
-            f"No registration found for model '{model}' with provider '{provider_type.value}'. "
-            "Register the model first via 'omop-emb embeddings add-embeddings'."
+            f"No registered model found for '{model}' (provider={provider_type.value})."
         )
 
-    new_index_config = index_config_from_index_type(
-        new_index_type,
+    index_config = index_config_from_index_type(
+        index_type,
         num_neighbors=index_hnsw_num_neighbors,
         ef_search=index_hnsw_ef_search,
         ef_construction=index_hnsw_ef_construction,
+        metric_type=metric_type if index_type == IndexType.HNSW else None,
     )
-    new_record = backend.register_model(
+    backend.rebuild_index(
         model_name=model,
-        dimensions=existing[0].dimensions,
         provider_type=provider_type,
-        index_config=new_index_config,
+        index_config=index_config,
     )
-    typer.echo(f"Registered '{model}' with index_type={new_index_type.value}.")
+    metric_info = f" (metric={metric_type.value})" if index_type == IndexType.HNSW else ""
+    typer.echo(f"Rebuilt {index_type.value} index for '{model}'{metric_info}.")
+    logger.info("Completed index rebuild for model '%s'.", model)
 
-    if rebuild:
-        resolved_metrics: tuple[MetricType, ...]
-        if metric_types:
-            resolved_metrics = tuple(metric_types)
-        else:
-            resolved_metrics = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(
-                BackendType.PGVECTOR, {}
-            ).get(new_index_type, ())
 
-        backend.rebuild_model_indexes(
-            model_name=model,
-            provider_type=provider_type,
-            index_type=new_index_type,
-            metric_types=resolved_metrics,
-            batch_size=batch_size,
-            _model_record=new_record,
+@app.command(name="delete-model", help="Irreversibly delete a registered model and all its embeddings.")
+def delete_model(
+    model: Annotated[str, typer.Option(
+        "--model", "-m",
+        help="Canonical model name to delete.",
+    )],
+    provider_type: Annotated[ProviderType, typer.Option(
+        "--provider-type",
+        help="Provider the model was registered with.",
+    )] = ProviderType.OPENAI,
+    confirm: Annotated[bool, typer.Option(
+        "--yes", "-y",
+        help="Skip confirmation prompt.",
+    )] = False,
+    verbosity: Annotated[int, typer.Option(
+        "--verbose", "-v", count=True,
+        help="Increase verbosity (up to two levels)",
+    )] = 0,
+):
+    configure_logging_level(verbosity)
+    load_dotenv()
+
+    if not confirm:
+        typer.confirm(
+            f"Delete model '{model}' (provider={provider_type.value}) "
+            "and ALL associated embeddings? This cannot be undone.",
+            abort=True,
         )
-        typer.echo(f"Built {len(resolved_metrics)} index(es) for '{model}' ({new_index_type.value}).")
+
+    backend = resolve_backend()
+    backend.delete_model(
+        model_name=model,
+        provider_type=provider_type,
+    )
+    typer.echo(f"Deleted model '{model}' (provider={provider_type.value}).")
 
 
-@app.command(name="export-faiss-cache", help="Export a FAISS sidecar cache from pgvector for a registered model.")
+@app.command(name="export-faiss-cache", help="Export a FAISS sidecar cache from the embedding store.")
 def export_faiss_cache(
     model: Annotated[str, typer.Option(
         "--model", "-m",
         help="Canonical model name to export FAISS cache for.",
     )],
-    api_base: Annotated[str, typer.Option(
-        "--api-base",
-        help="Base URL of the embedding API (used to resolve provider type).",
-        rich_help_panel="Embedding API Options",
-    )],
-    api_key: Annotated[str, typer.Option(
-        "--api-key",
-        help="API key for the embedding API.",
-        rich_help_panel="Embedding API Options",
-    )],
     cache_dir: Annotated[str, typer.Option(
         "--cache-dir",
-        help="Directory where the FAISS index files and HDF5 snapshot will be written.",
+        help="Directory where the FAISS index files will be written.",
     )],
+    metric_type: Annotated[MetricType, typer.Option(
+        "--metric-type",
+        help="Distance metric for the FAISS index.",
+        rich_help_panel="Index Options",
+    )] = MetricType.COSINE,
     provider_type: Annotated[ProviderType, typer.Option(
         "--provider-type",
         help="Provider the model was registered with.",
     )] = ProviderType.OPENAI,
-    index_type: Annotated[IndexType, typer.Option(
-        "--index-type",
-        help="Registered index type to cache.",
-        rich_help_panel="Index Options",
-    )] = IndexType.FLAT,
-    metric_types: Annotated[Optional[list[MetricType]], typer.Option(
-        "--metric-type",
-        help="Metrics to build FAISS indices for. Defaults to all supported FAISS metrics.",
-        rich_help_panel="Index Options",
-    )] = None,
     batch_size: Annotated[int, typer.Option(
         "--batch-size", "-b",
-        help="Batch size when streaming embeddings from pgvector.",
+        help="Batch size when streaming embeddings.",
     )] = 100_000,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
@@ -273,50 +201,39 @@ def export_faiss_cache(
     load_dotenv()
 
     try:
-        from omop_emb.storage.faiss_cache import FAISSCache
+        from omop_emb.storage.faiss import FAISSCache
     except ImportError as exc:
         raise typer.Exit(1) from typer.BadParameter(
             f"FAISS optional dependency not installed: {exc}. "
             "Install it with: pip install omop-emb[faiss]"
         )
 
-    from omop_emb.config import SUPPORTED_FAISS_CACHE_METRICS
-
-    emb_engine = resolve_emb_engine()
-    omop_cdm_engine = resolve_omop_cdm_engine()
-    backend = PGVectorEmbeddingBackend(emb_engine=emb_engine, omop_cdm_engine=omop_cdm_engine)
-
-    resolved_metrics: tuple[MetricType, ...]
-    if metric_types:
-        resolved_metrics = tuple(metric_types)
-    else:
-        resolved_metrics = tuple(SUPPORTED_FAISS_CACHE_METRICS)
-
+    backend = resolve_backend()
     cache = FAISSCache(
         backend=backend,
         model_name=model,
         provider_type=provider_type,
-        index_type=index_type,
+        metric_type=metric_type,
         cache_dir=cache_dir,
     )
-    cache.export(metric_types=resolved_metrics, batch_size=batch_size)
-    typer.echo(f"FAISS cache exported to '{cache_dir}' for '{model}' ({index_type.value}).")
+    cache.export(batch_size=batch_size)
+    typer.echo(f"FAISS cache exported to '{cache_dir}' for '{model}' (metric={metric_type.value}).")
 
 
-@app.command(name="check-faiss-cache", help="Check whether the FAISS sidecar cache is stale for a registered model.")
+@app.command(name="check-faiss-cache", help="Check whether the FAISS sidecar cache is stale.")
 def check_faiss_cache(
     model: Annotated[str, typer.Option(
         "--model", "-m",
         help="Canonical model name to check.",
     )],
+    metric_type: Annotated[MetricType, typer.Option(
+        "--metric-type",
+        help="Distance metric of the FAISS index to check.",
+    )] = MetricType.COSINE,
     provider_type: Annotated[ProviderType, typer.Option(
         "--provider-type",
         help="Provider the model was registered with.",
     )] = ProviderType.OPENAI,
-    index_type: Annotated[IndexType, typer.Option(
-        "--index-type",
-        help="Registered index type to check.",
-    )] = IndexType.FLAT,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
         help="Increase verbosity (up to two levels)",
@@ -326,29 +243,27 @@ def check_faiss_cache(
     load_dotenv()
 
     try:
-        from omop_emb.storage.faiss_cache import FAISSCache
+        from omop_emb.storage.faiss import FAISSCache
     except ImportError as exc:
         raise typer.Exit(1) from typer.BadParameter(
             f"FAISS optional dependency not installed: {exc}. "
             "Install it with: pip install omop-emb[faiss]"
         )
 
-    emb_engine = resolve_emb_engine()
-    omop_cdm_engine = resolve_omop_cdm_engine()
-    backend = PGVectorEmbeddingBackend(emb_engine=emb_engine, omop_cdm_engine=omop_cdm_engine)
-
+    backend = resolve_backend()
     record = backend.get_registered_model(
         model_name=model,
         provider_type=provider_type,
-        index_type=index_type,
     )
     if record is None:
-        typer.echo(f"No registered model found for '{model}' ({provider_type.value}, {index_type.value}).")
+        typer.echo(
+            f"No registered model found for '{model}' (provider={provider_type.value})."
+        )
         raise typer.Exit(1)
 
     cache_meta = record.metadata.get("faiss_cache") if record.metadata else None
     if cache_meta is None:
-        typer.echo(f"No FAISS cache metadata found for '{model}'. Run 'export-faiss-cache' first.")
+        typer.echo(f"No FAISS cache metadata for '{model}'. Run 'export-faiss-cache' first.")
         raise typer.Exit(1)
 
     cache_dir = cache_meta.get("cache_dir")
@@ -360,7 +275,7 @@ def check_faiss_cache(
         backend=backend,
         model_name=model,
         provider_type=provider_type,
-        index_type=index_type,
+        metric_type=metric_type,
         cache_dir=cache_dir,
     )
 
@@ -368,7 +283,7 @@ def check_faiss_cache(
     exported_at = cache_meta.get("exported_at", "unknown")
     row_count = cache_meta.get("row_count", "unknown")
     typer.echo(
-        f"Model: {model} | Index: {index_type.value} | "
+        f"Model: {model} | Metric: {metric_type.value} | "
         f"Exported: {exported_at} | Rows: {row_count} | "
         f"Status: {'STALE' if stale else 'FRESH'}"
     )

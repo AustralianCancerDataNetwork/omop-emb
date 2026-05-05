@@ -4,7 +4,7 @@ import abc
 from typing import Generic, TypeVar
 
 from omop_emb.config import IndexType, MetricType
-from omop_emb.storage.index_config import IndexConfig
+from omop_emb.backends.index_config import IndexConfig
 
 C = TypeVar("C", bound=IndexConfig)
 

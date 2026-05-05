@@ -12,19 +12,19 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
-from omop_emb.config import IndexType, MetricType, ProviderType
-from omop_emb.storage.index_config import FlatIndexConfig, HNSWIndexConfig
-from omop_emb.storage.postgres.pg_index_manager import (
+from omop_emb.config import IndexType, MetricType, ProviderType, VectorColumnType
+from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
+from omop_emb.backends.pgvector.pg_index_manager import (
     PGVectorFlatIndexManager,
     PGVectorHNSWIndexManager,
 )
-from omop_emb.storage import PGVectorEmbeddingBackend
-from omop_emb.config import VectorColumnType, vector_column_type_for_dimensions
+from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
+from omop_emb.utils.embedding_utils import vector_column_type_for_dimensions
 
 
 TABLENAME = "test_emb_idx_mgr"
 EMBEDDING_COL = "embedding"
-DEFAULT_HNSW_CONFIG = HNSWIndexConfig(num_neighbors=16, ef_search=64, ef_construction=128)
+DEFAULT_HNSW_CONFIG = HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=16, ef_search=64, ef_construction=128)
 
 
 @pytest.fixture(scope="module")
@@ -101,7 +101,7 @@ class TestPGVectorFlatIndexManagerUnit:
                 emb_engine=None,  # type: ignore
                 tablename="t",
                 embedding_column="e",
-                index_config=HNSWIndexConfig(),  # type: ignore
+                index_config=HNSWIndexConfig(metric_type=MetricType.L2),
                 dimensions=4,
             )
 
@@ -119,7 +119,7 @@ class TestPGVectorHNSWIndexManagerDDL:
         m._engine = None  # type: ignore
         m._tablename = "my_table"
         m._embedding_column = "embedding"
-        m._index_config = HNSWIndexConfig(num_neighbors=32, ef_search=64, ef_construction=128)
+        m._index_config = HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=32, ef_search=64, ef_construction=128)
         m._vector_col_type = VectorColumnType.VECTOR
         return m
 
@@ -156,7 +156,7 @@ class TestPGVectorHNSWIndexManagerDDL:
                 emb_engine=None,  # type: ignore
                 tablename="t",
                 embedding_column="e",
-                index_config=FlatIndexConfig(),  # type: ignore
+                index_config=FlatIndexConfig(),
                 dimensions=4,
             )
 
@@ -165,7 +165,7 @@ class TestPGVectorHNSWIndexManagerDDL:
         m._engine = None  # type: ignore
         m._tablename = "my_table"
         m._embedding_column = "embedding"
-        m._index_config = HNSWIndexConfig(num_neighbors=16, ef_search=64, ef_construction=128)
+        m._index_config = HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=16, ef_search=64, ef_construction=128)
         m._vector_col_type = VectorColumnType.HALFVEC
         ddl = m._create_index_ddl(MetricType.L2)
         assert "halfvec_l2_ops" in ddl
@@ -177,9 +177,9 @@ class TestPGVectorHNSWIndexManagerDDL:
         assert vector_column_type_for_dimensions(4000) == VectorColumnType.HALFVEC
 
     def test_vector_column_type_rejects_oversized(self):
-        from omop_emb.config import _HALFVEC_MAX_DIMENSIONS
+        from omop_emb.config import PGVECTOR_HALFVEC_MAX_DIMENSIONS
         with pytest.raises(ValueError):
-            vector_column_type_for_dimensions(_HALFVEC_MAX_DIMENSIONS + 1)
+            vector_column_type_for_dimensions(PGVECTOR_HALFVEC_MAX_DIMENSIONS + 1)
 
 
 # ---------------------------------------------------------------------------
@@ -243,12 +243,12 @@ class TestPGVectorHNSWIndexManagerIntegration:
     def test_new_config_produces_different_ddl(self, pg_engine, hnsw_table):
         mgr_a = PGVectorHNSWIndexManager(
             emb_engine=pg_engine, tablename=TABLENAME, embedding_column=EMBEDDING_COL,
-            index_config=HNSWIndexConfig(num_neighbors=8, ef_search=16, ef_construction=32),
+            index_config=HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=8, ef_search=16, ef_construction=32),
             dimensions=4,
         )
         mgr_b = PGVectorHNSWIndexManager(
             emb_engine=pg_engine, tablename=TABLENAME, embedding_column=EMBEDDING_COL,
-            index_config=HNSWIndexConfig(num_neighbors=64, ef_search=128, ef_construction=256),
+            index_config=HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=64, ef_search=128, ef_construction=256),
             dimensions=4,
         )
         ddl_a = mgr_a._create_index_ddl(MetricType.L2)

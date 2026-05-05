@@ -18,9 +18,10 @@ from typing import Generic, TypeVar
 
 from sqlalchemy import Engine, inspect, text
 
-from omop_emb.config import IndexType, MetricType, VectorColumnType, vector_column_type_for_dimensions
-from omop_emb.storage.index_config import IndexConfig, FlatIndexConfig, HNSWIndexConfig
-from omop_emb.storage.base_index_manager import BaseIndexManager
+from omop_emb.config import IndexType, MetricType, VectorColumnType
+from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig, HNSWIndexConfig
+from omop_emb.backends.base_index_manager import BaseIndexManager
+from omop_emb.utils.embedding_utils import vector_column_type_for_dimensions
 
 logger = logging.getLogger(__name__)
 

@@ -5,65 +5,112 @@ ENV_DOCUMENT_EMBEDDING_PREFIX = "OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX"
 ENV_QUERY_EMBEDDING_PREFIX = "OMOP_EMB_QUERY_EMBEDDING_PREFIX"
 ENV_EMBEDDING_DIM = "OMOP_EMB_EMBEDDING_DIM"
 
-# Kept for CLI / legacy migration tooling that may still reference it.
 ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
-# Removed: ENV_BASE_STORAGE_DIR — storage is now entirely in Postgres.
 
+# sqlite-vec backend (default)
+ENV_EMB_SQLITE_PATH = "OMOP_EMB_SQLITE_PATH"
+
+# pgvector backend (optional)
 ENV_EMB_POSTGRES_URL = "OMOP_EMB_POSTGRES_URL"
+
+# OMOP CDM (always required for concept ingestion in CLI)
 ENV_CDM_DATABASE_URL = "OMOP_DATABASE_URL"
 
 
 class ProviderType(StrEnum):
-    """Enum for supported embedding model providers."""
+    """Embedding model provider.
+
+    Members
+    -------
+    OLLAMA
+        Self-hosted models served via the Ollama runtime.
+    OPENAI
+        OpenAI and OpenAI-compatible API endpoints.
+    """
+
     OLLAMA = "ollama"
     OPENAI = "openai"
 
 
 class BackendType(StrEnum):
-    """Embedding storage backend.  Currently only pgvector is supported as a
-    production backend; the enum is preserved so that ``EmbeddingModelRecord``
-    and the registry schema remain stable.
+    """Embedding storage backend.
+
+    Members
+    -------
+    SQLITEVEC
+        Default backend. Requires no external database server.
+    PGVECTOR
+        Optional backend. Requires a PostgreSQL instance with the pgvector
+        extension (``pip install omop-emb[pgvector]``).
+    FAISS
+        Sidecar read-acceleration layer on top of any primary backend.
     """
+
+    SQLITEVEC = "sqlitevec"
     PGVECTOR = "pgvector"
+    FAISS = "faiss"
 
 
 class VectorColumnType(StrEnum):
-    """Postgres column type used to store embedding vectors.
+    """PostgreSQL column type used to store embedding vectors (pgvector only).
 
-    ``VECTOR``  – ``pgvector`` ``vector`` type  (float32, ≤ 2 000 dims).
-    ``HALFVEC`` – ``pgvector`` ``halfvec`` type (float16, ≤ 4 000 dims).
+    Selected automatically by the pgvector backend based on dimensionality.
+    Not applicable to the sqlite-vec backend.
 
-    Selected automatically by the backend based on dimensionality:
-    dimensions > 2 000 → HALFVEC, otherwise VECTOR.
+    Members
+    -------
+    VECTOR
+        ``pgvector`` ``vector`` type (float32, up to 2 000 dims).
+    HALFVEC
+        ``pgvector`` ``halfvec`` type (float16, up to 4 000 dims).
+
+    Notes
+    -----
+    .. TODO: Include the storage options also for sqlite-vec
+       https://alexgarcia.xyz/sqlite-vec/guides/scalar-quant.html
     """
+
     VECTOR = "vector"
     HALFVEC = "halfvec"
 
 
-_VECTOR_MAX_DIMENSIONS = 2_000
-_HALFVEC_MAX_DIMENSIONS = 4_000
-
-
-def vector_column_type_for_dimensions(dimensions: int) -> VectorColumnType:
-    """Return the appropriate Postgres column type for *dimensions*."""
-    if dimensions <= _VECTOR_MAX_DIMENSIONS:
-        return VectorColumnType.VECTOR
-    if dimensions <= _HALFVEC_MAX_DIMENSIONS:
-        return VectorColumnType.HALFVEC
-    raise ValueError(
-        f"pgvector supports at most {_HALFVEC_MAX_DIMENSIONS:,} dimensions "
-        f"(halfvec), but model requests {dimensions:,}."
-    )
+PGVECTOR_VECTOR_MAX_DIMENSIONS = 2_000
+PGVECTOR_HALFVEC_MAX_DIMENSIONS = 4_000
 
 
 class IndexType(StrEnum):
-    """Enum for index types used for nearest neighbor search."""
+    """Index structure built on an embedding table for nearest-neighbor search.
+
+    Members
+    -------
+    FLAT
+        Exact sequential scan. Always correct, slower at scale.
+    HNSW
+        Approximate nearest-neighbor index. Supported by pgvector and FAISS
+        only, not by sqlite-vec.
+    """
+
     FLAT = "flat"
     HNSW = "hnsw"
 
 
 class MetricType(StrEnum):
-    """Defines the distance metric used for nearest neighbor search."""
+    """Distance metric used for nearest-neighbor search.
+
+    Members
+    -------
+    L2
+        Euclidean (L2) distance.
+    COSINE
+        Cosine distance.
+    L1
+        Manhattan (L1) distance.
+    HAMMING
+        Hamming distance (bit vectors).
+    JACCARD
+        Jaccard distance (bit vectors).
+    """
+
     L2 = "l2"
     COSINE = "cosine"
     L1 = "l1"
@@ -72,6 +119,22 @@ class MetricType(StrEnum):
 
 
 def parse_backend_type(value: str | BackendType) -> BackendType:
+    """Parse a string or ``BackendType`` into a ``BackendType``.
+
+    Parameters
+    ----------
+    value : str | BackendType
+        Backend identifier string or enum member.
+
+    Returns
+    -------
+    BackendType
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not a recognised backend type.
+    """
     if isinstance(value, BackendType):
         return value
     try:
@@ -84,6 +147,22 @@ def parse_backend_type(value: str | BackendType) -> BackendType:
 
 
 def parse_index_type(value: str | IndexType) -> IndexType:
+    """Parse a string or ``IndexType`` into an ``IndexType``.
+
+    Parameters
+    ----------
+    value : str | IndexType
+        Index type identifier string or enum member.
+
+    Returns
+    -------
+    IndexType
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not a recognised index type.
+    """
     if isinstance(value, IndexType):
         return value
     try:
@@ -96,6 +175,22 @@ def parse_index_type(value: str | IndexType) -> IndexType:
 
 
 def parse_metric_type(value: str | MetricType) -> MetricType:
+    """Parse a string or ``MetricType`` into a ``MetricType``.
+
+    Parameters
+    ----------
+    value : str | MetricType
+        Metric type identifier string or enum member.
+
+    Returns
+    -------
+    MetricType
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not a recognised metric type.
+    """
     if isinstance(value, MetricType):
         return value
     try:
@@ -107,26 +202,84 @@ def parse_metric_type(value: str | MetricType) -> MetricType:
         ) from exc
 
 
+# Supported index + metric combinations per backend.
 SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tuple[MetricType, ...]]] = {
+    # https://alexgarcia.xyz/sqlite-vec/features/vec0.html
+    BackendType.SQLITEVEC: {
+        IndexType.FLAT: (MetricType.L2, MetricType.COSINE),
+    },
     # https://github.com/pgvector/pgvector?tab=readme-ov-file#querying
     BackendType.PGVECTOR: {
         IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1, MetricType.HAMMING, MetricType.JACCARD),
         IndexType.HNSW: (MetricType.L2, MetricType.COSINE, MetricType.L1),
     },
+    BackendType.FAISS: {
+        IndexType.FLAT: (MetricType.L2, MetricType.COSINE),
+        IndexType.HNSW: (MetricType.L2, MetricType.COSINE),
+    },
 }
 
-# FAISS cache supports the same metrics as pgvector FLAT/HNSW for L2 and COSINE.
-SUPPORTED_FAISS_CACHE_METRICS: Tuple[MetricType, ...] = (MetricType.L2, MetricType.COSINE)
 
+def is_supported_index_metric_combination_for_backend(
+    backend: BackendType, index: IndexType, metric: MetricType
+) -> bool:
+    """Return whether a backend supports a given index and metric combination.
 
-def is_supported_index_metric_combination_for_backend(backend: BackendType, index: IndexType, metric: MetricType) -> bool:
+    Parameters
+    ----------
+    backend : BackendType
+    index : IndexType
+    metric : MetricType
+
+    Returns
+    -------
+    bool
+    """
     supported = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
     return metric in supported.get(index, ())
 
 
 def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) -> bool:
+    """Return whether a backend supports a given index type.
+
+    Parameters
+    ----------
+    backend : BackendType
+    index : IndexType
+
+    Returns
+    -------
+    bool
+    """
     return index in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
 
 
 def get_supported_index_types_for_backend(backend: BackendType) -> Tuple[IndexType, ...]:
+    """Return all index types supported by a backend.
+
+    Parameters
+    ----------
+    backend : BackendType
+
+    Returns
+    -------
+    tuple[IndexType, ...]
+    """
     return tuple(SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {}).keys())
+
+
+def get_supported_metrics_for_backend(backend: BackendType) -> Tuple[MetricType, ...]:
+    """Return all metrics supported by any index type for a backend.
+
+    Parameters
+    ----------
+    backend : BackendType
+
+    Returns
+    -------
+    tuple[MetricType, ...]
+    """
+    seen: set[MetricType] = set()
+    for metrics in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {}).values():
+        seen.update(metrics)
+    return tuple(seen)

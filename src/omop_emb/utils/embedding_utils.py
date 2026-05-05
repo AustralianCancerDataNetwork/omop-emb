@@ -1,22 +1,47 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, overload
+import logging
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import Select, func
 from sqlalchemy.sql.elements import ColumnElement
 from omop_alchemy.cdm.model.vocabulary import Concept
-from ..config import MetricType 
+
+from omop_emb.config import (
+    MetricType,
+    PGVECTOR_HALFVEC_MAX_DIMENSIONS,
+    PGVECTOR_VECTOR_MAX_DIMENSIONS,
+    VectorColumnType
+)
 
 
 @dataclass(frozen=True)
 class EmbeddingConceptFilter:
-    """
-    Constraints applied during embedding retrieval.
+    """Search constraints applied during KNN retrieval.
 
-    This mirrors the current OMOP grounding needs without importing
-    ``omop_graph`` or its search-constraint objects into ``omop_emb``.
+    All fields are optional. Unset fields impose no constraint. ``limit``
+    maps directly to the ``k`` nearest neighbours returned.
 
-    The `limit` field determines the number of nearest neighbors returned by embedding search operations. If not set, a backend default may be used.
+    Notes
+    -----
+    Mirrors OMOP grounding needs without importing ``omop_graph`` or its
+    search-constraint types into ``omop_emb``.
+
+    Attributes
+    ----------
+    concept_ids : tuple[int, ...], optional
+        Restrict results to this set of concept IDs.
+    domains : tuple[str, ...], optional
+        Restrict results to concepts in these OMOP domains.
+    vocabularies : tuple[str, ...], optional
+        Restrict results to concepts from these vocabularies.
+    require_standard : bool
+        When ``True``, only standard concepts (``standard_concept`` in
+        ``('S', 'C')``) are returned. Default ``False``.
+    limit : int, optional
+        Maximum number of nearest neighbours to return. If not set, the
+        backend default is used.
     """
 
     concept_ids: Optional[tuple[int, ...]] = None
@@ -32,6 +57,18 @@ class EmbeddingConceptFilter:
             )
 
     def apply(self, query: Select) -> Select:
+        """Apply filter constraints to a CDM-backed SQLAlchemy select.
+
+        Parameters
+        ----------
+        query : Select
+            Base select statement targeting the OMOP CDM ``concept`` table.
+
+        Returns
+        -------
+        Select
+            Query with all active constraints and ``limit`` applied.
+        """
         if self.concept_ids is not None:
             query = query.where(Concept.concept_id.in_(self.concept_ids))
 
@@ -45,8 +82,9 @@ class EmbeddingConceptFilter:
             query = query.where(Concept.standard_concept.in_(["S", "C"]))
 
         return query.limit(self.limit)
-    
+
     def is_empty(self) -> bool:
+        """Return ``True`` if no constraints are set."""
         return (
             self.concept_ids is None and
             self.domains is None and
@@ -58,27 +96,104 @@ class EmbeddingConceptFilter:
 
 @dataclass(frozen=True)
 class NearestConceptMatch:
-    """
-    Backend-neutral nearest-neighbor payload returned to callers.
+    """Single nearest-neighbour result as returned to callers.
 
-    The current resolver layer in ``omop-graph`` needs these fields to build
-    ``LabelMatch`` objects and to explain whether a retrieved concept is
-    standard and active.
+    ``concept_id`` and ``similarity`` are always populated by the backend.
+    The remaining fields are optionally enriched by the interface layer from
+    the OMOP CDM when an ``omop_cdm_engine`` is provided.
+
+    Attributes
+    ----------
+    concept_id : int
+        OMOP concept ID of the matched concept.
+    similarity : float
+        Similarity score in ``[0.0, 1.0]``. Higher is more similar.
+    concept_name : str, optional
+        Human-readable concept name. ``None`` when no CDM engine is provided.
+    is_standard : bool, optional
+        ``True`` if ``standard_concept`` is ``'S'`` or ``'C'``. ``None``
+        when no CDM engine is provided.
+    is_active : bool, optional
+        ``True`` if ``invalid_reason`` is not ``'D'`` or ``'U'``. ``None``
+        when no CDM engine is provided.
     """
 
     concept_id: int
-    concept_name: str
     similarity: float
-    is_standard: bool
-    is_active: bool
+    concept_name: Optional[str] = None
+    is_standard: Optional[bool] = None
+    is_active: Optional[bool] = None
 
 
-def get_similarity_from_distance(distance_col: float | ColumnElement, metric: MetricType) -> float | ColumnElement:
+@dataclass(frozen=True)
+class ConceptEmbeddingRecord:
+    """Concept metadata for a single embedding upsert row.
+
+    Populated from the OMOP CDM by the caller (interface layer) before being
+    passed to the backend.
+
+    Attributes
+    ----------
+    concept_id : int
+        OMOP concept ID.
+    domain_id : str
+        OMOP domain (e.g. ``'Condition'``, ``'Drug'``).
+    vocabulary_id : str
+        Source vocabulary (e.g. ``'SNOMED'``, ``'RxNorm'``).
+    is_standard : bool
+        ``True`` if ``standard_concept`` is ``'S'`` or ``'C'``.
     """
-    Map distance values to a similarity score in [0.0, 1.0].
+
+    concept_id: int
+    domain_id: str
+    vocabulary_id: str
+    is_standard: bool
+
+
+@overload
+def get_similarity_from_distance(
+    distance_col: float,
+    metric: MetricType,
+) -> float: ...
+
+@overload
+def get_similarity_from_distance(
+    distance_col: ColumnElement,
+    metric: MetricType,
+) -> ColumnElement: ...
+
+
+def get_similarity_from_distance(
+    distance_col: float | ColumnElement,
+    metric: MetricType,
+) -> float | ColumnElement:
+    """Convert a raw distance value to a similarity score in ``[0.0, 1.0]``.
+
+    Parameters
+    ----------
+    distance_col : float | ColumnElement
+        Raw distance value or SQLAlchemy column expression.
+    metric : MetricType
+        Distance metric that produced ``distance_col``.
+
+    Returns
+    -------
+    float | ColumnElement
+        Similarity in ``[0.0, 1.0]``. When ``distance_col`` is a
+        ``ColumnElement`` the result is also a column expression with
+        ``LEAST``/``GREATEST`` clamping applied.
+
+    Notes
+    -----
+    Conversion formulas:
+
+    * ``COSINE`` -- distance in ``[0, 2]``, so ``similarity = 1 - dist/2``.
+    * ``L2``     -- ``similarity = 1 / (1 + dist)``.
+    * ``L1``     -- ``similarity = 1 / (1 + dist)``.
+    * ``JACCARD`` -- ``similarity = 1 - dist``.
+    * ``HAMMING`` -- not implemented.
     """
     if metric == MetricType.COSINE:
-        # Cosine distance is typically in [0, 2], so this maps to [0, 1].
         similarity = 1.0 - (distance_col / 2.0)
     elif metric == MetricType.L2:
         similarity = 1.0 / (1.0 + distance_col)
@@ -95,3 +210,34 @@ def get_similarity_from_distance(distance_col: float | ColumnElement, metric: Me
         return func.least(func.greatest(similarity, 0.0), 1.0)
     else:
         return min(1.0, max(0.0, similarity))
+
+def vector_column_type_for_dimensions(dimensions: int) -> VectorColumnType:
+    """Return the appropriate PostgreSQL column type for a given dimensionality.
+
+    Parameters
+    ----------
+    dimensions : int
+        Number of dimensions in the embedding vector.
+
+    Returns
+    -------
+    VectorColumnType
+        ``VECTOR`` for dimensions up to 2 000, ``HALFVEC`` for up to 4 000.
+
+    Raises
+    ------
+    ValueError
+        If ``dimensions`` exceeds the halfvec limit of 4 000.
+    """
+    if dimensions <= PGVECTOR_VECTOR_MAX_DIMENSIONS:
+        return VectorColumnType.VECTOR
+    if dimensions <= PGVECTOR_HALFVEC_MAX_DIMENSIONS:
+        logger.warning(
+            f"Using {VectorColumnType.HALFVEC} for {dimensions} dimensions. This uses float16 quantization which may reduce accuracy. "
+            f"Consider reducing dimensionality to {PGVECTOR_VECTOR_MAX_DIMENSIONS} or less to use the full float32 precision of {VectorColumnType.VECTOR}."
+        )
+        return VectorColumnType.HALFVEC
+    raise ValueError(
+        f"pgvector supports at most {PGVECTOR_HALFVEC_MAX_DIMENSIONS:,} dimensions "
+        f"(halfvec), but model requests {dimensions:,}."
+    )

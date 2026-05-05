@@ -132,12 +132,16 @@ class TestEmbeddingDim:
         _ = client.embedding_dim
         provider.get_embedding_dim.assert_called_once()
 
-    def test_openai_provider_raises_not_implemented(self, mock_openai):
+    def test_openai_provider_falls_back_to_live_probe(self, mock_openai):
+        """OpenAI provider doesn't support get_embedding_dim; falls back to a live probe."""
+        _, openai_instance = mock_openai
+        openai_instance.embeddings.create.return_value = _make_embedding_response([[0.1] * 1536])
+
         client = EmbeddingClient(
             model="text-embedding-3-small", api_base=OPENAI_BASE, api_key="sk-x", provider=OpenAIProvider()
         )
-        with pytest.raises(NotImplementedError):
-            _ = client.embedding_dim
+        assert client.embedding_dim == 1536
+        openai_instance.embeddings.create.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

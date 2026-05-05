@@ -1,19 +1,21 @@
 """Diagnostics for omop-emb CLI."""
 
-from typing import Annotated
-from dotenv import load_dotenv
 import logging
-logger = logging.getLogger(__name__)
+from typing import Annotated
+
 import sqlalchemy as sa
 import typer
+from dotenv import load_dotenv
+
+from .utils import configure_logging_level, resolve_backend, resolve_omop_cdm_engine
+from omop_emb.config import MetricType
+from omop_emb.interface import list_registered_models
+
+logger = logging.getLogger(__name__)
 app = typer.Typer(help="Diagnostics for embedding storage and retrieval.")
 
-from .utils import configure_logging_level, resolve_omop_cdm_engine, resolve_emb_engine
-from omop_emb.interface import list_registered_models, EmbeddingReaderInterface
-from omop_emb.config import IndexType
 
-
-@app.command(name="health-check", help="List all registered models and verify connectivity to both engines.")
+@app.command(name="health-check", help="Verify backend connectivity and list registered models.")
 def health_check(
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
@@ -23,42 +25,41 @@ def health_check(
     configure_logging_level(verbosity)
     load_dotenv()
 
-    emb_engine = resolve_emb_engine()
-    omop_cdm_engine = resolve_omop_cdm_engine()
+    backend = resolve_backend()
+    typer.echo(f"Backend: {backend.backend_type.value} — connected.")
 
-    with emb_engine.connect() as conn:
-        conn.execute(sa.text("SELECT 1"))
-    typer.echo(f"EMB engine: {emb_engine.url} — connected.")
+    # CDM connectivity is optional for the health check
+    try:
+        omop_cdm_engine = resolve_omop_cdm_engine()
+        with omop_cdm_engine.connect() as conn:
+            conn.execute(sa.text("SELECT 1"))
+        typer.echo(f"CDM engine: {omop_cdm_engine.url} — connected.")
+    except RuntimeError as exc:
+        typer.echo(f"CDM engine: not configured ({exc})")
+    except Exception as exc:
+        typer.echo(f"CDM engine: connection failed — {exc}")
 
-    with omop_cdm_engine.connect() as conn:
-        conn.execute(sa.text("SELECT 1"))
-    typer.echo(f"CDM engine: {omop_cdm_engine.url} — connected.")
-
-    records = list_registered_models(emb_engine=emb_engine)
+    records = list_registered_models(backend=backend)
     if not records:
-        typer.echo("No registered models found in the pgvector registry.")
+        typer.echo("No registered models found.")
         return
 
     typer.echo(f"\n{len(records)} registered model(s):")
-    typer.echo(f"  {'Model':<40} {'Provider':<10} {'Index':<6} {'Dims':<6} {'Table'}")
-    typer.echo("  " + "-" * 85)
+    typer.echo(f"  {'Model':<40} {'Provider':<10} {'Metric':<8} {'Index':<6} {'Dims':<6} {'Table'}")
+    typer.echo("  " + "-" * 95)
     for r in records:
+        index_str = r.index_type.value if r.index_type else "none"
+        metric_str = r.metric_type.value if r.metric_type else "any"
         typer.echo(
-            f"  {r.model_name:<40} {r.provider_type:<10} {r.index_type:<6} "
-            f"{r.dimensions:<6} {r.storage_identifier}"
+            f"  {r.model_name:<40} {r.provider_type:<10} {metric_str:<8} "
+            f"{index_str:<6} {r.dimensions:<6} {r.storage_identifier}"
         )
-
-        reader = EmbeddingReaderInterface(
-            emb_engine=emb_engine,
-            omop_cdm_engine=omop_cdm_engine,
-            canonical_model_name=r.model_name,
-            provider_name_or_type=r.provider_type,
+        # FLAT models have metric_type=None; use COSINE for the diagnostic call
+        # (FLAT accepts any backend-supported metric).
+        probe_metric = r.metric_type or MetricType.COSINE
+        has_emb = backend.has_any_embeddings(
+            model_name=r.model_name,
+            provider_type=r.provider_type,
+            metric_type=probe_metric,
         )
-        try:
-            idx = IndexType(r.index_type)
-        except ValueError:
-            typer.echo(f"    [WARN] Unknown index_type '{r.index_type}' — skipping table check.")
-            continue
-
-        has_emb = reader.has_any_embeddings(index_type=idx)
         typer.echo(f"    embeddings present: {has_emb}")

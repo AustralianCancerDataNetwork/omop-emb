@@ -1,7 +1,7 @@
 [project]
 name = "omop-emb"
 version = "0.5.0"
-description = "Embedding extension to omop-graph — pgvector source-of-truth with optional FAISS sidecar"
+description = "Embedding extension for OMOP CDM. Utilises sqlite-vec by default, optional pgvector and FAISS backends"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [
@@ -37,14 +37,17 @@ dependencies = [
     "orm-loader>=0.3.15",
     "sqlalchemy>=2.0.45",
     "typing-extensions>=4.15.0",
-    "psycopg2-binary>=2.9.11",
-    "pgvector",
+    "sqlite-vec>=0.1.9",
     "openai",
     "requests",
     "typer",
 ]
 
 [project.optional-dependencies]
+pgvector = [
+    "psycopg[binary]>=3.1.0",
+    "pgvector>=0.3.0",
+]
 faiss = [
     "faiss-cpu>=1.8.0",
     "h5py",
@@ -54,15 +57,18 @@ faiss-gpu = [
     "h5py",
 ]
 all = [
+    "psycopg[binary]>=3.1.0",
+    "pgvector>=0.3.0",
     "faiss-cpu>=1.8.0",
     "h5py",
 ]
 
 [dependency-groups]
 dev = [
+    "sqlite-vec>=0.1.9",
     "faiss-cpu>=1.8.0",
-    "pgvector",
-    "psycopg2-binary>=2.9.11",
+    "pgvector>=0.3.0",
+    "psycopg[binary]>=3.1.0",
     "mypy>=1.19.1",
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
@@ -92,8 +98,9 @@ python_functions = ["test_*"]
 markers = [
   "unit: Unit tests",
   "integration: Integration tests",
+  "sqlitevec: sqlite-vec backend tests",
   "pgvector: pgvector backend tests",
-  "faiss_cache: FAISS sidecar cache tests",
+  "faiss: FAISS sidecar tests",
 ]
 testpaths = ["tests"]
 addopts = "-v --tb=short"

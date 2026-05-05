@@ -1,324 +1,345 @@
-"""Shared pgvector backend tests exercised via a generic ``backend`` fixture."""
+"""Shared backend tests — run against any EmbeddingBackend implementation.
 
-import pytest
+Subclass SharedBackendTests in backend-specific test modules and provide a
+``backend`` fixture that returns a registered-free instance of the backend
+under test.  The ``metric_type`` fixture defaults to L2; override it in the
+subclass for metric-specific variants.
+"""
+
+from __future__ import annotations
+
 import numpy as np
+import pytest
 
-from omop_emb.config import IndexType, MetricType
+from omop_emb.backends.base_backend import EmbeddingBackend
+from omop_emb.backends.index_config import FlatIndexConfig
+from omop_emb.config import MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
-from omop_emb.utils.errors import ModelRegistrationConflictError
-from omop_emb.storage.base import EmbeddingBackend
-from omop_emb.storage.index_config import index_config_from_index_type
-from omop_emb.embeddings import EmbeddingRole
-from .conftest import CONCEPTS, MODEL_NAME, EMBEDDING_DIM, TEST_CONCEPT_EMB, PROVIDER_TYPE
+
+from .conftest import (
+    ASPIRIN_ID,
+    CONCEPT_EMBEDDINGS,
+    CONCEPT_RECORDS,
+    DIABETES_ID,
+    EMBEDDING_DIM,
+    HYPERTENSION_ID,
+    MODEL_NAME,
+    NON_STANDARD_ID,
+    PROVIDER_TYPE,
+    QUERY_EMBEDDING,
+)
 
 
 class SharedBackendTests:
-    """Base class containing backend-parity tests via a generic ``backend`` fixture."""
+    """Mixin class — drop into any backend test class."""
 
-    def test_backend_registration(self, session, backend: EmbeddingBackend, index_type: IndexType = IndexType.FLAT):
-        model = backend.register_model(
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _register(self, backend: EmbeddingBackend):
+        return backend.register_model(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_config=index_config_from_index_type(index_type),
+            index_config=FlatIndexConfig(),
             dimensions=EMBEDDING_DIM,
         )
-        assert model.model_name == MODEL_NAME
-        assert model.dimensions == EMBEDDING_DIM
 
-    def test_get_registered_model(self, session, backend: EmbeddingBackend, index_type: IndexType = IndexType.FLAT):
-        backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=index_config_from_index_type(index_type),
-            dimensions=EMBEDDING_DIM,
-        )
-        retrieved = backend.get_registered_model(
-            model_name=MODEL_NAME, index_type=index_type, provider_type=PROVIDER_TYPE
-        )
-        assert retrieved is not None
-        assert retrieved.model_name == MODEL_NAME
-
-    def test_duplicate_registration_identical_success(self, session, backend: EmbeddingBackend, index_type: IndexType = IndexType.FLAT):
-        params = dict(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            dimensions=EMBEDDING_DIM,
-            index_config=index_config_from_index_type(index_type),
-            metadata={"version": "1.0"},
-        )
-        model1 = backend.register_model(**params)
-        model2 = backend.register_model(**params)
-        assert model1.storage_identifier == model2.storage_identifier
-        assert model2.metadata["version"] == "1.0"
-
-    def test_registration_metadata_conflict_raises_error(self, session, backend: EmbeddingBackend, index_type: IndexType = IndexType.FLAT):
-        params = dict(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            dimensions=EMBEDDING_DIM,
-            index_config=index_config_from_index_type(index_type),
-            metadata={"version": "1.0"},
-        )
-        backend.register_model(**params)
-        with pytest.raises(ModelRegistrationConflictError) as excinfo:
-            backend.register_model(**{**params, "metadata": {"version": "2.0"}})
-        assert excinfo.value.conflict_field == "metadata"
-
-    def test_upsert_embeddings(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
-        backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=index_config_from_index_type(index_type),
-            dimensions=EMBEDDING_DIM,
-        )
-        test_concept = CONCEPTS["Hypertension"]
-        embeddings = mock_llm_client.embeddings(
-            test_concept.concept_name, embedding_role=EmbeddingRole.DOCUMENT
-        )
+    def _upsert_all(self, backend: EmbeddingBackend, metric_type: MetricType = MetricType.L2):
+        self._register(backend)
         backend.upsert_embeddings(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            concept_ids=(test_concept.concept_id,),
-            embeddings=embeddings,
-        )
-        assert backend.has_any_embeddings(
-            model_name=MODEL_NAME, index_type=index_type, provider_type=PROVIDER_TYPE
+            metric_type=metric_type,
+            records=list(CONCEPT_RECORDS),
+            embeddings=CONCEPT_EMBEDDINGS,
         )
 
-    def test_get_embeddings_by_ids(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
-        backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=index_config_from_index_type(index_type),
-            dimensions=EMBEDDING_DIM,
-        )
-        test_concepts = [CONCEPTS["Hypertension"], CONCEPTS["Diabetes"]]
-        concept_ids = [c.concept_id for c in test_concepts]
-        embeddings = mock_llm_client.embeddings(
-            [c.concept_name for c in test_concepts], embedding_role=EmbeddingRole.DOCUMENT
-        )
-        backend.upsert_embeddings(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            concept_ids=concept_ids,
-            embeddings=embeddings,
-        )
-        retrieved = backend.get_embeddings_by_concept_ids(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            concept_ids=tuple(concept_ids),
-            index_type=index_type,
-        )
-        assert len(retrieved) == 2
-        assert set(retrieved.keys()) == set(concept_ids)
+    # ------------------------------------------------------------------
+    # Registration
+    # ------------------------------------------------------------------
 
-    def test_nearest_neighbor_search(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
-        backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=index_config_from_index_type(index_type),
-            dimensions=EMBEDDING_DIM,
-        )
-        test_concepts = list(CONCEPTS.values())
-        concept_ids = [c.concept_id for c in test_concepts]
-        embeddings = mock_llm_client.embeddings(
-            [c.concept_name for c in test_concepts], embedding_role=EmbeddingRole.DOCUMENT
-        )
-        backend.upsert_embeddings(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            concept_ids=concept_ids,
-            embeddings=embeddings,
-        )
-        query_embeddings = mock_llm_client.embeddings(
-            "Hypertension", embedding_role=EmbeddingRole.QUERY
-        )
-        results = backend.get_nearest_concepts(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            query_embeddings=query_embeddings,
-            metric_type=MetricType.L2,
-            concept_filter=EmbeddingConceptFilter(limit=1),
-        )
-        assert len(results) == 1
-        assert len(results[0]) == 1
-        assert results[0][0].concept_id == CONCEPTS["Hypertension"].concept_id
+    def test_register_model(self, backend: EmbeddingBackend):
+        record = self._register(backend)
+        assert record.model_name == MODEL_NAME
+        assert record.dimensions == EMBEDDING_DIM
 
-    def test_nearest_neighbor_with_domain_filter(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
-        backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=index_config_from_index_type(index_type),
-            dimensions=EMBEDDING_DIM,
-        )
-        test_concepts = list(CONCEPTS.values())
-        concept_ids = [c.concept_id for c in test_concepts]
-        embeddings = mock_llm_client.embeddings(
-            [c.concept_name for c in test_concepts], embedding_role=EmbeddingRole.DOCUMENT
-        )
-        backend.upsert_embeddings(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            concept_ids=concept_ids,
-            embeddings=embeddings,
-        )
-        results = backend.get_nearest_concepts(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            query_embeddings=TEST_CONCEPT_EMB,
-            concept_filter=EmbeddingConceptFilter(domains=("Condition",), limit=10),
-            metric_type=MetricType.L2,
-        )
-        expected_ids = {CONCEPTS["Hypertension"].concept_id, CONCEPTS["Diabetes"].concept_id}
-        assert len(results) == 1
-        assert set(m.concept_id for m in results[0]) == expected_ids
+    def test_register_model_is_idempotent(self, backend: EmbeddingBackend):
+        r1 = self._register(backend)
+        r2 = self._register(backend)
+        assert r1.storage_identifier == r2.storage_identifier
 
-    def test_nearest_neighbor_with_vocabulary_filter(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
-        backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=index_config_from_index_type(index_type),
-            dimensions=EMBEDDING_DIM,
-        )
-        test_concepts = list(CONCEPTS.values())
-        concept_ids = [c.concept_id for c in test_concepts]
-        embeddings = mock_llm_client.embeddings(
-            [c.concept_name for c in test_concepts], embedding_role=EmbeddingRole.DOCUMENT
-        )
-        backend.upsert_embeddings(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            concept_ids=concept_ids,
-            embeddings=embeddings,
-        )
-        results = backend.get_nearest_concepts(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            query_embeddings=TEST_CONCEPT_EMB,
-            concept_filter=EmbeddingConceptFilter(vocabularies=("RxNorm",), limit=10),
-            metric_type=MetricType.L2,
-        )
-        assert len(results) == 1
-        assert len(results[0]) == 1
-        assert results[0][0].concept_id == CONCEPTS["Aspirin"].concept_id
-
-    def test_get_concepts_without_embedding(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
-        backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=index_config_from_index_type(index_type),
-            dimensions=EMBEDDING_DIM,
-        )
-        test_concept = CONCEPTS["Hypertension"]
-        embeddings = mock_llm_client.embeddings(
-            test_concept.concept_name, embedding_role=EmbeddingRole.DOCUMENT
-        )
-        backend.upsert_embeddings(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            concept_ids=(test_concept.concept_id,),
-            embeddings=embeddings,
-        )
-        unembedded = backend.get_concepts_without_embedding(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-        )
-        assert CONCEPTS["Aspirin"].concept_id in unembedded
-        assert CONCEPTS["Diabetes"].concept_id in unembedded
-        assert CONCEPTS["Hypertension"].concept_id not in unembedded
-
-    def test_l2_similarity_exact_values(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
-        """L2 distance checks with deterministic 1-D embeddings.
-
-        TEST_CONCEPT_EMB = [-1.0]:
-        - Hypertension = [-10.0] → L2 = 9.0 → sim = 1/(1+9) = 0.1
-        - Diabetes     = [0.0]   → L2 = 1.0 → sim = 1/(1+1) = 0.5
-        - Aspirin      = [10.0]  → L2 = 11.0 → sim = 1/(1+11) ≈ 0.0833
-        """
-        backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=index_config_from_index_type(index_type),
-            dimensions=EMBEDDING_DIM,
-        )
-        test_concepts = list(CONCEPTS.values())
-        concept_ids = [c.concept_id for c in test_concepts]
-        embeddings = mock_llm_client.embeddings(
-            [c.concept_name for c in test_concepts], embedding_role=EmbeddingRole.DOCUMENT
-        )
-        backend.upsert_embeddings(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            concept_ids=concept_ids,
-            embeddings=embeddings,
-        )
-        results = backend.get_nearest_concepts(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            query_embeddings=TEST_CONCEPT_EMB,
-            metric_type=MetricType.L2,
-            concept_filter=EmbeddingConceptFilter(limit=10),
-        )
-        expected = {
-            CONCEPTS["Hypertension"].concept_id: 0.1,
-            CONCEPTS["Diabetes"].concept_id: 0.5,
-            CONCEPTS["Aspirin"].concept_id: 1.0 / 12.0,
-        }
-        for match in results[0]:
-            assert match.concept_id in expected
-            assert np.isclose(match.similarity, expected[match.concept_id], rtol=1e-5), (
-                f"concept_id {match.concept_id}: got {match.similarity}, expected {expected[match.concept_id]}"
+    def test_register_model_dimension_conflict_raises(self, backend: EmbeddingBackend):
+        self._register(backend)
+        with pytest.raises(Exception):
+            backend.register_model(
+                model_name=MODEL_NAME,
+                provider_type=PROVIDER_TYPE,
+                index_config=FlatIndexConfig(),
+                dimensions=EMBEDDING_DIM + 1,
             )
 
-    def test_cosine_similarity_exact_values(self, session, backend: EmbeddingBackend, mock_llm_client, index_type: IndexType = IndexType.FLAT):
-        """Cosine similarity checks with deterministic 1-D embeddings.
+    def test_is_model_registered(self, backend: EmbeddingBackend):
+        assert not backend.is_model_registered(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+        )
+        self._register(backend)
+        assert backend.is_model_registered(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+        )
 
-        Query [-1.0] normalized → [-1.0]:
-        - Hypertension [-10.0] → normalized [-1.0] → cos_sim = 1.0 → sim = 1.0
-        - Aspirin [10.0]       → normalized [1.0]  → cos_sim = -1.0 → sim = 0.0
-        """
+    def test_get_registered_model(self, backend: EmbeddingBackend):
+        self._register(backend)
+        record = backend.get_registered_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+        )
+        assert record is not None
+        assert record.model_name == MODEL_NAME
+        assert record.dimensions == EMBEDDING_DIM
+
+    def test_get_registered_models_returns_all(self, backend: EmbeddingBackend):
         backend.register_model(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_config=index_config_from_index_type(index_type),
+            index_config=FlatIndexConfig(),
             dimensions=EMBEDDING_DIM,
         )
-        test_concepts = list(CONCEPTS.values())
-        concept_ids = [c.concept_id for c in test_concepts]
-        embeddings = mock_llm_client.embeddings(
-            [c.concept_name for c in test_concepts], embedding_role=EmbeddingRole.DOCUMENT
+        records = backend.get_registered_models(model_name=MODEL_NAME, provider_type=PROVIDER_TYPE)
+        assert len(records) >= 1
+
+    # ------------------------------------------------------------------
+    # Upsert
+    # ------------------------------------------------------------------
+
+    def test_upsert_and_has_embeddings(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
+        assert backend.has_any_embeddings(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
         )
+
+    def test_upsert_count_matches(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
+        count = backend.get_embedding_count(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
+        )
+        assert count == len(CONCEPT_RECORDS)
+
+    def test_upsert_is_idempotent(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
         backend.upsert_embeddings(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            concept_ids=concept_ids,
-            embeddings=embeddings,
+            metric_type=MetricType.L2,
+            records=list(CONCEPT_RECORDS),
+            embeddings=CONCEPT_EMBEDDINGS,
         )
+        count = backend.get_embedding_count(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
+        )
+        assert count == len(CONCEPT_RECORDS)
+
+    # ------------------------------------------------------------------
+    # Read — concept IDs
+    # ------------------------------------------------------------------
+
+    def test_get_all_stored_concept_ids(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
+        stored = backend.get_all_stored_concept_ids(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
+        )
+        expected = {r.concept_id for r in CONCEPT_RECORDS}
+        assert stored == expected
+
+    def test_get_embeddings_by_concept_ids(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
+        result = backend.get_embeddings_by_concept_ids(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
+            concept_ids=[HYPERTENSION_ID, DIABETES_ID],
+        )
+        assert set(result.keys()) == {HYPERTENSION_ID, DIABETES_ID}
+        assert np.isclose(result[HYPERTENSION_ID][0], -10.0)
+        assert np.isclose(result[DIABETES_ID][0], 0.0)
+
+    # ------------------------------------------------------------------
+    # KNN — basic
+    # ------------------------------------------------------------------
+
+    def test_knn_returns_results(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
         results = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_type=index_type,
-            query_embeddings=TEST_CONCEPT_EMB,
-            metric_type=MetricType.COSINE,
-            concept_filter=EmbeddingConceptFilter(limit=10),
+            metric_type=MetricType.L2,
+            query_embeddings=QUERY_EMBEDDING,
+            k=3,
+        )
+        assert len(results) == 1
+        assert len(results[0]) == 3
+
+    def test_knn_top1_is_closest(self, backend: EmbeddingBackend):
+        # Query [-1] is closest to Diabetes [0] under L2
+        self._upsert_all(backend)
+        results = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
+            query_embeddings=QUERY_EMBEDDING,
+            k=1,
+        )
+        assert results[0][0].concept_id == DIABETES_ID
+
+    def test_knn_exact_hypertension_query(self, backend: EmbeddingBackend):
+        # Querying exactly the stored vector should return itself first
+        self._upsert_all(backend)
+        query = np.array([[-10.0]], dtype=np.float32)
+        results = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
+            query_embeddings=query,
+            k=1,
+        )
+        assert results[0][0].concept_id == HYPERTENSION_ID
+
+    def test_knn_batch_queries(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
+        queries = np.array([[-10.0], [10.0]], dtype=np.float32)
+        results = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
+            query_embeddings=queries,
+            k=1,
+        )
+        assert len(results) == 2
+        assert results[0][0].concept_id == HYPERTENSION_ID
+        assert results[1][0].concept_id == ASPIRIN_ID
+
+    # ------------------------------------------------------------------
+    # KNN — filters
+    # ------------------------------------------------------------------
+
+    def test_knn_domain_filter(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
+        results = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
+            query_embeddings=QUERY_EMBEDDING,
+            concept_filter=EmbeddingConceptFilter(domains=("Drug",), limit=10),
+        )
+        returned_ids = {r.concept_id for r in results[0]}
+        assert ASPIRIN_ID in returned_ids
+        assert HYPERTENSION_ID not in returned_ids
+        assert DIABETES_ID not in returned_ids
+
+    def test_knn_vocabulary_filter(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
+        results = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
+            query_embeddings=QUERY_EMBEDDING,
+            concept_filter=EmbeddingConceptFilter(vocabularies=("SNOMED",), limit=10),
+        )
+        returned_ids = {r.concept_id for r in results[0]}
+        assert HYPERTENSION_ID in returned_ids
+        assert DIABETES_ID in returned_ids
+        assert ASPIRIN_ID not in returned_ids
+
+    def test_knn_concept_id_filter(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
+        results = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
+            query_embeddings=QUERY_EMBEDDING,
+            concept_filter=EmbeddingConceptFilter(
+                concept_ids=(HYPERTENSION_ID, ASPIRIN_ID), limit=10
+            ),
+        )
+        returned_ids = {r.concept_id for r in results[0]}
+        assert returned_ids == {HYPERTENSION_ID, ASPIRIN_ID}
+
+    def test_knn_require_standard_filter(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
+        results = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
+            query_embeddings=QUERY_EMBEDDING,
+            concept_filter=EmbeddingConceptFilter(require_standard=True, limit=10),
+        )
+        returned_ids = {r.concept_id for r in results[0]}
+        assert NON_STANDARD_ID not in returned_ids
+        assert HYPERTENSION_ID in returned_ids
+
+    # ------------------------------------------------------------------
+    # KNN — similarity math
+    # ------------------------------------------------------------------
+
+    def test_l2_similarity_values(self, backend: EmbeddingBackend):
+        """L2 sim = 1/(1+dist).  Query=[-1], stored=[-10,0,10,20]."""
+        self._upsert_all(backend)
+        results = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            metric_type=MetricType.L2,
+            query_embeddings=QUERY_EMBEDDING,
+            k=len(CONCEPT_RECORDS),
         )
         expected = {
-            CONCEPTS["Hypertension"].concept_id: 1.0,
-            CONCEPTS["Aspirin"].concept_id: 0.0,
+            HYPERTENSION_ID: 1.0 / (1.0 + 9.0),   # dist=9
+            DIABETES_ID: 1.0 / (1.0 + 1.0),        # dist=1
+            ASPIRIN_ID: 1.0 / (1.0 + 11.0),        # dist=11
+            NON_STANDARD_ID: 1.0 / (1.0 + 21.0),   # dist=21
         }
         for match in results[0]:
-            if match.concept_id in expected:
-                assert np.isclose(match.similarity, expected[match.concept_id], atol=1e-5)
+            assert np.isclose(match.similarity, expected[match.concept_id], rtol=1e-4), (
+                f"concept_id={match.concept_id}: got {match.similarity}, "
+                f"expected {expected[match.concept_id]}"
+            )
+
+    # ------------------------------------------------------------------
+    # Delete model
+    # ------------------------------------------------------------------
+
+    def test_delete_model_removes_registry_entry(self, backend: EmbeddingBackend):
+        self._register(backend)
+        assert backend.is_model_registered(
+            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE,
+        )
+        backend.delete_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+        )
+        assert not backend.is_model_registered(
+            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE,
+        )
+
+    def test_patch_model_metadata(self, backend: EmbeddingBackend):
+        self._register(backend)
+        backend.patch_model_metadata(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            key="custom_key",
+            value={"info": "test"},
+        )
+        record = backend.get_registered_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+        )
+        assert record.metadata.get("custom_key") == {"info": "test"}

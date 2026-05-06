@@ -56,13 +56,14 @@ class SQLiteVecTableSpec:
         Physical table name (the registry ``storage_identifier``).
     dimensions : int
         Embedding vector length.
-    metric_type : MetricType
-        Distance metric configured on the vec0 table.
+    metric_type : MetricType, optional
+        Metric baked into the ``distance_metric=`` DDL column suffix, or
+        ``None`` for FLAT tables (per-query metric via ``vec_distance_*``).
     """
 
     table_name: str
     dimensions: int
-    metric_type: MetricType
+    metric_type: Optional[MetricType]
 
 
 def create_sqlitevec_engine(db_path: str) -> Engine:
@@ -129,22 +130,17 @@ class SQLiteVecBackend(EmbeddingBackend):
     # ------------------------------------------------------------------
 
     def _create_storage_table(self, model_record: EmbeddingModelRecord) -> SQLiteVecTableSpec:
-        # vec0 tables require a concrete metric at creation time. For FLAT
-        # registrations (metric_type=None) we default to L2 since the table
-        # structure is metric-agnostic for exact scans; the caller supplies the
-        # actual metric at query time and sqlite-vec applies it correctly.
-        metric = model_record.metric_type or MetricType.L2
         ddl = ddl_create_vec0(
             table_name=model_record.storage_identifier,
             dimensions=model_record.dimensions,
-            metric_type=metric,
+            metric_type=model_record.metric_type,
         )
         with self.emb_engine.begin() as conn:
             conn.execute(text(ddl))
         return SQLiteVecTableSpec(
             table_name=model_record.storage_identifier,
             dimensions=model_record.dimensions,
-            metric_type=metric,
+            metric_type=model_record.metric_type,
         )
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
@@ -216,20 +212,12 @@ class SQLiteVecBackend(EmbeddingBackend):
         self,
         *,
         model_record: EmbeddingModelRecord,
+        metric_type: MetricType,
         query_embeddings: ndarray,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         self.validate_embeddings(query_embeddings, model_record.dimensions)
-
-        # Metric comes from the caller (validated by the decorator). For FLAT
-        # the model_record.metric_type is None, so we read from the table spec.
-        table_spec = self._table_cache.get(model_record.storage_identifier)
-        metric = (
-            table_spec.metric_type
-            if isinstance(table_spec, SQLiteVecTableSpec)
-            else MetricType.L2
-        )
 
         results: list[tuple[NearestConceptMatch, ...]] = []
         with self.emb_session_factory() as session:
@@ -238,14 +226,14 @@ class SQLiteVecBackend(EmbeddingBackend):
                     session=session,
                     table_name=model_record.storage_identifier,
                     query_vector=query_vec.astype(np.float32),
-                    metric_type=metric,
+                    metric_type=metric_type,
                     k=k,
                     concept_filter=concept_filter,
                 )
                 matches = tuple(
                     NearestConceptMatch(
                         concept_id=concept_id,
-                        similarity=get_similarity_from_distance(distance, metric),
+                        similarity=get_similarity_from_distance(distance, metric_type),
                     )
                     for concept_id, distance in rows
                 )

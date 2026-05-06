@@ -1,17 +1,4 @@
-"""SQL helpers for the sqlite-vec backend.
-
-vec0 table structure per model+metric:
-    CREATE VIRTUAL TABLE <name> USING vec0(
-        concept_id   INTEGER PRIMARY KEY,
-        domain_id    TEXT METADATA,
-        vocabulary_id TEXT METADATA,
-        is_standard  INTEGER METADATA,   -- 1=True, 0=False
-        embedding    FLOAT[<dim>] distance_metric=<metric>
-    )
-
-Metadata columns can appear in the WHERE clause of a vec0 KNN MATCH query
-and are applied during the ANN scan.
-"""
+"""SQL helpers for the sqlite-vec backend."""
 from __future__ import annotations
 
 import logging
@@ -28,13 +15,25 @@ from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
 
-_METRIC_MAP = {
+# Used by ddl_create_vec0 when baking a metric into the column definition.
+_MATCH_METRIC_MAP = {
     MetricType.L2: "l2",
     MetricType.COSINE: "cosine",
 }
 
+# Used by query_knn for per-query metric selection via ORDER BY.
+_QUERY_METRIC_FUNC = {
+    MetricType.L2: "vec_distance_l2",
+    MetricType.COSINE: "vec_distance_cosine",
+    MetricType.L1: "vec_distance_l1",
+}
 
-def ddl_create_vec0(table_name: str, dimensions: int, metric_type: MetricType) -> str:
+
+def ddl_create_vec0(
+    table_name: str,
+    dimensions: int,
+    metric_type: Optional[MetricType] = None,
+) -> str:
     """Return DDL to create a vec0 virtual table for the given model.
 
     Parameters
@@ -43,8 +42,12 @@ def ddl_create_vec0(table_name: str, dimensions: int, metric_type: MetricType) -
         Physical table name (the registry ``storage_identifier``).
     dimensions : int
         Embedding vector length.
-    metric_type : MetricType
-        Distance metric. Only ``L2`` and ``COSINE`` are supported.
+    metric_type : MetricType, optional
+        When provided, bakes ``distance_metric=<metric>`` into the embedding
+        column definition. This is intended for future ANN index types (e.g.
+        sqlite-vec IVF/HNSW) that use the baked-in metric during index-
+        accelerated scans. For FLAT tables pass ``None`` (default) and supply
+        the metric per-query via ``vec_distance_*`` functions.
 
     Returns
     -------
@@ -54,21 +57,27 @@ def ddl_create_vec0(table_name: str, dimensions: int, metric_type: MetricType) -
     Raises
     ------
     ValueError
-        If ``metric_type`` is not supported by sqlite-vec.
+        If ``metric_type`` is provided but not supported by the
+        ``distance_metric=`` DDL syntax (only L2 and COSINE are accepted).
     """
-    metric = _METRIC_MAP.get(metric_type)
-    if metric is None:
-        raise ValueError(
-            f"sqlite-vec does not support metric '{metric_type.value}'. "
-            f"Supported: {[m.value for m in _METRIC_MAP]}"
-        )
+    if metric_type is not None:
+        metric_str = _MATCH_METRIC_MAP.get(metric_type)
+        if metric_str is None:
+            raise ValueError(
+                f"sqlite-vec does not support baked-in metric '{metric_type.value}'. "
+                f"Supported values for distance_metric=: {[m.value for m in _MATCH_METRIC_MAP]}"
+            )
+        embedding_col = f"embedding FLOAT[{dimensions}] distance_metric={metric_str}"
+    else:
+        embedding_col = f"embedding FLOAT[{dimensions}]"
+
     return (
         f'CREATE VIRTUAL TABLE IF NOT EXISTS "{table_name}" USING vec0('
         f"concept_id INTEGER PRIMARY KEY, "
         f"domain_id TEXT METADATA, "
         f"vocabulary_id TEXT METADATA, "
         f"is_standard INTEGER METADATA, "
-        f"embedding FLOAT[{dimensions}] distance_metric={metric}"
+        f"{embedding_col}"
         f")"
     )
 
@@ -143,7 +152,7 @@ def query_knn(
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
 ) -> list[tuple[int, float]]:
-    """Run a KNN MATCH query against a vec0 table.
+    """Run a KNN query against a vec0 table using a per-query distance function.
 
     Parameters
     ----------
@@ -152,20 +161,39 @@ def query_knn(
     query_vector : ndarray
         Float32 array of shape ``(D,)``.
     metric_type : MetricType
+        Distance metric. Must be one of the keys in ``_QUERY_METRIC_FUNC``
+        (L2, COSINE, L1).
     k : int
         Maximum number of results to return.
     concept_filter : EmbeddingConceptFilter, optional
-        Metadata filters applied inside the vec0 MATCH clause.
+        Row-level filters applied in the WHERE clause before ranking.
 
     Returns
     -------
     list[tuple[int, float]]
         Pairs of ``(concept_id, distance)`` ordered by distance ascending.
-    """
-    emb_blob = _embedding_to_blob(query_vector)
 
-    where_clauses = ["embedding MATCH :emb", "k = :k"]
+    Raises
+    ------
+    ValueError
+        If ``metric_type`` is not supported for per-query distance functions.
+
+    Notes
+    -----
+    Uses ``ORDER BY vec_distance_*(embedding, :emb) LIMIT k`` instead of the
+    vec0 MATCH syntax. For FLAT (full-scan) tables the performance is identical
+    and the metric can be chosen freely at call time.
+    """
+    dist_func = _QUERY_METRIC_FUNC.get(metric_type)
+    if dist_func is None:
+        raise ValueError(
+            f"sqlite-vec does not support metric '{metric_type.value}' for FLAT queries. "
+            f"Supported: {[m.value for m in _QUERY_METRIC_FUNC]}"
+        )
+
+    emb_blob = _embedding_to_blob(query_vector)
     params: dict = {"emb": emb_blob, "k": k}
+    where_clauses: list[str] = []
 
     if concept_filter is not None:
         if concept_filter.concept_ids is not None:
@@ -186,8 +214,13 @@ def query_knn(
         if concept_filter.require_standard:
             where_clauses.append("is_standard = 1")
 
-    where_str = " AND ".join(where_clauses)
-    sql = text(f'SELECT concept_id, distance FROM "{table_name}" WHERE {where_str}')
+    where_str = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
+    sql = text(
+        f'SELECT concept_id, {dist_func}(embedding, :emb) as distance '
+        f'FROM "{table_name}" '
+        f"{where_str}"
+        f"ORDER BY distance LIMIT :k"
+    )
     rows = session.execute(sql, params).all()
     return [(int(row[0]), float(row[1])) for row in rows]
 

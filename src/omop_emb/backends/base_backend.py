@@ -684,6 +684,7 @@ class EmbeddingBackend(ABC):
         """
         return self._get_nearest_concepts_impl(
             model_record=_model_record,
+            metric_type=metric_type,
             query_embeddings=query_embeddings,
             concept_filter=concept_filter,
             k=k,
@@ -694,6 +695,7 @@ class EmbeddingBackend(ABC):
         self,
         *,
         model_record: EmbeddingModelRecord,
+        metric_type: MetricType,
         query_embeddings: ndarray,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = DEFAULT_K_NEAREST,

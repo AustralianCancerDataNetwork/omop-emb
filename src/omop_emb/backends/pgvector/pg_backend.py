@@ -245,6 +245,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         self,
         *,
         model_record: EmbeddingModelRecord,
+        metric_type: MetricType,
         query_embeddings: ndarray,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
@@ -258,21 +259,12 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
                     text(f"SET hnsw.ef_search = {manager.index_config.ef_search}")
                 )
 
-        # Metric comes from the registered index config (HNSW) or must be
-        # supplied by the caller and stored on the model_record via the
-        # decorator. For FLAT, model_record.metric_type is None; we read it
-        # from the query_embeddings context — but the impl doesn't know the
-        # caller's metric. The pg backend uses the metric from the record when
-        # set (HNSW), and falls back to COSINE for FLAT (the decorator already
-        # validated the caller's metric, so this is safe for the SQL operator).
-        # The distance is converted to similarity using the same metric.
-        metric = model_record.metric_type or MetricType.COSINE
 
         table = self._table_cache[model_record.storage_identifier]
         stmt = q_nearest_concept_ids(
             embedding_table=table,
             query_embeddings=query_embeddings.tolist(),
-            metric_type=metric,
+            metric_type=metric_type,
             k=k,
             concept_filter=concept_filter,
         )
@@ -281,7 +273,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
 
         results: list[list[NearestConceptMatch]] = [[] for _ in range(len(query_embeddings))]
         for row in ann_rows:
-            similarity = get_similarity_from_distance(float(row.distance), metric)
+            similarity = get_similarity_from_distance(float(row.distance), metric_type)
             results[row.q_id].append(
                 NearestConceptMatch(
                     concept_id=int(row.concept_id),

@@ -306,6 +306,13 @@ class EmbeddingBackend(ABC):
         -----
         One row per model means deletion always drops the physical table.
         There is no shared-table check.
+
+        The physical table is dropped **before** the registry row is removed.
+        If the DDL step fails the registry entry remains intact and the call
+        is re-runnable. If the DDL succeeds but the registry delete fails the
+        only failure mode is a registry entry pointing at a table that no
+        longer exists. The next ``_initialise_store`` will
+        recreate an empty table.
         """
         record = self.get_registered_model(model_name, provider_type)
         if record is None:
@@ -313,13 +320,13 @@ class EmbeddingBackend(ABC):
                 f"Model '{model_name}' (provider='{provider_type.value}') "
                 f"is not registered in backend '{self.backend_type.value}'."
             )
+        self._delete_storage_table(model_record=record)
+        self._table_cache.pop(record.storage_identifier, None)
         self._registry.delete_model(
             model_name=model_name,
             provider_type=provider_type,
             backend_type=self.backend_type,
         )
-        self._table_cache.pop(record.storage_identifier, None)
-        self._delete_storage_table(model_record=record)
         logger.info(
             f"Deleted model '{model_name}' (provider='{provider_type.value}') from backend '{self.backend_type.value}' and dropped storage table."
         )

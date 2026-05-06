@@ -21,7 +21,7 @@ from typing import Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from numpy import ndarray
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, select, Row
 from sqlalchemy.orm import sessionmaker
 
 from omop_alchemy.cdm.model.vocabulary import Concept
@@ -73,20 +73,25 @@ def list_registered_models(
 
 
 # ---------------------------------------------------------------------------
-# CDM enrichment helper (private)
+# CDM fetch helpers (private)
 # ---------------------------------------------------------------------------
 
-def _fetch_cdm_concept_metadata(
+def _fetch_cdm_concepts_for_ingestion(
     concept_ids: set[int],
     cdm_session_factory: sessionmaker,
-) -> dict[int, object]:
+) -> dict[int, Row]:
+    """Return CDM rows needed to build ``ConceptEmbeddingRecord`` filter columns.
+
+    Fetches ``domain_id``, ``vocabulary_id``, and ``standard_concept`` — the
+    three columns written into the embedding table at upsert time.
+    """
     if not concept_ids:
         return {}
     query = select(
         Concept.concept_id,
-        Concept.concept_name,
+        Concept.domain_id,
+        Concept.vocabulary_id,
         Concept.standard_concept,
-        Concept.invalid_reason,
     ).where(Concept.concept_id.in_(concept_ids))
     with cdm_session_factory() as session:
         return {row.concept_id: row for row in session.execute(query)}
@@ -99,7 +104,7 @@ def _fetch_cdm_concepts_for_filter(
     """Return {concept_id: concept_name} from CDM matching the filter."""
     query = select(Concept.concept_id, Concept.concept_name)
     if concept_filter is not None:
-        query = concept_filter.apply(query)
+        query = concept_filter.apply(query, Concept)
     with cdm_session_factory() as session:
         return {row.concept_id: row.concept_name for row in session.execute(query)}
 
@@ -373,21 +378,21 @@ class EmbeddingReaderInterface:
         self,
         raw: Tuple[Tuple[NearestConceptMatch, ...], ...],
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
-        """Enrich backend results with CDM concept metadata if available."""
+        """Enrich backend results with concept names from the CDM.
+
+        Only ``concept_name`` is populated here.  ``is_standard`` and
+        ``is_active`` will be sourced from the embedding table in item 36.
+        """
         if not self._cdm_session_factory:
             return raw
 
         unique_ids = {r.concept_id for results in raw for r in results}
-        meta = _fetch_cdm_concept_metadata(unique_ids, self._cdm_session_factory)
+        concept_filter = EmbeddingConceptFilter(concept_ids=tuple(unique_ids))
+        names = _fetch_cdm_concepts_for_filter(concept_filter, self._cdm_session_factory)
 
         return tuple(
             tuple(
-                dc_replace(
-                    r,
-                    concept_name=meta[r.concept_id].concept_name if r.concept_id in meta else None,
-                    is_standard=meta[r.concept_id].standard_concept in ("S", "C") if r.concept_id in meta else None,
-                    is_active=meta[r.concept_id].invalid_reason not in ("D", "U") if r.concept_id in meta else None,
-                )
+                dc_replace(r, concept_name=names.get(r.concept_id))
                 for r in query_results
             )
             for query_results in raw
@@ -604,7 +609,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
 
         # Fetch concept metadata from CDM for filter columns
         cdm_factory = sessionmaker(omop_cdm_engine)
-        meta = _fetch_cdm_concept_metadata(set(concept_ids), cdm_factory)
+        meta = _fetch_cdm_concepts_for_ingestion(set(concept_ids), cdm_factory)
 
         records = [
             ConceptEmbeddingRecord(

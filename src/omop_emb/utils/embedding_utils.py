@@ -56,7 +56,7 @@ class EmbeddingConceptFilter:
                 f"EmbeddingConceptFilter.limit must be a positive integer, got {self.limit}."
             )
 
-    def apply(self, query: Select) -> Select:
+    def apply(self, query: Select, table: type) -> Select:
         """Apply filter constraints to a CDM-backed SQLAlchemy select.
 
         Parameters
@@ -70,16 +70,19 @@ class EmbeddingConceptFilter:
             Query with all active constraints and ``limit`` applied.
         """
         if self.concept_ids is not None:
-            query = query.where(Concept.concept_id.in_(self.concept_ids))
+            query = query.where(table.concept_id.in_(self.concept_ids))
 
         if self.domains is not None:
-            query = query.where(Concept.domain_id.in_(self.domains))
+            query = query.where(table.domain_id.in_(self.domains))
 
         if self.vocabularies is not None:
-            query = query.where(Concept.vocabulary_id.in_(self.vocabularies))
+            query = query.where(table.vocabulary_id.in_(self.vocabularies))
 
         if self.require_standard:
-            query = query.where(Concept.standard_concept.in_(["S", "C"]))
+            if hasattr(table, "is_standard"):
+                query = query.where(table.is_standard == True)  # noqa: E712
+            else:
+                query = query.where(table.standard_concept.in_(["S", "C"]))
 
         return query.limit(self.limit)
 

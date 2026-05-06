@@ -215,20 +215,7 @@ def q_nearest_concept_ids(
     )
 
     if concept_filter is not None:
-        if concept_filter.concept_ids is not None:
-            inner_stmt = inner_stmt.where(
-                embedding_table.concept_id.in_(concept_filter.concept_ids)
-            )
-        if concept_filter.domains is not None:
-            inner_stmt = inner_stmt.where(
-                embedding_table.domain_id.in_(concept_filter.domains)
-            )
-        if concept_filter.vocabularies is not None:
-            inner_stmt = inner_stmt.where(
-                embedding_table.vocabulary_id.in_(concept_filter.vocabularies)
-            )
-        if concept_filter.require_standard:
-            inner_stmt = inner_stmt.where(embedding_table.is_standard == True)  # noqa: E712
+        inner_stmt = concept_filter.apply(inner_stmt, embedding_table)
 
     lateral_subq = inner_stmt.lateral("top_k")
 

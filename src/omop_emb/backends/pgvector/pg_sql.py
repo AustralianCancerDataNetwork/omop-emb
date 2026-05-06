@@ -22,7 +22,7 @@ from omop_emb.config import MetricType
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.embedding_table import create_pg_embedding_table
 from omop_emb.model_registry import EmbeddingModelRecord
-from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, get_similarity_from_distance
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
 

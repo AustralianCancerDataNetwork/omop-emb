@@ -333,6 +333,10 @@ class EmbeddingBackend(ABC):
     ) -> EmbeddingModelRecord:
         """Build or rebuild the index on an existing embedding table.
 
+        This is the unified entry point for both rebuilding an existing index
+        and switching index type (e.g. FLAT → HNSW or HNSW → FLAT). Pass the
+        desired target ``index_config`` regardless of the current state.
+
         Parameters
         ----------
         model_name : str
@@ -340,13 +344,14 @@ class EmbeddingBackend(ABC):
         provider_type : ProviderType
             Provider that serves the model.
         index_config : IndexConfig
-            New index configuration. For HNSW, ``metric_type`` must be set.
-            Pass ``FlatIndexConfig()`` to revert to an exact scan.
+            Target index configuration. Pass ``HNSWIndexConfig`` (with
+            ``metric_type`` set) to build an HNSW index, or ``FlatIndexConfig()``
+            to revert to an exact scan.
 
         Returns
         -------
         EmbeddingModelRecord
-            Updated registry record reflecting the new index configuration.
+            Updated registry record reflecting the new index type and metric.
 
         Raises
         ------
@@ -355,12 +360,13 @@ class EmbeddingBackend(ABC):
 
         Notes
         -----
-        - The registry ``metric_type`` changes to the
-        the new metric stored in the index_config. 
-        Any in-flight queries validated against the old configuration will fail on their next call.
+        The registry ``metric_type`` is updated to match the new ``index_config``.
+        Any in-flight queries that passed the old metric validation may fail on
+        their next call — this is an administrative operation and the error
+        message will be clear.
 
-        - We don't enforce `require_registered_model` as we are changing things under the hood.
-        The context manager has some safety precautions we are actively evading under control.
+        ``require_registered_model`` is not applied here because this method
+        intentionally modifies the state that the decorator validates against.
         """
         record = self.get_registered_model(model_name, provider_type)
         if record is None:

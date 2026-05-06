@@ -37,7 +37,7 @@ class TestSQLiteVecSpecific:
     """SQLiteVec-specific behaviour not covered by the shared suite."""
 
     def test_hnsw_registration_raises(self, svec_backend: SQLiteVecBackend):
-        with pytest.raises(ValueError, match="hnsw.*not supported"):
+        with pytest.raises(ValueError, match="Only FLAT index is allowed at registration"):
             svec_backend.register_model(
                 model_name=MODEL_NAME,
                 provider_type=PROVIDER_TYPE,

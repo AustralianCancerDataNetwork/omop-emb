@@ -167,8 +167,6 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
             index_config=index_config,
             dimensions=model_record.dimensions,
         )
-        # For HNSW, use the metric from the config; for FLAT use COSINE as a
-        # no-op rebuild (FlatIndexManager ignores metric).
         metric = index_config.metric_type or MetricType.COSINE
         manager.rebuild_index(metric)
         self._index_managers[model_record.storage_identifier] = manager

@@ -1,5 +1,8 @@
+import os
 from enum import StrEnum
-from typing import Dict, Tuple
+from typing import Dict, Tuple, TYPE_CHECKING
+if TYPE_CHECKING:
+    from sqlalchemy import URL
 
 ENV_DOCUMENT_EMBEDDING_PREFIX = "OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX"
 ENV_QUERY_EMBEDDING_PREFIX = "OMOP_EMB_QUERY_EMBEDDING_PREFIX"
@@ -7,14 +10,22 @@ ENV_EMBEDDING_DIM = "OMOP_EMB_EMBEDDING_DIM"
 
 ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
 
+# Database connection — individual components (used to compose URL at runtime)
+ENV_OMOP_EMB_DB_USER = "OMOP_EMB_DB_USER"
+ENV_OMOP_EMB_DB_PASSWORD = "OMOP_EMB_DB_PASSWORD"
+ENV_OMOP_EMB_DB_HOST = "OMOP_EMB_DB_HOST"
+ENV_OMOP_EMB_DB_PORT = "OMOP_EMB_DB_PORT"
+ENV_OMOP_EMB_DB_NAME = "OMOP_EMB_DB_NAME"
+# Override the SQLAlchemy driver string (e.g. "postgresql+psycopg2")
+ENV_OMOP_EMB_DB_DRIVER = "OMOP_EMB_DB_CONN"
+# Optional full connection string — overrides all individual components above
+ENV_OMOP_EMB_DB_URL = "OMOP_EMB_DB_URL"
+
 # sqlite-vec backend (default)
 ENV_EMB_SQLITE_PATH = "OMOP_EMB_SQLITE_PATH"
 
-# pgvector backend (optional)
-ENV_EMB_POSTGRES_URL = "OMOP_EMB_POSTGRES_URL"
-
 # OMOP CDM (always required for concept ingestion in CLI)
-ENV_CDM_DATABASE_URL = "OMOP_DATABASE_URL"
+ENV_CDM_DATABASE_URL = "OMOP_CDM_DB_URL"
 
 
 class ProviderType(StrEnum):
@@ -283,3 +294,95 @@ def get_supported_metrics_for_backend(backend: BackendType) -> Tuple[MetricType,
     for metrics in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {}).values():
         seen.update(metrics)
     return tuple(seen)
+
+
+def build_engine_string(backend: "BackendType") -> "URL":
+    """Compose a SQLAlchemy ``URL`` for the given backend at runtime.
+
+    Parameters
+    ----------
+    backend : BackendType
+        The storage backend that determines which driver and which environment
+        variables are required.
+
+    Returns
+    -------
+    sqlalchemy.URL
+
+    Notes
+    -----
+    If ``OMOP_EMB_DB_URL`` is set it is used as-is for any backend, allowing
+    callers to supply a fully-qualified connection string without setting the
+    individual component variables.
+
+    For ``SQLITEVEC``: reads ``OMOP_EMB_SQLITE_PATH``. Use the special value
+    ``:memory:`` for a transient in-memory database (useful in tests).
+    For ``PGVECTOR``: reads ``OMOP_EMB_DB_USER``, ``OMOP_EMB_DB_PASSWORD``,
+    ``OMOP_EMB_DB_HOST``, ``OMOP_EMB_DB_NAME``, and optionally
+    ``OMOP_EMB_DB_PORT`` (default 5432) and ``OMOP_EMB_DB_CONN`` (driver,
+    default ``postgresql+psycopg``).
+
+    Raises
+    ------
+    RuntimeError
+        If a required environment variable is missing.
+    ValueError
+        If ``backend`` does not support URL composition from environment
+        variables (e.g. ``FAISS``).
+    """
+    from sqlalchemy import URL
+    from sqlalchemy.engine import make_url
+
+    optional_url = os.getenv(ENV_OMOP_EMB_DB_URL)
+    if optional_url:
+        return make_url(optional_url)
+
+    if backend == BackendType.SQLITEVEC:
+        path = _get_required_env_variable(ENV_EMB_SQLITE_PATH)
+        return URL.create(drivername="sqlite", database=path)
+
+    if backend == BackendType.PGVECTOR:
+        driver = os.getenv(ENV_OMOP_EMB_DB_DRIVER, "postgresql+psycopg")
+        user = _get_required_env_variable(ENV_OMOP_EMB_DB_USER)
+        password = _get_required_env_variable(ENV_OMOP_EMB_DB_PASSWORD)
+        host = _get_required_env_variable(ENV_OMOP_EMB_DB_HOST)
+        database = _get_required_env_variable(ENV_OMOP_EMB_DB_NAME)
+        port_str = os.getenv(ENV_OMOP_EMB_DB_PORT)
+        port = int(port_str) if port_str else None
+        return URL.create(
+            drivername=driver,
+            username=user,
+            password=password,
+            host=host,
+            port=port,
+            database=database,
+        )
+
+    raise ValueError(
+        f"Cannot compose an engine URL for backend {backend!r} from environment variables. "
+        f"Set {ENV_OMOP_EMB_DB_URL!r} to supply a full connection string."
+    )
+
+
+def _get_required_env_variable(name: str) -> str:
+    """Get the value of a required environment variable.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name.
+
+    Returns
+    -------
+    str
+        Environment variable value.
+
+    Raises
+    ------
+    RuntimeError
+        If the environment variable is not set.
+    """
+    value = os.getenv(name)
+    if value is None:
+        raise RuntimeError(f"Required environment variable {name!r} is not set.")
+    return value

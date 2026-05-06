@@ -1,66 +1,104 @@
 # Installation
 
-`omop-emb` supports backend-specific optional dependencies so users can install
-only what they need.
+`omop-emb` supports backend-specific optional dependencies so you can install
+only what you need.
 
-## Core only
+## sqlite-vec (default, no extras required)
 
 ```bash
 pip install omop-emb
 ```
 
-This installs the shared core package only. It does not guarantee that any
-particular embedding backend is available.
+The default backend is sqlite-vec — a file-based or in-memory vector store that
+requires no external database server. This is ready to use immediately after
+install.
 
-It also does not remove the need for a database backend. `omop-emb` still
-requires database-backed OMOP access and model registration.
-
-## PostgreSQL backend
+## pgvector backend
 
 ```bash
 pip install "omop-emb[pgvector]"
 ```
 
-Use this when you want the current pgvector/PostgreSQL-backed embedding store
-and CLI flow.
+Adds `psycopg` and the `pgvector` SQLAlchemy type adapter. Requires a running
+PostgreSQL instance with the pgvector extension installed (e.g.
+[`pgvector/pgvector`](https://hub.docker.com/r/pgvector/pgvector) Docker image).
 
-## FAISS backend
+## FAISS sidecar
 
 ```bash
 pip install "omop-emb[faiss]"
 ```
 
-Use this when you want the FAISS backend dependencies available.
-
-Even in this case, a database backend is still required for OMOP concept
-metadata access.
+Adds `faiss-cpu` and `h5py`. FAISS is a read-acceleration sidecar that layers
+on top of any primary backend — it does not replace sqlite-vec or pgvector.
 
 ## Everything
 
 ```bash
-pip install "omop-emb[all]"
+pip install "omop-emb[pgvector,faiss]"
 ```
 
-This is the most convenient choice for development, testing, and mixed
-environments where you want both backend stacks available.
+Installs all optional dependencies. Recommended for development and mixed
+environments.
 
-## Recommended runtime pattern
+---
 
-For clarity, backend selection should be explicit at runtime as well as
-install-time.
+## Configuring the backend at runtime
 
-Examples:
+Set `OMOP_EMB_BACKEND` to select the backend (default: `sqlitevec`):
 
 ```bash
-export OMOP_EMB_BACKEND=pgvector
-export OMOP_EMB_BACKEND=faiss
-export OMOP_EMB_BASE_STORAGE_DIR=$PWD/.omop_emb
+export OMOP_EMB_BACKEND=sqlitevec   # default — no external service needed
+export OMOP_EMB_BACKEND=pgvector    # requires PostgreSQL + pgvector
 ```
 
-That avoids silent fallback between backend implementations.
+### sqlite-vec connection
 
-`OMOP_EMB_BASE_STORAGE_DIR` controls where `omop-emb` stores local metadata
-(`metadata.db`) and file-based backend artifacts (such as FAISS files).
-If it is not set, `omop-emb` defaults to `./.omop_emb` in the current working directory.
-If a provided path includes `~`, it is expanded automatically.
+Point to a database file (or use `:memory:` for a transient in-memory store):
 
+```bash
+export OMOP_EMB_SQLITE_PATH=/data/omop_emb.db
+# or, for a transient in-memory database:
+export OMOP_EMB_SQLITE_PATH=:memory:
+```
+
+### pgvector connection
+
+Supply individual connection components (recommended, matches `.env` and
+Docker Compose patterns):
+
+```bash
+export OMOP_EMB_DB_HOST=localhost
+export OMOP_EMB_DB_PORT=5432
+export OMOP_EMB_DB_USER=omop_emb
+export OMOP_EMB_DB_PASSWORD=omop_emb
+export OMOP_EMB_DB_NAME=omop_emb
+```
+
+Or supply a full SQLAlchemy URL (overrides all individual components):
+
+```bash
+export OMOP_EMB_DB_URL=postgresql+psycopg://omop_emb:omop_emb@localhost:5432/omop_emb
+```
+
+The default driver string is `postgresql+psycopg` (psycopg3). Override via
+`OMOP_EMB_DB_CONN` if you need a different driver (e.g. `postgresql+psycopg2`).
+
+### Docker Compose
+
+A reference `docker-compose.yaml` for the pgvector service ships with the
+package. Create a `.env` file alongside it:
+
+```bash
+OMOP_EMB_DB_USER=omop_emb
+OMOP_EMB_DB_PASSWORD=omop_emb
+OMOP_EMB_DB_NAME=omop_emb
+OMOP_EMB_DB_HOST=omop-emb-db
+OMOP_EMB_DB_PORT=5432
+```
+
+Then start the service:
+
+```bash
+docker compose up -d omop-emb-db
+```

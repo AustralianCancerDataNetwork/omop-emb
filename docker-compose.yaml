@@ -1,15 +1,15 @@
 services:
   omop-emb-db:
     image: pgvector/pgvector:pg18
-    restart: unless-stopped
+    restart: always
     environment:
-      POSTGRES_USER: omop_emb
-      POSTGRES_PASSWORD: omop_emb
-      POSTGRES_DB: omop_emb
+      - POSTGRES_USER=${OMOP_EMB_DB_USER:-omop_emb}
+      - POSTGRES_PASSWORD=${OMOP_EMB_DB_PASSWORD:-omop_emb}
+      - POSTGRES_DB=${OMOP_EMB_DB_NAME:-omop_emb}
     ports:
       - "5433:5432"
     volumes:
-      - omop_emb_data:/var/lib/postgresql/data
+      - omop_emb_data:/var/lib/postgresql
     command: >
       postgres
         -c shared_preload_libraries=vector
@@ -17,14 +17,29 @@ services:
         -c max_parallel_maintenance_workers=4
         -c max_parallel_workers=8
         -c checkpoint_completion_target=0.9
-        -c wal_level=replica
     networks:
       - omop-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omop_emb} -d ${POSTGRES_DB:-omop_emb}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   ollama:
     image: ollama/ollama:0.14.2
+    profiles: ["standalone"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    tty: true
+    restart: always
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_HOST=0.0.0.0
     networks:
       - omop-net
+    stop_grace_period: 1m
 
 networks:
   omop-net:
@@ -32,3 +47,4 @@ networks:
 
 volumes:
   omop_emb_data:
+  ollama_data:

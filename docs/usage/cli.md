@@ -1,117 +1,209 @@
-# Embedding Generation CLI
+# CLI Reference
 
-This tool generates vector embeddings for OMOP CDM concepts and stores them in the configured embedding backend.
-
-At present, the production CLI path is PostgreSQL-oriented and stores embeddings in Postgres/pgvector-backed model tables. It specifically targets concepts that do not yet have embeddings and processes them in batches.
-
-!!! note "Supported Models"
-
-    Currently supported are only Ollama models
----
+`omop-emb` provides a CLI for concept ingestion, index management, and
+diagnostics. All commands load a `.env` file from the working directory
+automatically.
 
 ## Prerequisites
 
-- **Installation**: install the backend dependencies you plan to use:
-
-  ```bash
-  pip install "omop-emb[pgvector]"
-  # or
-  pip install "omop-emb[faiss]"
-  ```
-
-- **Database**: PostgreSQL implementation of OMOP CDM. See [`omop-graph` documentation](https://AustralianCancerDataNetwork.github.io/omop-graph) for information how to setup.
-- **Environment**: `OMOP_DATABASE_URL` must be exported or present in `.env`  (e.g., `postgresql://user:pass@localhost:5432/omop`).
-- **Backend config**: set `OMOP_EMB_BACKEND` (`pgvector` or `faiss`) and optionally `OMOP_EMB_BASE_STORAGE_DIR`.
-- **Connectivity**: Access to an OpenAI-compatible embeddings endpoint. *Currently only Ollama supported*.
-
-!!! note "Backend Scope"
-
-    `omop-emb` now defines a backend abstraction layer for both PostgreSQL and FAISS-style storage.
-    The current `add-embeddings` CLI still targets the PostgreSQL backend path.
+- **Backend installed**: `pip install omop-emb` (sqlite-vec) or
+  `pip install "omop-emb[pgvector]"`.
+- **Backend configured**: set `OMOP_EMB_BACKEND` and the matching connection
+  variables (see [Installation](installation.md)).
+- **Embedding API**: an OpenAI-compatible embeddings endpoint (e.g. Ollama or
+  OpenAI). Ingestion commands require `--api-base` and `--api-key`.
+- **OMOP CDM** (`OMOP_CDM_DB_URL`): required only for the ingestion commands
+  (`add-embeddings`, `add-embeddings-with-index`). Not required for
+  `list-models`, `rebuild-index`, `delete-model`, or diagnostics.
 
 ---
-
-## `add-embeddings`
-
-### Usage
-```bash
-omop-emb add-embeddings --api-base <URL> --api-key <KEY> [OPTIONS]
-```
-where `[OPTIONS]` are optional arguments that can be specified as described below.
-
-
-### Command Options
-
-| Option | Short | Type | Default | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| **`--api-base`** | | `String` | **Required** | Base URL for the embedding API service. |
-| **`--api-key`** | | `String` | **Required** | API key for the embedding API provider. |
-| **`--index-type`** | | `IndexType` | `FLAT` | The storage index for the embeddings for retrieval. Currently supported: `FLAT`. |
-| **`--batch-size`** | `-b` | `Integer` | `100` | Number of concepts to process in each chunk. |
-| **`--model`** | `-m` | `String` | `text-embedding-3-small` | Name of the embedding model to use for generating vectors. |
-| **`--backend`** | | `Literal['pgvector', 'faiss']` | `None` | Embedding backend to use (can be replaced by `OMOP_EMB_BACKEND`). Requires the corresponding optional dependency. |
-| **`--storage-base-dir`** | | `String` | `None` | Optional base directory for backend storage and local metadata registry (`metadata.db`). |
-| **`--standard-only`** | | `Boolean` | `False` | If set, only generate embeddings for OMOP standard concepts (`standard_concept = 'S'`). |
-| **`--vocabulary`** | | `List[String]` | `None` | Filter to embed concepts only from specific OMOP vocabularies. |
-| **`--num-embeddings`** | `-n` | `Integer` | `None` | Limit the number of concepts processed (useful for testing). |
 
 ## Environment Variables
 
-- `OMOP_DATABASE_URL`: OMOP CDM database connection string.
-- `OMOP_EMB_BACKEND`: backend selector used when `--backend` is not provided.
-- `OMOP_EMB_BASE_STORAGE_DIR`: local storage root for metadata and file-based artifacts. If unset, `omop-emb` defaults to `./.omop_emb` in the current working directory.
+### Backend
 
-Paths that include `~` are expanded automatically.
+| Variable | Default | Description |
+|---|---|---|
+| `OMOP_EMB_BACKEND` | `sqlitevec` | Backend selector: `sqlitevec`, `pgvector`. |
+
+### sqlite-vec
+
+| Variable | Description |
+|---|---|
+| `OMOP_EMB_SQLITE_PATH` | Path to the sqlite-vec database file (or `:memory:`). |
+
+### pgvector (individual components)
+
+| Variable | Default | Description |
+|---|---|---|
+| `OMOP_EMB_DB_HOST` | — | PostgreSQL host. |
+| `OMOP_EMB_DB_PORT` | `5432` | PostgreSQL port. |
+| `OMOP_EMB_DB_USER` | — | PostgreSQL user. |
+| `OMOP_EMB_DB_PASSWORD` | — | PostgreSQL password. |
+| `OMOP_EMB_DB_NAME` | — | PostgreSQL database name. |
+| `OMOP_EMB_DB_CONN` | `postgresql+psycopg` | SQLAlchemy driver string. |
+| `OMOP_EMB_DB_URL` | — | Full connection URL. Overrides individual components. |
+
+### Ingestion (CDM access)
+
+| Variable | Description |
+|---|---|
+| `OMOP_CDM_DB_URL` | SQLAlchemy URL for the OMOP CDM database. |
 
 ---
 
-## `migrate-legacy-pgvector-registry`
+## Ingestion commands
 
-Migrate legacy pgvector registry rows from a source database table into the local metadata registry (`metadata.db`).
+### `add-embeddings`
 
-This command is intended for compatibility with older setups that kept registry metadata in the database instead of the local metadata store.
-
-### Usage
-```bash
-omop-emb migrate-legacy-pgvector-registry [OPTIONS]
-```
-
-### Options
-
-| Option | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| **`--storage-base-dir`** | `String` | `None` | Optional path to local metadata registry location. If unset, falls back to `OMOP_EMB_BASE_STORAGE_DIR`, otherwise defaults to `./.omop_emb` in the current working directory. |
-| **`--source-database-url`** | `String` | `OMOP_DATABASE_URL` | Source database URL containing the legacy registry table. |
-| **`--legacy-table`** | `String` | `model_registry` | Name of the legacy registry table in the source database. |
-| **`--dry-run`** | `Boolean` | `False` | Show what would be migrated without writing changes. |
-| **`--drop-legacy-registry`** | `Boolean` | `False` | Drop the legacy table after successful migration. |
-
-### Recommended Migration Flow
-
-1. Validate what will migrate:
+Bulk-generate and store embeddings for OMOP concepts that do not yet have
+embeddings. Models are registered with a FLAT index; use `rebuild-index`
+afterwards to build an HNSW index.
 
 ```bash
-omop-emb migrate-legacy-pgvector-registry --dry-run
+omop-emb add-embeddings --api-base <URL> --api-key <KEY> [OPTIONS]
 ```
 
-2. Run the migration:
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--api-base` | | **required** | Base URL of the embedding API. |
+| `--api-key` | | **required** | API key for the embedding API. |
+| `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
+| `--batch-size` | `-b` | `100` | Concepts per API batch. |
+| `--standard-only` | | `False` | Embed only standard concepts (`standard_concept = 'S'`). |
+| `--vocabulary` | | `None` | Restrict to specific OMOP vocabularies (repeatable). |
+| `--domain` | | `None` | Restrict to specific OMOP domains (repeatable). |
+| `--num-embeddings` | `-n` | `None` | Cap on total concepts processed (useful for testing). |
+| `--verbose` | `-v` | | Increase log verbosity (pass twice for DEBUG). |
+
+---
+
+### `add-embeddings-with-index`
+
+Ingest embeddings and immediately build an HNSW index in one step. Equivalent
+to running `add-embeddings` followed by `rebuild-index`.
 
 ```bash
-omop-emb migrate-legacy-pgvector-registry
+omop-emb add-embeddings-with-index --api-base <URL> --api-key <KEY> [OPTIONS]
 ```
 
-3. Optionally remove legacy table after verification:
+Accepts all options from `add-embeddings`, plus:
+
+| Option | Default | Description |
+|---|---|---|
+| `--index-type` | `flat` | Index to build after ingestion (`flat` or `hnsw`). |
+| `--metric-type` | `cosine` | Distance metric. Required and locked in for `hnsw`. |
+| `--num-neighbors` | `16` | HNSW graph connectivity (`M`). |
+| `--ef-search` | `16` | HNSW query recall parameter. |
+| `--ef-construction` | `64` | HNSW build quality parameter. |
+
+---
+
+### `create-index`
+
+Build or rebuild the index for a model that already has embeddings stored.
 
 ```bash
-omop-emb migrate-legacy-pgvector-registry --drop-legacy-registry
+omop-emb create-index --api-base <URL> --api-key <KEY> --model <NAME> [OPTIONS]
 ```
 
-### Field Mapping
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--api-base` | | **required** | Base URL of the embedding API (used to resolve canonical model name). |
+| `--api-key` | | **required** | API key. |
+| `--model` | `-m` | **required** | Embedding model name. |
+| `--index-type` | | `flat` | `flat` or `hnsw`. |
+| `--metric-type` | | `cosine` | Distance metric. Required and locked in for `hnsw`. |
+| `--num-neighbors` | | `16` | HNSW `M` parameter. |
+| `--ef-search` | | `16` | HNSW query recall parameter. |
+| `--ef-construction` | | `64` | HNSW build quality parameter. |
 
-The migration command supports these legacy field names when reading rows:
+---
 
-- model name: `model_name`
-- dimensions: `dimensions`
-- index type: `index_type` (fallback: `index_method`)
-- storage identifier: `storage_identifier` (fallback: `table_name`)
-- metadata: `details` (fallback: `metadata`)
+## Model management
+
+### `list-models`
+
+List all registered embedding models in the configured backend.
+
+```bash
+omop-emb list-models [OPTIONS]
+```
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--model` | `-m` | `None` | Filter by model name. |
+| `--provider-type` | | `None` | Filter by provider (`ollama`, `openai`). |
+| `--verbose` | `-v` | | Increase log verbosity. |
+
+---
+
+### `rebuild-index`
+
+Build or rebuild the storage index for an already-registered model. Use this to
+switch between FLAT and HNSW without re-ingesting.
+
+```bash
+omop-emb rebuild-index --model <NAME> [OPTIONS]
+```
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--model` | `-m` | **required** | Canonical model name. |
+| `--provider-type` | | `openai` | Provider the model was registered with. |
+| `--index-type` | | `flat` | `flat` or `hnsw`. |
+| `--metric-type` | | `cosine` | Distance metric (required and locked in for `hnsw`). |
+| `--num-neighbors` | | `16` | HNSW `M` parameter. |
+| `--ef-search` | | `16` | HNSW query recall parameter. |
+| `--ef-construction` | | `64` | HNSW build quality parameter. |
+| `--verbose` | `-v` | | Increase log verbosity. |
+
+---
+
+### `delete-model`
+
+Permanently delete a registered model and all its stored embeddings. This
+operation is irreversible.
+
+```bash
+omop-emb delete-model --model <NAME> [OPTIONS]
+```
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--model` | `-m` | **required** | Canonical model name. |
+| `--provider-type` | | `openai` | Provider the model was registered with. |
+| `--yes` | `-y` | `False` | Skip confirmation prompt. |
+| `--verbose` | `-v` | | Increase log verbosity. |
+
+---
+
+## Diagnostics
+
+### `health-check`
+
+Verify backend connectivity and list registered models.
+
+```bash
+omop-emb health-check
+```
+
+---
+
+## FAISS sidecar
+
+### `export-faiss-cache`
+
+Export a FAISS sidecar cache from the embedding store for a registered model.
+
+```bash
+omop-emb export-faiss-cache --model <NAME> [OPTIONS]
+```
+
+### `check-faiss-cache`
+
+Check whether the FAISS sidecar cache is stale relative to the primary backend.
+
+```bash
+omop-emb check-faiss-cache --model <NAME> [OPTIONS]
+```

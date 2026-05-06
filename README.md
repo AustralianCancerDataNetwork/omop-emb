@@ -1,56 +1,80 @@
 # omop-emb
-Embedding layer for OMOP CDM.
 
-`omop-emb` now separates model metadata from embedding storage:
+Vector embedding layer for OMOP CDM concepts.
 
-- model metadata is stored locally in SQLite (`metadata.db`)
-- embedding vectors are stored by the selected backend (`pgvector` or `faiss`)
-- OMOP concept metadata remains in the OMOP CDM database
+`omop-emb` generates, stores, and retrieves embeddings for OMOP concepts. It
+works out of the box with **sqlite-vec** (no external database required) and
+scales to **PostgreSQL/pgvector** for larger deployments.
 
 ## Installation
 
-`omop-emb` now exposes backend-specific optional dependencies so installation
-can match the embedding backend you actually intend to use.
-
 ```bash
-pip install "omop-emb[pgvector]"
-pip install "omop-emb[faiss]"
-pip install "omop-emb[all]"
+pip install omop-emb                    # sqlite-vec backend (default, no extras needed)
+pip install "omop-emb[pgvector]"        # adds PostgreSQL/pgvector support
+pip install "omop-emb[faiss]"           # adds FAISS sidecar support
+pip install "omop-emb[pgvector,faiss]"  # everything
 ```
 
-Notes:
+## Quick start
 
-- `pgvector` installs the PostgreSQL/pgvector dependencies.
-- `faiss` installs the FAISS-based backend dependencies. This currently only includes CPU support
-- `all` installs both backend stacks for development or mixed environments.
-- A plain `pip install omop-emb` installs the shared core package only.
-- PostgreSQL-specific embedding dependencies are optional, but `omop-emb`
-  still requires OMOP CDM database access.
-- Non-PostgreSQL database backends have not yet been tested.
+**sqlite-vec (no external service):**
 
-## Runtime Configuration
+```bash
+export OMOP_EMB_BACKEND=sqlitevec
+export OMOP_EMB_SQLITE_PATH=/data/omop_emb.db
 
-Common environment variables:
+omop-emb add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
+    --model nomic-embed-text:v1.5
+```
 
-- `OMOP_EMB_BACKEND`: backend name (`pgvector` or `faiss`) used by the backend factory.
-- `OMOP_EMB_BASE_STORAGE_DIR`: local base directory for `omop-emb` artifacts, including local metadata (`metadata.db`) and FAISS files. If unset, `omop-emb` defaults to `./.omop_emb` in the current working directory.
-- `OMOP_DATABASE_URL`: SQLAlchemy URL for the OMOP CDM database.
-- `OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX`: task prefix prepended to concept texts at index time. Required for asymmetric models (e.g. `search_document: ` for nomic-embed-text, `passage: ` for E5).
-- `OMOP_EMB_QUERY_EMBEDDING_PREFIX`: task prefix prepended to search queries at query time. Required for asymmetric models (e.g. `search_query: ` for nomic-embed-text, `query: ` for E5).
+**pgvector:**
 
-The prefix variables default to `""` and are safe to omit for symmetric models. See [Asymmetric Embeddings](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/asymmetric-embeddings/) for details.
+```bash
+export OMOP_EMB_BACKEND=pgvector
+export OMOP_EMB_DB_HOST=localhost
+export OMOP_EMB_DB_PORT=5432
+export OMOP_EMB_DB_USER=omop_emb
+export OMOP_EMB_DB_PASSWORD=omop_emb
+export OMOP_EMB_DB_NAME=omop_emb
 
-Extended documentation can be found [here](https://AustralianCancerDataNetwork.github.io/omop-emb).
+omop-emb add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
+    --model nomic-embed-text:v1.5
+```
 
-# Project Roadmap
+## Environment variables
 
-- [x] Interface for PostgreSQL storage of vectors
-- [x] Interface for FAISS storage of embeddings
-- [x] HNSW index support for FAISS and pgvector (approximate nearest-neighbour with configurable `M`, `ef_construction`, `ef_search`)
-- [x] Extensive unit testing
-    - [x] Backend testing
-    - [x] Corruption and restoration of DB testing
-- [ ] Support importing and exporting of calculated embeddings
+| Variable | Default | Description |
+|---|---|---|
+| `OMOP_EMB_BACKEND` | `sqlitevec` | Backend: `sqlitevec` or `pgvector`. |
+| `OMOP_EMB_SQLITE_PATH` | — | sqlite-vec database file path (or `:memory:`). |
+| `OMOP_EMB_DB_HOST` | — | pgvector: PostgreSQL host. |
+| `OMOP_EMB_DB_PORT` | `5432` | pgvector: PostgreSQL port. |
+| `OMOP_EMB_DB_USER` | — | pgvector: database user. |
+| `OMOP_EMB_DB_PASSWORD` | — | pgvector: database password. |
+| `OMOP_EMB_DB_NAME` | — | pgvector: database name. |
+| `OMOP_EMB_DB_URL` | — | pgvector: full SQLAlchemy URL (overrides individual vars). |
+| `OMOP_CDM_DB_URL` | — | OMOP CDM connection (required for ingestion commands only). |
+
+See the [Configuration Reference](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/configuration/)
+for the complete list including asymmetric embedding prefixes and driver overrides.
+
+## Documentation
+
+Full documentation: <https://AustralianCancerDataNetwork.github.io/omop-emb>
+
+- [Installation & backend setup](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/installation/)
+- [Configuration reference](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/configuration/)
+- [Backend selection & index types](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/backend-selection/)
+- [CLI reference](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/cli/)
+
+## Roadmap
+
+- [x] sqlite-vec backend (default, zero-config)
+- [x] pgvector backend (PostgreSQL)
+- [x] FAISS sidecar (approximate nearest-neighbour acceleration)
+- [x] HNSW index support for pgvector and FAISS
+- [x] Extensive backend and registry testing
+- [ ] Import/export of pre-computed embeddings
 - [ ] `faiss` GPU support
 - [ ] [`pgvectorscale`](https://github.com/timescale/pgvectorscale) support
-- [ ] Vector-quantisation for more efficient storage
+- [ ] Vector quantisation for more efficient storage

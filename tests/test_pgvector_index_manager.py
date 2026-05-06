@@ -12,6 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
+pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed — skipping pgvector tests")
+
 from omop_emb.config import IndexType, MetricType, ProviderType, VectorColumnType
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.pgvector.pg_index_manager import (
@@ -101,7 +103,7 @@ class TestPGVectorFlatIndexManagerUnit:
                 emb_engine=None,  # type: ignore
                 tablename="t",
                 embedding_column="e",
-                index_config=HNSWIndexConfig(metric_type=MetricType.L2),
+                index_config=HNSWIndexConfig(metric_type=MetricType.L2), # type: ignore
                 dimensions=4,
             )
 
@@ -156,7 +158,7 @@ class TestPGVectorHNSWIndexManagerDDL:
                 emb_engine=None,  # type: ignore
                 tablename="t",
                 embedding_column="e",
-                index_config=FlatIndexConfig(),
+                index_config=FlatIndexConfig(), # type: ignore
                 dimensions=4,
             )
 

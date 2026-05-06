@@ -48,16 +48,18 @@ QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
 
 # ---------------------------------------------------------------------------
 # PostgreSQL config (integration tests only)
+#
+# Reads OMOP_EMB_DB_* from your .env (same user as production, separate DB).
+# The omop_emb user must have CREATEDB privilege; grant it once with:
+#   ALTER USER omop_emb CREATEDB;
 # ---------------------------------------------------------------------------
 
-_DB_HOST = os.getenv("TEST_DB_HOST")
-_DB_PORT = os.getenv("TEST_DB_PORT")
-_DB_NAME = os.getenv("TEST_DATABASE_NAME", "test_omop_emb")
-_DB_USER = os.getenv("TEST_DB_USERNAME", "test")
-_DB_PASS = os.getenv("TEST_DB_PASSWORD", "test")
-_DB_ADMIN_USER = os.getenv("POSTGRES_USER", "postgres")
-_DB_ADMIN_PASS = os.getenv("POSTGRES_PASSWORD", "postgres")
-_DB_DRIVER = os.getenv("TEST_DB_DRIVER", "postgresql+psycopg2")
+_DB_HOST = os.getenv("OMOP_EMB_DB_HOST")
+_DB_PORT = os.getenv("OMOP_EMB_DB_PORT")
+_DB_NAME = "test_omop_emb"
+_DB_USER = os.getenv("OMOP_EMB_DB_USER", "omop_emb")
+_DB_PASS = os.getenv("OMOP_EMB_DB_PASSWORD", "omop_emb")
+_DB_DRIVER = "postgresql+psycopg"
 
 _pg_available = _DB_HOST is not None and (_DB_PORT is not None and _DB_PORT.isdigit())
 
@@ -68,39 +70,38 @@ def _test_db_url() -> sa.URL:
         username=_DB_USER,
         password=_DB_PASS,
         host=_DB_HOST,
-        port=int(_DB_PORT),
+        port=int(_DB_PORT),  # type: ignore[arg-type]
         database=_DB_NAME,
     )
 
 
-def _admin_db_url() -> sa.URL:
+def _maintenance_db_url() -> sa.URL:
+    """Connect to the maintenance DB as the app user to issue CREATE/DROP DATABASE."""
     return sa.URL.create(
         drivername=_DB_DRIVER,
-        username=_DB_ADMIN_USER,
-        password=_DB_ADMIN_PASS,
+        username=_DB_USER,
+        password=_DB_PASS,
         host=_DB_HOST,
-        port=int(_DB_PORT),
+        port=int(_DB_PORT),  # type: ignore[arg-type]
         database="postgres",
     )
 
 
 def _create_test_db() -> sa.URL:
-    admin_engine = sa.create_engine(_admin_db_url(), future=True)
+    engine = sa.create_engine(_maintenance_db_url(), future=True)
     try:
-        with admin_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{_DB_NAME}"'))
-            conn.execute(sa.text(f"DROP ROLE IF EXISTS {_DB_USER}"))
-            conn.execute(sa.text(f"CREATE USER {_DB_USER} WITH PASSWORD '{_DB_PASS}' SUPERUSER"))
             conn.execute(sa.text(f'CREATE DATABASE "{_DB_NAME}" OWNER {_DB_USER}'))
     finally:
-        admin_engine.dispose()
+        engine.dispose()
     return _test_db_url()
 
 
 def _drop_test_db() -> None:
-    admin_engine = sa.create_engine(_admin_db_url(), future=True)
+    engine = sa.create_engine(_maintenance_db_url(), future=True)
     try:
-        with admin_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(
                 sa.text(
                     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
@@ -109,9 +110,8 @@ def _drop_test_db() -> None:
                 {"db": _DB_NAME},
             )
             conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{_DB_NAME}"'))
-            conn.execute(sa.text(f"DROP ROLE IF EXISTS {_DB_USER}"))
     finally:
-        admin_engine.dispose()
+        engine.dispose()
 
 
 # ---------------------------------------------------------------------------

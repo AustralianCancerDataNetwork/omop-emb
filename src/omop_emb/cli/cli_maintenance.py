@@ -129,7 +129,6 @@ def rebuild_index(
     )
     metric_info = f" (metric={metric_type.value})" if index_type == IndexType.HNSW else ""
     typer.echo(f"Rebuilt {index_type.value} index for '{model}'{metric_info}.")
-    logger.info("Completed index rebuild for model '%s'.", model)
 
 
 @app.command(name="delete-model", help="Irreversibly delete a registered model and all its embeddings.")

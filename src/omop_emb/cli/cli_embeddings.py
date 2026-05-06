@@ -149,7 +149,7 @@ def add_embeddings(
         missing = dict(list(missing.items())[:num_embeddings])
 
     total_concepts = len(missing)
-    logger.info(f"Total concepts to process: {total_concepts}")
+    typer.echo(f"Total concepts to process: {total_concepts:,}")
 
     from itertools import batched as _batched
     with tqdm(total=total_concepts, desc="Processing", unit="concept") as pbar:
@@ -242,6 +242,8 @@ def create_index(
         metric_type=metric_type if index_type == IndexType.HNSW else None,
     )
     embedding_writer.rebuild_index(index_config=index_config)
+    metric_info = f" (metric={metric_type.value})" if index_type == IndexType.HNSW else ""
+    typer.echo(f"Index ({index_type.value}) built for '{model}'{metric_info}.")
 
 
 @app.command()
@@ -417,6 +419,7 @@ def search(
         omop_cdm_engine = resolve_omop_cdm_engine()
     except RuntimeError:
         omop_cdm_engine = None
+        logger.info("CDM engine not configured; concept names will not be enriched in results.")
 
     embedding_client = EmbeddingClient(
         model=model,

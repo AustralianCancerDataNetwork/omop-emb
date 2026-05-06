@@ -200,7 +200,10 @@ def get_similarity_from_distance(
     elif metric == MetricType.L1:
         similarity = 1.0 / (1.0 + distance_col)
     elif metric == MetricType.HAMMING:
-        raise NotImplementedError()
+        raise ValueError(
+            "HAMMING distance has no similarity conversion formula for 'vector' columns. "
+            "It requires a 'bit' column type which is not currently supported."
+        )
     elif metric == MetricType.JACCARD:
         similarity = 1.0 - distance_col
     else:

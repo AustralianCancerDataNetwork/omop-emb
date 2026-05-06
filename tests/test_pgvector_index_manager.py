@@ -183,6 +183,41 @@ class TestPGVectorHNSWIndexManagerDDL:
 
 
 # ---------------------------------------------------------------------------
+# Metric support guards — unit tests (no DB)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestMetricSupportGuards:
+
+    @pytest.mark.parametrize("metric", [MetricType.HAMMING, MetricType.JACCARD])
+    def test_bit_metrics_not_in_pgvector_supported_metrics(self, metric):
+        from omop_emb.config import (
+            BackendType,
+            is_supported_index_metric_combination_for_backend,
+        )
+        assert not is_supported_index_metric_combination_for_backend(
+            backend=BackendType.PGVECTOR,
+            index=IndexType.FLAT,
+            metric=metric,
+        )
+
+    @pytest.mark.parametrize("metric", [MetricType.HAMMING, MetricType.JACCARD])
+    def test_get_distance_raises_for_bit_metrics(self, metric):
+        from omop_emb.backends.pgvector.pg_sql import get_distance
+
+        class _FakeTable:
+            embedding = None
+
+        with pytest.raises(ValueError, match="bit"):
+            get_distance(_FakeTable, [], metric)
+
+    def test_get_similarity_raises_valueerror_for_hamming(self):
+        from omop_emb.utils.embedding_utils import get_similarity_from_distance
+        with pytest.raises(ValueError, match="HAMMING"):
+            get_similarity_from_distance(0.5, MetricType.HAMMING)
+
+
+# ---------------------------------------------------------------------------
 # PGVectorHNSWIndexManager — integration tests (need DB)
 # ---------------------------------------------------------------------------
 

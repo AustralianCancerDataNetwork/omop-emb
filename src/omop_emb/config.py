@@ -210,7 +210,7 @@ SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tup
     },
     # https://github.com/pgvector/pgvector?tab=readme-ov-file#querying
     BackendType.PGVECTOR: {
-        IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1, MetricType.HAMMING, MetricType.JACCARD),
+        IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1),
         IndexType.HNSW: (MetricType.L2, MetricType.COSINE, MetricType.L1),
     },
     BackendType.FAISS: {

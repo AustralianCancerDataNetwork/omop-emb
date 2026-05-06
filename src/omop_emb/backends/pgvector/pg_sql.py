@@ -279,8 +279,14 @@ def get_distance(
     elif metric == MetricType.L1:
         return embedding_table.embedding.l1_distance(text_embedding)
     elif metric == MetricType.HAMMING:
-        return embedding_table.embedding.hamming_distance(text_embedding)
+        raise ValueError(
+            "HAMMING distance requires a 'bit' column type which is not currently "
+            "supported. Use L2, COSINE, L1, or JACCARD."
+        )
     elif metric == MetricType.JACCARD:
-        return embedding_table.embedding.jaccard_distance(text_embedding)
+        raise ValueError(
+            "JACCARD distance requires a 'bit' column type which is not currently "
+            "supported. Use L2, COSINE, or L1."
+        )
     else:
         raise ValueError(f"Unsupported metric: {metric.value}")

@@ -33,7 +33,15 @@ def resolve_backend() -> EmbeddingBackend:
     """
     backend_str = os.getenv(ENV_OMOP_EMB_BACKEND, BackendType.SQLITEVEC.value).lower()
 
-    if backend_str == BackendType.SQLITEVEC.value:
+    try:
+        backend_type = BackendType(backend_str)
+    except ValueError:
+        raise RuntimeError(
+            f"Unknown backend {backend_str!r} in {ENV_OMOP_EMB_BACKEND}. "
+            f"Supported: {[b.value for b in BackendType]}."
+        )
+
+    if backend_type == BackendType.SQLITEVEC:
         db_path = os.getenv(ENV_EMB_SQLITE_PATH)
         if db_path is None:
             raise RuntimeError(
@@ -45,7 +53,7 @@ def resolve_backend() -> EmbeddingBackend:
         from omop_emb.backends.sqlitevec import SQLiteVecBackend
         return SQLiteVecBackend.from_path(db_path)
 
-    if backend_str == BackendType.PGVECTOR.value:
+    elif backend_type == BackendType.PGVECTOR:
         url = os.getenv(ENV_EMB_POSTGRES_URL)
         if url is None:
             raise RuntimeError(
@@ -68,10 +76,10 @@ def resolve_backend() -> EmbeddingBackend:
             ) from exc
         return PGVectorEmbeddingBackend(emb_engine=engine)
 
-    raise RuntimeError(
-        f"Unknown backend {backend_str!r} in {ENV_OMOP_EMB_BACKEND}. "
-        f"Supported: {[b.value for b in BackendType]}."
-    )
+    else:
+        raise RuntimeError(
+            f"Implementation for {backend_type.value} is not available."
+        )
 
 
 def resolve_omop_cdm_engine() -> sa.Engine:

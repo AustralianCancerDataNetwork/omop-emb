@@ -6,7 +6,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 from numpy import ndarray
-from sqlalchemy import text
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
@@ -27,6 +27,19 @@ _QUERY_METRIC_FUNC = {
     MetricType.COSINE: "vec_distance_cosine",
     MetricType.L1: "vec_distance_l1",
 }
+
+
+def table_exists(engine: Engine, table_name: str) -> bool:
+    """Return ``True`` if a table (or virtual table) named *table_name* exists.
+
+    Queries ``sqlite_master`` which lists all objects (real tables, virtual
+    tables, indexes, views) regardless of type.
+    """
+    with engine.connect() as conn:
+        return conn.execute(
+            text("SELECT 1 FROM sqlite_master WHERE name = :n"),
+            {"n": table_name},
+        ).first() is not None
 
 
 def ddl_create_vec0(

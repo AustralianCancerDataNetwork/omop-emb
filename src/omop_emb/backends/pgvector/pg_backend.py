@@ -24,16 +24,20 @@ from omop_emb.backends.pgvector.pg_index_manager import (
     PGVectorFlatIndexManager,
     PGVectorHNSWIndexManager,
 )
+from omop_emb.backends.embedding_table import (
+    create_pg_embedding_table, 
+    load_pg_embedding_table
+)
 from omop_emb.backends.pgvector.pg_sql import (
     EMBEDDING_COLUMN_NAME,
     drop_pg_embedding_table,
-    get_or_create_pg_embedding_table,
     get_distance,
     q_all_concept_ids,
     q_embedding_vectors_by_concept_ids,
     q_nearest_concept_ids,
     q_upsert_embeddings,
-    q_create_extension_pgvector
+    q_create_extension_pgvector,
+    table_exists,
 )
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
@@ -95,8 +99,14 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
     # Storage table management
     # ------------------------------------------------------------------
 
+    def _storage_table_exists(self, model_record: EmbeddingModelRecord) -> bool:
+        return table_exists(self.emb_engine, model_record.storage_identifier)
+
+    def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> type:
+        return load_pg_embedding_table(model_record=model_record)
+
     def _create_storage_table(self, model_record: EmbeddingModelRecord) -> type:
-        return get_or_create_pg_embedding_table(engine=self.emb_engine, model_record=model_record)
+        return create_pg_embedding_table(engine=self.emb_engine, model_record=model_record)
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
         self._index_managers.pop(model_record.storage_identifier, None)

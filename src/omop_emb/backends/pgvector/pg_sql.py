@@ -14,13 +14,12 @@ import logging
 from typing import List, Optional, Sequence, Tuple, Type, Union, TYPE_CHECKING
 
 from numpy import ndarray
-from sqlalchemy import Engine, Integer, Select, delete, literal, select, text, TextClause
+from sqlalchemy import Engine, Integer, Select, literal, select, text, TextClause
 from sqlalchemy.sql import cast, column, values
 from sqlalchemy.sql.elements import ColumnElement
 
 from omop_emb.config import MetricType
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.embedding_table import create_pg_embedding_table
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
@@ -28,35 +27,15 @@ logger = logging.getLogger(__name__)
 
 EMBEDDING_COLUMN_NAME = "embedding"
 
-_PGVECTOR_TABLE_CACHE: dict[str, type] = {}
 
-
-def get_or_create_pg_embedding_table(
-    engine: Engine,
-    model_record: EmbeddingModelRecord,
-) -> type:
-    """Return an ORM class for the embedding table, creating it if needed.
-
-    Parameters
-    ----------
-    engine : Engine
-    model_record : EmbeddingModelRecord
-
-    Returns
-    -------
-    type
-        Dynamically generated SQLAlchemy ORM class.
-    """
-    tablename = model_record.storage_identifier
-    if tablename in _PGVECTOR_TABLE_CACHE:
-        return _PGVECTOR_TABLE_CACHE[tablename]
-    table_cls = create_pg_embedding_table(engine=engine, model_record=model_record)
-    _PGVECTOR_TABLE_CACHE[tablename] = table_cls
-    return table_cls
+def table_exists(engine: Engine, table_name: str) -> bool:
+    """Return ``True`` if *table_name* exists in the current Postgres schema."""
+    from sqlalchemy import inspect as sa_inspect
+    return sa_inspect(engine).has_table(table_name)
 
 
 def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) -> None:
-    """Delete all rows from an embedding table and evict it from the cache.
+    """Drop the physical embedding table from the database.
 
     Parameters
     ----------
@@ -64,11 +43,9 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
     model_record : EmbeddingModelRecord
     """
     tablename = model_record.storage_identifier
-    table_cls = _PGVECTOR_TABLE_CACHE.pop(tablename, None)
-    if table_cls is not None:
-        with engine.begin() as conn:
-            conn.execute(delete(table_cls))
-        logger.info(f"Dropped embedding table '{tablename}'.")
+    with engine.begin() as conn:
+        conn.execute(text(f'DROP TABLE IF EXISTS "{tablename}"'))
+    logger.info(f"Dropped embedding table '{tablename}'.")
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Type
-
 from sqlalchemy import Boolean, Engine, Integer, String
 from sqlalchemy.orm import DeclarativeBase, mapped_column
 
@@ -41,51 +39,25 @@ class ConceptEmbeddingMixin:
     is_valid = mapped_column(Boolean, nullable=False, server_default="true")
 
 
-def create_pg_embedding_table(
-    engine: Engine,
-    model_record: EmbeddingModelRecord,
-) -> Type:
-    """Create or retrieve a cached ORM class for a pgvector embedding table.
+def _build_pg_embedding_cls(model_record: EmbeddingModelRecord) -> type:
+    """Build the SQLAlchemy ORM class for a pgvector embedding table.
 
-    Parameters
-    ----------
-    engine : Engine
-        SQLAlchemy engine for the pgvector database.
-    model_record : EmbeddingModelRecord
-        Registry record whose ``storage_identifier`` names the table and
-        whose ``dimensions`` selects the column type.
-
-    Returns
-    -------
-    type
-        Dynamically generated SQLAlchemy ORM class mapped to the table.
-
-    Notes
-    -----
-    Uses ``halfvec(N)`` for dimensions greater than 2 000 and ``vector(N)``
-    otherwise, matching pgvector column-type limits.
-    Results are cached in ``_PG_TABLE_CACHE`` keyed by ``storage_identifier``.
+    Pure in-process operation — no database calls. Used by both
+    :func:`load_pg_embedding_table` (startup) and
+    :func:`create_pg_embedding_table` (new registration).
     """
-    from omop_emb.utils.embedding_utils import (
-        VectorColumnType, 
-        vector_column_type_for_dimensions
-    )
+    from omop_emb.utils.embedding_utils import VectorColumnType, vector_column_type_for_dimensions
     from pgvector.sqlalchemy import VECTOR, HALFVEC  # optional dependency
 
     tablename = model_record.storage_identifier
     dimensions = model_record.dimensions
-
-    if tablename in _PG_TABLE_CACHE:
-        return _PG_TABLE_CACHE[tablename]
-
     col_type = vector_column_type_for_dimensions(dimensions)
     emb_col = mapped_column(
         HALFVEC(dimensions) if col_type == VectorColumnType.HALFVEC else VECTOR(dimensions),
         nullable=False,
         index=False,
     )
-
-    table_cls = type(
+    return type(
         f"PGEmbedding_{tablename}",
         (ConceptEmbeddingMixin, EmbeddingTableBase),
         {
@@ -95,51 +67,45 @@ def create_pg_embedding_table(
             "embedding": emb_col,
         },
     )
-    EmbeddingTableBase.metadata.create_all(engine, tables=[table_cls.__table__])  # type: ignore[arg-type]
-    _PG_TABLE_CACHE[tablename] = table_cls
-    return table_cls
 
 
-def create_svec_embedding_table(model_record: EmbeddingModelRecord) -> Type:
-    """Return an ORM class mapped to an existing sqlite-vec vec0 table.
+def load_pg_embedding_table(model_record: EmbeddingModelRecord) -> type:
+    """Return an ORM class for an existing pgvector embedding table without DDL.
 
     Parameters
     ----------
     model_record : EmbeddingModelRecord
-        Registry record whose ``storage_identifier`` names the vec0 table.
 
     Returns
     -------
     type
-        Dynamically generated SQLAlchemy ORM class.
+        SQLAlchemy ORM class ready for queries. No ``CREATE TABLE`` is issued.
+    """
+    return _build_pg_embedding_cls(model_record)
+
+
+def create_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) -> type:
+    """Create a pgvector embedding table and return its ORM class.
+
+    Parameters
+    ----------
+    engine : Engine
+        SQLAlchemy engine for the pgvector database.
+    model_record : EmbeddingModelRecord
+
+    Returns
+    -------
+    type
+        SQLAlchemy ORM class mapped to the newly created table.
 
     Notes
     -----
-    The vec0 table itself is created separately via raw DDL (see
-    ``sqlitevec_sql.ddl_create_vec0``). This ORM class is used for INSERT
-    and DELETE only. KNN queries use raw SQL with the MATCH syntax.
-    Results are cached in ``_SVEC_TABLE_CACHE`` keyed by ``storage_identifier``.
+    Uses ``halfvec(N)`` for dimensions greater than 2 000 and ``vector(N)``
+    otherwise. Caching is handled by ``_ensure_storage_table`` in the backend
+    base class; this function always issues DDL.
     """
-    from sqlalchemy import LargeBinary
-
-    tablename = model_record.storage_identifier
-
-    if tablename in _SVEC_TABLE_CACHE:
-        return _SVEC_TABLE_CACHE[tablename]
-
-    table_cls = type(
-        f"SVecEmbedding_{tablename}",
-        (ConceptEmbeddingMixin, EmbeddingTableBase),
-        {
-            "__tablename__": tablename,
-            "__table_args__": {"extend_existing": True},
-            "__module__": __name__,
-            "embedding": mapped_column(LargeBinary, nullable=False),
-        },
-    )
-    _SVEC_TABLE_CACHE[tablename] = table_cls
+    table_cls = _build_pg_embedding_cls(model_record)
+    EmbeddingTableBase.metadata.create_all(engine, tables=[table_cls.__table__])  # type: ignore[arg-type]
     return table_cls
 
 
-_PG_TABLE_CACHE: dict[str, type] = {}
-_SVEC_TABLE_CACHE: dict[str, type] = {}

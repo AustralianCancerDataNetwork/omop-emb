@@ -6,7 +6,6 @@ the registry table share the same file and SQLAlchemy engine.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -35,6 +34,7 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     query_embeddings_by_ids,
     query_has_any,
     query_knn,
+    table_exists,
 )
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
@@ -45,25 +45,6 @@ from omop_emb.utils.embedding_utils import (
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass(frozen=True)
-class SQLiteVecTableSpec:
-    """Descriptor for a sqlite-vec vec0 virtual table.
-
-    Attributes
-    ----------
-    table_name : str
-        Physical table name (the registry ``storage_identifier``).
-    dimensions : int
-        Embedding vector length.
-    metric_type : MetricType, optional
-        Metric baked into the ``distance_metric=`` DDL column suffix, or
-        ``None`` for FLAT tables (per-query metric via ``vec_distance_*``).
-    """
-
-    table_name: str
-    dimensions: int
-    metric_type: Optional[MetricType]
 
 
 def create_sqlitevec_engine(db_path: str) -> Engine:
@@ -98,8 +79,15 @@ class SQLiteVecBackend(EmbeddingBackend):
 
     Notes
     -----
-    Only ``FLAT`` index type is supported. Supports ``L2`` and ``COSINE``
-    distance metrics.
+    - Only ``FLAT`` index type is supported. Supports ``L2``, ``COSINE``, and
+    ``L1`` distance metrics.
+
+    - **No SQLAlchemy ORM for embeddings.** 
+        - vec0 is a SQLite virtual table type that the SQLAlchemy ORM cannot introspect or query. 
+        - All embedding operations therefore use raw ``text()`` SQL, passing the physical table name directly.
+        - ``_table_cache`` (inherited from :class:`~omop_emb.backends.base_backend.EmbeddingBackend`) stores only the table name string as a presence marker. 
+        - ``_table_cache`` is used solely to prevent redundant existence checks and DDL
+        - All operations resolve the table via ``model_record.storage_identifier``.
     """
 
     @classmethod
@@ -129,7 +117,15 @@ class SQLiteVecBackend(EmbeddingBackend):
     # Storage table management
     # ------------------------------------------------------------------
 
-    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> SQLiteVecTableSpec:
+    def _storage_table_exists(self, model_record: EmbeddingModelRecord) -> bool:
+        return table_exists(self.emb_engine, model_record.storage_identifier)
+
+    def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> str:
+        # The descriptor for sqlite-vec is just the table name: all operations
+        # use model_record.storage_identifier directly via raw SQL.
+        return model_record.storage_identifier
+
+    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> str:
         ddl = ddl_create_vec0(
             table_name=model_record.storage_identifier,
             dimensions=model_record.dimensions,
@@ -137,11 +133,7 @@ class SQLiteVecBackend(EmbeddingBackend):
         )
         with self.emb_engine.begin() as conn:
             conn.execute(text(ddl))
-        return SQLiteVecTableSpec(
-            table_name=model_record.storage_identifier,
-            dimensions=model_record.dimensions,
-            metric_type=model_record.metric_type,
-        )
+        return model_record.storage_identifier
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
         with self.emb_engine.begin() as conn:

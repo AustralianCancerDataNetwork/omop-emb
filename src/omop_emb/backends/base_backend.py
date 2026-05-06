@@ -197,7 +197,8 @@ class EmbeddingBackend(ABC):
     def _initialise_store(self) -> None:
         self.pre_initialise_store()
         for record in self._registry.get_registered_models(backend_type=self.backend_type):
-            self._ensure_storage_table(record)
+            if record.storage_identifier not in self._table_cache:
+                self._table_cache[record.storage_identifier] = self._load_storage_table(record)
 
     def pre_initialise_store(self) -> None:
         """Hook for backend-specific setup before the registry is queried.
@@ -516,8 +517,47 @@ class EmbeddingBackend(ABC):
     # Storage table management (backend-specific)
     # ------------------------------------------------------------------
 
+    def _load_storage_table(self, model_record: EmbeddingModelRecord) -> Any:
+        """Return the table descriptor for a registered model, recovering if missing
+        by recreating the table as needed."""
+        if not self._storage_table_exists(model_record):
+            logger.warning(
+                f"Embedding table '{model_record.storage_identifier}' is registered but missing from the database. "
+                "Recreating table but expect missing records."
+            )
+            return self._create_storage_table(model_record)
+        return self._get_storage_table_descriptor(model_record)
+
     @abstractmethod
-    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> Any: ...
+    def _storage_table_exists(self, model_record: EmbeddingModelRecord) -> bool:
+        """Return ``True`` if the physical embedding table exists in the database.
+        """
+        ...
+
+    @abstractmethod
+    def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> Any:
+        """Build the in-process descriptor for a table known to already exist.
+        Must not issue any DDL.
+
+        Returns
+        -------
+        descriptor
+            Opaque object used by the backend to identify the table in subsequent operations.
+            Differs between backends, e.g. SQLAlchemy ORM class for pgvector, table name string for sqlite-vec.
+        """
+        ...
+
+    @abstractmethod
+    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> Any:
+        """Create the physical table in the database and return its descriptor.
+
+        Returns
+        -------
+        descriptor
+            Opaque object used by the backend to identify the table in subsequent operations.
+            Differs between backends, e.g. SQLAlchemy ORM class for pgvector, table name string for sqlite-vec.
+        """
+        ...
 
     @abstractmethod
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None: ...

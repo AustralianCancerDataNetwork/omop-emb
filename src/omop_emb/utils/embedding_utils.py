@@ -39,6 +39,9 @@ class EmbeddingConceptFilter:
     require_standard : bool
         When ``True``, only standard concepts (``standard_concept`` in
         ``('S', 'C')``) are returned. Default ``False``.
+    require_active : bool
+        When ``True``, only active concepts (``invalid_reason`` not in 
+        ``('D', 'U')``) are returned. Default ``False``.
     limit : int, optional
         Maximum number of nearest neighbours to return. If not set, the
         backend default is used.
@@ -48,6 +51,7 @@ class EmbeddingConceptFilter:
     domains: Optional[tuple[str, ...]] = None
     vocabularies: Optional[tuple[str, ...]] = None
     require_standard: bool = False
+    require_active: bool = False
     limit: Optional[int] = None
 
     def __post_init__(self) -> None:
@@ -84,7 +88,15 @@ class EmbeddingConceptFilter:
             else:
                 query = query.where(table.standard_concept.in_(["S", "C"]))
 
-        return query.limit(self.limit)
+        if self.require_active:
+            if hasattr(table, "is_valid"):
+                query = query.where(table.is_valid == True)  # noqa: E712
+            else:
+                query = query.where(table.invalid_reason.not_in(["D", "U"]))
+
+        if self.limit is not None:
+            query = query.limit(self.limit)
+        return query
 
     def is_empty(self) -> bool:
         """Return ``True`` if no constraints are set."""
@@ -93,6 +105,7 @@ class EmbeddingConceptFilter:
             self.domains is None and
             self.vocabularies is None and
             not self.require_standard and
+            not self.require_active and
             self.limit is None
         )
 
@@ -151,6 +164,7 @@ class ConceptEmbeddingRecord:
     domain_id: str
     vocabulary_id: str
     is_standard: bool
+    is_valid: bool = True
 
 
 @overload

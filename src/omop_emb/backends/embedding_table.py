@@ -38,6 +38,7 @@ class ConceptEmbeddingMixin:
     domain_id = mapped_column(String, nullable=False)
     vocabulary_id = mapped_column(String, nullable=False)
     is_standard = mapped_column(Boolean, nullable=False)
+    is_valid = mapped_column(Boolean, nullable=False, server_default="true")
 
 
 def create_pg_embedding_table(

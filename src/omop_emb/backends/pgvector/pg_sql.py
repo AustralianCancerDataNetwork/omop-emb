@@ -104,6 +104,7 @@ def q_upsert_embeddings(
             "domain_id": rec.domain_id,
             "vocabulary_id": rec.vocabulary_id,
             "is_standard": rec.is_standard,
+            "is_valid": rec.is_valid,
             EMBEDDING_COLUMN_NAME: emb.tolist(),
         }
         for rec, emb in zip(records, embeddings)
@@ -115,6 +116,7 @@ def q_upsert_embeddings(
             "domain_id": stmt.excluded.domain_id,
             "vocabulary_id": stmt.excluded.vocabulary_id,
             "is_standard": stmt.excluded.is_standard,
+            "is_valid": stmt.excluded.is_valid,
             EMBEDDING_COLUMN_NAME: getattr(stmt.excluded, EMBEDDING_COLUMN_NAME),
         },
     )
@@ -187,8 +189,8 @@ def q_nearest_concept_ids(
     Returns
     -------
     Select
-        Columns: ``q_id`` (int), ``concept_id`` (int), ``distance`` (float).
-        Result shape is ``(Q*K, 3)`` before the caller re-groups by ``q_id``.
+        Columns: ``q_id`` (int), ``concept_id`` (int), ``is_standard`` (bool), ``distance`` (float).
+        Result shape is ``(Q*K, 4)`` before the caller re-groups by ``q_id``.
 
     Notes
     -----
@@ -208,6 +210,7 @@ def q_nearest_concept_ids(
     inner_stmt = (
         select(
             embedding_table.concept_id,
+            embedding_table.is_standard,
             distance.label("distance"),
         )
         .order_by(distance)
@@ -223,6 +226,7 @@ def q_nearest_concept_ids(
         select(
             query_v.c.q_id,
             lateral_subq.c.concept_id,
+            lateral_subq.c.is_standard,
             lateral_subq.c.distance,
         )
         .select_from(query_v)

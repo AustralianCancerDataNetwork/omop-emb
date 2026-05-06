@@ -76,7 +76,8 @@ def ddl_create_vec0(
         f"concept_id INTEGER PRIMARY KEY, "
         f"domain_id TEXT METADATA, "
         f"vocabulary_id TEXT METADATA, "
-        f"is_standard INTEGER METADATA, "
+        f"is_standard BOOLEAN METADATA, "
+        f"is_valid BOOLEAN METADATA DEFAULT 1, "
         f"{embedding_col}"
         f")"
     )
@@ -131,14 +132,15 @@ def dml_upsert_rows(
         session.execute(
             text(
                 f'INSERT INTO "{table_name}" '
-                f"(concept_id, domain_id, vocabulary_id, is_standard, embedding) "
-                f"VALUES (:cid, :did, :vid, :std, :emb)"
+                f"(concept_id, domain_id, vocabulary_id, is_standard, is_valid, embedding) "
+                f"VALUES (:cid, :did, :vid, :std, :valid, :emb)"
             ),
             {
                 "cid": rec.concept_id,
                 "did": rec.domain_id,
                 "vid": rec.vocabulary_id,
                 "std": int(rec.is_standard),
+                "valid": int(rec.is_valid),
                 "emb": _embedding_to_blob(emb),
             },
         )
@@ -151,7 +153,7 @@ def query_knn(
     metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
-) -> list[tuple[int, float]]:
+) -> list[tuple[int, float, int]]:
     """Run a KNN query against a vec0 table using a per-query distance function.
 
     Parameters
@@ -170,8 +172,8 @@ def query_knn(
 
     Returns
     -------
-    list[tuple[int, float]]
-        Pairs of ``(concept_id, distance)`` ordered by distance ascending.
+    list[tuple[int, float, int]]
+        Triples of ``(concept_id, distance, is_standard)`` ordered by distance ascending.
 
     Raises
     ------
@@ -213,16 +215,18 @@ def query_knn(
             params.update({f"voc{i}": v for i, v in enumerate(vocabs)})
         if concept_filter.require_standard:
             where_clauses.append("is_standard = 1")
+        if concept_filter.require_active:
+            where_clauses.append("is_valid = 1")
 
     where_str = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
     sql = text(
-        f'SELECT concept_id, {dist_func}(embedding, :emb) as distance '
+        f'SELECT concept_id, {dist_func}(embedding, :emb) as distance, is_standard '
         f'FROM "{table_name}" '
         f"{where_str}"
         f"ORDER BY distance LIMIT :k"
     )
     rows = session.execute(sql, params).all()
-    return [(int(row[0]), float(row[1])) for row in rows]
+    return [(int(row[0]), float(row[1]), int(row[2])) for row in rows]
 
 
 def query_all_concept_ids(session: Session, table_name: str) -> set[int]:

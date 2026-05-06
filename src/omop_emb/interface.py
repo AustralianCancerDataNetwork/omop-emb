@@ -92,6 +92,7 @@ def _fetch_cdm_concepts_for_ingestion(
         Concept.domain_id,
         Concept.vocabulary_id,
         Concept.standard_concept,
+        Concept.invalid_reason,
     ).where(Concept.concept_id.in_(concept_ids))
     with cdm_session_factory() as session:
         return {row.concept_id: row for row in session.execute(query)}
@@ -380,8 +381,8 @@ class EmbeddingReaderInterface:
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         """Enrich backend results with concept names from the CDM.
 
-        Only ``concept_name`` is populated here.  ``is_standard`` and
-        ``is_active`` will be sourced from the embedding table in item 36.
+        Only ``concept_name`` is populated here.  ``is_standard`` is already
+        set by the backend from the embedding table filter columns.
         """
         if not self._cdm_session_factory:
             return raw
@@ -617,6 +618,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
                 domain_id=meta[cid].domain_id if cid in meta else "",
                 vocabulary_id=meta[cid].vocabulary_id if cid in meta else "",
                 is_standard=meta[cid].standard_concept in ("S", "C") if cid in meta else False,
+                is_valid=meta[cid].invalid_reason not in ("D", "U") if cid in meta else True,
             )
             for cid in concept_ids
         ]

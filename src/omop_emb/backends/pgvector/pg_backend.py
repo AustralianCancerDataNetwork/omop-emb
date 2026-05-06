@@ -278,6 +278,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
                 NearestConceptMatch(
                     concept_id=int(row.concept_id),
                     similarity=float(similarity),
+                    is_standard=bool(row.is_standard),
                 )
             )
 

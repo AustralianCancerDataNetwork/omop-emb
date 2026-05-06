@@ -234,8 +234,9 @@ class SQLiteVecBackend(EmbeddingBackend):
                     NearestConceptMatch(
                         concept_id=concept_id,
                         similarity=get_similarity_from_distance(distance, metric_type),
+                        is_standard=bool(is_standard),
                     )
-                    for concept_id, distance in rows
+                    for concept_id, distance, is_standard in rows
                 )
                 results.append(matches)
 

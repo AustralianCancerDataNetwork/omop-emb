@@ -17,7 +17,7 @@ ENV_OMOP_EMB_DB_HOST = "OMOP_EMB_DB_HOST"
 ENV_OMOP_EMB_DB_PORT = "OMOP_EMB_DB_PORT"
 ENV_OMOP_EMB_DB_NAME = "OMOP_EMB_DB_NAME"
 # Override the SQLAlchemy driver string (e.g. "postgresql+psycopg2")
-ENV_OMOP_EMB_DB_DRIVER = "OMOP_EMB_DB_CONN"
+ENV_OMOP_EMB_DB_DRIVER = "OMOP_EMB_DB_DRIVER"
 # Optional full connection string — overrides all individual components above
 ENV_OMOP_EMB_DB_URL = "OMOP_EMB_DB_URL"
 

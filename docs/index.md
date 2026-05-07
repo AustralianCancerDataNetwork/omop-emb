@@ -48,7 +48,7 @@ pip install "omop-emb[pgvector,faiss]"  # everything
 | `OMOP_EMB_DB_USER` | — | PostgreSQL user. |
 | `OMOP_EMB_DB_PASSWORD` | — | PostgreSQL password. |
 | `OMOP_EMB_DB_NAME` | — | PostgreSQL database name. |
-| `OMOP_EMB_DB_CONN` | `postgresql+psycopg` | SQLAlchemy driver string. Override to use e.g. `psycopg2`. |
+| `OMOP_EMB_DB_DRIVER` | `postgresql+psycopg` | SQLAlchemy driver string. Override to use e.g. `psycopg2`. |
 | `OMOP_EMB_DB_URL` | — | Full SQLAlchemy connection URL. Overrides all individual components above when set. |
 
 ### Embedding API (CLI concept ingestion)

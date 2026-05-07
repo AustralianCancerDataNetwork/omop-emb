@@ -41,7 +41,7 @@ automatically.
 | `OMOP_EMB_DB_USER` | — | PostgreSQL user. |
 | `OMOP_EMB_DB_PASSWORD` | — | PostgreSQL password. |
 | `OMOP_EMB_DB_NAME` | — | PostgreSQL database name. |
-| `OMOP_EMB_DB_CONN` | `postgresql+psycopg` | SQLAlchemy driver string. |
+| `OMOP_EMB_DB_DRIVER` | `postgresql+psycopg` | SQLAlchemy driver string. |
 | `OMOP_EMB_DB_URL` | — | Full connection URL. Overrides individual components. |
 
 ### Ingestion (CDM access)

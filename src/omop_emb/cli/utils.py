@@ -32,7 +32,7 @@ def resolve_backend() -> EmbeddingBackend:
     - ``sqlitevec``: requires ``OMOP_EMB_SQLITE_PATH`` (or ``OMOP_EMB_DB_URL``).
     - ``pgvector``: requires ``OMOP_EMB_DB_USER``, ``OMOP_EMB_DB_PASSWORD``,
       ``OMOP_EMB_DB_HOST``, ``OMOP_EMB_DB_NAME`` (and optionally
-      ``OMOP_EMB_DB_PORT``, ``OMOP_EMB_DB_CONN``), or ``OMOP_EMB_DB_URL``.
+      ``OMOP_EMB_DB_PORT``, ``OMOP_EMB_DB_DRIVER``), or ``OMOP_EMB_DB_URL``.
     """
     backend_str = os.getenv(ENV_OMOP_EMB_BACKEND, BackendType.SQLITEVEC.value).lower()
 

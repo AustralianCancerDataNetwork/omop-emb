@@ -82,7 +82,7 @@ export OMOP_EMB_DB_URL=postgresql+psycopg://omop_emb:omop_emb@localhost:5432/omo
 ```
 
 The default driver string is `postgresql+psycopg` (psycopg3). Override via
-`OMOP_EMB_DB_CONN` if you need a different driver (e.g. `postgresql+psycopg2`).
+`OMOP_EMB_DB_DRIVER` if you need a different driver (e.g. `postgresql+psycopg2`).
 
 ### Docker Compose
 

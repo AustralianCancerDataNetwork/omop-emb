@@ -53,7 +53,7 @@ be committed safely to version-controlled `.env` files (without the password).
 | `OMOP_EMB_DB_USER` | yes | — | Database user. |
 | `OMOP_EMB_DB_PASSWORD` | yes | — | Database password. |
 | `OMOP_EMB_DB_NAME` | yes | — | Database name. |
-| `OMOP_EMB_DB_CONN` | no | `postgresql+psycopg` | SQLAlchemy driver string. |
+| `OMOP_EMB_DB_DRIVER` | no | `postgresql+psycopg` | SQLAlchemy driver string. |
 
 **Example `.env`:**
 
@@ -86,7 +86,7 @@ When `OMOP_EMB_DB_URL` is not set, `build_engine_string` assembles the
 SQLAlchemy URL from the individual components at runtime:
 
 ```
-{OMOP_EMB_DB_CONN}://{OMOP_EMB_DB_USER}:{OMOP_EMB_DB_PASSWORD}@{OMOP_EMB_DB_HOST}:{OMOP_EMB_DB_PORT}/{OMOP_EMB_DB_NAME}
+{OMOP_EMB_DB_DRIVER}://{OMOP_EMB_DB_USER}:{OMOP_EMB_DB_PASSWORD}@{OMOP_EMB_DB_HOST}:{OMOP_EMB_DB_PORT}/{OMOP_EMB_DB_NAME}
 ```
 
 With the defaults above this produces:
@@ -98,7 +98,7 @@ postgresql+psycopg://omop_emb:omop_emb@omop-emb-db:5432/omop_emb
 ### Driver string
 
 The default driver is `postgresql+psycopg` (psycopg3). Override
-`OMOP_EMB_DB_CONN` if you need a different driver:
+`OMOP_EMB_DB_DRIVER` if you need a different driver:
 
 | Driver string | Package | Notes |
 |---|---|---|

@@ -15,6 +15,7 @@ from omop_emb.config import (
     ProviderType,
     SUPPORTED_INDICES_AND_METRICS_PER_BACKEND,
 )
+from omop_emb.embeddings.embedding_providers import get_provider_from_provider_type
 from omop_emb.interface import list_registered_models
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,10 @@ def rebuild_index(
         "--model", "-m",
         help="Canonical model name to rebuild the index for.",
     )],
+    provider_type: Annotated[Optional[ProviderType], typer.Option(
+        "--provider-type",
+        help="Embedding provider type. Required to determine canonical model name.",
+    )] = None,
     index_type: Annotated[IndexType, typer.Option(
         "--index-type",
         help="Index type to build (FLAT = exact scan, HNSW = approximate; pgvector only).",
@@ -101,11 +106,20 @@ def rebuild_index(
     configure_logging_level(verbosity)
     load_dotenv()
 
+    if provider_type is not None:
+        embedding_provider = get_provider_from_provider_type(provider_type)
+        model = embedding_provider.canonical_model_name(model)
+
     backend = resolve_backend()
 
     record = backend.get_registered_model(model_name=model)
     if record is None:
-        raise typer.BadParameter(f"No registered model found for '{model}'.")
+        typer.echo(
+            f"No registered model found for '{model}'.\n"
+            f"Could be that you didn't canonicalize the model name correctly or that the model was never registered.\n"
+            f"Registered models: {[r.model_name for r in backend.get_registered_models()]}\n."
+        )
+        raise typer.Exit(1)
 
     index_config = index_config_from_index_type(
         index_type,
@@ -128,6 +142,10 @@ def delete_model(
         "--model", "-m",
         help="Canonical model name to delete.",
     )],
+    provider_type: Annotated[Optional[ProviderType], typer.Option(
+        "--provider-type",
+        help="Embedding provider type. Used to check canonical model_name if provided.",
+    )] = None,
     confirm: Annotated[bool, typer.Option(
         "--yes", "-y",
         help="Skip confirmation prompt.",
@@ -140,6 +158,10 @@ def delete_model(
     configure_logging_level(verbosity)
     load_dotenv()
 
+    if provider_type is not None:
+        embedding_provider = get_provider_from_provider_type(provider_type)
+        model = embedding_provider.canonical_model_name(model)
+
     if not confirm:
         typer.confirm(
             f"Delete model '{model}' and ALL associated embeddings? This cannot be undone.",
@@ -147,6 +169,16 @@ def delete_model(
         )
 
     backend = resolve_backend()
+    record = backend.get_registered_model(model_name=model)
+    if record is None:
+        typer.echo(
+            f"No registered model found for '{model}'.\n"
+            f"Could be that you didn't canonicalize the model name correctly or that the model was never registered.\n"
+            f"Registered models: {[r.model_name for r in backend.get_registered_models()]}\n."
+            f"Not deleting {model}."
+        )
+        raise typer.Exit(1)
+
     backend.delete_model(model_name=model)
     typer.echo(f"Deleted model '{model}'.")
 
@@ -166,6 +198,10 @@ def export_faiss_cache(
         help="Distance metric for the FAISS index.",
         rich_help_panel="Index Options",
     )] = MetricType.COSINE,
+    provider_type: Annotated[Optional[ProviderType], typer.Option(
+        "--provider-type",
+        help="Embedding provider type. Used to check canonical model_name if provided.",
+    )] = None,
     batch_size: Annotated[int, typer.Option(
         "--batch-size", "-b",
         help="Batch size when streaming embeddings.",
@@ -177,6 +213,10 @@ def export_faiss_cache(
 ):
     configure_logging_level(verbosity)
     load_dotenv()
+
+    if provider_type is not None:
+        embedding_provider = get_provider_from_provider_type(provider_type)
+        model = embedding_provider.canonical_model_name(model)
 
     try:
         from omop_emb.storage.faiss import FAISSCache
@@ -203,6 +243,10 @@ def check_faiss_cache(
         "--model", "-m",
         help="Canonical model name to check.",
     )],
+    provider_type: Annotated[Optional[ProviderType], typer.Option(
+        "--provider-type",
+        help="Embedding provider type. Used to check canonical model_name if provided.",
+    )],
     metric_type: Annotated[MetricType, typer.Option(
         "--metric-type",
         help="Distance metric of the FAISS index to check.",
@@ -215,6 +259,11 @@ def check_faiss_cache(
     configure_logging_level(verbosity)
     load_dotenv()
 
+    # Try to validate the canonical model name early
+    if provider_type is not None:
+        embedding_provider = get_provider_from_provider_type(provider_type)
+        model = embedding_provider.canonical_model_name(model)
+
     try:
         from omop_emb.storage.faiss import FAISSCache
     except ImportError as exc:
@@ -226,7 +275,11 @@ def check_faiss_cache(
     backend = resolve_backend()
     record = backend.get_registered_model(model_name=model)
     if record is None:
-        typer.echo(f"No registered model found for '{model}'.")
+        typer.echo(
+            f"No registered model found for '{model}'. "
+            f"Could be that you didn't canonicalize the model name correctly or that the model was never registered. "
+            f"Registered models: {[r.model_name for r in backend.get_registered_models()]}"
+        )
         raise typer.Exit(1)
 
     cache_meta = record.metadata.get("faiss_cache") if record.metadata else None

@@ -428,12 +428,11 @@ def search(
         embedding_batch_size=batch_size,
     )
     embedding_reader = EmbeddingReaderInterface(
+        model=embedding_client.canonical_model_name,
         backend=backend,
         metric_type=metric_type,
         omop_cdm_engine=omop_cdm_engine,
-        model=model,
-        api_base=api_base,
-        api_key=api_key,
+        provider_name_or_type=embedding_client.provider.provider_type,
     )
 
     concept_filter = EmbeddingConceptFilter(

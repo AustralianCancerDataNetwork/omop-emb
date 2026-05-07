@@ -35,7 +35,6 @@ class EmbeddingProvider(ABC):
         """Return the provider type as a value of the ProviderType enum."""
         ...
 
-    @abstractmethod
     def canonical_model_name(self, name: str) -> str:
         """Return the canonical form of *name* for this provider.
 
@@ -56,6 +55,13 @@ class EmbeddingProvider(ABC):
             Canonical model name, e.g. ``'llama3:8b'`` or
             ``'text-embedding-3-small'``.
         """
+        canonical_model_name = self._canonical_model_name_impl(name)
+        logger.info(f"Set canonical model name for provider {self.provider_type.value!r}: {canonical_model_name!r}")
+        return canonical_model_name
+
+    @abstractmethod
+    def _canonical_model_name_impl(self, name: str) -> str:
+        """Provider-specific implementation of canonical model name resolution."""
         ...
 
     def get_embedding_dim(self, model: str, api_base: URL) -> Optional[int]:
@@ -92,7 +98,7 @@ class OllamaProvider(EmbeddingProvider):
     def provider_type(self) -> ProviderType:
         return ProviderType.OLLAMA
 
-    def canonical_model_name(self, name: str) -> str:
+    def _canonical_model_name_impl(self, name: str) -> str:
         """Require an explicit, immutable model tag.
 
         Rejects both untagged names and the mutable ``:latest`` tag.

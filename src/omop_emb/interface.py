@@ -127,10 +127,9 @@ class EmbeddingReaderInterface:
         Engine for the user's OMOP CDM.  When provided, KNN results are
         enriched with ``concept_name``, ``is_standard``, and ``is_active``
         from the CDM.  When absent, those fields are ``None``.
-    model : str, optional
-        Raw model name (canonicalized via the provider).
+    model : str
+        Raw model name. Checked for cannonical form by the provider and passed verbatim to the API for embedding generation.
     canonical_model_name : str, optional
-        Pre-computed canonical model name.
     provider_name_or_type : str | ProviderType, optional
         Embedding provider.
     api_base / api_key : str, optional
@@ -142,11 +141,11 @@ class EmbeddingReaderInterface:
 
     def __init__(
         self,
+        model: str,
         backend: EmbeddingBackend,
         metric_type: MetricType,
         *,
         omop_cdm_engine: Optional[Engine] = None,
-        model: Optional[str] = None,
         canonical_model_name: Optional[str] = None,
         provider_name_or_type: Optional[Union[str, ProviderType]] = None,
         api_base: Optional[str] = None,
@@ -168,11 +167,7 @@ class EmbeddingReaderInterface:
             raise ValueError(f"Invalid provider_name_or_type: {type(provider_name_or_type).__name__}.")
 
         provider = get_provider_from_provider_type(provider_type)
-
-        if canonical_model_name is None:
-            if model is None:
-                raise ValueError("Either 'model' or 'canonical_model_name' must be provided.")
-            canonical_model_name = provider.canonical_model_name(model)
+        canonical_model_name = provider.canonical_model_name(model)
 
         self._backend = backend
         self._metric_type = metric_type
@@ -181,30 +176,6 @@ class EmbeddingReaderInterface:
         self._k = k
         self._cdm_engine = omop_cdm_engine
         self._cdm_session_factory = sessionmaker(omop_cdm_engine) if omop_cdm_engine else None
-
-    # ------------------------------------------------------------------
-    # Factory classmethods
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def from_sqlitevec(
-        cls,
-        db_path: str,
-        metric_type: MetricType,
-        **kwargs,
-    ) -> "EmbeddingReaderInterface":
-        from omop_emb.backends.sqlitevec import SQLiteVecBackend
-        return cls(backend=SQLiteVecBackend.from_path(db_path), metric_type=metric_type, **kwargs)
-
-    @classmethod
-    def from_pgvector(
-        cls,
-        emb_engine: Engine,
-        metric_type: MetricType,
-        **kwargs,
-    ) -> "EmbeddingReaderInterface":
-        from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
-        return cls(backend=PGVectorEmbeddingBackend(emb_engine=emb_engine), metric_type=metric_type, **kwargs)
 
     # ------------------------------------------------------------------
     # Properties
@@ -427,41 +398,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             provider_name_or_type=embedding_client.provider.provider_type,
         )
 
-    # ------------------------------------------------------------------
-    # Factory classmethods
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def from_sqlitevec(
-        cls,
-        db_path: str,
-        metric_type: MetricType,
-        embedding_client: EmbeddingClient,
-        **kwargs,
-    ) -> "EmbeddingWriterInterface":
-        from omop_emb.backends.sqlitevec import SQLiteVecBackend
-        return cls(
-            backend=SQLiteVecBackend.from_path(db_path),
-            metric_type=metric_type,
-            embedding_client=embedding_client,
-            **kwargs,
-        )
-
-    @classmethod
-    def from_pgvector(
-        cls,
-        emb_engine: Engine,
-        metric_type: MetricType,
-        embedding_client: EmbeddingClient,
-        **kwargs,
-    ) -> "EmbeddingWriterInterface":
-        from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
-        return cls(
-            backend=PGVectorEmbeddingBackend(emb_engine=emb_engine),
-            metric_type=metric_type,
-            embedding_client=embedding_client,
-            **kwargs,
-        )
 
     @property
     def embedding_dim(self) -> int:

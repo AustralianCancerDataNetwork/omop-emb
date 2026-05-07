@@ -15,9 +15,11 @@ Design
 """
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import replace as dc_replace
 from itertools import batched
-from typing import Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from numpy import ndarray
@@ -38,8 +40,13 @@ from omop_emb.backends.base_backend import (
     EmbeddingModelRecord,
 )
 from omop_emb.backends.index_config import IndexConfig
-from omop_emb.config import BackendType, MetricType, ProviderType
+from omop_emb.config import BackendType, ENV_FAISS_CACHE_DIR, MetricType, ProviderType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
+
+if TYPE_CHECKING:
+    from omop_emb.storage.faiss import FAISSCache
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +157,7 @@ class EmbeddingReaderInterface:
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
+        faiss_cache_dir: Optional[str] = None,
     ):
         # Resolve provider type
         if isinstance(provider_name_or_type, str):
@@ -175,6 +183,22 @@ class EmbeddingReaderInterface:
         self._k = k
         self._cdm_engine = omop_cdm_engine
         self._cdm_session_factory = sessionmaker(omop_cdm_engine) if omop_cdm_engine else None
+
+        # FAISS fast path — activated at construction, not mid-search
+        _faiss_dir = faiss_cache_dir or os.getenv(ENV_FAISS_CACHE_DIR)
+        self._faiss_cache: Optional["FAISSCache"] = None
+        if _faiss_dir is not None:
+            try:
+                from omop_emb.storage.faiss import FAISSCache as _FAISSCache
+                self._faiss_cache = _FAISSCache(
+                    model_name=canonical_model_name,
+                    cache_dir=_faiss_dir,
+                )
+            except ImportError as exc:
+                raise ImportError(
+                    "faiss_cache_dir was provided but the 'faiss' package is not installed. "
+                    "Install it with: pip install omop-emb[faiss]"
+                ) from exc
 
     # ------------------------------------------------------------------
     # Properties
@@ -251,6 +275,22 @@ class EmbeddingReaderInterface:
             Shape ``(Q, ≤k)``.  Enrichment fields are ``None`` if no CDM engine.
         """
         effective_k = k or (concept_filter.limit if concept_filter else None) or self._k
+
+        if self._faiss_cache is not None:
+            record = self._backend.get_registered_model(model_name=self.canonical_model_name)
+            if record is not None and self._faiss_cache.is_fresh(record):
+                logger.info(
+                    "Using FAISS cache for search (model='%s', cache='%s').",
+                    self.canonical_model_name,
+                    self._faiss_cache.model_dir,
+                )
+                raw = self._faiss_cache.search(
+                    query_embedding,
+                    effective_k,
+                    concept_filter=concept_filter,
+                )
+                return self._enrich(raw)
+
         raw = self._backend.get_nearest_concepts(
             model_name=self.canonical_model_name,
             metric_type=self._metric_type,

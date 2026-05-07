@@ -6,12 +6,9 @@ from sqlalchemy import DateTime, Engine, Integer, JSON, String, Enum, func
 from sqlalchemy.orm import DeclarativeBase, mapped_column, validates, Mapped
 
 from omop_emb.config import (
-    BackendType,
     IndexType,
     MetricType,
     ProviderType,
-    get_supported_index_types_for_backend,
-    is_index_type_supported_for_backend,
 )
 from omop_emb.backends.index_config import IndexConfig
 
@@ -24,14 +21,12 @@ class ModelRegistryBase(DeclarativeBase):
 class ModelRegistry(ModelRegistryBase):
     """ORM row for one registered embedding model.
 
-    The primary key is ``(model_name, backend_type)``.  ``provider_type`` is
-    stored as a plain nullable column for diagnostics; it is not part of the
-    key because the same model name + backend always maps to the same physical
-    table regardless of which compatible endpoint generated the vectors.
+    The primary key is ``model_name``.  ``provider_type`` is stored as a plain
+    nullable column for diagnostics.
 
     Each model has exactly one active index at any time.
-    ``index_type`` and ``metric_type`` are regular (non-key) columns that are automatically
-    synced when ``index_config`` is assigned.
+    ``index_type`` and ``metric_type`` are regular (non-key) columns that are
+    automatically synced when ``index_config`` is assigned.
 
     Attributes
     ----------
@@ -39,11 +34,9 @@ class ModelRegistry(ModelRegistryBase):
         Canonical model name including tag.
     provider_type : ProviderType
         Provider that served the model (informational only).
-    backend_type : BackendType
-        Embedding storage backend.
     storage_identifier : str
-        Physical table name (or file name for FAISS) where the model's embeddings are stored. 
-        Must be unique across the registry.
+        Physical table name where the model's embeddings are stored.
+        Must be unique across the registry. Format: ``<backend>_<safe_model>``.
     dimensions : int
         Embedding vector dimensionality.
     index_type : IndexType
@@ -55,9 +48,8 @@ class ModelRegistry(ModelRegistryBase):
         JSON serialisation of the active ``IndexConfig``. Written by the
         ``@validates`` hook whenever an ``IndexConfig`` object is assigned.
     details : dict or None
-        Free-form operational data (e.g. FAISS cache info, user extras).
-        Exposed as ``metadata`` on ``EmbeddingModelRecord``. Never contains
-        ``index_config`` data; that key is reserved.
+        Free-form operational data (e.g. user extras).
+        Exposed as ``metadata`` on ``EmbeddingModelRecord``.
     created_at : datetime
         Row creation timestamp (UTC).
     updated_at : datetime
@@ -67,15 +59,14 @@ class ModelRegistry(ModelRegistryBase):
     -----
     Assign an ``IndexConfig`` instance to ``row.index_config`` — the
     ``@validates`` hook unpacks it into ``index_type`` / ``metric_type``
-    columns, validates backend support, and stores the ``to_dict()`` result
-    in the JSON column. Do not assign the raw dict directly.
+    columns and stores the ``to_dict()`` result in the JSON column. Do not
+    assign the raw dict directly.
     """
 
     __tablename__ = "model_registry"
 
     model_name = mapped_column(String, primary_key=True)
-    backend_type = mapped_column(Enum(BackendType, native_enum=False), primary_key=True)
-    
+
     provider_type = mapped_column(Enum(ProviderType, native_enum=False))
     storage_identifier = mapped_column(String, nullable=False, unique=True)
     dimensions = mapped_column(Integer, nullable=False)
@@ -103,13 +94,6 @@ class ModelRegistry(ModelRegistryBase):
             raise ValueError(f"Unsupported provider type: {value!r}. Supported: {list(ProviderType)}")
         return value
 
-    @validates("backend_type")
-    def _validate_backend_type(self, _key: str, value: str) -> str:
-        """Reject unknown backend types on assignment."""
-        if value not in BackendType:
-            raise ValueError(f"Unsupported backend type: {value}: Supported: {list(BackendType)}")
-        return value
-
     @validates("index_config")
     def _validate_and_sync_index_config(self, _key: str, index_config: IndexConfig) -> Optional[dict[str, Any]]:
         """Unpack an ``IndexConfig`` into the row's index columns.
@@ -129,19 +113,18 @@ class ModelRegistry(ModelRegistryBase):
 
         Raises
         ------
-        ValueError
-            If ``config_obj`` is ``None``, has a ``None`` ``index_type``, has
-            an incompatible ``metric_type`` for its ``index_type``, or names
-            an index type not supported by this row's ``backend_type``.
         TypeError
             If ``config_obj`` is not an ``IndexConfig`` subclass.
+        ValueError
+            If ``config_obj`` is ``None``, has a ``None`` ``index_type``, or
+            has an incompatible ``metric_type`` for its ``index_type``.
 
         Notes
         -----
-        After this hook runs, ``self.index_type`` and ``self.metric_type`` are
-        always consistent with the stored ``index_config`` JSON.
+        Backend-level index support validation (e.g. sqlite-vec does not
+        support HNSW) is performed by the backend before calling the registry,
+        not here. The ORM only enforces structural constraints.
         """
-        # TODO: MAybe allow dict type? Then we can piece together an IndexConfig from the dict and validate it properly, instead of just trusting the dict keys/values.
         if index_config is None:
             raise ValueError(
                 "index_config cannot be None. Provide a valid IndexConfig instance."
@@ -163,16 +146,6 @@ class ModelRegistry(ModelRegistryBase):
                     f"{index_config.index_type} index requires a metric_type "
                     "(e.g. MetricType.COSINE)."
                 )
-
-        if not is_index_type_supported_for_backend(
-            index=index_config.index_type, backend=self.backend_type
-        ):
-            supported = get_supported_index_types_for_backend(self.backend_type)
-            raise ValueError(
-                f"Index type '{index_config.index_type.value}' is not supported for "
-                f"backend '{self.backend_type.value}'. "
-                f"Supported: {[idx.value for idx in supported]}."
-            )
 
         self.index_type = index_config.index_type
         self.metric_type = index_config.metric_type

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Mapping, Optional
 
-from omop_emb.config import BackendType, IndexType, MetricType, ProviderType
+from omop_emb.config import IndexType, MetricType, ProviderType
 from omop_emb.backends.index_config import IndexConfig
 
 
@@ -13,7 +13,7 @@ class EmbeddingModelRecord:
     """Immutable snapshot of one registered embedding model.
 
     Each record maps to exactly one row in the ``model_registry`` table,
-    identified by ``(model_name, backend_type)``.
+    identified by ``model_name``.
 
     Attributes
     ----------
@@ -21,17 +21,15 @@ class EmbeddingModelRecord:
         Canonical model name including tag (e.g. ``'nomic-embed-text:v1.5'``).
     provider_type : ProviderType
         Provider that serves the model.
-    backend_type : BackendType
-        Embedding storage backend.
     index_config : IndexConfig
         Active index configuration. ``index_type`` and ``metric_type`` are
         derived from this field via properties.
     dimensions : int
         Embedding vector dimensionality.
     storage_identifier : str
-        Physical table name. Unique per model; does not encode metric type.
+        Physical table name. Unique per model; format ``<backend>_<safe_model>``.
     metadata : Mapping[str, object]
-        Free-form operational data (e.g. FAISS cache info, user extras).
+        Free-form operational data.
     created_at : datetime, optional
         Row creation timestamp (UTC).
     updated_at : datetime, optional
@@ -47,7 +45,6 @@ class EmbeddingModelRecord:
 
     model_name: str
     provider_type: ProviderType
-    backend_type: BackendType
     index_config: IndexConfig
     dimensions: int
     storage_identifier: str

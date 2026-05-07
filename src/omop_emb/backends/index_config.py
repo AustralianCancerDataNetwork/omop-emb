@@ -8,37 +8,11 @@ from typing import Any, Callable, Mapping, Optional, Self, cast, get_type_hints
 
 from omop_emb.config import IndexType, MetricType
 
-# ---------------------------------------------------------------------------
-# Reserved metadata keys
-# ---------------------------------------------------------------------------
-
-FAISS_CACHE_METADATA_KEY = "faiss_cache"
-"""Reserved key in the registry ``metadata`` JSON for FAISS cache state.
-
-Structure when present::
-
-    {
-        "faiss_cache": {
-            "exported_at":  "<ISO-8601 timestamp, UTC>",
-            "row_count":    <int>,
-            "cache_dir":    "<absolute path>",
-        }
-    }
-
-Written by :meth:`~omop_emb.storage.faiss.FAISSCache.export` and read by
-:meth:`~omop_emb.storage.faiss.FAISSCache.is_stale`. Users must not set
-this key in external metadata passed to ``register_model``.
-"""
-
-RESERVED_METADATA_KEYS: frozenset[str] = frozenset({
-    FAISS_CACHE_METADATA_KEY,
-})
-"""Keys that must not appear in caller-supplied metadata dicts.
-
-Currently reserved:
-- ``"faiss_cache"``  -- written exclusively by ``FAISSCache.export``.
-"""
-
+# ----------------------------------------------------------------------------
+# Resevered metadata keys
+# ----------------------------------------------------------------------------
+# Populate if there are keys that should be reserved in the metadata dict
+RESERVED_METADATA_KEYS: frozenset[str] = frozenset({})
 
 # ---------------------------------------------------------------------------
 # Abstract base

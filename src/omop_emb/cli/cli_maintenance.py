@@ -9,11 +9,9 @@ from dotenv import load_dotenv
 from .utils import configure_logging_level, resolve_backend
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.config import (
-    BackendType,
     IndexType,
     MetricType,
     ProviderType,
-    SUPPORTED_INDICES_AND_METRICS_PER_BACKEND,
 )
 from omop_emb.embeddings.embedding_providers import get_provider_from_provider_type
 from omop_emb.interface import list_registered_models
@@ -191,21 +189,35 @@ def export_faiss_cache(
     )],
     cache_dir: Annotated[str, typer.Option(
         "--cache-dir",
-        help="Directory where the FAISS index files will be written.",
+        help="Root directory where the FAISS index files will be written.",
     )],
     metric_type: Annotated[MetricType, typer.Option(
         "--metric-type",
-        help="Distance metric for the FAISS index.",
+        help="Distance metric for the FAISS index. Must be L2 or COSINE.",
         rich_help_panel="Index Options",
     )] = MetricType.COSINE,
+    index_type: Annotated[IndexType, typer.Option(
+        "--index-type",
+        help="FAISS index type: FLAT (exact scan) or HNSW (approximate, faster at scale).",
+        rich_help_panel="Index Options",
+    )] = IndexType.FLAT,
+    hnsw_m: Annotated[int, typer.Option(
+        "--hnsw-m",
+        help="HNSW number of neighbours (M). Only used when --index-type=HNSW.",
+        rich_help_panel="Index Options",
+    )] = 32,
     provider_type: Annotated[Optional[ProviderType], typer.Option(
         "--provider-type",
-        help="Embedding provider type. Used to check canonical model_name if provided.",
+        help="Embedding provider type. Used to canonicalize the model name if provided.",
     )] = None,
     batch_size: Annotated[int, typer.Option(
         "--batch-size", "-b",
-        help="Batch size when streaming embeddings.",
+        help="Batch size when streaming embeddings from the backend.",
     )] = 100_000,
+    use_gpu: Annotated[bool, typer.Option(
+        "--gpu",
+        help="Transfer FAISS index to GPU device 0 after building (requires faiss-gpu).",
+    )] = False,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
         help="Increase verbosity (up to two levels)",
@@ -221,36 +233,41 @@ def export_faiss_cache(
     try:
         from omop_emb.storage.faiss import FAISSCache
     except ImportError as exc:
-        raise typer.Exit(1) from typer.BadParameter(
+        typer.echo(
             f"FAISS optional dependency not installed: {exc}. "
-            "Install it with: pip install omop-emb[faiss]"
+            "Install it with: pip install omop-emb[faiss]",
+            err=True,
         )
+        raise typer.Exit(1)
 
-    backend = resolve_backend()
-    cache = FAISSCache(
-        backend=backend,
-        model_name=model,
+    index_config = index_config_from_index_type(
+        index_type,
         metric_type=metric_type,
-        cache_dir=cache_dir,
+        num_neighbors=hnsw_m,
     )
-    cache.export(batch_size=batch_size)
-    typer.echo(f"FAISS cache exported to '{cache_dir}' for '{model}' (metric={metric_type.value}).")
+    backend = resolve_backend()
+    cache = FAISSCache(model_name=model, cache_dir=cache_dir, use_gpu=use_gpu)
+    cache.export(backend=backend, metric_type=metric_type, index_config=index_config, batch_size=batch_size)
+    typer.echo(
+        f"FAISS cache exported to '{cache.model_dir}' for '{model}' "
+        f"(metric={metric_type.value}, index={index_type.value})."
+    )
 
 
-@app.command(name="check-faiss-cache", help="Check whether the FAISS sidecar cache is stale.")
+@app.command(name="check-faiss-cache", help="Check whether the FAISS sidecar cache is fresh.")
 def check_faiss_cache(
     model: Annotated[str, typer.Option(
         "--model", "-m",
         help="Canonical model name to check.",
     )],
+    cache_dir: Annotated[str, typer.Option(
+        "--cache-dir",
+        help="Root cache directory passed to FAISSCache.",
+    )],
     provider_type: Annotated[Optional[ProviderType], typer.Option(
         "--provider-type",
-        help="Embedding provider type. Used to check canonical model_name if provided.",
-    )],
-    metric_type: Annotated[MetricType, typer.Option(
-        "--metric-type",
-        help="Distance metric of the FAISS index to check.",
-    )] = MetricType.COSINE,
+        help="Embedding provider type. Used to canonicalize the model name if provided.",
+    )] = None,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
         help="Increase verbosity (up to two levels)",
@@ -259,7 +276,6 @@ def check_faiss_cache(
     configure_logging_level(verbosity)
     load_dotenv()
 
-    # Try to validate the canonical model name early
     if provider_type is not None:
         embedding_provider = get_provider_from_provider_type(provider_type)
         model = embedding_provider.canonical_model_name(model)
@@ -267,44 +283,31 @@ def check_faiss_cache(
     try:
         from omop_emb.storage.faiss import FAISSCache
     except ImportError as exc:
-        raise typer.Exit(1) from typer.BadParameter(
+        typer.echo(
             f"FAISS optional dependency not installed: {exc}. "
-            "Install it with: pip install omop-emb[faiss]"
+            "Install it with: pip install omop-emb[faiss]",
+            err=True,
         )
+        raise typer.Exit(1)
 
     backend = resolve_backend()
     record = backend.get_registered_model(model_name=model)
     if record is None:
         typer.echo(
             f"No registered model found for '{model}'. "
-            f"Could be that you didn't canonicalize the model name correctly or that the model was never registered. "
-            f"Registered models: {[r.model_name for r in backend.get_registered_models()]}"
+            f"Registered models: {[r.model_name for r in backend.get_registered_models()]}",
+            err=True,
         )
         raise typer.Exit(1)
 
-    cache_meta = record.metadata.get("faiss_cache") if record.metadata else None
-    if cache_meta is None:
-        typer.echo(f"No FAISS cache metadata for '{model}'. Run 'export-faiss-cache' first.")
-        raise typer.Exit(1)
-
-    cache_dir = cache_meta.get("cache_dir")
-    if not cache_dir:
-        typer.echo("FAISS cache metadata is missing 'cache_dir'. Re-export the cache.")
-        raise typer.Exit(1)
-
-    cache = FAISSCache(
-        backend=backend,
-        model_name=model,
-        metric_type=metric_type,
-        cache_dir=cache_dir,
-    )
-
-    stale = cache.is_stale()
-    exported_at = cache_meta.get("exported_at", "unknown")
-    row_count = cache_meta.get("row_count", "unknown")
+    cache = FAISSCache(model_name=model, cache_dir=cache_dir)
+    info = cache.staleness_info(record)
+    status = "FRESH" if info["is_fresh"] else "STALE"
     typer.echo(
-        f"Model: {model} | Metric: {metric_type.value} | "
-        f"Exported: {exported_at} | Rows: {row_count} | "
-        f"Status: {'STALE' if stale else 'FRESH'}"
+        f"Model: {model} | "
+        f"Exported: {info['exported_at'] or 'never'} | "
+        f"Cached rows: {info['cached_row_count'] or 'unknown'} | "
+        f"Model updated: {info['model_updated_at'] or 'unknown'} | "
+        f"Status: {status}"
     )
-    raise typer.Exit(1 if stale else 0)
+    raise typer.Exit(0 if info["is_fresh"] else 1)

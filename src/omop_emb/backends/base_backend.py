@@ -14,7 +14,9 @@ from omop_emb.config import (
     MetricType,
     ProviderType,
     IndexType,
+    get_supported_index_types_for_backend,
     is_supported_index_metric_combination_for_backend,
+    is_index_type_supported_for_backend,
 )
 from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig
 from omop_emb.model_registry import EmbeddingModelRecord, RegistryManager
@@ -191,7 +193,7 @@ class EmbeddingBackend(ABC):
 
     def _initialise_store(self) -> None:
         self.pre_initialise_store()
-        for record in self._registry.get_registered_models(backend_type=self.backend_type):
+        for record in self._registry.get_registered_models():
             if record.storage_identifier not in self._table_cache:
                 self._table_cache[record.storage_identifier] = self._load_storage_table(record)
 
@@ -266,7 +268,6 @@ class EmbeddingBackend(ABC):
         record = self._registry.register_model(
             model_name=model_name,
             provider_type=provider_type,
-            backend_type=self.backend_type,
             dimensions=dimensions,
             index_config=index_config,
             metadata=metadata,
@@ -315,10 +316,7 @@ class EmbeddingBackend(ABC):
             )
         self._delete_storage_table(model_record=record)
         self._table_cache.pop(record.storage_identifier, None)
-        self._registry.delete_model(
-            model_name=model_name,
-            backend_type=self.backend_type,
-        )
+        self._registry.delete_model(model_name=model_name)
         logger.info(
             f"Deleted model '{model_name}' from backend '{self.backend_type.value}' and dropped storage table."
         )
@@ -369,10 +367,18 @@ class EmbeddingBackend(ABC):
             raise ValueError(
                 f"Model '{model_name}' is not registered in backend '{self.backend_type.value}'."
             )
+        if not is_index_type_supported_for_backend(
+            backend=self.backend_type, index=index_config.index_type
+        ):
+            supported = get_supported_index_types_for_backend(self.backend_type)
+            raise ValueError(
+                f"Index type '{index_config.index_type.value}' is not supported by "
+                f"backend '{self.backend_name}'. "
+                f"Supported: {[idx.value for idx in supported]}."
+            )
         self._rebuild_index_impl(model_record=record, index_config=index_config)
         return self._registry.update_index_config(
             model_name=model_name,
-            backend_type=self.backend_type,
             index_config=index_config,
         )
 
@@ -424,7 +430,6 @@ class EmbeddingBackend(ABC):
         tuple[EmbeddingModelRecord, ...]
         """
         return self._registry.get_registered_models(
-            backend_type=self.backend_type,
             model_name=model_name,
             provider_type=provider_type,
         )
@@ -477,11 +482,7 @@ class EmbeddingBackend(ABC):
                 f"Model '{model_name}' is not registered in backend '{self.backend_type.value}'."
             )
         updated = {**record.metadata, key: value}
-        self._registry.update_metadata(
-            model_name=model_name,
-            backend_type=self.backend_type,
-            metadata=updated,
-        )
+        self._registry.update_metadata(model_name=model_name, metadata=updated)
 
     # ------------------------------------------------------------------
     # Storage table management (backend-specific)

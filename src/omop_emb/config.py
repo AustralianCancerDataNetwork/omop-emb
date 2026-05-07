@@ -27,6 +27,9 @@ ENV_EMB_SQLITE_PATH = "OMOP_EMB_SQLITE_PATH"
 # OMOP CDM (always required for concept ingestion in CLI)
 ENV_CDM_DATABASE_URL = "OMOP_CDM_DB_URL"
 
+# Optional FAISS sidecar cache directory (auto-activates FAISS in EmbeddingReaderInterface)
+ENV_FAISS_CACHE_DIR = "OMOP_EMB_FAISS_CACHE_DIR"
+
 
 class ProviderType(StrEnum):
     """Embedding model provider.
@@ -50,13 +53,10 @@ class BackendType(StrEnum):
     PGVECTOR
         Optional backend. Requires a PostgreSQL instance with the pgvector
         extension (``pip install omop-emb[pgvector]``).
-    FAISS
-        Sidecar read-acceleration layer on top of any primary backend.
     """
 
     SQLITEVEC = "sqlitevec"
     PGVECTOR = "pgvector"
-    FAISS = "faiss"
 
 
 class VectorColumnType(StrEnum):
@@ -100,6 +100,8 @@ class IndexType(StrEnum):
 
     FLAT = "flat"
     HNSW = "hnsw"
+    IVFFLAT = "ivfflat"  # faiss only
+    IVFPQ = "ivfpq"  # faiss only
 
 
 class MetricType(StrEnum):
@@ -221,10 +223,6 @@ SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tup
         IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1),
         IndexType.HNSW: (MetricType.L2, MetricType.COSINE, MetricType.L1),
     },
-    BackendType.FAISS: {
-        IndexType.FLAT: (MetricType.L2, MetricType.COSINE),
-        IndexType.HNSW: (MetricType.L2, MetricType.COSINE),
-    },
 }
 
 
@@ -316,7 +314,7 @@ def build_engine_string(backend: "BackendType") -> "URL":
     ``:memory:`` for a transient in-memory database (useful in tests).
     For ``PGVECTOR``: reads ``OMOP_EMB_DB_USER``, ``OMOP_EMB_DB_PASSWORD``,
     ``OMOP_EMB_DB_HOST``, ``OMOP_EMB_DB_NAME``, and optionally
-    ``OMOP_EMB_DB_PORT`` (default 5432) and ``OMOP_EMB_DB_CONN`` (driver,
+    ``OMOP_EMB_DB_PORT`` (default 5432) and ``OMOP_EMB_DB_DRIVER`` (driver,
     default ``postgresql+psycopg``).
 
     Raises
@@ -357,7 +355,8 @@ def build_engine_string(backend: "BackendType") -> "URL":
 
     raise ValueError(
         f"Cannot compose an engine URL for backend {backend!r} from environment variables. "
-        f"Set {ENV_OMOP_EMB_DB_URL!r} to supply a full connection string."
+        f"Set {ENV_OMOP_EMB_DB_URL!r} to supply a full connection string. "
+        "FAISS is not a backend — use ENV_FAISS_CACHE_DIR and EmbeddingReaderInterface(faiss_cache_dir=...) instead."
     )
 
 

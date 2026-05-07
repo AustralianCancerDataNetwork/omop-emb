@@ -5,7 +5,7 @@ from unittest.mock import Mock, MagicMock
 import numpy as np
 import pytest
 
-from omop_emb.config import IndexType, MetricType, BackendType, ProviderType
+from omop_emb.config import IndexType, MetricType, ProviderType
 from omop_emb.embeddings import OllamaProvider
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.model_registry.model_registry_manager import RegistryManager
@@ -23,7 +23,7 @@ def _make_mock_client(model_name: str = "test-model:v1") -> Mock:
 
 def _make_mock_backend() -> Mock:
     backend = Mock()
-    backend.backend_type = BackendType.PGVECTOR
+    backend.backend_name = "pgvector"
     backend.get_registered_model.return_value = None
     return backend
 
@@ -69,11 +69,3 @@ class TestCanonicalModelName:
 
     def test_safe_model_name_lowercases(self):
         assert RegistryManager.safe_model_name("MyModel:V2") == "mymodel_v2"
-
-    def test_storage_name_contains_backend_and_model(self):
-        name = RegistryManager.storage_name(
-            safe_model_name="pseudo_model_v1",
-            backend_type=BackendType.PGVECTOR,
-        )
-        assert "pgvector" in name
-        assert "v1" in name

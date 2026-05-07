@@ -4,15 +4,15 @@ import logging
 import re
 from typing import Mapping, Optional
 
-from sqlalchemy import Engine, and_, select
+from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from omop_emb.backends.index_config import (
     RESERVED_METADATA_KEYS,
-    IndexConfig,
-    index_config_from_orm_row,
+    IndexConfig, 
+    index_config_from_orm_row
 )
-from omop_emb.config import BackendType, ProviderType
+from omop_emb.config import ProviderType
 from omop_emb.model_registry.model_registry_orm import ModelRegistry, ensure_registry_schema
 from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
 from omop_emb.utils.errors import ModelRegistrationConflictError
@@ -57,7 +57,6 @@ class RegistryManager:
     def get_registered_models(
         self,
         *,
-        backend_type: BackendType,
         model_name: Optional[str] = None,
         provider_type: Optional[ProviderType] = None,
     ) -> tuple[EmbeddingModelRecord, ...]:
@@ -65,18 +64,15 @@ class RegistryManager:
 
         Parameters
         ----------
-        backend_type : BackendType
-            Embedding storage backend.
         model_name : str, optional
             Filter by canonical model name.
         provider_type : ProviderType, optional
             Provider that serves the model.
-
         Returns
         -------
         tuple[EmbeddingModelRecord, ...]
         """
-        stmt = select(ModelRegistry).where(ModelRegistry.backend_type == backend_type)
+        stmt = select(ModelRegistry)
         if model_name is not None:
             stmt = stmt.where(ModelRegistry.model_name == model_name)
         if provider_type is not None:
@@ -86,7 +82,6 @@ class RegistryManager:
             rows = session.scalars(stmt).all()
         return tuple(self._row_to_record(r) for r in rows)
 
-
     # ------------------------------------------------------------------
     # Mutations
     # ------------------------------------------------------------------
@@ -95,12 +90,10 @@ class RegistryManager:
         self,
         *,
         model_name: str,
-        backend_type: BackendType,
         index_config: IndexConfig,
         dimensions: int,
         provider_type: ProviderType,
         metadata: Optional[Mapping[str, object]] = None,
-        storage_identifier: Optional[str] = None,
     ) -> EmbeddingModelRecord:
         """Register a model or return the existing record if already registered.
 
@@ -108,20 +101,14 @@ class RegistryManager:
         ----------
         model_name : str
             Canonical model name including tag.
-        backend_type : BackendType
-            Embedding storage backend.
         index_config : IndexConfig
-            Initial index configuration. Typically ``FlatIndexConfig()`` for
-            new registrations; call ``rebuild_index`` to upgrade later.
+            Initial index configuration.
         dimensions : int
             Embedding vector dimensionality.
         provider_type : ProviderType
             Provider that serves the model.
         metadata : Mapping[str, object], optional
-            Free-form operational metadata stored in the ``metadata`` column.
-            Must not contain any key from ``RESERVED_METADATA_KEYS``.
-        storage_identifier : str, optional
-            Override the auto-generated physical table name.
+            Free-form operational metadata.
 
         Returns
         -------
@@ -132,13 +119,13 @@ class RegistryManager:
         ------
         ModelRegistrationConflictError
             If the model is already registered with a different configuration.
-        ValueError
-            If ``metadata`` contains a reserved key.
         """
         _validate_metadata_keys(metadata)
+        safe_model_name = self.safe_model_name(model_name)
+        storage_identifier = self.storage_name(safe_model_name)
 
         with self.emb_session_factory(expire_on_commit=False) as session:
-            existing = self._fetch_row(session, model_name, backend_type)
+            existing = self._fetch_row(session, model_name)
             if existing is not None:
                 if existing.dimensions != dimensions:
                     raise ModelRegistrationConflictError(
@@ -154,18 +141,11 @@ class RegistryManager:
                     )
                 return self._row_to_record(existing)
 
-        safe = self.safe_model_name(model_name)
-        storage_name = storage_identifier or self.storage_name(
-            safe_model_name=safe,
-            backend_type=backend_type,
-        )
-
         new_row = ModelRegistry(
             model_name=model_name,
             provider_type=provider_type,
-            backend_type=backend_type,
             dimensions=dimensions,
-            storage_identifier=storage_name,
+            storage_identifier=storage_identifier,
             details=dict(metadata) if metadata else {},
             index_config=index_config,
         )
@@ -174,22 +154,15 @@ class RegistryManager:
             session.commit()
         return self._row_to_record(new_row)
 
-    def delete_model(
-        self,
-        *,
-        model_name: str,
-        backend_type: BackendType,
-    ) -> None:
+    def delete_model(self, *, model_name: str) -> None:
         """Delete a registry row. No-op if the row does not exist.
 
         Parameters
         ----------
         model_name : str
-        backend_type : BackendType
-            Embedding storage backend.
         """
         with self.emb_session_factory() as session:
-            row = self._fetch_row(session, model_name, backend_type)
+            row = self._fetch_row(session, model_name)
             if row is not None:
                 session.delete(row)
                 session.commit()
@@ -198,7 +171,6 @@ class RegistryManager:
         self,
         *,
         model_name: str,
-        backend_type: BackendType,
         index_config: IndexConfig,
     ) -> EmbeddingModelRecord:
         """Replace the index configuration of an existing registry row.
@@ -206,8 +178,6 @@ class RegistryManager:
         Parameters
         ----------
         model_name : str
-        backend_type : BackendType
-            Embedding storage backend.
         index_config : IndexConfig
             New index configuration. The ``@validates`` hook syncs
             ``index_type`` and ``metric_type`` columns automatically.
@@ -223,12 +193,10 @@ class RegistryManager:
             If the model is not registered.
         """
         with self.emb_session_factory(expire_on_commit=False) as session:
-            row = self._fetch_row(session, model_name, backend_type)
+            row = self._fetch_row(session, model_name)
             if row is None:
-                raise ValueError(
-                    f"Model '{model_name}' (backend={backend_type.value}) is not registered."
-                )
-            row.index_config = index_config  # triggers @validates hook
+                raise ValueError(f"Model '{model_name}' is not registered.")
+            row.index_config = index_config
             session.commit()
             return self._row_to_record(row)
 
@@ -236,7 +204,6 @@ class RegistryManager:
         self,
         *,
         model_name: str,
-        backend_type: BackendType,
         metadata: Mapping[str, object],
     ) -> EmbeddingModelRecord:
         """Replace the free-form metadata of an existing registry row.
@@ -244,11 +211,8 @@ class RegistryManager:
         Parameters
         ----------
         model_name : str
-        backend_type : BackendType
-            Embedding storage backend.
         metadata : Mapping[str, object]
-            New metadata dict. Replaces the existing value entirely. Must not
-            contain any key from ``RESERVED_METADATA_KEYS``.
+            New metadata dict. Replaces the existing value entirely.
 
         Returns
         -------
@@ -258,16 +222,13 @@ class RegistryManager:
         Raises
         ------
         ValueError
-            If the model is not registered or ``metadata`` contains a reserved
-            key.
+            If the model is not registered.
         """
         _validate_metadata_keys(metadata)
         with self.emb_session_factory(expire_on_commit=False) as session:
-            row = self._fetch_row(session, model_name, backend_type)
+            row = self._fetch_row(session, model_name)
             if row is None:
-                raise ValueError(
-                    f"Model '{model_name}' (backend={backend_type.value}) is not registered."
-                )
+                raise ValueError(f"Model '{model_name}' is not registered.")
             row.details = dict(metadata)
             session.commit()
             return self._row_to_record(row)
@@ -300,7 +261,7 @@ class RegistryManager:
     @staticmethod
     def storage_name(
         safe_model_name: str,
-        backend_type: BackendType,
+        embedding_table_prefix: str = "emb"
     ) -> str:
         """Return the physical table name for a model.
 
@@ -308,38 +269,24 @@ class RegistryManager:
         ----------
         safe_model_name : str
             Output of :meth:`safe_model_name`.
-        backend_type : BackendType
-            Embedding storage backend.
+        embedding_table_prefix : str, default "emb"
+            Prefix for the embedding table name.
 
         Returns
         -------
         str
-            Table name of the form ``<backend>_<model>``.
-
-        Notes
-        -----
-        Metric type is intentionally excluded. One model has one physical
-        table regardless of its index configuration.
+            Table name of the form ``<embedding_table_prefix>_<model>``.
         """
-        return f"{backend_type.value}_{safe_model_name}"
+        return f"{embedding_table_prefix}_{safe_model_name}"
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _fetch_row(
-        session: Session,
-        model_name: str,
-        backend_type: BackendType,
-    ) -> Optional[ModelRegistry]:
+    def _fetch_row(session: Session, model_name: str) -> Optional[ModelRegistry]:
         return session.scalar(
-            select(ModelRegistry).where(
-                and_(
-                    ModelRegistry.model_name == model_name,
-                    ModelRegistry.backend_type == backend_type,
-                )
-            )
+            select(ModelRegistry).where(ModelRegistry.model_name == model_name)
         )
 
     @staticmethod
@@ -347,7 +294,6 @@ class RegistryManager:
         index_config = index_config_from_orm_row(row.index_type, row.index_config)
         return EmbeddingModelRecord(
             model_name=row.model_name,
-            backend_type=row.backend_type,
             provider_type=row.provider_type,
             index_config=index_config,
             dimensions=row.dimensions,
@@ -377,9 +323,9 @@ def _validate_metadata_keys(metadata: Optional[Mapping[str, object]]) -> None:
     """
     if not metadata:
         return
-    bad = set(metadata.keys()) & RESERVED_METADATA_KEYS
-    if bad:
+    protected_keys_in_metadata = set(metadata.keys()) & RESERVED_METADATA_KEYS
+    if protected_keys_in_metadata:
         raise ValueError(
-            f"Metadata must not contain reserved keys: {sorted(bad)}. "
+            f"Metadata must not contain reserved keys: {sorted(protected_keys_in_metadata)}. "
             "These are managed internally by the registry."
         )

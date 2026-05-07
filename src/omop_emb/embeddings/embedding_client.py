@@ -134,17 +134,15 @@ class EmbeddingClient:
             logger.debug(f"Embedding dimension set from env {ENV_EMBEDDING_DIM}={self._embedding_dim}.")
             return self._embedding_dim
 
-        try:
-            self._embedding_dim = self._provider.get_embedding_dim(
-                self._model, self._base_client.base_url
-            )
+        provider_dim = self._provider.get_embedding_dim(model=self._model, api_base=self.api_base)
+        if provider_dim is not None:
+            self._embedding_dim = provider_dim
+            logger.debug(f"Embedding dimension discovered via provider API: {self._embedding_dim}.")
             return self._embedding_dim
-        except NotImplementedError:
-            pass
 
         logger.info(
             "Provider cannot discover embedding dimension automatically. "
-            "Probing via a test API call — this happens once and is then cached."
+            "Probing via a test API call. This happens once and is then cached."
         )
         response = self._base_client.embeddings.create(model=self._model, input=["test"])
         self._embedding_dim = len(response.data[0].embedding)

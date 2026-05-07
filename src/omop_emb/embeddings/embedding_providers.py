@@ -58,9 +58,10 @@ class EmbeddingProvider(ABC):
         """
         ...
 
-    @abstractmethod
-    def get_embedding_dim(self, model: str, api_base: URL) -> int:
+    def get_embedding_dim(self, model: str, api_base: URL) -> Optional[int]:
         """Return the embedding dimension for *model* served at *api_base*.
+        Child classes should overwrite this method if the provider has a way to query 
+        the embedding dimension via the API.
 
         Parameters
         ----------
@@ -73,17 +74,10 @@ class EmbeddingProvider(ABC):
 
         Returns
         -------
-        int
-            Number of dimensions in the embedding vector.
-
-        Raises
-        ------
-        ValueError
-            If the dimension cannot be determined from the API response.
-        NotImplementedError
-            If the provider does not support automatic dimension retrieval.
+        int, optional
+            Number of dimensions in the embedding vector. Return None if the provider does not support querying this via the API.
         """
-        ...
+        return None
 
 
 class OllamaProvider(EmbeddingProvider):

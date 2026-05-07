@@ -56,7 +56,6 @@ class TestPGVectorHNSWBackend:
         )
         backend.upsert_embeddings(
             model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
             metric_type=metric_type,
             records=list(CONCEPT_RECORDS),
             embeddings=CONCEPT_EMBEDDINGS,
@@ -72,7 +71,6 @@ class TestPGVectorHNSWBackend:
         )
         r_hnsw = pg_backend.rebuild_index(
             model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
             index_config=self.HNSW_CONFIG,
         )
         assert r_flat.storage_identifier == r_hnsw.storage_identifier
@@ -89,28 +87,22 @@ class TestPGVectorHNSWBackend:
         )
         pg_backend.rebuild_index(
             model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
             index_config=self.HNSW_CONFIG,
         )
         from omop_emb.backends.pgvector.pg_index_manager import PGVectorHNSWIndexManager
-        record = pg_backend.get_registered_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-        )
+        record = pg_backend.get_registered_model(model_name=MODEL_NAME)
         assert record is not None, "Model record should exist after registration and rebuild"
         mgr = pg_backend.get_index_manager(record.storage_identifier)
-        assert isinstance(mgr, PGVectorHNSWIndexManager)
+        assert isinstance(mgr, PGVectorHNSWIndexManager), f"Index manager should be PGVectorHNSWIndexManager after rebuilding to HNSW. Got: {type(mgr)}"
 
     def test_hnsw_search_returns_correct_top1(self, pg_backend: PGVectorEmbeddingBackend):
         self._register_and_upsert(pg_backend)
         pg_backend.rebuild_index(
             model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
             index_config=self.HNSW_CONFIG,
         )
         results = pg_backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
             metric_type=MetricType.L2,
             query_embeddings=np.array([[-10.0]], dtype=np.float32),
             k=1,
@@ -122,12 +114,10 @@ class TestPGVectorHNSWBackend:
         self._register_and_upsert(pg_backend)
         pg_backend.rebuild_index(
             model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
             index_config=self.HNSW_CONFIG,
         )
         results = pg_backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
             metric_type=MetricType.L2,
             query_embeddings=np.array([[-10.0]], dtype=np.float32),
             k=1,

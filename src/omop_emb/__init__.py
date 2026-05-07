@@ -3,10 +3,9 @@ from omop_emb.interface import (
     EmbeddingWriterInterface,
 )
 from omop_emb.embeddings import (
-    EmbeddingClient, 
-    EmbeddingProvider, 
-    OllamaProvider, 
-    OpenAIProvider,
+    EmbeddingClient,
+    EmbeddingProvider,
+    OllamaProvider,
     get_provider_for_api_base
 )
 from omop_emb.config import (

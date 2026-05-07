@@ -35,12 +35,9 @@ class ProviderType(StrEnum):
     -------
     OLLAMA
         Self-hosted models served via the Ollama runtime.
-    OPENAI
-        OpenAI and OpenAI-compatible API endpoints.
     """
 
     OLLAMA = "ollama"
-    OPENAI = "openai"
 
 
 class BackendType(StrEnum):

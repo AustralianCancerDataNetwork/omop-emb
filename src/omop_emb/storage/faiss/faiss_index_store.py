@@ -32,7 +32,7 @@ from omop_emb.backends.index_config import (
     HNSWIndexConfig,
     IndexConfig,
 )
-from omop_emb.config import MetricType, ProviderType
+from omop_emb.config import MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
 
 logger = logging.getLogger(__name__)
@@ -67,8 +67,6 @@ class FAISSCache:
         The backend that owns the embeddings (sqlite-vec or pgvector).
     model_name : str
         Registered canonical model name.
-    provider_type : ProviderType
-        Provider that serves the model.
     metric_type : MetricType
         Distance metric of the embedding table to cache.
     cache_dir : Path | str
@@ -79,14 +77,12 @@ class FAISSCache:
         self,
         backend: EmbeddingBackend,
         model_name: str,
-        provider_type: ProviderType,
         metric_type: MetricType,
         cache_dir: "Path | str",
     ) -> None:
         _require_faiss()
         self._backend = backend
         self._model_name = model_name
-        self._provider_type = provider_type
         self._metric_type = metric_type
         self._cache_dir = Path(cache_dir).expanduser().resolve()
         self._model_record: Optional[EmbeddingModelRecord] = None
@@ -105,14 +101,10 @@ class FAISSCache:
             If the model is not registered in the backend.
         """
         if self._model_record is None:
-            record = self._backend.get_registered_model(
-                model_name=self._model_name,
-                provider_type=self._provider_type,
-            )
+            record = self._backend.get_registered_model(model_name=self._model_name)
             if record is None:
                 raise ValueError(
-                    f"Model '{self._model_name}' (provider={self._provider_type.value}) "
-                    "is not registered in the backend."
+                    f"Model '{self._model_name}' is not registered in the backend."
                 )
             self._model_record = record
         return self._model_record
@@ -136,7 +128,6 @@ class FAISSCache:
             return True
         current_count = self._backend.get_embedding_count(
             model_name=self._model_name,
-            provider_type=self._provider_type,
             metric_type=self._metric_type,
         )
         return current_count != meta.get("row_count", -1)
@@ -150,7 +141,6 @@ class FAISSCache:
             "cached_row_count": meta.get("row_count"),
             "current_row_count": self._backend.get_embedding_count(
                 model_name=self._model_name,
-                provider_type=self._provider_type,
                 metric_type=self._metric_type,
             ),
             "cache_dir": meta.get("cache_dir"),
@@ -185,7 +175,6 @@ class FAISSCache:
         # Collect all stored concept IDs
         all_ids = sorted(self._backend.get_all_stored_concept_ids(
             model_name=self._model_name,
-            provider_type=self._provider_type,
             metric_type=self._metric_type,
         ))
         if not all_ids:
@@ -198,7 +187,6 @@ class FAISSCache:
         for id_batch in batched(all_ids, batch_size):
             emb_map = self._backend.get_embeddings_by_concept_ids(
                 model_name=self._model_name,
-                provider_type=self._provider_type,
                 metric_type=self._metric_type,
                 concept_ids=list(id_batch),
             )
@@ -223,7 +211,6 @@ class FAISSCache:
         # Persist staleness metadata via the backend's public API
         self._backend.patch_model_metadata(
             model_name=self._model_name,
-            provider_type=self._provider_type,
             key=FAISS_CACHE_METADATA_KEY,
             value={
                 "exported_at": datetime.now(tz=timezone.utc).isoformat(),

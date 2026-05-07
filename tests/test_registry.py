@@ -70,7 +70,7 @@ class TestRegistryManager:
             index_config=FLAT, dimensions=EMBEDDING_DIM,
         )
         r_hnsw = registry.update_index_config(
-            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE,
+            model_name=MODEL_NAME,
             backend_type=BackendType.PGVECTOR,
             index_config=HNSW,
         )
@@ -80,16 +80,22 @@ class TestRegistryManager:
 
     def test_storage_name_excludes_index_type(self, registry: RegistryManager):
         record = registry.register_model(
-            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, backend_type=BACKEND,
-            index_config=FLAT, dimensions=EMBEDDING_DIM,
+            model_name=MODEL_NAME, 
+            provider_type=PROVIDER_TYPE, 
+            backend_type=BACKEND,
+            index_config=FLAT, 
+            dimensions=EMBEDDING_DIM,
         )
         assert "flat" not in record.storage_identifier
         assert "hnsw" not in record.storage_identifier
 
     def test_get_model_exact_match(self, registry: RegistryManager):
         registry.register_model(
-            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, backend_type=BACKEND,
-            index_config=FLAT, dimensions=EMBEDDING_DIM,
+            model_name=MODEL_NAME, 
+            provider_type=PROVIDER_TYPE, 
+            backend_type=BACKEND,
+            index_config=FLAT, 
+            dimensions=EMBEDDING_DIM,
         )
         records = registry.get_registered_models(
             model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, backend_type=BACKEND,
@@ -105,12 +111,18 @@ class TestRegistryManager:
 
     def test_get_registered_models_filters_by_model(self, registry: RegistryManager):
         registry.register_model(
-            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, backend_type=BACKEND,
-            index_config=FLAT, dimensions=EMBEDDING_DIM,
+            model_name=MODEL_NAME, 
+            provider_type=PROVIDER_TYPE, 
+            backend_type=BACKEND,
+            index_config=FLAT, 
+            dimensions=EMBEDDING_DIM,
         )
         registry.register_model(
-            model_name="other-model", provider_type=PROVIDER_TYPE, backend_type=BACKEND,
-            index_config=FLAT, dimensions=EMBEDDING_DIM,
+            model_name="other-model", 
+            provider_type=PROVIDER_TYPE, 
+            backend_type=BACKEND,
+            index_config=FLAT, 
+            dimensions=EMBEDDING_DIM,
         )
         records = registry.get_registered_models(
             backend_type=BACKEND, model_name=MODEL_NAME
@@ -119,11 +131,14 @@ class TestRegistryManager:
 
     def test_delete_model(self, registry: RegistryManager):
         registry.register_model(
-            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, backend_type=BACKEND,
-            index_config=FLAT, dimensions=EMBEDDING_DIM,
+            model_name=MODEL_NAME, 
+            provider_type=PROVIDER_TYPE, 
+            backend_type=BACKEND,
+            index_config=FLAT, 
+            dimensions=EMBEDDING_DIM,
         )
         registry.delete_model(
-            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, backend_type=BACKEND,
+            model_name=MODEL_NAME, backend_type=BACKEND,
         )
         records = registry.get_registered_models(
             model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, backend_type=BACKEND,
@@ -132,11 +147,14 @@ class TestRegistryManager:
 
     def test_update_metadata(self, registry: RegistryManager):
         registry.register_model(
-            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, backend_type=BACKEND,
-            index_config=FLAT, dimensions=EMBEDDING_DIM,
+            model_name=MODEL_NAME, 
+            provider_type=PROVIDER_TYPE, 
+            backend_type=BACKEND,
+            index_config=FLAT, 
+            dimensions=EMBEDDING_DIM,
         )
         updated = registry.update_metadata(
-            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, backend_type=BACKEND,
+            model_name=MODEL_NAME, backend_type=BACKEND,
             metadata={"custom": "value"},
         )
         assert updated.metadata.get("custom") == "value"
@@ -145,9 +163,11 @@ class TestRegistryManager:
         """index_config serialised to details and deserialised back on retrieval."""
         hnsw = HNSWIndexConfig(metric_type=MetricType.COSINE, num_neighbors=32, ef_search=64, ef_construction=128)
         registry.register_model(
-            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE,
+            model_name=MODEL_NAME, 
+            provider_type=PROVIDER_TYPE,
             backend_type=BackendType.PGVECTOR,
-            index_config=hnsw, dimensions=EMBEDDING_DIM,
+            index_config=hnsw, 
+            dimensions=EMBEDDING_DIM,
         )
         records = registry.get_registered_models(
             model_name=MODEL_NAME, provider_type=PROVIDER_TYPE,

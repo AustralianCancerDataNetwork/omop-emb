@@ -50,8 +50,9 @@ def health_check(
     for r in records:
         index_str = r.index_type.value if r.index_type else "none"
         metric_str = r.metric_type.value if r.metric_type else "any"
+        provider_str = r.provider_type.value if r.provider_type else "-"
         typer.echo(
-            f"  {r.model_name:<40} {r.provider_type:<10} {metric_str:<8} "
+            f"  {r.model_name:<40} {provider_str:<10} {metric_str:<8} "
             f"{index_str:<6} {r.dimensions:<6} {r.storage_identifier}"
         )
         # FLAT models have metric_type=None; use COSINE for the diagnostic call
@@ -59,7 +60,6 @@ def health_check(
         probe_metric = r.metric_type or MetricType.COSINE
         has_emb = backend.has_any_embeddings(
             model_name=r.model_name,
-            provider_type=r.provider_type,
             metric_type=probe_metric,
         )
         typer.echo(f"    embeddings present: {has_emb}")

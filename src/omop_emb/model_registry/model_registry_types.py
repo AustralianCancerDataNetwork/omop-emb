@@ -13,7 +13,7 @@ class EmbeddingModelRecord:
     """Immutable snapshot of one registered embedding model.
 
     Each record maps to exactly one row in the ``model_registry`` table,
-    identified by ``(model_name, provider_type, backend_type)``.
+    identified by ``(model_name, backend_type)``.
 
     Attributes
     ----------

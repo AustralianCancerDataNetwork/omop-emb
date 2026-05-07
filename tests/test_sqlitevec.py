@@ -78,14 +78,12 @@ class TestSQLiteVecSpecific:
         )
         svec_backend.upsert_embeddings(
             model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
             metric_type=MetricType.COSINE,
             records=nonzero_records,
             embeddings=nonzero_embeddings,
         )
         results = svec_backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
             metric_type=MetricType.COSINE,
             query_embeddings=QUERY_EMBEDDING,
             k=2,

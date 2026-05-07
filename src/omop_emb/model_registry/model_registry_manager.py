@@ -95,10 +95,10 @@ class RegistryManager:
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         backend_type: BackendType,
         index_config: IndexConfig,
         dimensions: int,
+        provider_type: ProviderType,
         metadata: Optional[Mapping[str, object]] = None,
         storage_identifier: Optional[str] = None,
     ) -> EmbeddingModelRecord:
@@ -108,8 +108,6 @@ class RegistryManager:
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
         backend_type : BackendType
             Embedding storage backend.
         index_config : IndexConfig
@@ -117,6 +115,8 @@ class RegistryManager:
             new registrations; call ``rebuild_index`` to upgrade later.
         dimensions : int
             Embedding vector dimensionality.
+        provider_type : ProviderType
+            Provider that serves the model.
         metadata : Mapping[str, object], optional
             Free-form operational metadata stored in the ``metadata`` column.
             Must not contain any key from ``RESERVED_METADATA_KEYS``.
@@ -138,7 +138,7 @@ class RegistryManager:
         _validate_metadata_keys(metadata)
 
         with self.emb_session_factory(expire_on_commit=False) as session:
-            existing = self._fetch_row(session, model_name, provider_type, backend_type)
+            existing = self._fetch_row(session, model_name, backend_type)
             if existing is not None:
                 if existing.dimensions != dimensions:
                     raise ModelRegistrationConflictError(
@@ -178,7 +178,6 @@ class RegistryManager:
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         backend_type: BackendType,
     ) -> None:
         """Delete a registry row. No-op if the row does not exist.
@@ -186,13 +185,11 @@ class RegistryManager:
         Parameters
         ----------
         model_name : str
-        provider_type : ProviderType
-            Provider that serves the model.
         backend_type : BackendType
             Embedding storage backend.
         """
         with self.emb_session_factory() as session:
-            row = self._fetch_row(session, model_name, provider_type, backend_type)
+            row = self._fetch_row(session, model_name, backend_type)
             if row is not None:
                 session.delete(row)
                 session.commit()
@@ -201,7 +198,6 @@ class RegistryManager:
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         backend_type: BackendType,
         index_config: IndexConfig,
     ) -> EmbeddingModelRecord:
@@ -210,8 +206,6 @@ class RegistryManager:
         Parameters
         ----------
         model_name : str
-        provider_type : ProviderType
-            Provider that serves the model.
         backend_type : BackendType
             Embedding storage backend.
         index_config : IndexConfig
@@ -229,11 +223,10 @@ class RegistryManager:
             If the model is not registered.
         """
         with self.emb_session_factory(expire_on_commit=False) as session:
-            row = self._fetch_row(session, model_name, provider_type, backend_type)
+            row = self._fetch_row(session, model_name, backend_type)
             if row is None:
                 raise ValueError(
-                    f"Model '{model_name}' (provider={provider_type.value}, "
-                    f"backend={backend_type.value}) is not registered."
+                    f"Model '{model_name}' (backend={backend_type.value}) is not registered."
                 )
             row.index_config = index_config  # triggers @validates hook
             session.commit()
@@ -243,7 +236,6 @@ class RegistryManager:
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         backend_type: BackendType,
         metadata: Mapping[str, object],
     ) -> EmbeddingModelRecord:
@@ -252,8 +244,6 @@ class RegistryManager:
         Parameters
         ----------
         model_name : str
-        provider_type : ProviderType
-            Provider that serves the model.
         backend_type : BackendType
             Embedding storage backend.
         metadata : Mapping[str, object]
@@ -273,11 +263,10 @@ class RegistryManager:
         """
         _validate_metadata_keys(metadata)
         with self.emb_session_factory(expire_on_commit=False) as session:
-            row = self._fetch_row(session, model_name, provider_type, backend_type)
+            row = self._fetch_row(session, model_name, backend_type)
             if row is None:
                 raise ValueError(
-                    f"Model '{model_name}' (provider={provider_type.value}, "
-                    f"backend={backend_type.value}) is not registered."
+                    f"Model '{model_name}' (backend={backend_type.value}) is not registered."
                 )
             row.details = dict(metadata)
             session.commit()
@@ -342,14 +331,12 @@ class RegistryManager:
     def _fetch_row(
         session: Session,
         model_name: str,
-        provider_type: ProviderType,
         backend_type: BackendType,
     ) -> Optional[ModelRegistry]:
         return session.scalar(
             select(ModelRegistry).where(
                 and_(
                     ModelRegistry.model_name == model_name,
-                    ModelRegistry.provider_type == provider_type,
                     ModelRegistry.backend_type == backend_type,
                 )
             )
@@ -360,8 +347,8 @@ class RegistryManager:
         index_config = index_config_from_orm_row(row.index_type, row.index_config)
         return EmbeddingModelRecord(
             model_name=row.model_name,
-            provider_type=row.provider_type,
             backend_type=row.backend_type,
+            provider_type=row.provider_type,
             index_config=index_config,
             dimensions=row.dimensions,
             storage_identifier=row.storage_identifier,

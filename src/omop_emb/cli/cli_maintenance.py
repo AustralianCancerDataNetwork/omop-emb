@@ -55,8 +55,9 @@ def list_models(
     for r in records:
         index_str = r.index_type.value if r.index_type else "none"
         metric_str = r.metric_type.value if r.metric_type else "any"
+        provider_str = r.provider_type.value if r.provider_type else "-"
         typer.echo(
-            f"{r.model_name:<40} {r.provider_type:<10} {metric_str:<8} "
+            f"{r.model_name:<40} {provider_str:<10} {metric_str:<8} "
             f"{index_str:<6} {r.dimensions:<6} {r.storage_identifier}"
         )
 
@@ -67,10 +68,6 @@ def rebuild_index(
         "--model", "-m",
         help="Canonical model name to rebuild the index for.",
     )],
-    provider_type: Annotated[ProviderType, typer.Option(
-        "--provider-type",
-        help="Provider the model was registered with.",
-    )] = ProviderType.OPENAI,
     index_type: Annotated[IndexType, typer.Option(
         "--index-type",
         help="Index type to build (FLAT = exact scan, HNSW = approximate; pgvector only).",
@@ -106,14 +103,9 @@ def rebuild_index(
 
     backend = resolve_backend()
 
-    record = backend.get_registered_model(
-        model_name=model,
-        provider_type=provider_type,
-    )
+    record = backend.get_registered_model(model_name=model)
     if record is None:
-        raise typer.BadParameter(
-            f"No registered model found for '{model}' (provider={provider_type.value})."
-        )
+        raise typer.BadParameter(f"No registered model found for '{model}'.")
 
     index_config = index_config_from_index_type(
         index_type,
@@ -124,7 +116,6 @@ def rebuild_index(
     )
     backend.rebuild_index(
         model_name=model,
-        provider_type=provider_type,
         index_config=index_config,
     )
     metric_info = f" (metric={metric_type.value})" if index_type == IndexType.HNSW else ""
@@ -137,10 +128,6 @@ def delete_model(
         "--model", "-m",
         help="Canonical model name to delete.",
     )],
-    provider_type: Annotated[ProviderType, typer.Option(
-        "--provider-type",
-        help="Provider the model was registered with.",
-    )] = ProviderType.OPENAI,
     confirm: Annotated[bool, typer.Option(
         "--yes", "-y",
         help="Skip confirmation prompt.",
@@ -155,17 +142,13 @@ def delete_model(
 
     if not confirm:
         typer.confirm(
-            f"Delete model '{model}' (provider={provider_type.value}) "
-            "and ALL associated embeddings? This cannot be undone.",
+            f"Delete model '{model}' and ALL associated embeddings? This cannot be undone.",
             abort=True,
         )
 
     backend = resolve_backend()
-    backend.delete_model(
-        model_name=model,
-        provider_type=provider_type,
-    )
-    typer.echo(f"Deleted model '{model}' (provider={provider_type.value}).")
+    backend.delete_model(model_name=model)
+    typer.echo(f"Deleted model '{model}'.")
 
 
 @app.command(name="export-faiss-cache", help="Export a FAISS sidecar cache from the embedding store.")
@@ -183,10 +166,6 @@ def export_faiss_cache(
         help="Distance metric for the FAISS index.",
         rich_help_panel="Index Options",
     )] = MetricType.COSINE,
-    provider_type: Annotated[ProviderType, typer.Option(
-        "--provider-type",
-        help="Provider the model was registered with.",
-    )] = ProviderType.OPENAI,
     batch_size: Annotated[int, typer.Option(
         "--batch-size", "-b",
         help="Batch size when streaming embeddings.",
@@ -211,7 +190,6 @@ def export_faiss_cache(
     cache = FAISSCache(
         backend=backend,
         model_name=model,
-        provider_type=provider_type,
         metric_type=metric_type,
         cache_dir=cache_dir,
     )
@@ -229,10 +207,6 @@ def check_faiss_cache(
         "--metric-type",
         help="Distance metric of the FAISS index to check.",
     )] = MetricType.COSINE,
-    provider_type: Annotated[ProviderType, typer.Option(
-        "--provider-type",
-        help="Provider the model was registered with.",
-    )] = ProviderType.OPENAI,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
         help="Increase verbosity (up to two levels)",
@@ -250,14 +224,9 @@ def check_faiss_cache(
         )
 
     backend = resolve_backend()
-    record = backend.get_registered_model(
-        model_name=model,
-        provider_type=provider_type,
-    )
+    record = backend.get_registered_model(model_name=model)
     if record is None:
-        typer.echo(
-            f"No registered model found for '{model}' (provider={provider_type.value})."
-        )
+        typer.echo(f"No registered model found for '{model}'.")
         raise typer.Exit(1)
 
     cache_meta = record.metadata.get("faiss_cache") if record.metadata else None
@@ -273,7 +242,6 @@ def check_faiss_cache(
     cache = FAISSCache(
         backend=backend,
         model_name=model,
-        provider_type=provider_type,
         metric_type=metric_type,
         cache_dir=cache_dir,
     )

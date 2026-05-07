@@ -235,29 +235,21 @@ class EmbeddingReaderInterface:
     # ------------------------------------------------------------------
 
     def get_model_table_name(self) -> Optional[str]:
-        record = self._backend.get_registered_model(
-            model_name=self.canonical_model_name,
-            provider_type=self.provider_type,
-        )
+        record = self._backend.get_registered_model(model_name=self.canonical_model_name)
         return record.storage_identifier if record is not None else None
 
     def is_model_registered(self) -> bool:
-        return self._backend.is_model_registered(
-            model_name=self.canonical_model_name,
-            provider_type=self.provider_type,
-        )
+        return self._backend.is_model_registered(model_name=self.canonical_model_name)
 
     def has_any_embeddings(self) -> bool:
         return self._backend.has_any_embeddings(
             model_name=self.canonical_model_name,
-            provider_type=self.provider_type,
             metric_type=self._metric_type,
         )
 
     def get_embedding_count(self) -> int:
         return self._backend.get_embedding_count(
             model_name=self.canonical_model_name,
-            provider_type=self.provider_type,
             metric_type=self._metric_type,
         )
 
@@ -291,7 +283,6 @@ class EmbeddingReaderInterface:
         effective_k = k or (concept_filter.limit if concept_filter else None) or self._k
         raw = self._backend.get_nearest_concepts(
             model_name=self.canonical_model_name,
-            provider_type=self.provider_type,
             metric_type=self._metric_type,
             query_embeddings=query_embedding,
             concept_filter=concept_filter,
@@ -328,7 +319,6 @@ class EmbeddingReaderInterface:
     ) -> Mapping[int, Sequence[float]]:
         return self._backend.get_embeddings_by_concept_ids(
             model_name=self.canonical_model_name,
-            provider_type=self.provider_type,
             metric_type=self._metric_type,
             concept_ids=concept_ids,
         )
@@ -351,7 +341,6 @@ class EmbeddingReaderInterface:
         all_concepts = _fetch_cdm_concepts_for_filter(concept_filter, cdm_factory)
         embedded_ids = self._backend.get_all_stored_concept_ids(
             model_name=self.canonical_model_name,
-            provider_type=self.provider_type,
             metric_type=self._metric_type,
         )
         return {cid: name for cid, name in all_concepts.items() if cid not in embedded_ids}
@@ -512,10 +501,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
 
     def delete_model(self) -> None:
         """Irreversibly delete the model and all associated embeddings."""
-        self._backend.delete_model(
-            model_name=self.canonical_model_name,
-            provider_type=self._provider_type,
-        )
+        self._backend.delete_model(model_name=self.canonical_model_name)
 
     def rebuild_index(self, index_config: IndexConfig) -> EmbeddingModelRecord:
         """Build or rebuild the index on the embedding table.
@@ -532,7 +518,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         """
         return self._backend.rebuild_index(
             model_name=self.canonical_model_name,
-            provider_type=self._provider_type,
             index_config=index_config,
         )
 
@@ -564,7 +549,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         """Upsert pre-built ConceptEmbeddingRecords with their embeddings."""
         self._backend.upsert_embeddings(
             model_name=self.canonical_model_name,
-            provider_type=self._embedding_client.provider.provider_type,
             metric_type=self._metric_type,
             records=records,
             embeddings=embeddings,
@@ -577,7 +561,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         """Upsert from a lazy ``(records, embeddings)`` iterable."""
         self._backend.bulk_upsert_embeddings(
             model_name=self.canonical_model_name,
-            provider_type=self._embedding_client.provider.provider_type,
             metric_type=self._metric_type,
             batches=batches,
         )
@@ -624,10 +607,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         ]
 
         # Check registered dimensions
-        record = self._backend.get_registered_model(
-            model_name=self.canonical_model_name,
-            provider_type=self.provider_type,
-        )
+        record = self._backend.get_registered_model(model_name=self.canonical_model_name)
         if record is not None and record.dimensions != self.embedding_dim:
             raise ValueError(
                 f"Embedding dimension mismatch: client produces {self.embedding_dim}d "

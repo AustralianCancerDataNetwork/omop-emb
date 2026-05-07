@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from omop_emb.config import ProviderType
-from omop_emb.embeddings import EmbeddingClient, EmbeddingRole, OllamaProvider, OpenAIProvider
+from omop_emb.embeddings import EmbeddingClient, EmbeddingRole, OllamaProvider
 from omop_emb.embeddings.embedding_client import EmbeddingClientError
 from omop_emb.config import ENV_DOCUMENT_EMBEDDING_PREFIX, ENV_QUERY_EMBEDDING_PREFIX
 
@@ -67,9 +67,9 @@ class TestEmbeddingClientInit:
         client = EmbeddingClient(model=OLLAMA_MODEL, api_base="http://ollama.internal/v1")
         assert isinstance(client.provider, OllamaProvider)
 
-    def test_openai_provider_inferred_from_openai_url(self, mock_openai):
-        client = EmbeddingClient(model="text-embedding-3-small", api_base=OPENAI_BASE, api_key="sk-real")
-        assert isinstance(client.provider, OpenAIProvider)
+    def test_non_ollama_url_without_explicit_provider_raises(self, mock_openai):
+        with pytest.raises(ValueError, match="Only Ollama"):
+            EmbeddingClient(model="text-embedding-3-small", api_base=OPENAI_BASE, api_key="sk-real")
 
     def test_canonical_model_name_stored_after_provider_processing(self, mock_openai):
         client = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
@@ -85,12 +85,6 @@ class TestEmbeddingClientProperties:
     def test_provider_type_reflects_ollama(self, mock_openai):
         client = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
         assert client.provider.provider_type == ProviderType.OLLAMA
-
-    def test_provider_type_reflects_openai(self, mock_openai):
-        client = EmbeddingClient(
-            model="text-embedding-3-small", api_base=OPENAI_BASE, api_key="sk-x", provider=OpenAIProvider()
-        )
-        assert client.provider.provider_type == ProviderType.OPENAI
 
     def test_api_key_accessible(self, mock_openai):
         _, openai_instance = mock_openai
@@ -131,17 +125,6 @@ class TestEmbeddingDim:
         _ = client.embedding_dim
         _ = client.embedding_dim
         provider.get_embedding_dim.assert_called_once()
-
-    def test_openai_provider_falls_back_to_live_probe(self, mock_openai):
-        """OpenAI provider doesn't support get_embedding_dim; falls back to a live probe."""
-        _, openai_instance = mock_openai
-        openai_instance.embeddings.create.return_value = _make_embedding_response([[0.1] * 1536])
-
-        client = EmbeddingClient(
-            model="text-embedding-3-small", api_base=OPENAI_BASE, api_key="sk-x", provider=OpenAIProvider()
-        )
-        assert client.embedding_dim == 1536
-        openai_instance.embeddings.create.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

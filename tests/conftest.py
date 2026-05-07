@@ -175,9 +175,6 @@ def pg_backend(pg_engine: sa.Engine):
     # Tear down: remove all models registered during the test
     for record in backend.get_registered_models():
         try:
-            backend.delete_model(
-                model_name=record.model_name,
-                provider_type=record.provider_type,
-            )
+            backend.delete_model(model_name=record.model_name)
         except Exception:
             pass

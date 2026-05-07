@@ -175,44 +175,6 @@ class OllamaProvider(EmbeddingProvider):
         )
 
 
-class OpenAIProvider(EmbeddingProvider):
-    """Provider for OpenAI-compatible APIs (OpenAI, Azure OpenAI, etc.).
-
-    Model names require no tag normalisation.  Embedding dimensions are not
-    available via a query endpoint, so :meth:`get_embedding_dim` raises
-    :exc:`NotImplementedError` — pass the dimension explicitly via the
-    ``embedding_dim`` parameter of :class:`~omop_emb.embedding_client.EmbeddingClient`
-    instead.
-    """
-
-    @property
-    def provider_type(self) -> ProviderType:
-        return ProviderType.OPENAI
-
-    def canonical_model_name(self, name: str) -> str:
-        """Return *name* unchanged (no tag normalisation required).
-
-        Parameters
-        ----------
-        name : str
-            Model name, e.g. ``'text-embedding-3-small'``.
-
-        Returns
-        -------
-        str
-            The same model name, stripped of surrounding whitespace.
-        """
-        return name.strip()
-
-    def get_embedding_dim(self, model: str, api_base: str) -> int:
-        raise NotImplementedError(
-            f"Automatic embedding dimension retrieval is not supported for "
-            f"OpenAI-compatible endpoints (api_base='{api_base}'). "
-            f"Pass the dimension explicitly via the 'embedding_dim' parameter "
-            f"when constructing EmbeddingClient."
-        )
-
-
 def get_provider_for_api_base(
     api_base: str,
     api_key: str = "ollama",
@@ -224,7 +186,7 @@ def get_provider_for_api_base(
     1. ``'ollama'`` appears anywhere in *api_base* → :class:`OllamaProvider`
     2. *api_base* is a localhost/loopback URL **and** *api_key* is ``'ollama'``
        → :class:`OllamaProvider`
-    3. All other URLs → :class:`OpenAICompatProvider`
+    3. All other URLs → :exc:`ValueError`
 
     Pass a provider instance explicitly to
     :class:`~omop_emb.embedding_client.EmbeddingClient` to override this inference
@@ -242,19 +204,26 @@ def get_provider_for_api_base(
     -------
     EmbeddingProvider
         A provider instance appropriate for *api_base*.
+
+    Raises
+    ------
+    ValueError
+        If the endpoint cannot be identified as an Ollama instance.
     """
     is_local = "localhost" in api_base or "127.0.0.1" in api_base
     is_ollama = "ollama" in api_base or (is_local and api_key == "ollama")
 
     if is_ollama:
         return OllamaProvider()
-    return OpenAIProvider()
+    raise ValueError(
+        f"Cannot infer provider from api_base={api_base!r}. "
+        "Only Ollama endpoints are supported. Pass an explicit provider "
+        "instance to EmbeddingClient to override."
+    )
+
 
 def get_provider_from_provider_type(provider_type: ProviderType) -> EmbeddingProvider:
     """Map a ProviderType enum to an EmbeddingProvider instance."""
     if provider_type == ProviderType.OLLAMA:
         return OllamaProvider()
-    elif provider_type == ProviderType.OPENAI:
-        return OpenAIProvider()
-    else:
-        raise ValueError(f"Unsupported provider type: {provider_type}")
+    raise ValueError(f"Unsupported provider type: {provider_type}")

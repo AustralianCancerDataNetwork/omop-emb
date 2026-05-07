@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 def require_registered_model(func: Callable) -> Callable:
     """Resolve and validate a registry record before the wrapped method runs.
 
-    Looks up the model by ``(model_name, provider_type)`` using the backend's
-    own ``backend_type``, then validates the caller-supplied ``metric_type``
+    Looks up the model by ``model_name`` using the backend's own
+    ``backend_type``, then validates the caller-supplied ``metric_type``
     against the registry:
 
     - FLAT index (registry ``metric_type`` is ``None``): any metric supported
@@ -49,8 +49,8 @@ def require_registered_model(func: Callable) -> Callable:
     Parameters
     ----------
     func : Callable
-        Backend method that accepts ``model_name``, ``provider_type``,
-        ``metric_type``, and ``_model_record`` as keyword arguments.
+        Backend method that accepts ``model_name``, ``metric_type``, and
+        ``_model_record`` as keyword arguments.
 
     Returns
     -------
@@ -69,17 +69,13 @@ def require_registered_model(func: Callable) -> Callable:
         self: "EmbeddingBackend",
         *,
         model_name: str,
-        provider_type: ProviderType,
         metric_type: MetricType,
         **kwargs: Any,
     ) -> Any:
-        record = self.get_registered_model(
-            model_name=model_name, 
-            provider_type=provider_type
-        )
+        record = self.get_registered_model(model_name=model_name)
         if record is None:
             raise ValueError(
-                f"Embedding model '{model_name}' (provider='{provider_type.value}') "
+                f"Embedding model '{model_name}' "
                 f"is not registered in backend '{self.backend_type.value}'."
             )
 
@@ -120,7 +116,6 @@ def require_registered_model(func: Callable) -> Callable:
         return func(
             self,
             model_name=model_name,
-            provider_type=provider_type,
             metric_type=metric_type,
             **kwargs,
         )
@@ -288,7 +283,6 @@ class EmbeddingBackend(ABC):
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
     ) -> None:
         """Delete the registry row and drop the physical embedding table.
 
@@ -296,8 +290,7 @@ class EmbeddingBackend(ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
+
         Raises
         ------
         ValueError
@@ -315,28 +308,25 @@ class EmbeddingBackend(ABC):
         longer exists. The next ``_initialise_store`` will
         recreate an empty table.
         """
-        record = self.get_registered_model(model_name, provider_type)
+        record = self.get_registered_model(model_name=model_name)
         if record is None:
             raise ValueError(
-                f"Model '{model_name}' (provider='{provider_type.value}') "
-                f"is not registered in backend '{self.backend_type.value}'."
+                f"Model '{model_name}' is not registered in backend '{self.backend_type.value}'."
             )
         self._delete_storage_table(model_record=record)
         self._table_cache.pop(record.storage_identifier, None)
         self._registry.delete_model(
             model_name=model_name,
-            provider_type=provider_type,
             backend_type=self.backend_type,
         )
         logger.info(
-            f"Deleted model '{model_name}' (provider='{provider_type.value}') from backend '{self.backend_type.value}' and dropped storage table."
+            f"Deleted model '{model_name}' from backend '{self.backend_type.value}' and dropped storage table."
         )
     
     def rebuild_index(
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         index_config: IndexConfig,
     ) -> EmbeddingModelRecord:
         """Build or rebuild the index on an existing embedding table.
@@ -349,8 +339,6 @@ class EmbeddingBackend(ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
         index_config : IndexConfig
             Target index configuration. Pass ``HNSWIndexConfig`` (with
             ``metric_type`` set) to build an HNSW index, or ``FlatIndexConfig()``
@@ -376,16 +364,14 @@ class EmbeddingBackend(ABC):
         ``require_registered_model`` is not applied here because this method
         intentionally modifies the state that the decorator validates against.
         """
-        record = self.get_registered_model(model_name, provider_type)
+        record = self.get_registered_model(model_name=model_name)
         if record is None:
             raise ValueError(
-                f"Model '{model_name}' (provider='{provider_type.value}') "
-                f"is not registered in backend '{self.backend_type.value}'."
+                f"Model '{model_name}' is not registered in backend '{self.backend_type.value}'."
             )
         self._rebuild_index_impl(model_record=record, index_config=index_config)
         return self._registry.update_index_config(
             model_name=model_name,
-            provider_type=provider_type,
             backend_type=self.backend_type,
             index_config=index_config,
         )
@@ -401,30 +387,21 @@ class EmbeddingBackend(ABC):
 
     def get_registered_model(
         self,
+        *,
         model_name: str,
-        provider_type: ProviderType,
     ) -> Optional[EmbeddingModelRecord]:
-        """Convenience method to return a single registry record for the given model and provider.
+        """Return the registry record for *model_name*, or ``None`` if not registered.
 
         Parameters
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
+
         Returns
         -------
         EmbeddingModelRecord or None
         """
-        registered_models = self.get_registered_models(
-            model_name=model_name,
-            provider_type=provider_type,
-        )
-        if len(registered_models) > 1:
-            raise ValueError(
-                f"Multiple records found for model '{model_name}' (provider='{provider_type.value}') "
-                f"in backend '{self.backend_type.value}'. This should not happen as the registry is designed to have one record per model-provider-backend combination. Found {len(registered_models)} records."
-            )
+        registered_models = self.get_registered_models(model_name=model_name)
         return registered_models[0] if registered_models else None
     
     def get_registered_models(
@@ -456,7 +433,6 @@ class EmbeddingBackend(ABC):
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
     ) -> bool:
         """Return ``True`` if the model is present in the registry.
 
@@ -464,19 +440,17 @@ class EmbeddingBackend(ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
+
         Returns
         -------
         bool
         """
-        return self.get_registered_model(model_name, provider_type) is not None
+        return self.get_registered_model(model_name=model_name) is not None
 
     def patch_model_metadata(
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         key: str,
         value: object,
     ) -> None:
@@ -486,8 +460,6 @@ class EmbeddingBackend(ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
         key : str
             Metadata key to set or overwrite. Must not be a reserved key.
         value : object
@@ -499,16 +471,14 @@ class EmbeddingBackend(ABC):
             If the model is not registered or ``key`` is a reserved metadata
             key.
         """
-        record = self.get_registered_model(model_name, provider_type)
+        record = self.get_registered_model(model_name=model_name)
         if record is None:
             raise ValueError(
-                f"Model '{model_name}' (provider='{provider_type.value}') "
-                f"is not registered in backend '{self.backend_type.value}'."
+                f"Model '{model_name}' is not registered in backend '{self.backend_type.value}'."
             )
         updated = {**record.metadata, key: value}
         self._registry.update_metadata(
             model_name=model_name,
-            provider_type=provider_type,
             backend_type=self.backend_type,
             metadata=updated,
         )
@@ -571,7 +541,6 @@ class EmbeddingBackend(ABC):
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         metric_type: MetricType,
         records: Sequence[ConceptEmbeddingRecord],
         embeddings: ndarray,
@@ -583,8 +552,6 @@ class EmbeddingBackend(ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
         metric_type : MetricType
             Metric to validate against the registry. For FLAT any
             backend-supported metric is accepted; for HNSW it must match the
@@ -614,7 +581,6 @@ class EmbeddingBackend(ABC):
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         metric_type: MetricType,
         batches: Iterable[Tuple[Sequence[ConceptEmbeddingRecord], ndarray]],
     ) -> None:
@@ -624,8 +590,6 @@ class EmbeddingBackend(ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
         metric_type : MetricType
             Validated once per batch via ``upsert_embeddings``.
         batches : Iterable[tuple[Sequence[ConceptEmbeddingRecord], ndarray]]
@@ -634,7 +598,6 @@ class EmbeddingBackend(ABC):
         for records, embeddings in batches:
             self.upsert_embeddings(
                 model_name=model_name,
-                provider_type=provider_type,
                 metric_type=metric_type,
                 records=records,
                 embeddings=embeddings,
@@ -649,7 +612,6 @@ class EmbeddingBackend(ABC):
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         metric_type: MetricType,
         concept_ids: Sequence[int],
         _model_record: EmbeddingModelRecord,
@@ -660,8 +622,6 @@ class EmbeddingBackend(ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
         metric_type : MetricType
             Validated against the registry.
         concept_ids : Sequence[int]
@@ -694,7 +654,6 @@ class EmbeddingBackend(ABC):
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         metric_type: MetricType,
         query_embeddings: ndarray,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
@@ -707,8 +666,6 @@ class EmbeddingBackend(ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
         metric_type : MetricType
             Distance metric for the KNN query. Validated against the registry:
             must match the HNSW metric exactly, or be any backend-supported
@@ -757,7 +714,6 @@ class EmbeddingBackend(ABC):
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         metric_type: MetricType,
         _model_record: EmbeddingModelRecord,
     ) -> bool:
@@ -767,8 +723,6 @@ class EmbeddingBackend(ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
         metric_type : MetricType
             Validated against the registry.
 
@@ -786,7 +740,6 @@ class EmbeddingBackend(ABC):
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         metric_type: MetricType,
         _model_record: EmbeddingModelRecord,
     ) -> set[int]:
@@ -796,8 +749,6 @@ class EmbeddingBackend(ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
         metric_type : MetricType
             Validated against the registry.
 
@@ -814,7 +765,6 @@ class EmbeddingBackend(ABC):
         self,
         *,
         model_name: str,
-        provider_type: ProviderType,
         metric_type: MetricType,
     ) -> int:
         """Return the number of embeddings stored in the table.
@@ -823,8 +773,6 @@ class EmbeddingBackend(ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        provider_type : ProviderType
-            Provider that serves the model.
         metric_type : MetricType
 
         Returns
@@ -833,7 +781,6 @@ class EmbeddingBackend(ABC):
         """
         return len(self.get_all_stored_concept_ids(
             model_name=model_name,
-            provider_type=provider_type,
             metric_type=metric_type,
         ))
 

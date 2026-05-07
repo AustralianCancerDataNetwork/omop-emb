@@ -22,12 +22,14 @@ class ModelRegistryBase(DeclarativeBase):
 
 
 class ModelRegistry(ModelRegistryBase):
-    # TODO: Add the orignal non-safe canonical model name as it was used with e.g. Ollama
     """ORM row for one registered embedding model.
 
-    The primary key is ``(model_name, provider_type, backend_type)`` as
-    defined by :py:obj:`omop_emb.model_registry.model_registry_manager.ModelRegistryManager`.
-    Each model has exactly one active index at any time. 
+    The primary key is ``(model_name, backend_type)``.  ``provider_type`` is
+    stored as a plain nullable column for diagnostics; it is not part of the
+    key because the same model name + backend always maps to the same physical
+    table regardless of which compatible endpoint generated the vectors.
+
+    Each model has exactly one active index at any time.
     ``index_type`` and ``metric_type`` are regular (non-key) columns that are automatically
     synced when ``index_config`` is assigned.
 
@@ -36,7 +38,7 @@ class ModelRegistry(ModelRegistryBase):
     model_name : str
         Canonical model name including tag.
     provider_type : ProviderType
-        Provider that serves the model.
+        Provider that served the model (informational only).
     backend_type : BackendType
         Embedding storage backend.
     storage_identifier : str
@@ -72,9 +74,9 @@ class ModelRegistry(ModelRegistryBase):
     __tablename__ = "model_registry"
 
     model_name = mapped_column(String, primary_key=True)
-    provider_type = mapped_column(Enum(ProviderType, native_enum=False), primary_key=True)
     backend_type = mapped_column(Enum(BackendType, native_enum=False), primary_key=True)
-
+    
+    provider_type = mapped_column(Enum(ProviderType, native_enum=False))
     storage_identifier = mapped_column(String, nullable=False, unique=True)
     dimensions = mapped_column(Integer, nullable=False)
 
@@ -98,7 +100,7 @@ class ModelRegistry(ModelRegistryBase):
     def _validate_provider_type(self, _key: str, value: str) -> str:
         """Reject unknown provider types on assignment."""
         if value not in ProviderType:
-            raise ValueError(f"Unsupported provider type: {value}. Supported: {list(ProviderType)}")
+            raise ValueError(f"Unsupported provider type: {value!r}. Supported: {list(ProviderType)}")
         return value
 
     @validates("backend_type")

@@ -167,6 +167,7 @@ def pg_engine() -> Generator[sa.Engine, None, None]:
 def pg_backend(pg_engine: sa.Engine):
     """Function-scoped PGVectorEmbeddingBackend with a clean registry per test."""
     from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
+    from omop_emb.backends.embedding_table import EmbeddingTableBase
 
     backend = PGVectorEmbeddingBackend(emb_engine=pg_engine)
 
@@ -178,3 +179,7 @@ def pg_backend(pg_engine: sa.Engine):
             backend.delete_model(model_name=record.model_name)
         except Exception:
             pass
+    
+    # Remove the tables from the ORM cache
+    EmbeddingTableBase.metadata.clear()
+    EmbeddingTableBase.registry._class_registry.clear()

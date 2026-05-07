@@ -13,11 +13,14 @@ The provider is inferred automatically from the ``api_base`` URL via
 """
 
 from __future__ import annotations
+import logging
 from abc import ABC, abstractmethod
 from httpx import URL
 import requests
 
 from omop_emb.config import ProviderType
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingProvider(ABC):

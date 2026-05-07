@@ -128,7 +128,7 @@ class EmbeddingReaderInterface:
         enriched with ``concept_name``, ``is_standard``, and ``is_active``
         from the CDM.  When absent, those fields are ``None``.
     model : str
-        Raw model name. Checked for cannonical form by the provider and passed verbatim to the API for embedding generation.
+        Model name in canonical form.
     canonical_model_name : str, optional
     provider_name_or_type : str | ProviderType, optional
         Embedding provider.
@@ -146,7 +146,6 @@ class EmbeddingReaderInterface:
         metric_type: MetricType,
         *,
         omop_cdm_engine: Optional[Engine] = None,
-        canonical_model_name: Optional[str] = None,
         provider_name_or_type: Optional[Union[str, ProviderType]] = None,
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -394,7 +393,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             backend=backend,
             metric_type=metric_type,
             omop_cdm_engine=omop_cdm_engine,
-            canonical_model_name=embedding_client.canonical_model_name,
+            model=embedding_client.canonical_model_name,
             provider_name_or_type=embedding_client.provider.provider_type,
         )
 

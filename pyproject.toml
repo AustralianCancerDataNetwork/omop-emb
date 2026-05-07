@@ -41,6 +41,7 @@ dependencies = [
     "openai",
     "requests",
     "typer",
+    "tqdm"
 ]
 
 [project.optional-dependencies]

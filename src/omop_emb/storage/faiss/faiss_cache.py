@@ -50,6 +50,14 @@ from typing import Optional, Tuple
 import numpy as np
 from tqdm import tqdm
 
+try:
+    import faiss
+except ImportError as _faiss_err:
+    raise ImportError(
+        "FAISSCache requires the 'faiss-cpu' optional dependency. "
+        "Install it with: pip install omop-emb[faiss]"
+    ) from _faiss_err
+
 from omop_emb.config import MetricType, IndexType, ProviderType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
 from omop_emb.backends.index_config import IndexConfig
@@ -202,16 +210,6 @@ class CacheMetadata:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _require_faiss() -> None:
-    try:
-        import faiss  # noqa: F401
-    except ImportError as exc:
-        raise ImportError(
-            "FAISSCache requires the 'faiss' optional dependency. "
-            "Install it with: pip install omop-emb[faiss]"
-        ) from exc
-
-
 def _validate_faiss_metric(metric_type: MetricType) -> None:
     """Raise ``ValueError`` if *metric_type* is not supported by FAISS."""
     if metric_type not in _FAISS_SUPPORTED_METRICS:
@@ -260,7 +258,6 @@ class FAISSCache:
         model_name: str,
         cache_dir: "Path | str",
     ) -> None:
-        _require_faiss()
         self._model_name = model_name
         self._cache_dir = Path(cache_dir).expanduser().resolve()
 
@@ -516,7 +513,6 @@ class FAISSCache:
         may lower recall: graph traversal can skip valid candidates that would
         only be reached through excluded nodes.
         """
-        import faiss
         from omop_emb.utils.embedding_utils import get_similarity_from_distance
 
         query = np.ascontiguousarray(query_embeddings, dtype=np.float32)
@@ -604,8 +600,6 @@ class FAISSCache:
         metric_type: MetricType,
         index_config: IndexConfig,
     ) -> None:
-        import faiss
-
         vecs = embeddings.copy() if metric_type == MetricType.COSINE else embeddings
         if metric_type == MetricType.COSINE:
             faiss.normalize_L2(vecs)
@@ -627,7 +621,6 @@ class FAISSCache:
         index_config: IndexConfig,
     ):
         """Create the unwrapped FAISS inner index from *index_config*."""
-        import faiss
         from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 
         faiss_metric = (
@@ -677,8 +670,6 @@ class FAISSCache:
         raise ValueError(f"No FAISS index factory for {type(index_config).__name__}.")
 
     def _load_index(self, metric_type: MetricType, index_config: IndexConfig):
-        import faiss
-
         path = self._faiss_path(metric_type, index_config)
         if not path.exists():
             raise FileNotFoundError(
@@ -764,7 +755,6 @@ class FAISSCache:
             If the row count in ``metadata.npz`` does not match the FAISS
             index's ``ntotal``.
         """
-        import faiss
         from omop_emb.utils.embedding_utils import ConceptEmbeddingRecord
 
         meta = self._load_meta(metric_type, index_config)

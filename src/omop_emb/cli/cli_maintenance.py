@@ -226,23 +226,21 @@ def export_faiss_cache(
         embedding_provider = get_provider_from_provider_type(provider_type)
         model = embedding_provider.canonical_model_name(model)
 
-    try:
-        from omop_emb.storage.faiss import FAISSCache
-    except ImportError as exc:
-        typer.echo(
-            f"FAISS optional dependency not installed: {exc}. "
-            "Install it with: pip install omop-emb[faiss]",
-            err=True,
-        )
-        raise typer.Exit(1)
-
     index_config = index_config_from_index_type(
         index_type,
         metric_type=metric_type,
         num_neighbors=hnsw_m,
     )
     backend = resolve_backend()
-    cache = FAISSCache(model_name=model, cache_dir=cache_dir)
+
+    # Lazy import for optional FAISS dependency
+    try:
+        from omop_emb.storage.faiss import FAISSCache
+        cache = FAISSCache(model_name=model, cache_dir=cache_dir)
+    except ImportError as e:
+        typer.secho(str(e), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    
     cache.export(backend=backend, metric_type=metric_type, index_config=index_config, batch_size=batch_size)
     typer.echo(
         f"FAISS cache exported to '{cache.model_dir}' for '{model}' "
@@ -286,16 +284,6 @@ def check_faiss_cache(
         embedding_provider = get_provider_from_provider_type(provider_type)
         model = embedding_provider.canonical_model_name(model)
 
-    try:
-        from omop_emb.storage.faiss import FAISSCache
-    except ImportError as exc:
-        typer.echo(
-            f"FAISS optional dependency not installed: {exc}. "
-            "Install it with: pip install omop-emb[faiss]",
-            err=True,
-        )
-        raise typer.Exit(1)
-
     backend = resolve_backend()
     record = backend.get_registered_model(model_name=model)
     if record is None:
@@ -307,7 +295,13 @@ def check_faiss_cache(
         raise typer.Exit(1)
 
     index_config = index_config_from_index_type(index_type, metric_type=metric_type)
-    cache = FAISSCache(model_name=model, cache_dir=cache_dir)
+    try:
+        from omop_emb.storage.faiss import FAISSCache
+        cache = FAISSCache(model_name=model, cache_dir=cache_dir)
+    except ImportError as e:
+        typer.secho(str(e), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    
     info = cache.staleness_info(record, metric_type, index_config)
     status = "FRESH" if info["is_fresh"] else "STALE"
     typer.echo(
@@ -361,19 +355,14 @@ def import_faiss_cache(
     configure_logging_level(verbosity)
     load_dotenv()
 
-    try:
-        from omop_emb.storage.faiss import FAISSCache
-    except ImportError as exc:
-        typer.echo(
-            f"FAISS optional dependency not installed: {exc}. "
-            "Install it with: pip install omop-emb[faiss]",
-            err=True,
-        )
-        raise typer.Exit(1)
-
     index_config = index_config_from_index_type(index_type, metric_type=metric_type)
     backend = resolve_backend()
-    cache = FAISSCache(model_name=model, cache_dir=cache_dir)
+    try:
+        from omop_emb.storage.faiss import FAISSCache
+        cache = FAISSCache(model_name=model, cache_dir=cache_dir)
+    except ImportError as e:
+        typer.secho(str(e), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
 
     try:
         imported = cache.import_to_backend(
@@ -385,7 +374,7 @@ def import_faiss_cache(
             batch_size=batch_size,
         )
     except RuntimeError as exc:
-        typer.echo(str(exc), err=True)
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
     typer.echo(f"Imported {imported} concepts for '{model}' (metric={metric_type.value}, index={index_type.value}).")

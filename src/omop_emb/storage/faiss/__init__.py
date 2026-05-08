@@ -1,8 +1,6 @@
 """Optional FAISS sidecar cache.
 
-``faiss-cpu`` is an optional dependency.  This package is importable without
-it installed; ``ImportError`` is raised only when
-:class:`~omop_emb.storage.faiss.faiss_cache.FAISSCache` is instantiated.
+Requires: ``pip install omop-emb[faiss-cpu]``
 """
 from omop_emb.storage.faiss.faiss_cache import FAISSCache, IVFFlatIndexConfig, IVFPQIndexConfig
 

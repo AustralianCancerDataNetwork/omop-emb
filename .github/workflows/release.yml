@@ -51,6 +51,11 @@ jobs:
           PGPASSWORD=postgres psql -h localhost -U postgres -c \
             "CREATE USER omop_emb WITH PASSWORD 'omop_emb' CREATEDB;"
 
+      - name: Pre-install vector extension in template1
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -c \
+            "CREATE EXTENSION IF NOT EXISTS vector;" template1
+
       - name: Run tests
         run: uv run pytest
 

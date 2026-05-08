@@ -45,11 +45,12 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from itertools import batched
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
+from tqdm import tqdm
 
-from omop_emb.config import MetricType, IndexType
+from omop_emb.config import MetricType, IndexType, ProviderType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
 from omop_emb.backends.index_config import IndexConfig
 from omop_emb.backends.base_backend import EmbeddingBackend
@@ -418,7 +419,11 @@ class FAISSCache:
         is_standard_list: list[bool] = []
         is_valid_list: list[bool] = []
 
-        for id_batch in batched(all_ids, db_batch_size):
+        for id_batch in tqdm(
+            batched(all_ids, db_batch_size), 
+            total=(len(all_ids) + db_batch_size - 1) // db_batch_size, 
+            desc="Batched export to FAISS"
+        ):
             id_batch_list = list(id_batch)
             emb_map = backend.get_embeddings_by_concept_ids(
                 model_name=self._model_name,
@@ -447,6 +452,7 @@ class FAISSCache:
         # Shared metadata — overwrite on every export so it always reflects
         # the current set of concepts.  Stale per-index files are gated by
         # is_fresh() before any positional lookup into this array.
+        logger.info("Saving concept metadata arrays (%d rows) to '%s'.", total_rows, self._metadata_path())
         np.savez(
             self.model_dir / "metadata",  # NumPy appends .npz
             concept_ids=concept_ids_arr,
@@ -706,3 +712,151 @@ class FAISSCache:
                 "Run FAISSCache.export() first."
             )
         return CacheMetadata.from_json(json_path.read_text())
+
+    # ------------------------------------------------------------------
+    # Import
+    # ------------------------------------------------------------------
+
+    def import_to_backend(
+        self,
+        backend: "EmbeddingBackend",
+        metric_type: MetricType,
+        index_config: "IndexConfig",
+        provider_type: ProviderType,
+        *,
+        force: bool = False,
+        batch_size: int = 10_000,
+    ) -> int:
+        """Import embeddings from a FAISS index back into a backend.
+
+        Reconstructs raw vectors from the on-disk FAISS index and upserts
+        them into *backend* together with the concept metadata stored in
+        ``metadata.npz``.
+
+        Only ``FlatIndexConfig`` and ``HNSWIndexConfig`` support exact
+        reconstruction.  IVF and PQ indices are lossy and will raise at the
+        reconstruction step.
+
+        Parameters
+        ----------
+        backend : EmbeddingBackend
+            Target backend to write into.
+        metric_type : MetricType
+            Metric of the on-disk index to reconstruct from.
+        index_config : IndexConfig
+            Index structure of the on-disk index to reconstruct from.
+        provider_type : ProviderType
+            Provider type recorded in the registry if the model is not yet
+            registered.
+        force : bool
+            When ``False`` (default), refuse if the model already has
+            embeddings in the backend.  Set to ``True`` to overwrite.
+        batch_size : int
+            Number of vectors upserted per backend call.
+
+        Returns
+        -------
+        int
+            Number of concepts imported.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the ``.faiss`` or ``metadata.npz`` files do not exist.
+        RuntimeError
+            If the FAISS index does not support reconstruction (e.g. IVF-PQ),
+            or if the backend already has embeddings and ``force`` is ``False``.
+        ValueError
+            If the row count in ``metadata.npz`` does not match the FAISS
+            index's ``ntotal``.
+        """
+        import faiss
+        from omop_emb.utils.embedding_utils import ConceptEmbeddingRecord
+
+        meta = self._load_meta(metric_type, index_config)
+
+        meta_path = self._metadata_path()
+        if not meta_path.exists():
+            raise FileNotFoundError(
+                f"FAISS metadata not found at '{meta_path}'. "
+                "Run FAISSCache.export() first."
+            )
+        npz = np.load(meta_path, allow_pickle=True)
+        concept_ids_arr = npz["concept_ids"]
+        domain_ids_arr = npz["domain_ids"]
+        vocabulary_ids_arr = npz["vocabulary_ids"]
+        is_standard_arr = npz["is_standard"]
+        is_valid_arr = npz["is_valid"]
+        n = len(concept_ids_arr)
+
+        faiss_path = self._faiss_path(metric_type, index_config)
+        if not faiss_path.exists():
+            raise FileNotFoundError(
+                f"FAISS index not found at '{faiss_path}'. "
+                "Run FAISSCache.export() first."
+            )
+        index = faiss.read_index(str(faiss_path))
+
+        if index.ntotal != n:
+            raise ValueError(
+                f"Row count mismatch: metadata.npz has {n} concepts but "
+                f"FAISS index '{faiss_path.name}' has {index.ntotal} vectors. "
+                "Re-export to fix."
+            )
+
+        # Safety gate — refuse to silently overwrite existing embeddings.
+        if not force and backend.is_model_registered(model_name=self._model_name):
+            existing = backend.get_embedding_count(
+                model_name=self._model_name,
+                metric_type=metric_type,
+            )
+            if existing > 0:
+                raise RuntimeError(
+                    f"Backend already has {existing} embeddings for "
+                    f"'{self._model_name}'. Pass force=True to overwrite."
+                )
+
+        # Register if not already present.
+        if not backend.is_model_registered(model_name=self._model_name):
+            backend.register_model(
+                model_name=self._model_name,
+                provider_type=provider_type,
+                dimensions=meta.dimensions,
+            )
+
+        # Reconstruct all vectors from the inner index in one call.
+        vecs = np.empty((n, meta.dimensions), dtype=np.float32)
+        try:
+            index.index.reconstruct_n(0, n, vecs)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"FAISS index at '{faiss_path}' does not support exact "
+                "reconstruction. Only FLAT and HNSW indices can be imported "
+                f"back into a backend. Error: {exc}"
+            ) from exc
+
+        def _batches():
+            for start in range(0, n, batch_size):
+                end = min(start + batch_size, n)
+                records = [
+                    ConceptEmbeddingRecord(
+                        concept_id=int(concept_ids_arr[i]),
+                        domain_id=str(domain_ids_arr[i]),
+                        vocabulary_id=str(vocabulary_ids_arr[i]),
+                        is_standard=bool(is_standard_arr[i]),
+                        is_valid=bool(is_valid_arr[i]),
+                    )
+                    for i in range(start, end)
+                ]
+                yield records, vecs[start:end]
+
+        backend.bulk_upsert_embeddings(
+            model_name=self._model_name,
+            metric_type=metric_type,
+            batches=_batches(),
+        )
+        logger.info(
+            "Imported %d vectors for '%s' (metric=%s) into backend.",
+            n, self._model_name, metric_type.value,
+        )
+        return n

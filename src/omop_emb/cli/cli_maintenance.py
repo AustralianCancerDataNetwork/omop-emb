@@ -319,3 +319,73 @@ def check_faiss_cache(
         f"Status: {status}"
     )
     raise typer.Exit(0 if info["is_fresh"] else 1)
+
+
+@app.command(name="import-faiss-cache", help="Import embeddings from a FAISS index back into the backend.")
+def import_faiss_cache(
+    model: Annotated[str, typer.Option(
+        "--model", "-m",
+        help="Canonical model name.",
+    )],
+    cache_dir: Annotated[str, typer.Option(
+        "--cache-dir",
+        help="Root cache directory containing the FAISS index files.",
+    )],
+    provider_type: Annotated[ProviderType, typer.Option(
+        "--provider-type",
+        help="Embedding provider. Required to register the model if it is not already in the backend.",
+    )],
+    metric_type: Annotated[MetricType, typer.Option(
+        "--metric-type",
+        help="Distance metric of the index to import from.",
+        rich_help_panel="Index Options",
+    )] = MetricType.COSINE,
+    index_type: Annotated[IndexType, typer.Option(
+        "--index-type",
+        help="Index type to import from (FLAT or HNSW).",
+        rich_help_panel="Index Options",
+    )] = IndexType.FLAT,
+    batch_size: Annotated[int, typer.Option(
+        "--batch-size", "-b",
+        help="Number of vectors upserted per backend call.",
+    )] = 10_000,
+    force: Annotated[bool, typer.Option(
+        "--force",
+        help="Overwrite existing embeddings without prompting.",
+    )] = False,
+    verbosity: Annotated[int, typer.Option(
+        "--verbose", "-v", count=True,
+        help="Increase verbosity (up to two levels)",
+    )] = 0,
+):
+    configure_logging_level(verbosity)
+    load_dotenv()
+
+    try:
+        from omop_emb.storage.faiss import FAISSCache
+    except ImportError as exc:
+        typer.echo(
+            f"FAISS optional dependency not installed: {exc}. "
+            "Install it with: pip install omop-emb[faiss]",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    index_config = index_config_from_index_type(index_type, metric_type=metric_type)
+    backend = resolve_backend()
+    cache = FAISSCache(model_name=model, cache_dir=cache_dir)
+
+    try:
+        imported = cache.import_to_backend(
+            backend=backend,
+            metric_type=metric_type,
+            index_config=index_config,
+            provider_type=provider_type,
+            force=force,
+            batch_size=batch_size,
+        )
+    except RuntimeError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Imported {imported} concepts for '{model}' (metric={metric_type.value}, index={index_type.value}).")

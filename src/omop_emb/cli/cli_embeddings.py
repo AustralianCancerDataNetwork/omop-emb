@@ -403,6 +403,11 @@ def search(
         help="Filter results to specific OMOP domains. Repeat to add multiple.",
         rich_help_panel="Concept Filters",
     )] = None,
+    faiss_cache_dir: Annotated[Optional[str], typer.Option(
+        "--faiss-cache-dir",
+        help="Directory to cache FAISS index files for on-disk search with FAISS instead of the regular backend.",
+        rich_help_panel="Search Options",
+    )] = None,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
         help="Increase verbosity (up to two levels)",
@@ -433,6 +438,7 @@ def search(
         metric_type=metric_type,
         omop_cdm_engine=omop_cdm_engine,
         provider_name_or_type=embedding_client.provider.provider_type,
+        faiss_cache_dir=faiss_cache_dir,
     )
 
     concept_filter = EmbeddingConceptFilter(

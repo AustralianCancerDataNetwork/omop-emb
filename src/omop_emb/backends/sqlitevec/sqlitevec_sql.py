@@ -10,6 +10,13 @@ from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
+from omop_emb.backends.db_utils import (
+    KNN_CIDS_TABLE,
+    KNN_DOMS_TABLE,
+    KNN_VOCS_TABLE,
+    setup_concept_filter_temps,
+    temp_filter_table,
+)
 from omop_emb.config import MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
@@ -116,6 +123,7 @@ def dml_upsert_rows(
     table_name: str,
     records: Sequence[ConceptEmbeddingRecord],
     embeddings: ndarray,
+    dialect: str = "sqlite",
 ) -> None:
     """Upsert embedding rows into a vec0 table.
 
@@ -135,11 +143,11 @@ def dml_upsert_rows(
     delete-then-insert.
     """
     concept_ids = [r.concept_id for r in records]
-    id_placeholders = ",".join(f":d{i}" for i in range(len(concept_ids)))
-    session.execute(
-        text(f'DELETE FROM "{table_name}" WHERE concept_id IN ({id_placeholders})'),
-        {f"d{i}": cid for i, cid in enumerate(concept_ids)},
-    )
+
+    with temp_filter_table(session, concept_ids, "INTEGER", table_name="_tmp_del_cids", dialect=dialect) as temp_table_name:
+        session.execute(text(
+            f'DELETE FROM "{table_name}" WHERE concept_id IN (SELECT id FROM "{temp_table_name}")'
+        ))
 
     for rec, emb in zip(records, embeddings):
         session.execute(
@@ -211,21 +219,13 @@ def query_knn(
     where_clauses: list[str] = []
 
     if concept_filter is not None:
+        setup_concept_filter_temps(session, concept_filter, "sqlite")
         if concept_filter.concept_ids is not None:
-            ids = list(concept_filter.concept_ids)
-            placeholders = ",".join(f":cid{i}" for i in range(len(ids)))
-            where_clauses.append(f"concept_id IN ({placeholders})")
-            params.update({f"cid{i}": cid for i, cid in enumerate(ids)})
+            where_clauses.append(f'concept_id IN (SELECT id FROM "{KNN_CIDS_TABLE}")')
         if concept_filter.domains is not None:
-            domains = list(concept_filter.domains)
-            placeholders = ",".join(f":dom{i}" for i in range(len(domains)))
-            where_clauses.append(f"domain_id IN ({placeholders})")
-            params.update({f"dom{i}": d for i, d in enumerate(domains)})
+            where_clauses.append(f'domain_id IN (SELECT id FROM "{KNN_DOMS_TABLE}")')
         if concept_filter.vocabularies is not None:
-            vocabs = list(concept_filter.vocabularies)
-            placeholders = ",".join(f":voc{i}" for i in range(len(vocabs)))
-            where_clauses.append(f"vocabulary_id IN ({placeholders})")
-            params.update({f"voc{i}": v for i, v in enumerate(vocabs)})
+            where_clauses.append(f'vocabulary_id IN (SELECT id FROM "{KNN_VOCS_TABLE}")')
         if concept_filter.require_standard:
             where_clauses.append("is_standard = 1")
         if concept_filter.require_active:
@@ -262,6 +262,7 @@ def query_embeddings_by_ids(
     session: Session,
     table_name: str,
     concept_ids: Sequence[int],
+    dialect: str = "sqlite",
 ) -> dict[int, list[float]]:
     """Fetch embedding vectors for a set of concept IDs.
 
@@ -276,11 +277,11 @@ def query_embeddings_by_ids(
     dict[int, list[float]]
         Mapping of concept ID to embedding vector.
     """
-    placeholders = ",".join(f":c{i}" for i in range(len(concept_ids)))
-    rows = session.execute(
-        text(f'SELECT concept_id, embedding FROM "{table_name}" WHERE concept_id IN ({placeholders})'),
-        {f"c{i}": cid for i, cid in enumerate(concept_ids)},
-    ).all()
+    with temp_filter_table(session, list(concept_ids), "INTEGER", table_name="_tmp_emb_cids", dialect=dialect) as temp_table_name:
+        rows = session.execute(text(
+            f'SELECT concept_id, embedding FROM "{table_name}" '
+            f'WHERE concept_id IN (SELECT id FROM "{temp_table_name}")'
+        )).all()
     return {int(row[0]): _blob_to_embedding(row[1]) for row in rows}
 
 
@@ -311,3 +312,41 @@ def _embedding_to_blob(emb: ndarray) -> bytes:
 
 def _blob_to_embedding(blob: bytes) -> list[float]:
     return np.frombuffer(blob, dtype=np.float32).tolist()
+
+
+def query_filter_metadata_by_ids(
+    session: Session,
+    table_name: str,
+    concept_ids: Sequence[int],
+    dialect: str = "sqlite",
+) -> dict[int, dict]:
+    """Fetch filter metadata columns for a set of concept IDs.
+
+    Parameters
+    ----------
+    session : Session
+    table_name : str
+    concept_ids : Sequence[int]
+
+    Returns
+    -------
+    dict[int, dict]
+        ``{concept_id: {"domain_id": str, "vocabulary_id": str,
+        "is_standard": bool, "is_valid": bool}}``
+    """
+    if not concept_ids:
+        return {}
+    with temp_filter_table(session, list(concept_ids), "INTEGER", "_tmp_qf_cids", dialect=dialect) as temp_table_name:
+        rows = session.execute(text(
+            f'SELECT concept_id, domain_id, vocabulary_id, is_standard, is_valid '
+            f'FROM "{table_name}" WHERE concept_id IN (SELECT id FROM "{temp_table_name}")'
+        )).all()
+    return {
+        int(row[0]): {
+            "domain_id": row[1] or "",
+            "vocabulary_id": row[2] or "",
+            "is_standard": bool(row[3]),
+            "is_valid": bool(row[4]),
+        }
+        for row in rows
+    }

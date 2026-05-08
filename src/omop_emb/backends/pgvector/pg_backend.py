@@ -33,12 +33,12 @@ from omop_emb.backends.pgvector.pg_sql import (
     drop_pg_embedding_table,
     get_distance,
     q_all_concept_ids,
-    q_embedding_vectors_by_concept_ids,
     q_nearest_concept_ids,
     q_upsert_embeddings,
     q_create_extension_pgvector,
     table_exists,
 )
+from omop_emb.backends.db_utils import setup_concept_filter_temps, temp_filter_table
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
@@ -238,12 +238,15 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         if not concept_ids:
             return {}
         table = self._table_cache[model_record.storage_identifier]
-        stmt = q_embedding_vectors_by_concept_ids(
-            embedding_table=table,
-            concept_ids=tuple(concept_ids),
-        )
-        with self.emb_session_factory() as session:
-            result = {int(row.concept_id): list(row.embedding) for row in session.execute(stmt)}
+        with self.emb_session_factory.begin() as session:
+            with temp_filter_table(
+                session, list(concept_ids), "BIGINT", table_name="_tmp_emb_cids", dialect=self.emb_engine.dialect.name
+            ) as temp_table_name:
+                rows = session.execute(
+                    select(table.concept_id, table.embedding)
+                    .where(text(f'concept_id IN (SELECT id FROM "{temp_table_name}")'))
+                ).all()
+        result = {int(row[0]): list(row[1]) for row in rows}
         missing = set(concept_ids) - set(result.keys())
         if missing:
             raise ValueError(
@@ -263,22 +266,24 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         self.validate_embeddings(query_embeddings, model_record.dimensions)
 
         manager = self._index_managers.get(model_record.storage_identifier)
-        if isinstance(manager, PGVectorHNSWIndexManager):
-            with self.emb_session_factory.begin() as session:
+        table = self._table_cache[model_record.storage_identifier]
+
+        with self.emb_session_factory.begin() as session:
+            if isinstance(manager, PGVectorHNSWIndexManager):
                 session.execute(
                     text(f"SET hnsw.ef_search = {manager.index_config.ef_search}")
                 )
 
+            if concept_filter is not None:
+                setup_concept_filter_temps(session, concept_filter, "postgresql")
 
-        table = self._table_cache[model_record.storage_identifier]
-        stmt = q_nearest_concept_ids(
-            embedding_table=table,
-            query_embeddings=query_embeddings.tolist(),
-            metric_type=metric_type,
-            k=k,
-            concept_filter=concept_filter,
-        )
-        with self.emb_session_factory() as session:
+            stmt = q_nearest_concept_ids(
+                embedding_table=table,
+                query_embeddings=query_embeddings.tolist(),
+                metric_type=metric_type,
+                k=k,
+                concept_filter=concept_filter,
+            )
             ann_rows = session.execute(stmt).all()
 
         results: list[list[NearestConceptMatch]] = [[] for _ in range(len(query_embeddings))]
@@ -307,3 +312,35 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory() as session:
             return {row[0] for row in session.execute(q_all_concept_ids(table))}
+
+    def _get_concept_filter_metadata_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+    ) -> Mapping[int, Mapping[str, object]]:
+        if not concept_ids:
+            return {}
+        table = self._table_cache[model_record.storage_identifier]
+        with self.emb_session_factory.begin() as session:
+            with temp_filter_table(
+                session, list(concept_ids), "BIGINT", table_name="_tmp_cfm_cids", dialect=self.emb_engine.dialect.name
+            ) as temp_table_name:
+                rows = session.execute(
+                    select(
+                        table.concept_id,
+                        table.domain_id,
+                        table.vocabulary_id,
+                        table.is_standard,
+                        table.is_valid,
+                    ).where(text(f'concept_id IN (SELECT id FROM "{temp_table_name}")'))
+                ).all()
+        return {
+            int(row[0]): {
+                "domain_id": row[1] or "",
+                "vocabulary_id": row[2] or "",
+                "is_standard": bool(row[3]),
+                "is_valid": bool(row[4]),
+            }
+            for row in rows
+        }

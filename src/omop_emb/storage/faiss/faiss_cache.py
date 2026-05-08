@@ -406,12 +406,6 @@ class FAISSCache:
             logger.warning("No embeddings found for '%s' — FAISS export skipped.", self._model_name)
             return
 
-        # Cap at 50 000 per DB round-trip to stay under the PostgreSQL
-        # wire-protocol bind-parameter limit (65 535).
-        # TODO(phase-g): replace with temp-table JOIN so the cap can be removed.
-        _MAX_DB_BATCH = 50_000
-        db_batch_size = min(batch_size, _MAX_DB_BATCH)
-
         concept_ids_list: list[int] = []
         embeddings_list: list[np.ndarray] = []
         domain_ids_list: list[str] = []
@@ -420,8 +414,8 @@ class FAISSCache:
         is_valid_list: list[bool] = []
 
         for id_batch in tqdm(
-            batched(all_ids, db_batch_size), 
-            total=(len(all_ids) + db_batch_size - 1) // db_batch_size, 
+            batched(all_ids, batch_size),
+            total=(len(all_ids) + batch_size - 1) // batch_size,
             desc="Batched export to FAISS"
         ):
             id_batch_list = list(id_batch)

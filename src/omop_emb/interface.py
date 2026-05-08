@@ -86,23 +86,33 @@ def list_registered_models(
 def _fetch_cdm_concepts_for_ingestion(
     concept_ids: set[int],
     cdm_session_factory: sessionmaker,
+    batch_size: int = 50_000,
 ) -> dict[int, Row]:
     """Return CDM rows needed to build ``ConceptEmbeddingRecord`` filter columns.
 
     Fetches ``domain_id``, ``vocabulary_id``, and ``standard_concept`` — the
     three columns written into the embedding table at upsert time.
+    
+    Warnings
+    --------
+    This method allows sub-batching to avoid bind-parameter limits when fetching large numbers of concepts from the CDM. This is not designed for high performance retrieval of concept metadata; it is intended for ingestion workflows where the number of concepts is large and the CDM database may have an unknown dialect. 
     """
     if not concept_ids:
         return {}
-    query = select(
-        Concept.concept_id,
-        Concept.domain_id,
-        Concept.vocabulary_id,
-        Concept.standard_concept,
-        Concept.invalid_reason,
-    ).where(Concept.concept_id.in_(concept_ids))
-    with cdm_session_factory() as session:
-        return {row.concept_id: row for row in session.execute(query)}
+    id_list = list(concept_ids)
+    result: dict[int, Row] = {}
+    for start in range(0, len(id_list), batch_size):
+        chunk = id_list[start : start + batch_size]
+        query = select(
+            Concept.concept_id,
+            Concept.domain_id,
+            Concept.vocabulary_id,
+            Concept.standard_concept,
+            Concept.invalid_reason,
+        ).where(Concept.concept_id.in_(chunk))
+        with cdm_session_factory() as session:
+            result.update({row.concept_id: row for row in session.execute(query)})
+    return result
 
 
 def _fetch_cdm_concepts_for_filter(
@@ -558,6 +568,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         concept_ids: Sequence[int],
         concept_texts: Sequence[str],
         batch_size: Optional[int] = None,
+        cdm_batch_size: int = 50_000,
     ) -> ndarray:
         """Generate embeddings from CDM concepts and upsert with filter metadata.
 
@@ -579,7 +590,11 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
 
         # Fetch concept metadata from CDM for filter columns
         cdm_factory = sessionmaker(omop_cdm_engine)
-        meta = _fetch_cdm_concepts_for_ingestion(set(concept_ids), cdm_factory)
+        meta = _fetch_cdm_concepts_for_ingestion(
+            set(concept_ids), 
+            cdm_factory,
+            batch_size=cdm_batch_size,
+        )
 
         records = [
             ConceptEmbeddingRecord(

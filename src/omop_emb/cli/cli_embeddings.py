@@ -103,6 +103,11 @@ def add_embeddings(
         help="Limit the number of concepts to embed. Useful for testing.",
         rich_help_panel="Concept Filters",
     )] = None,
+    cdm_batch_size: Annotated[int, typer.Option(
+        "--cdm-batch-size",
+        help="Batch size for fetching concept metadata from the CDM during ingestion. Adjust if you encounter performance issues or database limits during ingestion.",
+        rich_help_panel="CDM Fetch Options",
+    )] = 50_000,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
         help="Increase verbosity (up to two levels)",
@@ -160,6 +165,7 @@ def add_embeddings(
                 concept_ids=tuple(batch_dict.keys()),
                 concept_texts=tuple(batch_dict.values()),
                 batch_size=batch_size,
+                cdm_batch_size=cdm_batch_size,
             )
             pbar.update(len(batch_dict))
 

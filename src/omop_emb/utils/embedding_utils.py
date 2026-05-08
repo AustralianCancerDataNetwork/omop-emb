@@ -63,6 +63,13 @@ class EmbeddingConceptFilter:
     def apply(self, query: Select, table: type) -> Select:
         """Apply filter constraints to a CDM-backed SQLAlchemy select.
 
+        .. warning::
+            CDM use only.  This method generates ``IN (…)`` bind parameters and
+            is safe only when list fields (``concept_ids``, ``domains``,
+            ``vocabularies``) are small.  Embedding backend queries must use
+            :func:`omop_emb.backends.db_utils.setup_concept_filter_temps` with
+            subquery-based WHERE clauses instead.
+
         Parameters
         ----------
         query : Select

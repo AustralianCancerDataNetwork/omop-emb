@@ -11,7 +11,7 @@ pre-filtering during KNN without re-querying the OMOP CDM.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Sequence, Tuple, Type, Union, TYPE_CHECKING
+from typing import List, Optional, Sequence, Union
 
 from numpy import ndarray
 from sqlalchemy import Engine, Integer, Select, literal, select, text, TextClause
@@ -20,6 +20,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from omop_emb.config import MetricType
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
+from omop_emb.backends.db_utils import KNN_CIDS_TABLE, KNN_DOMS_TABLE, KNN_VOCS_TABLE
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
@@ -99,28 +100,6 @@ def q_upsert_embeddings(
     )
 
 
-def q_embedding_vectors_by_concept_ids(
-    embedding_table: type,
-    concept_ids: Tuple[int, ...],
-) -> Select:
-    """Build a SELECT for concept IDs and their embedding vectors.
-
-    Parameters
-    ----------
-    embedding_table : type
-        ORM class for the embedding table.
-    concept_ids : tuple[int, ...]
-
-    Returns
-    -------
-    Select
-    """
-    return (
-        select(embedding_table.concept_id, embedding_table.embedding)
-        .where(embedding_table.concept_id.in_(concept_ids))
-    )
-
-
 def q_all_concept_ids(embedding_table: type) -> Select:
     """Build a SELECT for all concept IDs in an embedding table.
 
@@ -195,7 +174,24 @@ def q_nearest_concept_ids(
     )
 
     if concept_filter is not None:
-        inner_stmt = concept_filter.apply(inner_stmt, embedding_table)
+        if concept_filter.concept_ids is not None:
+            inner_stmt = inner_stmt.where(
+                text(f'concept_id IN (SELECT id FROM "{KNN_CIDS_TABLE}")')
+            )
+        if concept_filter.domains is not None:
+            inner_stmt = inner_stmt.where(
+                text(f'domain_id IN (SELECT id FROM "{KNN_DOMS_TABLE}")')
+            )
+        if concept_filter.vocabularies is not None:
+            inner_stmt = inner_stmt.where(
+                text(f'vocabulary_id IN (SELECT id FROM "{KNN_VOCS_TABLE}")')
+            )
+        if concept_filter.require_standard:
+            inner_stmt = inner_stmt.where(embedding_table.is_standard == True)  # noqa: E712
+        if concept_filter.require_active:
+            inner_stmt = inner_stmt.where(embedding_table.is_valid == True)  # noqa: E712
+        if concept_filter.limit is not None:
+            inner_stmt = inner_stmt.limit(concept_filter.limit)
 
     lateral_subq = inner_stmt.lateral("top_k")
 

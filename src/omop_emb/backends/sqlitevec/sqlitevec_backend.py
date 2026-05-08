@@ -32,6 +32,7 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     dml_upsert_rows,
     query_all_concept_ids,
     query_embeddings_by_ids,
+    query_filter_metadata_by_ids,
     query_has_any,
     query_knn,
     table_exists,
@@ -174,6 +175,7 @@ class SQLiteVecBackend(EmbeddingBackend):
                 table_name=model_record.storage_identifier,
                 records=records,
                 embeddings=embeddings.astype(np.float32),
+                dialect=self.emb_engine.dialect.name,
             )
 
     # ------------------------------------------------------------------
@@ -192,6 +194,7 @@ class SQLiteVecBackend(EmbeddingBackend):
                 session=session,
                 table_name=model_record.storage_identifier,
                 concept_ids=concept_ids,
+                dialect=self.emb_engine.dialect.name,
             )
         missing = set(concept_ids) - set(result.keys())
         if missing:
@@ -245,3 +248,17 @@ class SQLiteVecBackend(EmbeddingBackend):
     def _get_all_stored_concept_ids_impl(self, *, model_record: EmbeddingModelRecord) -> set[int]:
         with self.emb_session_factory() as session:
             return query_all_concept_ids(session=session, table_name=model_record.storage_identifier)
+
+    def _get_concept_filter_metadata_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+    ) -> Mapping[int, Mapping[str, object]]:
+        with self.emb_session_factory() as session:
+            return query_filter_metadata_by_ids(
+                session=session,
+                table_name=model_record.storage_identifier,
+                concept_ids=concept_ids,
+                dialect=self.emb_engine.dialect.name,
+            )

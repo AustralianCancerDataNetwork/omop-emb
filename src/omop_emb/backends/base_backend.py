@@ -762,6 +762,45 @@ class EmbeddingBackend(ABC):
     @abstractmethod
     def _get_all_stored_concept_ids_impl(self, *, model_record: EmbeddingModelRecord) -> set[int]: ...
 
+    @require_registered_model
+    def get_concept_filter_metadata(
+        self,
+        *,
+        model_name: str,
+        metric_type: MetricType,
+        concept_ids: Sequence[int],
+        _model_record: EmbeddingModelRecord,
+    ) -> Mapping[int, Mapping[str, object]]:
+        """Fetch filter-relevant metadata columns for the given concept IDs.
+
+        Parameters
+        ----------
+        model_name : str
+            Canonical model name including tag.
+        metric_type : MetricType
+            Validated against the registry.
+        concept_ids : Sequence[int]
+            OMOP concept IDs to look up.
+
+        Returns
+        -------
+        Mapping[int, Mapping[str, object]]
+            ``{concept_id: {"domain_id": str, "vocabulary_id": str,
+            "is_standard": bool, "is_valid": bool}}``
+        """
+        return self._get_concept_filter_metadata_impl(
+            model_record=_model_record,
+            concept_ids=concept_ids,
+        )
+
+    @abstractmethod
+    def _get_concept_filter_metadata_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+    ) -> Mapping[int, Mapping[str, object]]: ...
+
     def get_embedding_count(
         self,
         *,

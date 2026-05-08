@@ -47,6 +47,10 @@ def add_embeddings_from_h5(
         "--batch-size", "-b",
         help="Number of embeddings written to the backend per batch.",
     )] = 10_000,
+    cdm_batch_size: Annotated[int, typer.Option(
+        "--cdm-batch-size",
+        help="Batch size for fetching concept metadata from the CDM during ingestion. Adjust if you encounter performance issues or database limits during ingestion.",
+    )] = 50_000,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
         help="Increase verbosity (up to two levels)",
@@ -136,7 +140,8 @@ def add_embeddings_from_h5(
             batch_cids: np.ndarray = np.asarray(cid_ds[start:end])
             batch_emb = np.asarray(emb_ds[start:end], dtype=np.float32)
             meta = _fetch_cdm_concepts_for_ingestion(
-                {int(cid) for cid in batch_cids}, cdm_factory
+                {int(cid) for cid in batch_cids}, cdm_factory,
+                batch_size=cdm_batch_size,
             )
             records = []
             for j in range(len(batch_cids)):

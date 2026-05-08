@@ -238,7 +238,7 @@ class EmbeddingBackend(ABC):
             provided.
         metadata : Mapping[str, object], optional
             Free-form operational metadata. Must not contain reserved keys
-            (``"index_config"``, ``"faiss_cache"``).
+            (see ``RESERVED_METADATA_KEYS`` in ``index_config.py``).
 
         Returns
         -------

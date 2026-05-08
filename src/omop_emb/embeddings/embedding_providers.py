@@ -17,6 +17,7 @@ import logging
 from abc import ABC, abstractmethod
 from httpx import URL
 import requests
+from typing import Optional
 
 from omop_emb.config import ProviderType
 

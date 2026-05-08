@@ -214,10 +214,6 @@ def export_faiss_cache(
         "--batch-size", "-b",
         help="Batch size when streaming embeddings from the backend.",
     )] = 100_000,
-    use_gpu: Annotated[bool, typer.Option(
-        "--gpu",
-        help="Transfer FAISS index to GPU device 0 after building (requires faiss-gpu).",
-    )] = False,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
         help="Increase verbosity (up to two levels)",
@@ -246,7 +242,7 @@ def export_faiss_cache(
         num_neighbors=hnsw_m,
     )
     backend = resolve_backend()
-    cache = FAISSCache(model_name=model, cache_dir=cache_dir, use_gpu=use_gpu)
+    cache = FAISSCache(model_name=model, cache_dir=cache_dir)
     cache.export(backend=backend, metric_type=metric_type, index_config=index_config, batch_size=batch_size)
     typer.echo(
         f"FAISS cache exported to '{cache.model_dir}' for '{model}' "
@@ -264,6 +260,16 @@ def check_faiss_cache(
         "--cache-dir",
         help="Root cache directory passed to FAISSCache.",
     )],
+    metric_type: Annotated[MetricType, typer.Option(
+        "--metric-type",
+        help="Distance metric of the index to check.",
+        rich_help_panel="Index Options",
+    )] = MetricType.COSINE,
+    index_type: Annotated[IndexType, typer.Option(
+        "--index-type",
+        help="Index type to check (FLAT or HNSW).",
+        rich_help_panel="Index Options",
+    )] = IndexType.FLAT,
     provider_type: Annotated[Optional[ProviderType], typer.Option(
         "--provider-type",
         help="Embedding provider type. Used to canonicalize the model name if provided.",
@@ -300,11 +306,13 @@ def check_faiss_cache(
         )
         raise typer.Exit(1)
 
+    index_config = index_config_from_index_type(index_type, metric_type=metric_type)
     cache = FAISSCache(model_name=model, cache_dir=cache_dir)
-    info = cache.staleness_info(record)
+    info = cache.staleness_info(record, metric_type, index_config)
     status = "FRESH" if info["is_fresh"] else "STALE"
     typer.echo(
         f"Model: {model} | "
+        f"Index: {index_type.value}/{metric_type.value} | "
         f"Exported: {info['exported_at'] or 'never'} | "
         f"Cached rows: {info['cached_row_count'] or 'unknown'} | "
         f"Model updated: {info['model_updated_at'] or 'unknown'} | "

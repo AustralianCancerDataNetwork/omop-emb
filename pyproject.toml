@@ -41,7 +41,8 @@ dependencies = [
     "openai",
     "requests",
     "typer",
-    "tqdm"
+    "tqdm",
+    "openai"
 ]
 
 [project.optional-dependencies]
@@ -49,26 +50,18 @@ pgvector = [
     "psycopg[binary]>=3.1.0",
     "pgvector>=0.3.0",
 ]
-faiss = [
+faiss-cpu = [
     "faiss-cpu>=1.8.0",
 ]
-
 [dependency-groups]
 dev = [
-    "sqlite-vec>=0.1.9",
-    "faiss-cpu>=1.8.0",
-    "pgvector>=0.3.0",
-    "psycopg[binary]>=3.1.0",
+    "omop-emb[faiss-cpu,pgvector]", 
     "mypy>=1.19.1",
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
     "rich>=14.2.0",
     "ruff>=0.14.10",
     "h5py",
-    "openai",
-    "numpy",
-    "requests",
-    "typer",
 ]
 
 [build-system]

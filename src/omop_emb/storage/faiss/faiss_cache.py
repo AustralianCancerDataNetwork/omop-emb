@@ -3,42 +3,38 @@
 ``FAISSCache`` is **not** a storage backend. It exports vectors from any
 ``EmbeddingBackend`` (sqlite-vec or pgvector) into on-disk FAISS indices for
 lower-latency approximate search.  ``faiss-cpu`` is the only optional
-dependency; h5py is not used.
+dependency.
 
 Disk layout
 -----------
 Each model gets its own sub-directory inside ``cache_dir``::
 
     <cache_dir>/<safe_model_name>/
-        index.faiss          — FAISS index (IndexIDMap wrapping Flat or HNSW)
-        concept_ids.npy      — int64 array, parallel to FAISS internal rows
-        domain_ids.npy       — object (str) array, parallel to index
-        vocabulary_ids.npy   — object (str) array, parallel to index
-        is_standard.npy      — bool array, parallel to index
-        is_valid.npy         — bool array, parallel to index
-        cache_meta.json      — staleness tracking + build config
+        metadata.npz             — shared: concept_ids, domain_ids, vocabulary_ids,
+                                   is_standard, is_valid (overwritten every export)
+        flat_cosine.faiss        — IndexIDMap wrapping Flat index
+        flat_cosine.json         — per-index: exported_at, row_count, index_config
+        hnsw_l2.faiss
+        hnsw_l2.json
 
-``cache_meta.json`` is written and read as a :class:`CacheMetadata` dataclass.
+Multiple indices for the same model share ``metadata.npz``.  The file is
+always overwritten on export so it reflects the most recent export.  Staleness
+is tracked **per-index** via the ``.json`` sidecar: ``is_fresh()``  compares
+``exported_at`` against ``model_record.updated_at``.  A stale index is never
+queried, so any row-count mismatch with ``metadata.npz`` cannot produce wrong
+results.
+
+Caches exported with the old single-file layout (``index.faiss`` /
+``cache_meta.json``) will be treated as missing — re-export to use the new
+layout.
 
 FAISS-only index configs
 ------------------------
 :class:`IVFFlatIndexConfig` and :class:`IVFPQIndexConfig` are defined here for
-FAISS-specific acceleration.  They are **not** subclasses of the backend
-:class:`~omop_emb.backends.index_config.IndexConfig` and are not stored in the
-model registry.  Use :class:`~omop_emb.backends.index_config.FlatIndexConfig`
-or :class:`~omop_emb.backends.index_config.HNSWIndexConfig` for the publicly
-supported index types.  IVF configs are kept for future lifecycle work — see
-item 53d in REFACTOR_PLAN.md.
-
-Notes
------
-``IDSelectorBatch`` pre-filtering works differently depending on the inner index
-type:
-
-- **Flat**: exact scan — all selected positions are visited; results are exact.
-- **HNSW**: graph traversal skips non-selected nodes but may not reach all
-  valid candidates through excluded neighbours.  Recall may be lower than
-  expected when a tight filter is applied.
+FAISS-specific acceleration.  They subclass the backend
+:class:`~omop_emb.backends.index_config.IndexConfig` with ``IndexType.IVFFLAT``
+/ ``IndexType.IVFPQ`` and are **not** stored in the model registry.  Both are
+kept for future lifecycle work — see item 53d in REFACTOR_PLAN.md.
 """
 from __future__ import annotations
 
@@ -56,16 +52,12 @@ import numpy as np
 from omop_emb.config import MetricType, IndexType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
 from omop_emb.backends.index_config import IndexConfig
-
-if TYPE_CHECKING:
-    from omop_emb.backends.base_backend import EmbeddingBackend
-    from omop_emb.backends.index_config import IndexConfig
-    from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
+from omop_emb.backends.base_backend import EmbeddingBackend
+from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
 
 logger = logging.getLogger(__name__)
 
-_INDEX_FILENAME = "index.faiss"
-_META_FILENAME = "cache_meta.json"
+_METADATA_FILENAME = "metadata.npz"
 
 # Metrics supported by FAISS (L1, HAMMING, etc. are not available).
 _FAISS_SUPPORTED_METRICS = frozenset({MetricType.L2, MetricType.COSINE})
@@ -99,7 +91,6 @@ class IVFFlatIndexConfig(IndexConfig):
         raise NotImplementedError("IVFFlatIndexConfig is currently not supported")
 
 
-
 @dataclass(frozen=True, kw_only=True)
 class IVFPQIndexConfig(IndexConfig):
     """Inverted-file product-quantisation index (FAISS only).
@@ -128,7 +119,6 @@ class IVFPQIndexConfig(IndexConfig):
 
     def _validate_metric_type_after_init(self) -> None:
         raise NotImplementedError("IVFPQIndexConfig is currently not supported")
-        
 
 
 # ---------------------------------------------------------------------------
@@ -137,11 +127,11 @@ class IVFPQIndexConfig(IndexConfig):
 
 @dataclass(frozen=True)
 class CacheMetadata:
-    """Typed representation of ``cache_meta.json``.
+    """Typed representation of a per-index ``.json`` sidecar file.
 
     Written by :meth:`FAISSCache.export` and read back by
     :meth:`FAISSCache.is_fresh`, :meth:`FAISSCache.staleness_info`, and
-    :meth:`FAISSCache.search`.
+    :meth:`FAISSCache._load_meta`.
 
     Parameters
     ----------
@@ -152,8 +142,9 @@ class CacheMetadata:
     metric_type : MetricType
         Distance metric used when building the index.
     index_config : dict
-        Serialised index configuration (informational; index is loaded from
-        the binary ``.faiss`` file, not reconstructed from this dict).
+        Serialised index configuration.  The index type is already encoded in
+        the filename and in this dict; no separate ``index_type`` field is
+        needed.
     row_count : int
         Number of vectors in the index at export time.
     exported_at : str
@@ -166,19 +157,18 @@ class CacheMetadata:
     model_name: str
     dimensions: int
     metric_type: MetricType
-    index_config: dict
+    index_config: IndexConfig
     row_count: int
     exported_at: str
     model_updated_at: Optional[str]
 
     def to_json(self) -> str:
-        """Serialise to a JSON string suitable for writing to ``cache_meta.json``."""
         return json.dumps(
             {
                 "model_name": self.model_name,
                 "dimensions": self.dimensions,
                 "metric_type": self.metric_type.value,
-                "index_config": self.index_config,
+                "index_config": self.index_config.to_dict(),
                 "row_count": self.row_count,
                 "exported_at": self.exported_at,
                 "model_updated_at": self.model_updated_at,
@@ -188,19 +178,19 @@ class CacheMetadata:
 
     @classmethod
     def from_json(cls, text: str) -> "CacheMetadata":
-        """Deserialise from a ``cache_meta.json`` string.
+        """Deserialise from a per-index ``.json`` sidecar string.
 
         Raises
         ------
         ValueError
-            If the JSON is malformed or contains an unknown ``metric_type``.
+            If the JSON is malformed or contains an unknown enum value.
         """
         d = json.loads(text)
         return cls(
             model_name=d.get("model_name", ""),
             dimensions=int(d.get("dimensions", 0)),
             metric_type=MetricType(d["metric_type"]),
-            index_config=d.get("index_config", {}),
+            index_config=IndexConfig.from_dict(d.get("index_config", {})),
             row_count=int(d.get("row_count", -1)),
             exported_at=d.get("exported_at", ""),
             model_updated_at=d.get("model_updated_at"),
@@ -221,24 +211,8 @@ def _require_faiss() -> None:
         ) from exc
 
 
-def _validate_faiss_metric(
-    metric_type: MetricType,
-    index_config: Optional["IndexConfig"] = None,
-) -> None:
-    """Validate that *metric_type* is supported by FAISS.
-
-    Parameters
-    ----------
-    metric_type : MetricType
-        Metric to check.
-    index_config : IndexConfig, optional
-        Reserved for future per-config metric constraints.
-
-    Raises
-    ------
-    ValueError
-        If *metric_type* is not in :data:`_FAISS_SUPPORTED_METRICS`.
-    """
+def _validate_faiss_metric(metric_type: MetricType) -> None:
+    """Raise ``ValueError`` if *metric_type* is not supported by FAISS."""
     if metric_type not in _FAISS_SUPPORTED_METRICS:
         raise ValueError(
             f"FAISS only supports {[m.value for m in _FAISS_SUPPORTED_METRICS]} metrics, "
@@ -252,6 +226,11 @@ def _safe_model_name(model_name: str) -> str:
     return re.sub(r"_+", "_", sanitized).strip("_")
 
 
+def _index_key(metric_type: MetricType, index_config: IndexConfig) -> str:
+    """Return the file stem for a given metric+index combo, e.g. ``'flat_cosine'``."""
+    return f"{index_config.index_type.value}_{metric_type.value}"
+
+
 def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
@@ -261,11 +240,11 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 class FAISSCache:
-    """In-memory FAISS acceleration cache backed by any ``EmbeddingBackend``.
+    """Model-level FAISS sidecar cache.
 
-    Exports vectors from the authoritative backend into a FAISS index on disk.
-    Subsequent searches use FAISS directly (no SQL round-trip).  CDM enrichment
-    is the caller's responsibility (``EmbeddingReaderInterface._enrich``).
+    A single instance manages **all** FAISS indices for one model under
+    ``model_dir``.  The metric and index type are supplied per-call so that
+    multiple indices can coexist and be queried independently.
 
     Parameters
     ----------
@@ -273,21 +252,16 @@ class FAISSCache:
         Registered canonical model name.
     cache_dir : Path | str
         Root cache directory. Each model gets its own sub-directory.
-    use_gpu : bool
-        When ``True``, transfer the index to GPU device 0 after loading.
-        Requires a GPU-enabled FAISS build.
     """
 
     def __init__(
         self,
         model_name: str,
         cache_dir: "Path | str",
-        use_gpu: bool = False,
     ) -> None:
         _require_faiss()
         self._model_name = model_name
         self._cache_dir = Path(cache_dir).expanduser().resolve()
-        self._use_gpu = use_gpu
 
     # ------------------------------------------------------------------
     # Paths
@@ -298,39 +272,46 @@ class FAISSCache:
         """Sub-directory for this model's cache files."""
         return self._cache_dir / _safe_model_name(self._model_name)
 
-    def _path(self, filename: str) -> Path:
-        return self.model_dir / filename
+    def _faiss_path(self, metric_type: MetricType, index_config: IndexConfig) -> Path:
+        return self.model_dir / f"{_index_key(metric_type, index_config)}.faiss"
+
+    def _json_path(self, metric_type: MetricType, index_config: IndexConfig) -> Path:
+        return self.model_dir / f"{_index_key(metric_type, index_config)}.json"
+
+    def _metadata_path(self) -> Path:
+        return self.model_dir / _METADATA_FILENAME
 
     # ------------------------------------------------------------------
     # Staleness
     # ------------------------------------------------------------------
 
-    def is_fresh(self, model_record: "EmbeddingModelRecord") -> bool:
-        """Return ``True`` if the cache exists and is up-to-date.
+    def is_fresh(
+        self,
+        model_record: EmbeddingModelRecord,
+        metric_type: MetricType,
+        index_config: IndexConfig,
+    ) -> bool:
+        """Return ``True`` if this index exists and is up-to-date.
 
         Checks:
 
-        1. ``model_dir`` exists.
-        2. ``cache_meta.json`` is present and parseable.
-        3. Row count in the meta matches the record's embedding count.
-        4. ``exported_at`` timestamp is newer than ``model_record.updated_at``
+        1. ``{key}.faiss``, ``{key}.json``, and ``metadata.npz`` all exist.
+        2. ``{key}.json`` is parseable with a non-negative ``row_count``.
+        3. ``exported_at`` is strictly newer than ``model_record.updated_at``
            (when available).
-
-        Parameters
-        ----------
-        model_record : EmbeddingModelRecord
-            Current registry record for the model.
         """
-        meta_path = self._path(_META_FILENAME)
-        if not meta_path.exists():
+        if not self._faiss_path(metric_type, index_config).exists():
+            return False
+        if not self._metadata_path().exists():
+            return False
+
+        json_path = self._json_path(metric_type, index_config)
+        if not json_path.exists():
             return False
 
         try:
-            meta = CacheMetadata.from_json(meta_path.read_text())
+            meta = CacheMetadata.from_json(json_path.read_text())
         except (json.JSONDecodeError, OSError, ValueError, KeyError):
-            return False
-
-        if not self._path(_INDEX_FILENAME).exists():
             return False
 
         if meta.row_count < 0:
@@ -346,17 +327,22 @@ class FAISSCache:
 
         return True
 
-    def staleness_info(self, model_record: "EmbeddingModelRecord") -> dict:
-        """Return a summary dict describing the current staleness state."""
-        meta_path = self._path(_META_FILENAME)
+    def staleness_info(
+        self,
+        model_record: EmbeddingModelRecord,
+        metric_type: MetricType,
+        index_config: IndexConfig,
+    ) -> dict:
+        """Return a summary dict describing the staleness state of one index."""
         meta: Optional[CacheMetadata] = None
-        if meta_path.exists():
+        json_path = self._json_path(metric_type, index_config)
+        if json_path.exists():
             try:
-                meta = CacheMetadata.from_json(meta_path.read_text())
+                meta = CacheMetadata.from_json(json_path.read_text())
             except (json.JSONDecodeError, OSError, ValueError, KeyError):
                 pass
         return {
-            "is_fresh": self.is_fresh(model_record),
+            "is_fresh": self.is_fresh(model_record, metric_type, index_config),
             "exported_at": meta.exported_at if meta else None,
             "cached_row_count": meta.row_count if meta else None,
             "model_updated_at": model_record.updated_at.isoformat() if model_record.updated_at else None,
@@ -369,29 +355,31 @@ class FAISSCache:
 
     def export(
         self,
-        backend: "EmbeddingBackend",
+        backend: EmbeddingBackend,
         metric_type: MetricType,
-        index_config: "IndexConfig",
+        index_config: IndexConfig,
         batch_size: int = 100_000,
     ) -> None:
-        """Export all embeddings from the backend to a local FAISS index.
+        """Export all embeddings from the backend to one FAISS index on disk.
+
+        Writes (or overwrites):
+
+        * ``metadata.npz`` — shared concept metadata arrays.
+        * ``{key}.faiss`` — the FAISS index for this metric+index combo.
+        * ``{key}.json`` — per-index staleness metadata.
 
         Parameters
         ----------
         backend : EmbeddingBackend
             Authoritative backend to export from.
         metric_type : MetricType
-            Distance metric for the FAISS index. Must be L2 or COSINE.
+            Distance metric. Must be L2 or COSINE.
         index_config : IndexConfig
-            FAISS index configuration. Supported types are
-            :class:`~omop_emb.backends.index_config.FlatIndexConfig` (exact
-            scan, always correct) and
-            :class:`~omop_emb.backends.index_config.HNSWIndexConfig`
-            (approximate, faster at scale). Must be supplied explicitly.
+            FAISS index configuration. Supported: ``FlatIndexConfig`` (exact)
+            and ``HNSWIndexConfig`` (approximate).
         batch_size : int
-            Concept IDs fetched per backend call. Also controls memory
-            pressure during export; capped internally at 50 000 per DB
-            round-trip (PostgreSQL bind-parameter limit).
+            Concept IDs fetched per backend call.  Capped internally at 50 000
+            per DB round-trip to stay below the PostgreSQL bind-parameter limit.
 
         Raises
         ------
@@ -399,7 +387,7 @@ class FAISSCache:
             If ``metric_type`` is not supported by FAISS, or the model is not
             registered in the backend.
         """
-        _validate_faiss_metric(metric_type, index_config)
+        _validate_faiss_metric(metric_type)
 
         record = backend.get_registered_model(model_name=self._model_name)
         if record is None:
@@ -418,8 +406,7 @@ class FAISSCache:
             return
 
         # Cap at 50 000 per DB round-trip to stay under the PostgreSQL
-        # wire-protocol bind-parameter limit (65 535). batch_size controls
-        # memory pressure; DB queries use the smaller cap.
+        # wire-protocol bind-parameter limit (65 535).
         # TODO(phase-g): replace with temp-table JOIN so the cap can be removed.
         _MAX_DB_BATCH = 50_000
         db_batch_size = min(batch_size, _MAX_DB_BATCH)
@@ -457,35 +444,34 @@ class FAISSCache:
         embeddings_arr = np.vstack(embeddings_list).astype(np.float32)
         total_rows = len(concept_ids_arr)
 
-        np.save(self._path("concept_ids.npy"), concept_ids_arr)
-        np.save(self._path("is_standard.npy"), np.array(is_standard_list, dtype=bool))
-        np.save(self._path("is_valid.npy"), np.array(is_valid_list, dtype=bool))
-        np.save(self._path("domain_ids.npy"), np.array(domain_ids_list, dtype=object), allow_pickle=True)
-        np.save(self._path("vocabulary_ids.npy"), np.array(vocabulary_ids_list, dtype=object), allow_pickle=True)
+        # Shared metadata — overwrite on every export so it always reflects
+        # the current set of concepts.  Stale per-index files are gated by
+        # is_fresh() before any positional lookup into this array.
+        np.savez(
+            self.model_dir / "metadata",  # NumPy appends .npz
+            concept_ids=concept_ids_arr,
+            domain_ids=np.array(domain_ids_list, dtype=object),
+            vocabulary_ids=np.array(vocabulary_ids_list, dtype=object),
+            is_standard=np.array(is_standard_list, dtype=bool),
+            is_valid=np.array(is_valid_list, dtype=bool),
+        )
         logger.info("Saved concept metadata arrays (%d rows).", total_rows)
 
-        self._build_and_write_index(embeddings_arr, concept_ids_arr, metric_type, index_config, record.dimensions)
-
-        if hasattr(index_config, "to_dict"):
-            ic_dict = index_config.to_dict()
-        elif hasattr(index_config, "__dataclass_fields__"):
-            ic_dict = asdict(index_config)
-        else:
-            ic_dict = {}
+        self._build_and_write_index(embeddings_arr, concept_ids_arr, record.dimensions, metric_type, index_config)
 
         meta = CacheMetadata(
             model_name=self._model_name,
             dimensions=record.dimensions,
             metric_type=metric_type,
-            index_config=ic_dict,
+            index_config=index_config,
             row_count=total_rows,
             exported_at=_now_iso(),
             model_updated_at=record.updated_at.isoformat() if record.updated_at else None,
         )
-        self._path(_META_FILENAME).write_text(meta.to_json())
+        self._json_path(metric_type, index_config).write_text(meta.to_json())
         logger.info(
-            "FAISS export complete: %d vectors, metric=%s, dir='%s'.",
-            total_rows, metric_type.value, self.model_dir,
+            "FAISS export complete: %d vectors, metric=%s, index=%s, dir='%s'.",
+            total_rows, metric_type.value, index_config.index_type.value, self.model_dir,
         )
 
     # ------------------------------------------------------------------
@@ -496,13 +482,15 @@ class FAISSCache:
         self,
         query_embeddings: np.ndarray,
         k: int,
+        metric_type: MetricType,
+        index_config: IndexConfig,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
-        """Search the local FAISS index for nearest concepts.
+        """Search a specific FAISS index for nearest concepts.
 
         All ``EmbeddingConceptFilter`` fields are applied as pre-filters using
-        the numpy metadata arrays stored at export time.
+        the numpy metadata arrays in ``metadata.npz``.
 
         Parameters
         ----------
@@ -510,6 +498,10 @@ class FAISSCache:
             Float32 array of shape ``(Q, D)``.
         k : int
             Maximum number of nearest neighbours per query.
+        metric_type : MetricType
+            Distance metric identifying which on-disk index to load.
+        index_config : IndexConfig
+            Index configuration identifying which on-disk index to load.
         concept_filter : EmbeddingConceptFilter, optional
             Applied as a pre-filter over the stored metadata arrays.
 
@@ -527,13 +519,11 @@ class FAISSCache:
         import faiss
         from omop_emb.utils.embedding_utils import get_similarity_from_distance
 
-        meta = self._load_meta()
-
         query = np.ascontiguousarray(query_embeddings, dtype=np.float32)
-        if meta.metric_type == MetricType.COSINE:
+        if metric_type == MetricType.COSINE:
             faiss.normalize_L2(query)
 
-        index = self._load_index()
+        index = self._load_index(metric_type, index_config)
 
         params = None
         if concept_filter is not None and not concept_filter.is_empty():
@@ -553,7 +543,7 @@ class FAISSCache:
             row_results = tuple(
                 NearestConceptMatch(
                     concept_id=int(cid),
-                    similarity=float(get_similarity_from_distance(float(dist), meta.metric_type)),
+                    similarity=float(get_similarity_from_distance(float(dist), metric_type)),
                 )
                 for dist, cid in zip(dist_row, id_row)
                 if cid != -1
@@ -570,30 +560,37 @@ class FAISSCache:
     ) -> Optional[np.ndarray]:
         """Return int64 internal-position array for the filter, or None (no restriction).
 
-        The returned positions are sequential 0-based indices into the inner
-        FAISS index (not external concept IDs), suitable for ``IDSelectorBatch``.
+        Positions are sequential 0-based indices into the inner FAISS index
+        (not external concept IDs), suitable for ``IDSelectorBatch``.
+        The ``metadata.npz`` arrays are parallel to FAISS internal rows —
+        position *i* in the array corresponds to position *i* in the index.
         """
-        concept_ids_arr = np.load(self._path("concept_ids.npy"))
+        meta_path = self._metadata_path()
+        if not meta_path.exists():
+            raise FileNotFoundError(
+                f"FAISS metadata not found at '{meta_path}'. Run FAISSCache.export() first."
+            )
+        npz = np.load(meta_path, allow_pickle=True)
+        concept_ids_arr = npz["concept_ids"]
         mask = np.ones(len(concept_ids_arr), dtype=bool)
 
         if concept_filter.concept_ids is not None:
-            mask &= np.isin(concept_ids_arr, np.array(list(concept_filter.concept_ids), dtype=np.int64))
+            mask &= np.isin(
+                concept_ids_arr,
+                np.array(list(concept_filter.concept_ids), dtype=np.int64),
+            )
 
         if concept_filter.domains:
-            domain_ids_arr = np.load(self._path("domain_ids.npy"), allow_pickle=True)
-            mask &= np.isin(domain_ids_arr, list(concept_filter.domains))
+            mask &= np.isin(npz["domain_ids"], list(concept_filter.domains))
 
         if concept_filter.vocabularies:
-            vocabulary_ids_arr = np.load(self._path("vocabulary_ids.npy"), allow_pickle=True)
-            mask &= np.isin(vocabulary_ids_arr, list(concept_filter.vocabularies))
+            mask &= np.isin(npz["vocabulary_ids"], list(concept_filter.vocabularies))
 
         if concept_filter.require_standard:
-            is_standard_arr = np.load(self._path("is_standard.npy"))
-            mask &= is_standard_arr
+            mask &= npz["is_standard"]
 
         if concept_filter.require_active:
-            is_valid_arr = np.load(self._path("is_valid.npy"))
-            mask &= is_valid_arr
+            mask &= npz["is_valid"]
 
         if mask.all():
             return None
@@ -603,9 +600,9 @@ class FAISSCache:
         self,
         embeddings: np.ndarray,
         concept_ids: np.ndarray,
-        metric_type: MetricType,
-        index_config: "IndexConfig",
         dimensions: int,
+        metric_type: MetricType,
+        index_config: IndexConfig,
     ) -> None:
         import faiss
 
@@ -613,32 +610,30 @@ class FAISSCache:
         if metric_type == MetricType.COSINE:
             faiss.normalize_L2(vecs)
 
-        inner = self._create_inner_index(index_config, dimensions, metric_type, vecs)
+        inner = self._create_inner_index(dimensions, vecs, metric_type, index_config)
 
         index = faiss.IndexIDMap(inner)
         index.add_with_ids(vecs, concept_ids)  # type: ignore
 
-        path = self._path(_INDEX_FILENAME)
+        path = self._faiss_path(metric_type, index_config)
         faiss.write_index(index, str(path))
         logger.info("Built FAISS index at '%s' (%d vectors).", path, len(concept_ids))
 
     def _create_inner_index(
         self,
-        index_config: "IndexConfig",
         dimensions: int,
-        metric_type: MetricType,
         train_vecs: np.ndarray,
+        metric_type: MetricType,
+        index_config: IndexConfig,
     ):
-        """Create the inner (unwrapped) FAISS index.
-
-        Handles ``FlatIndexConfig``, ``HNSWIndexConfig``, and the FAISS-internal
-        ``IVFFlatIndexConfig`` / ``IVFPQIndexConfig`` types.
-        """
+        """Create the unwrapped FAISS inner index from *index_config*."""
         import faiss
         from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 
         faiss_metric = (
-            faiss.METRIC_INNER_PRODUCT if metric_type == MetricType.COSINE else faiss.METRIC_L2
+            faiss.METRIC_INNER_PRODUCT
+            if metric_type == MetricType.COSINE
+            else faiss.METRIC_L2
         )
 
         if isinstance(index_config, FlatIndexConfig):
@@ -681,42 +676,33 @@ class FAISSCache:
 
         raise ValueError(f"No FAISS index factory for {type(index_config).__name__}.")
 
-    def _load_index(self):
+    def _load_index(self, metric_type: MetricType, index_config: IndexConfig):
         import faiss
 
-        path = self._path(_INDEX_FILENAME)
+        path = self._faiss_path(metric_type, index_config)
         if not path.exists():
             raise FileNotFoundError(
                 f"FAISS index not found at '{path}'. Run FAISSCache.export() first."
             )
         index = faiss.read_index(str(path))
-
-        if self._use_gpu:
-            try:
-                res = faiss.StandardGpuResources()
-                index = faiss.index_cpu_to_gpu(res, 0, index)
-            except AttributeError as exc:
-                raise ImportError(
-                    "GPU FAISS requires a GPU-enabled faiss build (faiss-gpu). "
-                    "Install it or set use_gpu=False."
-                ) from exc
-
         return index
 
-    def _load_meta(self) -> CacheMetadata:
-        """Load and parse ``cache_meta.json``.
+    def _load_meta(
+        self, metric_type: MetricType, index_config: IndexConfig
+    ) -> CacheMetadata:
+        """Load and parse the per-index ``.json`` sidecar.
 
         Raises
         ------
         FileNotFoundError
-            If ``cache_meta.json`` does not exist.
+            If the ``.json`` file does not exist.
         ValueError
-            If the file is malformed or contains an unknown metric type.
+            If the file is malformed or contains an unknown enum value.
         """
-        meta_path = self._path(_META_FILENAME)
-        if not meta_path.exists():
+        json_path = self._json_path(metric_type, index_config)
+        if not json_path.exists():
             raise FileNotFoundError(
-                f"FAISS cache metadata not found at '{meta_path}'. "
+                f"FAISS index metadata not found at '{json_path}'. "
                 "Run FAISSCache.export() first."
             )
-        return CacheMetadata.from_json(meta_path.read_text())
+        return CacheMetadata.from_json(json_path.read_text())

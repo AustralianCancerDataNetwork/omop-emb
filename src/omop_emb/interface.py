@@ -257,6 +257,7 @@ class EmbeddingReaderInterface:
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: Optional[int] = None,
+        faiss_index_config: Optional[IndexConfig] = None,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         """Return nearest stored concepts for each query embedding row.
 
@@ -277,8 +278,14 @@ class EmbeddingReaderInterface:
         effective_k = k or (concept_filter.limit if concept_filter else None) or self._k
 
         if self._faiss_cache is not None:
+            if faiss_index_config is None:
+                raise ValueError(
+                    "faiss_index_config is required when a FAISS cache is configured. "
+                    "Pass FlatIndexConfig() for exact search or HNSWIndexConfig(metric_type=...) "
+                    "for approximate search."
+                )
             record = self._backend.get_registered_model(model_name=self.canonical_model_name)
-            if record is not None and self._faiss_cache.is_fresh(record):
+            if record is not None and self._faiss_cache.is_fresh(record, self._metric_type, faiss_index_config):
                 logger.info(
                     "Using FAISS cache for search (model='%s', cache='%s').",
                     self.canonical_model_name,
@@ -287,6 +294,8 @@ class EmbeddingReaderInterface:
                 raw = self._faiss_cache.search(
                     query_embedding,
                     effective_k,
+                    self._metric_type,
+                    faiss_index_config,
                     concept_filter=concept_filter,
                 )
                 return self._enrich(raw)
@@ -308,6 +317,7 @@ class EmbeddingReaderInterface:
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         batch_size: Optional[int] = None,
         k: Optional[int] = None,
+        faiss_index_config: Optional[IndexConfig] = None,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         """Embed *query_texts* then search for nearest concepts."""
         if isinstance(query_texts, str):
@@ -321,6 +331,7 @@ class EmbeddingReaderInterface:
             query_embedding=query_embeddings,
             concept_filter=concept_filter,
             k=k,
+            faiss_index_config=faiss_index_config,
         )
 
     def get_embeddings_by_concept_ids(

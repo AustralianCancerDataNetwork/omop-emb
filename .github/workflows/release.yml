@@ -72,8 +72,13 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          # Use GITHUB_TOKEN for standard releases
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
 
       - name: Semantic Release
         id: semantic
@@ -85,16 +90,9 @@ jobs:
             @semantic-release/exec
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install uv
-        if: steps.semantic.outputs.new_release_published == 'true'
-        uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.12"
-
+      
       - name: Build and publish to PyPI
         if: steps.semantic.outputs.new_release_published == 'true'
         run: |
           uv build
-          # uv uses the id-token permission for OIDC "Trusted Publishing"
           uv publish

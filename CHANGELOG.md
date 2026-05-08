@@ -1,3 +1,12 @@
+## [0.4.1](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.4.0...v0.4.1) (2026-04-24)
+
+
+### Bug Fixes
+
+* **ci:** remove conditional from uv installation ([02912c5](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/02912c524b6acd8e0e0575ef0ad5c31085a5f1f9))
+* **ci:** setup uv before release and anchor version sed ([50f0fe3](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/50f0fe3de70feba09ed9cb846a478cfff33f283c))
+* include lock file in CI ([a57ab1e](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/a57ab1eb1072a364b747b3cb16341033619e737a))
+
 # [0.4.0](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.3.3...v0.4.0) (2026-04-20)
 
 

@@ -71,7 +71,7 @@ def resolve_backend() -> EmbeddingBackend:
 
 
 def resolve_omop_cdm_engine() -> sa.Engine:
-    """CDM engine — any SQLAlchemy dialect, used read-only."""
+    """Resolve CDM engine with any SQLAlchemy dialect, used read-only."""
     url = os.getenv(ENV_CDM_DATABASE_URL)
     if url is None:
         raise RuntimeError(

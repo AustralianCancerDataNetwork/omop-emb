@@ -1,4 +1,5 @@
-"""FAISS sidecar cache — backend-agnostic read-acceleration layer.
+"""FAISS sidecar cache providing backend-agnostic read-acceleration layer,
+export to local indices and (eventually) GPU support.
 
 ``FAISSCache`` is **not** a storage backend. It exports vectors from any
 ``EmbeddingBackend`` (sqlite-vec or pgvector) into on-disk FAISS indices for
@@ -10,12 +11,11 @@ Disk layout
 Each model gets its own sub-directory inside ``cache_dir``::
 
     <cache_dir>/<safe_model_name>/
-        metadata.npz             — shared: concept_ids, domain_ids, vocabulary_ids,
-                                   is_standard, is_valid (overwritten every export)
-        flat_cosine.faiss        — IndexIDMap wrapping Flat index
-        flat_cosine.json         — per-index: exported_at, row_count, index_config
-        hnsw_l2.faiss
-        hnsw_l2.json
+        metadata.npz                            : concept_ids, domain_ids, vocabulary_ids, is_standard, is_valid (overwritten every export)
+        <index_type>_<metric_type>.faiss        : IndexIDMap wrapping Flat index
+        <index_type>_<metric_type>.json         : per-index: exported_at, row_count, index_config
+        ...
+
 
 Multiple indices for the same model share ``metadata.npz``.  The file is
 always overwritten on export so it reflects the most recent export.  Staleness
@@ -24,17 +24,13 @@ is tracked **per-index** via the ``.json`` sidecar: ``is_fresh()``  compares
 queried, so any row-count mismatch with ``metadata.npz`` cannot produce wrong
 results.
 
-Caches exported with the old single-file layout (``index.faiss`` /
-``cache_meta.json``) will be treated as missing — re-export to use the new
-layout.
 
 FAISS-only index configs
 ------------------------
 :class:`IVFFlatIndexConfig` and :class:`IVFPQIndexConfig` are defined here for
 FAISS-specific acceleration.  They subclass the backend
 :class:`~omop_emb.backends.index_config.IndexConfig` with ``IndexType.IVFFLAT``
-/ ``IndexType.IVFPQ`` and are **not** stored in the model registry.  Both are
-kept for future lifecycle work — see item 53d in REFACTOR_PLAN.md.
+/ ``IndexType.IVFPQ`` and are **NOT** officially supported at the moment.
 """
 from __future__ import annotations
 
@@ -80,7 +76,7 @@ _FAISS_SUPPORTED_METRICS = frozenset({MetricType.L2, MetricType.COSINE})
 class IVFFlatIndexConfig(IndexConfig):
     """Inverted-file flat index (FAISS only).
 
-    Good for ~500 K–10 M vectors. Approximate search; faster than flat scan.
+    Good for ~500 K-10 M vectors. Approximate search; faster than flat scan.
 
     Parameters
     ----------
@@ -362,9 +358,9 @@ class FAISSCache:
 
         Writes (or overwrites):
 
-        * ``metadata.npz`` — shared concept metadata arrays.
-        * ``{key}.faiss`` — the FAISS index for this metric+index combo.
-        * ``{key}.json`` — per-index staleness metadata.
+        * ``metadata.npz``: shared concept metadata arrays.
+        * ``<index_type>_<metric_type>.faiss`` the FAISS index for this metric+index combo.
+        * ``<index_type>_<metric_type>.json``: per-index staleness metadata.
 
         Parameters
         ----------
@@ -400,7 +396,7 @@ class FAISSCache:
             metric_type=metric_type,
         ))
         if not all_ids:
-            logger.warning("No embeddings found for '%s' — FAISS export skipped.", self._model_name)
+            logger.warning("No embeddings found for '%s'. FAISS export skipped.", self._model_name)
             return
 
         concept_ids_list: list[int] = []
@@ -440,7 +436,7 @@ class FAISSCache:
         embeddings_arr = np.vstack(embeddings_list).astype(np.float32)
         total_rows = len(concept_ids_arr)
 
-        # Shared metadata — overwrite on every export so it always reflects
+        # Shared metadata. Overwrite on every export so it always reflects
         # the current set of concepts.  Stale per-index files are gated by
         # is_fresh() before any positional lookup into this array.
         logger.info("Saving concept metadata arrays (%d rows) to '%s'.", total_rows, self._metadata_path())
@@ -558,7 +554,7 @@ class FAISSCache:
 
         Positions are sequential 0-based indices into the inner FAISS index
         (not external concept IDs), suitable for ``IDSelectorBatch``.
-        The ``metadata.npz`` arrays are parallel to FAISS internal rows —
+        The ``metadata.npz`` arrays are parallel to FAISS internal rows:
         position *i* in the array corresponds to position *i* in the index.
         """
         meta_path = self._metadata_path()
@@ -788,7 +784,7 @@ class FAISSCache:
                 "Re-export to fix."
             )
 
-        # Safety gate — refuse to silently overwrite existing embeddings.
+        # Refuse to silently overwrite existing embeddings.
         if not force and backend.is_model_registered(model_name=self._model_name):
             existing = backend.get_embedding_count(
                 model_name=self._model_name,

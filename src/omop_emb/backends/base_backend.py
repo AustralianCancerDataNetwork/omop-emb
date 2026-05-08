@@ -356,7 +356,7 @@ class EmbeddingBackend(ABC):
         -----
         The registry ``metric_type`` is updated to match the new ``index_config``.
         Any in-flight queries that passed the old metric validation may fail on
-        their next call — this is an administrative operation and the error
+        their next call. This is an administrative operation and the error
         message will be clear.
 
         ``require_registered_model`` is not applied here because this method

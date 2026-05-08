@@ -42,7 +42,7 @@ class PGVectorBaseIndexManager(BaseIndexManager[C], Generic[C]):
     index_config : C
         Configuration for this index type.
     dimensions : int
-        Vector dimensionality — used to select the correct operator class
+        Vector dimensionality. Used to select the correct operator class
         (``vector_*_ops`` vs ``halfvec_*_ops``).
     """
 
@@ -131,7 +131,7 @@ _HALFVEC_OPS: dict[MetricType, str] = {
     MetricType.COSINE: "halfvec_cosine_ops",
     MetricType.L2: "halfvec_l2_ops",
     MetricType.L1: "halfvec_l1_ops",
-    # HAMMING / JACCARD are bit-type operations — halfvec doesn't apply.
+    # HAMMING / JACCARD are bit-type operations -> halfvec doesn't apply.
     MetricType.HAMMING: "bit_hamming_ops",
     MetricType.JACCARD: "bit_jaccard_ops",
 }
@@ -147,7 +147,7 @@ _OPERATOR_CLASSES: dict[VectorColumnType, dict[MetricType, str]] = {
 # ---------------------------------------------------------------------------
 
 class PGVectorFlatIndexManager(PGVectorBaseIndexManager[FlatIndexConfig]):
-    """No-op manager for FLAT search (sequential scan — no SQL index needed)."""
+    """No-op manager for FLAT search (sequential scan; no SQL index needed)."""
 
     @property
     def supported_index_type(self) -> IndexType:
@@ -173,7 +173,7 @@ class PGVectorHNSWIndexManager(PGVectorBaseIndexManager[HNSWIndexConfig]):
     is applied per-session via ``SET hnsw.ef_search = <value>`` at query
     time rather than at index-creation time.
 
-    Works with both ``vector`` and ``halfvec`` column types — the correct
+    Works with both ``vector`` and ``halfvec`` column types. The correct
     operator class is selected automatically.
     """
 

@@ -131,7 +131,7 @@ def add_embeddings(
         api_key=api_key,
         embedding_batch_size=batch_size,
     )
-    # FLAT registration — metric_type=COSINE is used only for upsert validation;
+    # FLAT registration: metric_type=COSINE is used only for upsert validation;
     # FLAT accepts any backend-supported metric, so COSINE is always valid here.
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,

@@ -4,41 +4,53 @@ Vector embedding layer for OMOP CDM concepts.
 
 `omop-emb` generates, stores, and retrieves embeddings for OMOP concepts. It
 works out of the box with **sqlite-vec** (no external database required) and
-scales to **PostgreSQL/pgvector** for larger deployments.
+scales to **PostgreSQL/pgvector** for larger deployments. The database is the
+source of truth — FAISS is an optional read-acceleration sidecar, not a primary
+store.
 
 ## Installation
 
 ```bash
-pip install omop-emb                    # sqlite-vec backend (default, no extras needed)
-pip install "omop-emb[pgvector]"        # adds PostgreSQL/pgvector support
-pip install "omop-emb[faiss]"           # adds FAISS sidecar support
-pip install "omop-emb[pgvector,faiss]"  # everything
+pip install omop-emb                         # sqlite-vec backend (default, no extras needed)
+pip install "omop-emb[pgvector]"             # adds PostgreSQL/pgvector support
+pip install "omop-emb[faiss-cpu]"            # adds FAISS sidecar support
+pip install "omop-emb[pgvector,faiss-cpu]"   # everything
 ```
 
 ## Quick start
 
-**sqlite-vec (no external service):**
+**Ingest concepts (sqlite-vec, no external service):**
 
 ```bash
 export OMOP_EMB_BACKEND=sqlitevec
 export OMOP_EMB_SQLITE_PATH=/data/omop_emb.db
+export OMOP_CDM_DB_URL=postgresql+psycopg://user:pass@host:5432/omop_cdm
 
 omop-emb add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
     --model nomic-embed-text:v1.5
 ```
 
-**pgvector:**
+**Search:**
+
+```bash
+omop-emb search --api-base http://localhost:11434/v1 --api-key ollama \
+    --model nomic-embed-text:v1.5 \
+    --query "hypertension" --query "type 2 diabetes" \
+    --standard-only --domain Condition --k 5
+```
+
+**pgvector with HNSW index:**
 
 ```bash
 export OMOP_EMB_BACKEND=pgvector
 export OMOP_EMB_DB_HOST=localhost
-export OMOP_EMB_DB_PORT=5432
 export OMOP_EMB_DB_USER=omop_emb
 export OMOP_EMB_DB_PASSWORD=omop_emb
 export OMOP_EMB_DB_NAME=omop_emb
 
 omop-emb add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
     --model nomic-embed-text:v1.5
+omop-emb rebuild-index --model nomic-embed-text:v1.5 --index-type hnsw --metric-type cosine
 ```
 
 ## Environment variables
@@ -66,15 +78,18 @@ Full documentation: <https://AustralianCancerDataNetwork.github.io/omop-emb>
 - [Configuration reference](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/configuration/)
 - [Backend selection & index types](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/backend-selection/)
 - [CLI reference](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/cli/)
+- [Interface guide](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/interface-guide/)
 
 ## Roadmap
 
 - [x] sqlite-vec backend (default, zero-config)
 - [x] pgvector backend (PostgreSQL)
-- [x] FAISS sidecar (approximate nearest-neighbour acceleration)
-- [x] HNSW index support for pgvector and FAISS
+- [x] HNSW index support for pgvector
+- [x] FAISS sidecar (approximate nearest-neighbour read acceleration)
+- [x] FAISS export / import CLI (`export-faiss-cache`, `import-faiss-cache`)
+- [x] In-DB concept filtering (domain, vocabulary, standard status, active status)
+- [x] Transparent FAISS fast path in `EmbeddingReaderInterface`
 - [x] Extensive backend and registry testing
-- [ ] Import/export of pre-computed embeddings
-- [ ] `faiss` GPU support
+- [ ] FAISS GPU support
 - [ ] [`pgvectorscale`](https://github.com/timescale/pgvectorscale) support
 - [ ] Vector quantisation for more efficient storage

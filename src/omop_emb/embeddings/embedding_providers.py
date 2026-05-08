@@ -2,9 +2,9 @@
 
 An EmbeddingProvider encapsulates the two things that vary across embedding backends:
 
-- **Model name canonicalisation** — e.g. Ollama requires a tag such as
+- **Model name canonicalisation**: e.g. Ollama requires a tag such as
   ``llama3:8b`` while OpenAI-style names carry no tags.
-- **Embedding dimension retrieval** — Ollama exposes a ``/api/show`` endpoint;
+- **Embedding dimension retrieval**: Ollama exposes a ``/api/show`` endpoint;
   OpenAI-compatible APIs do not have an equivalent.
 
 The provider is inferred automatically from the ``api_base`` URL via
@@ -44,7 +44,7 @@ class EmbeddingProvider(ABC):
 
         The canonical form is the identifier used as a stable key in the
         embedding registry and passed verbatim to the API.
-        Implementations should be idempotent — calling this on an already-
+        Implementations should be idempotent. Calling this on an already-
         canonical name must return the same string unchanged.
 
         Parameters

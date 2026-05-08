@@ -40,12 +40,7 @@ class ConceptEmbeddingMixin:
 
 
 def _build_pg_embedding_cls(model_record: EmbeddingModelRecord) -> type:
-    """Build the SQLAlchemy ORM class for a pgvector embedding table.
-
-    Pure in-process operation — no database calls. Used by both
-    :func:`load_pg_embedding_table` (startup) and
-    :func:`create_pg_embedding_table` (new registration).
-    """
+    """Build the SQLAlchemy ORM class for a pgvector embedding table."""
     from omop_emb.utils.embedding_utils import VectorColumnType, vector_column_type_for_dimensions
     from pgvector.sqlalchemy import VECTOR, HALFVEC  # optional dependency
 

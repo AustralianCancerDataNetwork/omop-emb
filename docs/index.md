@@ -19,10 +19,10 @@ The package supports:
 Install the backend you want to use:
 
 ```bash
-pip install omop-emb                  # sqlite-vec only (default backend)
-pip install "omop-emb[pgvector]"      # adds PostgreSQL/pgvector support
-pip install "omop-emb[faiss]"         # adds FAISS sidecar support
-pip install "omop-emb[pgvector,faiss]"  # everything
+pip install omop-emb                       # sqlite-vec only (default backend)
+pip install "omop-emb[pgvector]"           # adds PostgreSQL/pgvector support
+pip install "omop-emb[faiss-cpu]"          # adds FAISS sidecar support
+pip install "omop-emb[pgvector,faiss-cpu]" # everything
 ```
 
 ## Environment Variables { data-toc-label="Environment Variables" }
@@ -31,7 +31,7 @@ pip install "omop-emb[pgvector,faiss]"  # everything
 
 | Variable | Default | Description |
 |---|---|---|
-| `OMOP_EMB_BACKEND` | `sqlitevec` | Backend to use: `sqlitevec`, `pgvector`, or `faiss`. |
+| `OMOP_EMB_BACKEND` | `sqlitevec` | Backend to use: `sqlitevec` or `pgvector`. |
 
 ### sqlite-vec connection
 

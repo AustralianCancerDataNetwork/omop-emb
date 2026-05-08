@@ -26,18 +26,18 @@ def health_check(
     load_dotenv()
 
     backend = resolve_backend()
-    typer.echo(f"Backend: {backend.backend_type.value} — connected.")
+    typer.echo(f"Backend: {backend.backend_type.value} | connected.")
 
     # CDM connectivity is optional for the health check
     try:
         omop_cdm_engine = resolve_omop_cdm_engine()
         with omop_cdm_engine.connect() as conn:
             conn.execute(sa.text("SELECT 1"))
-        typer.echo(f"CDM engine: {omop_cdm_engine.url} — connected.")
+        typer.echo(f"CDM engine: {omop_cdm_engine.url} | connected.")
     except RuntimeError as exc:
         typer.echo(f"CDM engine: not configured ({exc})")
     except Exception as exc:
-        typer.echo(f"CDM engine: connection failed — {exc}")
+        typer.echo(f"CDM engine: connection failed. {exc}")
 
     records = list_registered_models(backend=backend)
     if not records:

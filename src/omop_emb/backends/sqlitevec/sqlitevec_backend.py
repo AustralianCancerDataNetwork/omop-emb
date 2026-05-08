@@ -151,7 +151,7 @@ class SQLiteVecBackend(EmbeddingBackend):
             raise ValueError(
                 f"sqlite-vec only supports FLAT indexes. Got: {type(index_config).__name__}."
             )
-        # vec0 is always a flat scan — no DDL needed.
+        # vec0 is always a flat scan -> no DDL needed.
 
     # ------------------------------------------------------------------
     # Core write operations

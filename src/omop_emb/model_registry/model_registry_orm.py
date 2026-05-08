@@ -57,7 +57,7 @@ class ModelRegistry(ModelRegistryBase):
 
     Notes
     -----
-    Assign an ``IndexConfig`` instance to ``row.index_config`` — the
+    Assign an ``IndexConfig`` instance to ``row.index_config``: The
     ``@validates`` hook unpacks it into ``index_type`` / ``metric_type``
     columns and stores the ``to_dict()`` result in the JSON column. Do not
     assign the raw dict directly.

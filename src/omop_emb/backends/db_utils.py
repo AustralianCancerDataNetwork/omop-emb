@@ -46,16 +46,16 @@ def temp_filter_table(
 
     Yields
     ------
-    str
-        *table_name* — use it in a ``JOIN`` or ``IN (SELECT id FROM …)`` clause.
+    table_name : str
+         Use it in a ``JOIN`` or ``IN (SELECT id FROM …)`` clause.
 
     Notes
     -----
-    **PostgreSQL** — ``CREATE TEMPORARY TABLE … ON COMMIT DROP``.  The table is
+    **PostgreSQL**: ``CREATE TEMPORARY TABLE … ON COMMIT DROP``.  The table is
     dropped automatically when the enclosing transaction commits; no explicit
     cleanup is needed.
 
-    **SQLite** — ``CREATE TEMPORARY TABLE IF NOT EXISTS … ; DELETE FROM …``.
+    **SQLite**: ``CREATE TEMPORARY TABLE IF NOT EXISTS … ; DELETE FROM …``.
     Temp tables are connection-scoped, so the idempotent pattern handles pooled
     connections safely.  The table is truncated before each use and cleaned up
     when the connection is returned to the pool.
@@ -94,7 +94,7 @@ def setup_concept_filter_temps(
     :data:`KNN_VOCS_TABLE` as their names.
 
     Callers determine which WHERE clauses to add by checking the corresponding
-    ``concept_filter`` fields directly — no return value is needed because the
+    ``concept_filter`` fields directly. No return value is needed because the
     filter already encodes which fields are set.
 
     Call this at the start of a transaction before running any query that needs

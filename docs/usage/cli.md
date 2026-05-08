@@ -1,8 +1,8 @@
 # CLI Reference
 
-`omop-emb` provides a CLI for concept ingestion, index management, and
-diagnostics. All commands load a `.env` file from the working directory
-automatically.
+`omop-emb` provides a CLI for concept ingestion, similarity search, index
+management, and diagnostics. All commands load a `.env` file from the working
+directory automatically.
 
 ## Prerequisites
 
@@ -11,9 +11,9 @@ automatically.
 - **Backend configured**: set `OMOP_EMB_BACKEND` and the matching connection
   variables (see [Installation](installation.md)).
 - **Embedding API**: an OpenAI-compatible embeddings endpoint (e.g. Ollama or
-  OpenAI). Ingestion commands require `--api-base` and `--api-key`.
-- **OMOP CDM** (`OMOP_CDM_DB_URL`): required only for the ingestion commands
-  (`add-embeddings`, `add-embeddings-with-index`). Not required for
+  OpenAI). Required for ingestion and search commands.
+- **OMOP CDM** (`OMOP_CDM_DB_URL`): required only for concept ingestion
+  (`add-embeddings`, `add-embeddings-with-index`). Not required for search,
   `list-models`, `rebuild-index`, `delete-model`, or diagnostics.
 
 ---
@@ -74,14 +74,15 @@ omop-emb add-embeddings --api-base <URL> --api-key <KEY> [OPTIONS]
 | `--vocabulary` | | `None` | Restrict to specific OMOP vocabularies (repeatable). |
 | `--domain` | | `None` | Restrict to specific OMOP domains (repeatable). |
 | `--num-embeddings` | `-n` | `None` | Cap on total concepts processed (useful for testing). |
+| `--cdm-batch-size` | | `50000` | Batch size for fetching concept metadata from the CDM. |
 | `--verbose` | `-v` | | Increase log verbosity (pass twice for DEBUG). |
 
 ---
 
 ### `add-embeddings-with-index`
 
-Ingest embeddings and immediately build an HNSW index in one step. Equivalent
-to running `add-embeddings` followed by `rebuild-index`.
+Ingest embeddings and immediately build an index in one step. Equivalent to
+running `add-embeddings` followed by `create-index`.
 
 ```bash
 omop-emb add-embeddings-with-index --api-base <URL> --api-key <KEY> [OPTIONS]
@@ -93,15 +94,16 @@ Accepts all options from `add-embeddings`, plus:
 |---|---|---|
 | `--index-type` | `flat` | Index to build after ingestion (`flat` or `hnsw`). |
 | `--metric-type` | `cosine` | Distance metric. Required and locked in for `hnsw`. |
-| `--num-neighbors` | `16` | HNSW graph connectivity (`M`). |
-| `--ef-search` | `16` | HNSW query recall parameter. |
-| `--ef-construction` | `64` | HNSW build quality parameter. |
+| `--index-hnsw-num-neighbors` | `None` | HNSW graph connectivity (`M`). |
+| `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
+| `--index-ef-construction` | `None` | HNSW build quality parameter. |
 
 ---
 
 ### `create-index`
 
 Build or rebuild the index for a model that already has embeddings stored.
+`--api-base` and `--api-key` are used only to resolve the canonical model name.
 
 ```bash
 omop-emb create-index --api-base <URL> --api-key <KEY> --model <NAME> [OPTIONS]
@@ -109,14 +111,47 @@ omop-emb create-index --api-base <URL> --api-key <KEY> --model <NAME> [OPTIONS]
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--api-base` | | **required** | Base URL of the embedding API (used to resolve canonical model name). |
+| `--api-base` | | **required** | Base URL of the embedding API. |
 | `--api-key` | | **required** | API key. |
-| `--model` | `-m` | **required** | Embedding model name. |
+| `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
 | `--index-type` | | `flat` | `flat` or `hnsw`. |
 | `--metric-type` | | `cosine` | Distance metric. Required and locked in for `hnsw`. |
-| `--num-neighbors` | | `16` | HNSW `M` parameter. |
-| `--ef-search` | | `16` | HNSW query recall parameter. |
-| `--ef-construction` | | `64` | HNSW build quality parameter. |
+| `--index-hnsw-num-neighbors` | | `None` | HNSW `M` parameter. |
+| `--index-hnsw-ef-search` | | `None` | HNSW query recall parameter. |
+| `--index-ef-construction` | | `None` | HNSW build quality parameter. |
+| `--verbose` | `-v` | | Increase log verbosity. |
+
+---
+
+## Search
+
+### `search`
+
+Query stored embeddings for nearest OMOP concepts. Outputs tab-separated rows:
+`query_id`, `query_text`, `rank`, `concept_id`, `similarity`, `concept_name`.
+
+If `OMOP_CDM_DB_URL` is set, results are enriched with concept names from the
+CDM. Without it, the `concept_name` column is left empty.
+
+```bash
+omop-emb search --api-base <URL> --api-key <KEY> --query "hypertension" [OPTIONS]
+```
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--api-base` | | **required** | Base URL of the embedding API. |
+| `--api-key` | | **required** | API key. |
+| `--query` | | `None` | Query text (repeatable). At least one of `--query` or `--queries-file` is required. |
+| `--queries-file` | | `None` | Path to a `.txt` file with one query per line. |
+| `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
+| `--metric-type` | | `cosine` | Distance metric for search. |
+| `--k` | | `10` | Number of nearest concepts to return per query. |
+| `--batch-size` | `-b` | `100` | Batch size for embedding generation. |
+| `--standard-only` | | `False` | Return only standard OMOP concepts. |
+| `--vocabulary` | | `None` | Filter results to specific vocabularies (repeatable). |
+| `--domain` | | `None` | Filter results to specific domains (repeatable). |
+| `--faiss-cache-dir` | | `None` | Use a FAISS sidecar index for search instead of the primary backend. Requires `omop-emb[faiss-cpu]`. |
+| `--verbose` | `-v` | | Increase log verbosity. |
 
 ---
 
@@ -141,21 +176,23 @@ omop-emb list-models [OPTIONS]
 ### `rebuild-index`
 
 Build or rebuild the storage index for an already-registered model. Use this to
-switch between FLAT and HNSW without re-ingesting.
+switch between FLAT and HNSW without re-ingesting.  The canonical model name is
+passed directly via `--model`; supply `--provider-type` to canonicalize a raw
+name if needed.
 
 ```bash
-omop-emb rebuild-index --model <NAME> [OPTIONS]
+omop-emb rebuild-index --model <CANONICAL_NAME> [OPTIONS]
 ```
 
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--model` | `-m` | **required** | Canonical model name. |
-| `--provider-type` | | `openai` | Provider the model was registered with. |
+| `--provider-type` | | `None` | Provider used to canonicalize the model name when needed. |
 | `--index-type` | | `flat` | `flat` or `hnsw`. |
 | `--metric-type` | | `cosine` | Distance metric (required and locked in for `hnsw`). |
-| `--num-neighbors` | | `16` | HNSW `M` parameter. |
-| `--ef-search` | | `16` | HNSW query recall parameter. |
-| `--ef-construction` | | `64` | HNSW build quality parameter. |
+| `--index-hnsw-num-neighbors` | | `None` | HNSW `M` parameter. |
+| `--index-hnsw-ef-search` | | `None` | HNSW query recall parameter. |
+| `--index-ef-construction` | | `None` | HNSW build quality parameter. |
 | `--verbose` | `-v` | | Increase log verbosity. |
 
 ---
@@ -172,7 +209,7 @@ omop-emb delete-model --model <NAME> [OPTIONS]
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--model` | `-m` | **required** | Canonical model name. |
-| `--provider-type` | | `openai` | Provider the model was registered with. |
+| `--provider-type` | | `None` | Provider used to canonicalize the model name when needed. |
 | `--yes` | `-y` | `False` | Skip confirmation prompt. |
 | `--verbose` | `-v` | | Increase log verbosity. |
 
@@ -192,18 +229,71 @@ omop-emb health-check
 
 ## FAISS sidecar
 
+Requires `pip install "omop-emb[faiss-cpu]"`.
+
+FAISS indices are exported from the primary backend (sqlite-vec or pgvector)
+and stored on disk as `.faiss` / `.json` / `metadata.npz` files under a model
+sub-directory of `--cache-dir`.  The primary backend remains the source of
+truth; FAISS is a read-acceleration layer only.
+
 ### `export-faiss-cache`
 
-Export a FAISS sidecar cache from the embedding store for a registered model.
+Export all embeddings from the primary backend into a FAISS index on disk.
 
 ```bash
-omop-emb export-faiss-cache --model <NAME> [OPTIONS]
+omop-emb export-faiss-cache --model <NAME> --cache-dir <DIR> [OPTIONS]
 ```
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--model` | `-m` | **required** | Canonical model name. |
+| `--cache-dir` | | **required** | Root directory for FAISS index files. |
+| `--metric-type` | | `cosine` | Distance metric for the FAISS index (`cosine` or `l2`). |
+| `--index-type` | | `flat` | FAISS index type: `flat` (exact) or `hnsw` (approximate). |
+| `--hnsw-m` | | `32` | HNSW number of neighbours. Only used when `--index-type=hnsw`. |
+| `--provider-type` | | `None` | Provider used to canonicalize the model name when needed. |
+| `--batch-size` | `-b` | `100000` | Embeddings fetched per backend round-trip. |
+| `--verbose` | `-v` | | Increase log verbosity. |
+
+---
 
 ### `check-faiss-cache`
 
-Check whether the FAISS sidecar cache is stale relative to the primary backend.
+Check whether the FAISS index on disk is fresh relative to the primary backend.
+Exits with code `0` if fresh, `1` if stale or missing.
 
 ```bash
-omop-emb check-faiss-cache --model <NAME> [OPTIONS]
+omop-emb check-faiss-cache --model <NAME> --cache-dir <DIR> [OPTIONS]
 ```
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--model` | `-m` | **required** | Canonical model name. |
+| `--cache-dir` | | **required** | Root cache directory. |
+| `--metric-type` | | `cosine` | Metric of the index to check. |
+| `--index-type` | | `flat` | Index type to check (`flat` or `hnsw`). |
+| `--provider-type` | | `None` | Provider used to canonicalize the model name when needed. |
+| `--verbose` | `-v` | | Increase log verbosity. |
+
+---
+
+### `import-faiss-cache`
+
+Import embeddings from an on-disk FAISS index back into the primary backend.
+Reconstructs raw vectors from the `.faiss` file (exact reconstruction requires
+`flat` or `hnsw` index types; IVF/PQ indices are lossy and unsupported).
+
+```bash
+omop-emb import-faiss-cache --model <NAME> --cache-dir <DIR> --provider-type <TYPE> [OPTIONS]
+```
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--model` | `-m` | **required** | Canonical model name. |
+| `--cache-dir` | | **required** | Root cache directory containing the FAISS index files. |
+| `--provider-type` | | **required** | Embedding provider. Used to register the model if not already present. |
+| `--metric-type` | | `cosine` | Metric of the index to import from. |
+| `--index-type` | | `flat` | Index type to import from (`flat` or `hnsw`). |
+| `--batch-size` | `-b` | `10000` | Vectors upserted per backend call. |
+| `--force` | | `False` | Overwrite existing embeddings without prompting. |
+| `--verbose` | `-v` | | Increase log verbosity. |

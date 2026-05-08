@@ -60,9 +60,8 @@ def add_embeddings_from_h5(
 
     The HDF5 file must contain two datasets:
 
-    \b
-      concept_id   — 1-D integer array of OMOP concept IDs
-      embedding    — 2-D float array of shape (N, dimensions)
+    - `concept_ids`: 1-D integer array of OMOP concept IDs
+    - `embeddings`: 2-D float array of shape (N, dimensions)
 
     Concept metadata (domain_id, vocabulary_id, is_standard, is_valid) is
     fetched from the OMOP CDM per batch and stored alongside the embeddings.
@@ -70,6 +69,9 @@ def add_embeddings_from_h5(
     """
     configure_logging_level(verbosity)
     load_dotenv()
+
+    CONCEPT_ID_KEY = "concept_ids"
+    EMBEDDINGS_KEY = "embeddings"
 
     try:
         import h5py
@@ -87,13 +89,13 @@ def add_embeddings_from_h5(
         raise typer.Exit(1)
 
     with h5py.File(h5_path, "r") as f:
-        for _ds_name in ("concept_ids", "embeddings"):
+        for _ds_name in (CONCEPT_ID_KEY, EMBEDDINGS_KEY):
             if _ds_name not in f or not isinstance(f[_ds_name], h5py.Dataset):
                 typer.echo(f"HDF5 file is missing required dataset '{_ds_name}'.", err=True)
                 raise typer.Exit(1)
 
-        cid_ds = f["concept_ids"]
-        emb_ds = f["embeddings"]
+        cid_ds = f[CONCEPT_ID_KEY]
+        emb_ds = f[EMBEDDINGS_KEY]
         assert isinstance(cid_ds, h5py.Dataset) and isinstance(emb_ds, h5py.Dataset)
 
         total: int = cid_ds.shape[0]

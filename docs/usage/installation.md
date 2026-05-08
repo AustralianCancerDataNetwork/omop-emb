@@ -26,16 +26,18 @@ PostgreSQL instance with the pgvector extension installed (e.g.
 ## FAISS sidecar
 
 ```bash
-pip install "omop-emb[faiss]"
+pip install "omop-emb[faiss-cpu]"
 ```
 
-Adds `faiss-cpu` and `h5py`. FAISS is a read-acceleration sidecar that layers
-on top of any primary backend — it does not replace sqlite-vec or pgvector.
+Adds `faiss-cpu`. FAISS is a read-acceleration sidecar that layers on top of
+any primary backend — it does not replace sqlite-vec or pgvector.  The primary
+backend remains the source of truth; FAISS indices are exported from it and used
+for faster in-memory approximate-nearest-neighbour search.
 
 ## Everything
 
 ```bash
-pip install "omop-emb[pgvector,faiss]"
+pip install "omop-emb[pgvector,faiss-cpu]"
 ```
 
 Installs all optional dependencies. Recommended for development and mixed

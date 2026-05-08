@@ -4,7 +4,7 @@ Design
 ------
 * The interface accepts a pre-constructed ``EmbeddingBackend`` (sqlite-vec
   default, or pgvector optional) so it is backend-agnostic.
-* Table identity is ``(model_name, provider_type)`` — one row per model in the
+* Table identity is ``(model_name, provider_type)``: one row per model in the
   registry. ``metric_type`` is supplied by the caller at query time.
 * ``omop_cdm_engine`` is **optional** on the reader interface.  When provided,
   KNN results are enriched with concept names and flags from the CDM.
@@ -90,8 +90,8 @@ def _fetch_cdm_concepts_for_ingestion(
 ) -> dict[int, Row]:
     """Return CDM rows needed to build ``ConceptEmbeddingRecord`` filter columns.
 
-    Fetches ``domain_id``, ``vocabulary_id``, and ``standard_concept`` — the
-    three columns written into the embedding table at upsert time.
+    Fetches ``domain_id``, ``vocabulary_id``, and ``standard_concept`` 
+    (the three columns written into the embedding table at upsert time.)
     
     Warnings
     --------
@@ -194,7 +194,7 @@ class EmbeddingReaderInterface:
         self._cdm_engine = omop_cdm_engine
         self._cdm_session_factory = sessionmaker(omop_cdm_engine) if omop_cdm_engine else None
 
-        # FAISS fast path — activated at construction, not mid-search
+        # FAISS fast path activated at construction, not mid-search
         _faiss_dir = faiss_cache_dir or os.getenv(ENV_FAISS_CACHE_DIR)
         self._faiss_cache: Optional["FAISSCache"] = None
         if _faiss_dir is not None:
@@ -274,7 +274,7 @@ class EmbeddingReaderInterface:
         Parameters
         ----------
         query_embedding : ndarray
-            Shape ``(Q, D)`` — one row per query vector.
+            Shape ``(Q, D)``, Q query vectors of dimension D.  D must match the embedding dimension for the registered model.
         concept_filter : EmbeddingConceptFilter, optional
             In-DB pre-filter applied during KNN (domain, vocabulary, standard).
         k : int, optional

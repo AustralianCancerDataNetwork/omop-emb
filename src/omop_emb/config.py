@@ -10,7 +10,8 @@ ENV_EMBEDDING_DIM = "OMOP_EMB_EMBEDDING_DIM"
 
 ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
 
-# Database connection — individual components (used to compose URL at runtime)
+# Database connection 
+# Individual components (used to compose URL at runtime)
 ENV_OMOP_EMB_DB_USER = "OMOP_EMB_DB_USER"
 ENV_OMOP_EMB_DB_PASSWORD = "OMOP_EMB_DB_PASSWORD"
 ENV_OMOP_EMB_DB_HOST = "OMOP_EMB_DB_HOST"
@@ -18,7 +19,7 @@ ENV_OMOP_EMB_DB_PORT = "OMOP_EMB_DB_PORT"
 ENV_OMOP_EMB_DB_NAME = "OMOP_EMB_DB_NAME"
 # Override the SQLAlchemy driver string (e.g. "postgresql+psycopg2")
 ENV_OMOP_EMB_DB_DRIVER = "OMOP_EMB_DB_DRIVER"
-# Optional full connection string — overrides all individual components above
+# Optional full connection string.
 ENV_OMOP_EMB_DB_URL = "OMOP_EMB_DB_URL"
 
 # sqlite-vec backend (default)
@@ -355,8 +356,8 @@ def build_engine_string(backend: "BackendType") -> "URL":
 
     raise ValueError(
         f"Cannot compose an engine URL for backend {backend!r} from environment variables. "
-        f"Set {ENV_OMOP_EMB_DB_URL!r} to supply a full connection string. "
-        "FAISS is not a backend — use ENV_FAISS_CACHE_DIR and EmbeddingReaderInterface(faiss_cache_dir=...) instead."
+        f"Set `{ENV_OMOP_EMB_DB_URL!r}` to supply a full connection string. "
+        f"FAISS is not a backend. Use `{ENV_FAISS_CACHE_DIR!r}` and EmbeddingReaderInterface(faiss_cache_dir=...) instead."
     )
 
 

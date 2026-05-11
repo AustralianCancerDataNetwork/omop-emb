@@ -33,4 +33,4 @@ from omop_emb.utils.embedding_utils import (
     ConceptEmbeddingRecord
 )
 from omop_emb.backends.base_backend import EmbeddingBackend
-from omop_emb.backends.sqlitevec import SQLiteVecBackend, create_sqlitevec_engine
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine

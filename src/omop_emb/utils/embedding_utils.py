@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Optional, overload
 import logging
 logger = logging.getLogger(__name__)
@@ -146,6 +146,10 @@ class NearestConceptMatch:
     concept_name: Optional[str] = None
     is_standard: Optional[bool] = None
     is_active: Optional[bool] = None
+
+    def to_dict(self) -> dict:
+        """Convert to a dictionary for serialization."""
+        return asdict(self)
 
 
 @dataclass(frozen=True)

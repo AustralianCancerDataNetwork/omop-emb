@@ -72,7 +72,7 @@ def create_sqlitevec_engine(db_path: str) -> Engine:
     return engine
 
 
-class SQLiteVecBackend(EmbeddingBackend):
+class SQLiteVecEmbeddingBackend(EmbeddingBackend):
     """sqlite-vec embedding backend.
 
     All data lives in a single .db file. vec0 virtual tables (embeddings) and
@@ -92,7 +92,7 @@ class SQLiteVecBackend(EmbeddingBackend):
     """
 
     @classmethod
-    def from_path(cls, db_path: str) -> "SQLiteVecBackend":
+    def from_path(cls, db_path: str) -> "SQLiteVecEmbeddingBackend":
         """Construct a backend from a database file path.
 
         Parameters
@@ -102,7 +102,7 @@ class SQLiteVecBackend(EmbeddingBackend):
 
         Returns
         -------
-        SQLiteVecBackend
+        SQLiteVecEmbeddingBackend
         """
         return cls(emb_engine=create_sqlitevec_engine(db_path))
 

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
-from omop_emb.backends.sqlitevec import SQLiteVecBackend
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.config import MetricType
 
 from .conftest import (
@@ -24,11 +24,11 @@ from .shared_backend_tests import SharedBackendTests
 
 
 @pytest.mark.unit
-class TestSQLiteVecBackend(SharedBackendTests):
-    """Runs the full shared suite against an in-memory SQLiteVecBackend."""
+class TestSQLiteVecEmbeddingBackend(SharedBackendTests):
+    """Runs the full shared suite against an in-memory SQLiteVecEmbeddingBackend."""
 
     @pytest.fixture
-    def backend(self, svec_backend: SQLiteVecBackend):
+    def backend(self, svec_backend: SQLiteVecEmbeddingBackend):
         return svec_backend
 
 
@@ -36,7 +36,7 @@ class TestSQLiteVecBackend(SharedBackendTests):
 class TestSQLiteVecSpecific:
     """SQLiteVec-specific behaviour not covered by the shared suite."""
 
-    def test_hnsw_registration_raises(self, svec_backend: SQLiteVecBackend):
+    def test_hnsw_registration_raises(self, svec_backend: SQLiteVecEmbeddingBackend):
         with pytest.raises(ValueError, match="Only FLAT index is allowed at registration"):
             svec_backend.register_model(
                 model_name=MODEL_NAME,
@@ -45,7 +45,7 @@ class TestSQLiteVecSpecific:
                 dimensions=EMBEDDING_DIM,
             )
 
-    def test_flat_registration_has_no_metric(self, svec_backend: SQLiteVecBackend):
+    def test_flat_registration_has_no_metric(self, svec_backend: SQLiteVecEmbeddingBackend):
         """FLAT-registered models have metric_type=None — metric is supplied at query time."""
         record = svec_backend.register_model(
             model_name=MODEL_NAME,
@@ -55,7 +55,7 @@ class TestSQLiteVecSpecific:
         )
         assert record.metric_type is None
 
-    def test_flat_model_accepts_cosine_metric_at_query_time(self, svec_backend: SQLiteVecBackend):
+    def test_flat_model_accepts_cosine_metric_at_query_time(self, svec_backend: SQLiteVecEmbeddingBackend):
         """FLAT models accept any metric at query time; sqlite-vec uses L2 internally.
 
         The vec0 table is created with L2 (FLAT default). Querying with COSINE is
@@ -96,7 +96,7 @@ class TestSQLiteVecSpecific:
         for match in results[0]:
             assert 0.0 <= match.similarity <= 1.0
 
-    def test_one_table_per_model(self, svec_backend: SQLiteVecBackend):
+    def test_one_table_per_model(self, svec_backend: SQLiteVecEmbeddingBackend):
         """One row and one physical table per model — metric is not part of the key."""
         r1 = svec_backend.register_model(
             model_name=MODEL_NAME,
@@ -115,7 +115,7 @@ class TestSQLiteVecSpecific:
 
     def test_from_path_constructor(self, tmp_path):
         db_file = str(tmp_path / "test.db")
-        backend = SQLiteVecBackend.from_path(db_file)
+        backend = SQLiteVecEmbeddingBackend.from_path(db_file)
         record = backend.register_model(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,

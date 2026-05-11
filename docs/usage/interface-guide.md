@@ -22,11 +22,11 @@ backend = resolve_backend()  # reads OMOP_EMB_BACKEND + connection variables
 Or construct one directly:
 
 ```python
-from omop_emb.backends.sqlitevec import SQLiteVecBackend
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 
 # sqlite-vec
-backend = SQLiteVecBackend(db_path="/data/omop_emb.db")
+backend = SQLiteVecEmbeddingBackend(db_path="/data/omop_emb.db")
 
 # pgvector
 backend = PGVectorEmbeddingBackend(db_url="postgresql+psycopg://user:pass@host:5432/db")

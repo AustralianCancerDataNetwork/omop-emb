@@ -6,7 +6,8 @@ from typing import Annotated, Optional
 import typer
 from dotenv import load_dotenv
 
-from .utils import configure_logging_level, resolve_backend
+from .utils import configure_logging_level
+from omop_emb.backends import resolve_backend
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.config import (
     IndexType,

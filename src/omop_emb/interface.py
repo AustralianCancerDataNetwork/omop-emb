@@ -40,7 +40,7 @@ from omop_emb.backends.base_backend import (
     EmbeddingModelRecord,
 )
 from omop_emb.backends.index_config import IndexConfig
-from omop_emb.config import BackendType, ENV_FAISS_CACHE_DIR, MetricType, ProviderType
+from omop_emb.config import BackendType, ENV_OMOP_EMB_FAISS_CACHE_DIR, MetricType, ProviderType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
 
 if TYPE_CHECKING:
@@ -137,7 +137,7 @@ class EmbeddingReaderInterface:
     Parameters
     ----------
     backend : EmbeddingBackend
-        Pre-constructed backend (SQLiteVecBackend or PGVectorEmbeddingBackend).
+        Pre-constructed backend (SQLiteVecEmbeddingBackend or PGVectorEmbeddingBackend).
     metric_type : MetricType
         Distance metric used for KNN queries and validated against the registry.
     omop_cdm_engine : Engine, optional
@@ -187,6 +187,9 @@ class EmbeddingReaderInterface:
         canonical_model_name = provider.canonical_model_name(model)
 
         self._backend = backend
+
+        if not isinstance(metric_type, MetricType):
+            raise ValueError(f"metric_type must be an instance of MetricType Enum, got {type(metric_type).__name__}")
         self._metric_type = metric_type
         self._provider_type = provider_type
         self._canonical_model_name = canonical_model_name
@@ -195,7 +198,7 @@ class EmbeddingReaderInterface:
         self._cdm_session_factory = sessionmaker(omop_cdm_engine) if omop_cdm_engine else None
 
         # FAISS fast path activated at construction, not mid-search
-        _faiss_dir = faiss_cache_dir or os.getenv(ENV_FAISS_CACHE_DIR)
+        _faiss_dir = faiss_cache_dir or os.getenv(ENV_OMOP_EMB_FAISS_CACHE_DIR)
         self._faiss_cache: Optional["FAISSCache"] = None
         if _faiss_dir is not None:
             try:

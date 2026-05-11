@@ -1,6 +1,6 @@
-from omop_emb.backends.index_config import (
-    IndexConfig,
-    FlatIndexConfig,
-    HNSWIndexConfig,
-    index_config_from_index_type,
+from .base_backend import (
+    EmbeddingBackend,
+    resolve_backend
 )
+from .pgvector import PGVectorEmbeddingBackend
+from .sqlitevec import SQLiteVecEmbeddingBackend 

@@ -11,7 +11,8 @@ from tqdm import tqdm
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
 
-from .utils import configure_logging_level, resolve_backend
+from .utils import configure_logging_level
+from omop_emb.backends import resolve_backend
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.config import MetricType, ProviderType
 from omop_emb.interface import _fetch_cdm_concepts_for_ingestion

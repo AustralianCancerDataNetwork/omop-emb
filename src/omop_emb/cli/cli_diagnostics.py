@@ -7,7 +7,8 @@ import sqlalchemy as sa
 import typer
 from dotenv import load_dotenv
 
-from .utils import configure_logging_level, resolve_backend, resolve_omop_cdm_engine
+from .utils import configure_logging_level, resolve_omop_cdm_engine
+from omop_emb.backends import resolve_backend
 from omop_emb.config import MetricType
 from omop_emb.interface import list_registered_models
 

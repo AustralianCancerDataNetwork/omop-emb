@@ -10,8 +10,9 @@ from tqdm import tqdm
 
 from orm_loader.helpers import create_db
 
-from .utils import configure_logging_level, resolve_backend, resolve_omop_cdm_engine
+from .utils import configure_logging_level, resolve_omop_cdm_engine
 from omop_emb.backends.index_config import index_config_from_index_type
+from omop_emb.backends import resolve_backend
 from omop_emb.config import IndexType, MetricType
 from omop_emb.embeddings import EmbeddingClient
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface

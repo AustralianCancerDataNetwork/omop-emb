@@ -11,7 +11,7 @@ import pytest
 import sqlalchemy as sa
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.sqlitevec import SQLiteVecBackend, create_sqlitevec_engine
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
 from omop_emb.config import MetricType, ProviderType
 
 
@@ -127,9 +127,9 @@ def svec_engine():
 
 
 @pytest.fixture
-def svec_backend(svec_engine) -> SQLiteVecBackend:
-    """In-memory SQLiteVecBackend, fresh per test."""
-    return SQLiteVecBackend(emb_engine=svec_engine)
+def svec_backend(svec_engine) -> SQLiteVecEmbeddingBackend:
+    """In-memory SQLiteVecEmbeddingBackend, fresh per test."""
+    return SQLiteVecEmbeddingBackend(emb_engine=svec_engine)
 
 
 # ---------------------------------------------------------------------------

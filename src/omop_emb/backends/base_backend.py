@@ -3,10 +3,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from functools import wraps
 import logging
-from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Tuple
-
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Tuple, Union
+import os
 from numpy import ndarray
-from sqlalchemy import Engine
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import sessionmaker
 
 from omop_emb.config import (
@@ -17,6 +17,8 @@ from omop_emb.config import (
     get_supported_index_types_for_backend,
     is_supported_index_metric_combination_for_backend,
     is_index_type_supported_for_backend,
+    build_engine_string,
+    ENV_OMOP_EMB_BACKEND
 )
 from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig
 from omop_emb.model_registry import EmbeddingModelRecord, RegistryManager
@@ -882,3 +884,52 @@ class EmbeddingBackend(ABC):
                 f"Number of records ({len(records)}) does not match "
                 f"number of embeddings ({embeddings.shape[0]})."
             )
+
+
+def resolve_backend(backend_type: Optional[Union[str, BackendType]]= None) -> EmbeddingBackend:
+    """Return the configured embedding backend.
+
+    Reads ``OMOP_EMB_BACKEND`` (default: ``sqlitevec``) to select the backend.
+    Connection details are resolved via ``build_engine_string``:
+
+    - ``sqlitevec``: requires ``OMOP_EMB_SQLITE_PATH`` (or ``OMOP_EMB_DB_URL``).
+    - ``pgvector``: requires ``OMOP_EMB_DB_USER``, ``OMOP_EMB_DB_PASSWORD``,
+      ``OMOP_EMB_DB_HOST``, ``OMOP_EMB_DB_NAME`` (and optionally
+      ``OMOP_EMB_DB_PORT``, ``OMOP_EMB_DB_DRIVER``), or ``OMOP_EMB_DB_URL``.
+    """
+    backend_str = backend_type or os.getenv(ENV_OMOP_EMB_BACKEND, BackendType.SQLITEVEC.value).lower()
+
+    try:
+        backend_type = BackendType(backend_str)
+    except ValueError:
+        raise RuntimeError(
+            f"Unknown backend {backend_str!r} in {ENV_OMOP_EMB_BACKEND}. "
+            f"Supported: {[b.value for b in BackendType]}."
+        )
+
+    url = build_engine_string(backend_type)
+
+    if backend_type == BackendType.SQLITEVEC:
+        from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+        assert url.database is not None  # guaranteed by build_engine_string
+        logger.info(f"Using SQLiteVec backend with database file: {url.database}")
+        return SQLiteVecEmbeddingBackend.from_path(url.database)
+
+    if backend_type == BackendType.PGVECTOR:
+        engine = create_engine(url, future=True, echo=False)
+        if engine.dialect.name != "postgresql":
+            raise RuntimeError(
+                "The resolved URL must point to a PostgreSQL database "
+                f"(pgvector extension required), got dialect: {engine.dialect.name!r}."
+            )
+        try:
+            from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
+        except ImportError as exc:
+            raise RuntimeError(
+                "pgvector backend is not installed. "
+                "Install it with: pip install omop-emb[pgvector]"
+            ) from exc
+        logger.info(f"Using pgvector backend with database URL: {url}")
+        return PGVectorEmbeddingBackend(emb_engine=engine)
+
+    raise RuntimeError(f"Implementation for {backend_type.value} is not available.")

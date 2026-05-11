@@ -9,6 +9,7 @@ ENV_QUERY_EMBEDDING_PREFIX = "OMOP_EMB_QUERY_EMBEDDING_PREFIX"
 ENV_EMBEDDING_DIM = "OMOP_EMB_EMBEDDING_DIM"
 
 ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
+ENV_OMOP_EMBEDDING_MODEL = "OMOP_EMBEDDING_MODEL"
 
 # Database connection 
 # Individual components (used to compose URL at runtime)
@@ -23,13 +24,14 @@ ENV_OMOP_EMB_DB_DRIVER = "OMOP_EMB_DB_DRIVER"
 ENV_OMOP_EMB_DB_URL = "OMOP_EMB_DB_URL"
 
 # sqlite-vec backend (default)
-ENV_EMB_SQLITE_PATH = "OMOP_EMB_SQLITE_PATH"
+ENV_OMOP_EMB_SQLITE_PATH = "OMOP_EMB_SQLITE_PATH"
 
 # OMOP CDM (always required for concept ingestion in CLI)
-ENV_CDM_DATABASE_URL = "OMOP_CDM_DB_URL"
+# NOTE: Should be the same str value as in omop-graph `omop_graph.config.ENV_OMOP_CDM_DB_URL`
+ENV_OMOP_CDM_DATABASE_URL = "OMOP_CDM_DB_URL"
 
 # Optional FAISS sidecar cache directory (auto-activates FAISS in EmbeddingReaderInterface)
-ENV_FAISS_CACHE_DIR = "OMOP_EMB_FAISS_CACHE_DIR"
+ENV_OMOP_EMB_FAISS_CACHE_DIR = "OMOP_EMB_FAISS_CACHE_DIR"
 
 
 class ProviderType(StrEnum):
@@ -307,16 +309,20 @@ def build_engine_string(backend: "BackendType") -> "URL":
 
     Notes
     -----
-    If ``OMOP_EMB_DB_URL`` is set it is used as-is for any backend, allowing
+    If ``ENV_OMOP_EMB_DB_URL`` is set it is used as-is for any backend, allowing
     callers to supply a fully-qualified connection string without setting the
     individual component variables.
+    Otherwise, the following environment variables are read based on the selected backend:
+    - SQLITEVEC: 
+        - ``ENV_OMOP_EMB_SQLITE_PATH`` (required): the file path to the sqlite database. Use the special value ``:memory:`` for a transient in-memory database (useful in tests).
 
-    For ``SQLITEVEC``: reads ``OMOP_EMB_SQLITE_PATH``. Use the special value
-    ``:memory:`` for a transient in-memory database (useful in tests).
-    For ``PGVECTOR``: reads ``OMOP_EMB_DB_USER``, ``OMOP_EMB_DB_PASSWORD``,
-    ``OMOP_EMB_DB_HOST``, ``OMOP_EMB_DB_NAME``, and optionally
-    ``OMOP_EMB_DB_PORT`` (default 5432) and ``OMOP_EMB_DB_DRIVER`` (driver,
-    default ``postgresql+psycopg``).
+    - PGVECTOR: 
+        - ``ENV_OMOP_EMB_DB_DRIVER`` (default: 'postgresql+psycopg'): the SQLAlchemy driver name (e.g. 'postgresql', 'mysql', 'sqlite').
+        - ``ENV_OMOP_EMB_DB_USER`` (required): the username for database authentication.
+        - ``ENV_OMOP_EMB_DB_PASSWORD`` (required): the password for database authentication.
+        - ``ENV_OMOP_EMB_DB_HOST`` (required): the hostname or IP address of the database server.
+        - ``ENV_OMOP_EMB_DB_NAME`` (required): the name of the database to connect to.
+        - ``ENV_OMOP_EMB_DB_PORT`` (optional, default 5432): the port number on which the database server is listening.
 
     Raises
     ------
@@ -334,7 +340,7 @@ def build_engine_string(backend: "BackendType") -> "URL":
         return make_url(optional_url)
 
     if backend == BackendType.SQLITEVEC:
-        path = _get_required_env_variable(ENV_EMB_SQLITE_PATH)
+        path = _get_required_env_variable(ENV_OMOP_EMB_SQLITE_PATH)
         return URL.create(drivername="sqlite", database=path)
 
     if backend == BackendType.PGVECTOR:
@@ -343,7 +349,7 @@ def build_engine_string(backend: "BackendType") -> "URL":
         password = _get_required_env_variable(ENV_OMOP_EMB_DB_PASSWORD)
         host = _get_required_env_variable(ENV_OMOP_EMB_DB_HOST)
         database = _get_required_env_variable(ENV_OMOP_EMB_DB_NAME)
-        port_str = os.getenv(ENV_OMOP_EMB_DB_PORT)
+        port_str = os.getenv(ENV_OMOP_EMB_DB_PORT, "5432")
         port = int(port_str) if port_str else None
         return URL.create(
             drivername=driver,
@@ -357,7 +363,7 @@ def build_engine_string(backend: "BackendType") -> "URL":
     raise ValueError(
         f"Cannot compose an engine URL for backend {backend!r} from environment variables. "
         f"Set `{ENV_OMOP_EMB_DB_URL!r}` to supply a full connection string. "
-        f"FAISS is not a backend. Use `{ENV_FAISS_CACHE_DIR!r}` and EmbeddingReaderInterface(faiss_cache_dir=...) instead."
+        f"FAISS is not a backend. Use `{ENV_OMOP_EMB_FAISS_CACHE_DIR!r}` and EmbeddingReaderInterface(faiss_cache_dir=...) instead."
     )
 
 

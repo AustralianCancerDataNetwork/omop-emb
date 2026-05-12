@@ -1,6 +1,6 @@
 [project]
 name = "omop-emb"
-version = "0.4.1"
+version = "1.0.0"
 description = "Embedding extension for OMOP CDM. Utilises sqlite-vec by default and provides an optional pgvector backend, and optionall FAISS export."
 readme = "README.md"
 requires-python = ">=3.12"

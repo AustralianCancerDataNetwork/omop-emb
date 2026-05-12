@@ -1,3 +1,27 @@
+# [1.0.0](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.4.1...v1.0.0) (2026-05-12)
+
+
+### Performance Improvements
+
+* Refactoring of backend for local-first storage solution ([7ff45e7](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/7ff45e705fb43584a96b2ab35549f7a1052a2e7b))
+
+
+### BREAKING CHANGES
+
+* Introduction of 2 new backends, alteration of interfaces, removal of FAISS as a standalone backend.
+
+- Support of `SQLiteVecBackend` and `PGVectorEmbeddingBackend` with common interfaces and methods for storage and retrieval
+- Unified ORM for both backends and associated tables for easy interaction using SQLAlchemy
+- Standardised embedding storage table and `ModelRegistry`
+- Enforcement of a singular `IndexType` per model to streamline ingestion and retrieval. CLI interfaces to update `IndexType` are provided.
+- Improved CLI maintenance modules
+- Default `IndexType.FLAT` ingestion to accelerate bulk ingestion and interfaces for creating, modifying and deleting indices
+- FAISS: demoted from ground truth to read-acceleration, per-index staleness tracking via .json sidecars, `import-faiss-cache` CLI for round-tripping, transparent fast path in `EmbeddingReaderInterface` via `faiss_cache_dir`
+- temporary table JOINs replacing IN (...) clauses across both backends
+- prevent the hard-capped limit for each dialect
+- optional packages with `pgvector` backend and `faiss` export
+- fail at import time with install hint (`omop-emb[pgvector]`, `omop-emb[faiss-cpu]`)
+
 ## [0.4.1](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.4.0...v0.4.1) (2026-04-24)
 
 

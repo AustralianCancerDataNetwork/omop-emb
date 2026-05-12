@@ -40,9 +40,9 @@ dependencies = [
     "sqlite-vec>=0.1.9",
     "openai",
     "requests",
+    "urllib3>=2.7.0", # CVE-2026-44432, CVE-2026-44431
     "typer",
-    "tqdm",
-    "openai"
+    "tqdm"
 ]
 
 [project.optional-dependencies]
@@ -57,9 +57,10 @@ faiss-cpu = [
 dev = [
     "omop-emb[faiss-cpu,pgvector]", 
     "mypy>=1.19.1",
-    "pytest>=9.0.2",
+    "pytest>=9.0.3",  # CVE-2025-71176
     "pytest-cov>=7.0.0",
     "rich>=14.2.0",
+    "pygments>=2.20.0",  # CVE-2026-4539
     "ruff>=0.14.10",
     "h5py",
     "mkdocs<2.0",

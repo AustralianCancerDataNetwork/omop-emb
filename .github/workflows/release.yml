@@ -28,13 +28,11 @@ jobs:
           --health-retries 10
 
     env:
-      TEST_DB_HOST: localhost
-      TEST_DB_PORT: 5432
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      TEST_DATABASE_NAME: test_omop_emb
-      TEST_DB_USERNAME: test
-      TEST_DB_PASSWORD: test
+      OMOP_EMB_DB_HOST: localhost
+      OMOP_EMB_DB_PORT: 5432
+      OMOP_EMB_DB_USER: omop_emb
+      OMOP_EMB_DB_PASSWORD: omop_emb
+      OMOP_EMB_DB_NAME: omop_emb
 
     steps:
       - uses: actions/checkout@v5
@@ -47,6 +45,16 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --all-extras --dev
+
+      - name: Create omop_emb database user
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -c \
+            "CREATE USER omop_emb WITH PASSWORD 'omop_emb' CREATEDB;"
+
+      - name: Pre-install vector extension in template1
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -c \
+            "CREATE EXTENSION IF NOT EXISTS vector;" template1
 
       - name: Run tests
         run: uv run pytest

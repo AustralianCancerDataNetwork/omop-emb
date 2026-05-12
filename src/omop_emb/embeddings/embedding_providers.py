@@ -2,9 +2,9 @@
 
 An EmbeddingProvider encapsulates the two things that vary across embedding backends:
 
-- **Model name canonicalisation** — e.g. Ollama requires a tag such as
+- **Model name canonicalisation**: e.g. Ollama requires a tag such as
   ``llama3:8b`` while OpenAI-style names carry no tags.
-- **Embedding dimension retrieval** — Ollama exposes a ``/api/show`` endpoint;
+- **Embedding dimension retrieval**: Ollama exposes a ``/api/show`` endpoint;
   OpenAI-compatible APIs do not have an equivalent.
 
 The provider is inferred automatically from the ``api_base`` URL via
@@ -13,11 +13,15 @@ The provider is inferred automatically from the ``api_base`` URL via
 """
 
 from __future__ import annotations
+import logging
 from abc import ABC, abstractmethod
 from httpx import URL
 import requests
+from typing import Optional
 
 from omop_emb.config import ProviderType
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingProvider(ABC):
@@ -35,13 +39,12 @@ class EmbeddingProvider(ABC):
         """Return the provider type as a value of the ProviderType enum."""
         ...
 
-    @abstractmethod
     def canonical_model_name(self, name: str) -> str:
         """Return the canonical form of *name* for this provider.
 
         The canonical form is the identifier used as a stable key in the
         embedding registry and passed verbatim to the API.
-        Implementations should be idempotent — calling this on an already-
+        Implementations should be idempotent. Calling this on an already-
         canonical name must return the same string unchanged.
 
         Parameters
@@ -56,11 +59,19 @@ class EmbeddingProvider(ABC):
             Canonical model name, e.g. ``'llama3:8b'`` or
             ``'text-embedding-3-small'``.
         """
-        ...
+        canonical_model_name = self._canonical_model_name_impl(name)
+        logger.info(f"Set canonical model name for provider {self.provider_type.value!r}: {canonical_model_name!r}")
+        return canonical_model_name
 
     @abstractmethod
-    def get_embedding_dim(self, model: str, api_base: URL) -> int:
+    def _canonical_model_name_impl(self, name: str) -> str:
+        """Provider-specific implementation of canonical model name resolution."""
+        ...
+
+    def get_embedding_dim(self, model: str, api_base: URL) -> Optional[int]:
         """Return the embedding dimension for *model* served at *api_base*.
+        Child classes should overwrite this method if the provider has a way to query 
+        the embedding dimension via the API.
 
         Parameters
         ----------
@@ -73,17 +84,10 @@ class EmbeddingProvider(ABC):
 
         Returns
         -------
-        int
-            Number of dimensions in the embedding vector.
-
-        Raises
-        ------
-        ValueError
-            If the dimension cannot be determined from the API response.
-        NotImplementedError
-            If the provider does not support automatic dimension retrieval.
+        int, optional
+            Number of dimensions in the embedding vector. Return None if the provider does not support querying this via the API.
         """
-        ...
+        return None
 
 
 class OllamaProvider(EmbeddingProvider):
@@ -98,7 +102,7 @@ class OllamaProvider(EmbeddingProvider):
     def provider_type(self) -> ProviderType:
         return ProviderType.OLLAMA
 
-    def canonical_model_name(self, name: str) -> str:
+    def _canonical_model_name_impl(self, name: str) -> str:
         """Require an explicit, immutable model tag.
 
         Rejects both untagged names and the mutable ``:latest`` tag.
@@ -175,44 +179,6 @@ class OllamaProvider(EmbeddingProvider):
         )
 
 
-class OpenAIProvider(EmbeddingProvider):
-    """Provider for OpenAI-compatible APIs (OpenAI, Azure OpenAI, etc.).
-
-    Model names require no tag normalisation.  Embedding dimensions are not
-    available via a query endpoint, so :meth:`get_embedding_dim` raises
-    :exc:`NotImplementedError` — pass the dimension explicitly via the
-    ``embedding_dim`` parameter of :class:`~omop_emb.embedding_client.EmbeddingClient`
-    instead.
-    """
-
-    @property
-    def provider_type(self) -> ProviderType:
-        return ProviderType.OPENAI
-
-    def canonical_model_name(self, name: str) -> str:
-        """Return *name* unchanged (no tag normalisation required).
-
-        Parameters
-        ----------
-        name : str
-            Model name, e.g. ``'text-embedding-3-small'``.
-
-        Returns
-        -------
-        str
-            The same model name, stripped of surrounding whitespace.
-        """
-        return name.strip()
-
-    def get_embedding_dim(self, model: str, api_base: str) -> int:
-        raise NotImplementedError(
-            f"Automatic embedding dimension retrieval is not supported for "
-            f"OpenAI-compatible endpoints (api_base='{api_base}'). "
-            f"Pass the dimension explicitly via the 'embedding_dim' parameter "
-            f"when constructing EmbeddingClient."
-        )
-
-
 def get_provider_for_api_base(
     api_base: str,
     api_key: str = "ollama",
@@ -224,7 +190,7 @@ def get_provider_for_api_base(
     1. ``'ollama'`` appears anywhere in *api_base* → :class:`OllamaProvider`
     2. *api_base* is a localhost/loopback URL **and** *api_key* is ``'ollama'``
        → :class:`OllamaProvider`
-    3. All other URLs → :class:`OpenAICompatProvider`
+    3. All other URLs → :exc:`ValueError`
 
     Pass a provider instance explicitly to
     :class:`~omop_emb.embedding_client.EmbeddingClient` to override this inference
@@ -242,19 +208,26 @@ def get_provider_for_api_base(
     -------
     EmbeddingProvider
         A provider instance appropriate for *api_base*.
+
+    Raises
+    ------
+    ValueError
+        If the endpoint cannot be identified as an Ollama instance.
     """
     is_local = "localhost" in api_base or "127.0.0.1" in api_base
     is_ollama = "ollama" in api_base or (is_local and api_key == "ollama")
 
     if is_ollama:
         return OllamaProvider()
-    return OpenAIProvider()
+    raise ValueError(
+        f"Cannot infer provider from api_base={api_base!r}. "
+        "Only Ollama endpoints are supported. Pass an explicit provider "
+        "instance to EmbeddingClient to override."
+    )
+
 
 def get_provider_from_provider_type(provider_type: ProviderType) -> EmbeddingProvider:
     """Map a ProviderType enum to an EmbeddingProvider instance."""
     if provider_type == ProviderType.OLLAMA:
         return OllamaProvider()
-    elif provider_type == ProviderType.OPENAI:
-        return OpenAIProvider()
-    else:
-        raise ValueError(f"Unsupported provider type: {provider_type}")
+    raise ValueError(f"Unsupported provider type: {provider_type}")

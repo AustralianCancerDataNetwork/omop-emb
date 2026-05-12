@@ -31,6 +31,7 @@ nav:
   - Home: index.md
   - Getting Started:
       - Installation: usage/installation.md
+      - Configuration: usage/configuration.md
       - Embedding Storage: usage/backend-selection.md
       - Interfaces: usage/interface-guide.md
       - Asymmetric Embeddings: usage/asymmetric-embeddings.md

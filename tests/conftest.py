@@ -4,327 +4,182 @@ from __future__ import annotations
 
 import os
 import time
-import tempfile
-from pathlib import Path
-from typing import Generator, Dict, Any, Optional
-from unittest.mock import Mock
-from dataclasses import dataclass, field
+from typing import Generator
 
-import pytest
 import numpy as np
+import pytest
 import sqlalchemy as sa
-from sqlalchemy.orm import Session, sessionmaker
+
+from omop_emb.backends.base_backend import ConceptEmbeddingRecord
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
+from omop_emb.config import MetricType, ProviderType
 
 
-from omop_alchemy.cdm.model.vocabulary import Concept
-from orm_loader.helpers import Base
-from omop_emb.embeddings import EmbeddingClient
+# ---------------------------------------------------------------------------
+# Test data constants
+# ---------------------------------------------------------------------------
 
-from omop_emb.backends.faiss import FaissEmbeddingBackend
-from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
-from omop_emb.interface import EmbeddingWriterInterface, EmbeddingReaderInterface
-from omop_emb.config import BackendType, ProviderType, IndexType
-from omop_emb.embeddings import EmbeddingRole
+MODEL_NAME = "test-model:v1"
+PROVIDER_TYPE = ProviderType.OLLAMA
+EMBEDDING_DIM = 1
+
+# Fixed 1-D embeddings: Hypertension=-10, Diabetes=0, Aspirin=+10
+# This makes L2 and cosine tests fully deterministic.
+CONCEPT_RECORDS: tuple[ConceptEmbeddingRecord, ...] = (
+    ConceptEmbeddingRecord(concept_id=1, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True),
+    ConceptEmbeddingRecord(concept_id=2, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True),
+    ConceptEmbeddingRecord(concept_id=3, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True),
+    ConceptEmbeddingRecord(concept_id=4, domain_id="Drug", vocabulary_id="RxNorm", is_standard=False),
+)
+
+CONCEPT_EMBEDDINGS = np.array([[-10.0], [0.0], [10.0], [20.0]], dtype=np.float32)
+
+# Kept for backward compat with tests that reference by name
+HYPERTENSION_ID = 1
+DIABETES_ID = 2
+ASPIRIN_ID = 3
+NON_STANDARD_ID = 4
+
+# Query vector used for similarity math tests: [-1.0]
+# L2 distances from [-1]: Hypertension=9, Diabetes=1, Aspirin=11, NonStandard=21
+# L2 similarities:        0.1,            0.5,        ~0.083,      ~0.045
+QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
 
 
-TEST_DB_NAME = os.getenv("TEST_DATABASE_NAME", "test_omop_emb")
-TEST_USERNAME = os.getenv("TEST_DB_USERNAME", "test")
-TEST_PASSWORD = os.getenv("TEST_DB_PASSWORD", "test")
+# ---------------------------------------------------------------------------
+# PostgreSQL config (integration tests only)
+#
+# Reads OMOP_EMB_DB_* from your .env (same user as production, separate DB).
+# The omop_emb user must have CREATEDB privilege; grant it once with:
+#   ALTER USER omop_emb CREATEDB;
+# ---------------------------------------------------------------------------
 
-DB_HOST = os.getenv("TEST_DB_HOST", None)
-DB_PORT = os.getenv("TEST_DB_PORT", None)
-DB_DRIVER = os.getenv("TEST_DB_DRIVER", "postgresql+psycopg2")
-DB_ADMIN_USER = os.getenv("POSTGRES_USER", "postgres")
-DB_ADMIN_PASS = os.getenv("POSTGRES_PASSWORD", "postgres")
+_DB_HOST = os.getenv("OMOP_EMB_DB_HOST")
+_DB_PORT = os.getenv("OMOP_EMB_DB_PORT")
+_DB_NAME = "test_omop_emb"
+_DB_USER = os.getenv("OMOP_EMB_DB_USER", "omop_emb")
+_DB_PASS = os.getenv("OMOP_EMB_DB_PASSWORD", "omop_emb")
+_DB_DRIVER = "postgresql+psycopg"
+
+_pg_available = _DB_HOST is not None and (_DB_PORT is not None and _DB_PORT.isdigit())
 
 
-# ================ Fixtures ================
-
-
-def _create_test_url() -> sa.URL:
-    """Construct the test database URL from environment variables."""
-    if DB_HOST is None or not (
-        DB_PORT is not None and DB_PORT.isdigit()
-    ):
-        raise RuntimeError(
-            "TEST_DB_HOST and TEST_DB_PORT must be set in the environment. "
-            "Example: TEST_DB_HOST=db-omop TEST_DB_PORT=5432"
-        )
+def _test_db_url() -> sa.URL:
     return sa.URL.create(
-        drivername=DB_DRIVER,
-        username=TEST_USERNAME,
-        password=TEST_PASSWORD,
-        host=DB_HOST,
-        port=int(DB_PORT),
-        database=TEST_DB_NAME
+        drivername=_DB_DRIVER,
+        username=_DB_USER,
+        password=_DB_PASS,
+        host=_DB_HOST,
+        port=int(_DB_PORT),  # type: ignore[arg-type]
+        database=_DB_NAME,
     )
 
-def _create_admin_url() -> sa.URL:
-    """Construct the admin database URL for managing test DB."""
-    if DB_HOST is None or not (
-        DB_PORT is not None and DB_PORT.isdigit()
-    ):
-        raise RuntimeError(
-            "TEST_DB_HOST and TEST_DB_PORT must be set in the environment. "
-            "Example: TEST_DB_HOST=db-omop TEST_DB_PORT=5432"
-        )
+
+def _maintenance_db_url() -> sa.URL:
+    """Connect to the maintenance DB as the app user to issue CREATE/DROP DATABASE."""
     return sa.URL.create(
-        drivername=DB_DRIVER,
-        username=DB_ADMIN_USER,
-        password=DB_ADMIN_PASS,
-        host=DB_HOST,
-        port=int(DB_PORT),
-        database="postgres"
+        drivername=_DB_DRIVER,
+        username=_DB_USER,
+        password=_DB_PASS,
+        host=_DB_HOST,
+        port=int(_DB_PORT),  # type: ignore[arg-type]
+        database="postgres",
     )
 
-def _create_test_database() -> sa.URL:
-    """Create a dedicated test database and return its URL."""
-    
-    admin_url = _create_admin_url()
-    test_url = _create_test_url()
-    admin_engine = sa.create_engine(admin_url, future=True)
+
+def _create_test_db() -> sa.URL:
+    engine = sa.create_engine(_maintenance_db_url(), future=True)
     try:
-        with admin_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}"'))
-            conn.execute(sa.text(f"DROP ROLE IF EXISTS {TEST_USERNAME}"))
-            conn.execute(sa.text(f"CREATE USER {TEST_USERNAME} WITH PASSWORD '{TEST_PASSWORD}' SUPERUSER"))
-            conn.execute(sa.text(f'CREATE DATABASE "{TEST_DB_NAME}" OWNER {TEST_USERNAME}'))
-
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{_DB_NAME}"'))
+            conn.execute(sa.text(f'CREATE DATABASE "{_DB_NAME}" OWNER {_DB_USER}'))
     finally:
-        admin_engine.dispose()
-    return test_url
+        engine.dispose()
+    return _test_db_url()
 
 
-def _drop_test_database() -> None:
-    """Drop the test database and the associated test user."""
-    admin_url = _create_admin_url()
-    admin_engine = sa.create_engine(admin_url, future=True)
+def _drop_test_db() -> None:
+    engine = sa.create_engine(_maintenance_db_url(), future=True)
     try:
-        with admin_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(
                 sa.text(
-                    "SELECT pg_terminate_backend(pid) "
-                    "FROM pg_stat_activity "
-                    "WHERE datname = :db_name "
-                    "AND pid <> pg_backend_pid()"
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :db AND pid <> pg_backend_pid()"
                 ),
-                {"db_name": TEST_DB_NAME},
+                {"db": _DB_NAME},
             )
-            
-            conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}"'))
-            conn.execute(sa.text(f"DROP ROLE IF EXISTS {TEST_USERNAME};"))
+            conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{_DB_NAME}"'))
     finally:
-        admin_engine.dispose()
+        engine.dispose()
 
+
+# ---------------------------------------------------------------------------
+# Fixtures — SQLiteVec (in-memory, function-scoped)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def svec_engine():
+    """In-memory SQLiteVec engine, fresh per test."""
+    engine = create_sqlitevec_engine(":memory:")
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture
+def svec_backend(svec_engine) -> SQLiteVecEmbeddingBackend:
+    """In-memory SQLiteVecEmbeddingBackend, fresh per test."""
+    return SQLiteVecEmbeddingBackend(emb_engine=svec_engine)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures — pgvector (session-scoped engine, function-scoped backend)
+# ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
-def pg_engine():
-    """Create PostgreSQL engine with retry logic and dedicated test DB."""
-    test_db_url = _create_test_database()
+def pg_engine() -> Generator[sa.Engine, None, None]:
+    """Session-scoped PostgreSQL engine.  Skipped when TEST_DB_HOST is unset."""
+    if not _pg_available:
+        pytest.skip("PostgreSQL not configured (set TEST_DB_HOST and TEST_DB_PORT)")
 
+    url = _create_test_db()
     max_retries = 20
     for attempt in range(max_retries):
         try:
-            engine = sa.create_engine(test_db_url, echo=False, future=True)
+            engine = sa.create_engine(url, echo=False, future=True)
             with engine.connect() as conn:
                 conn.execute(sa.text("SELECT 1"))
-            print(f"\n--- PostgreSQL connection established to {TEST_DB_NAME} ---")
-            
-            # Create all tables
-            Base.metadata.create_all(engine)
-            
             yield engine
-            
             engine.dispose()
-            _drop_test_database()
+            _drop_test_db()
             return
-
-        except Exception as e:
+        except Exception as exc:
             if attempt < max_retries - 1:
-                print(f"[{attempt + 1}/{max_retries}] PostgreSQL not ready: {e}")
                 time.sleep(1)
             else:
-                _drop_test_database()
-                raise RuntimeError(f"PostgreSQL never became available after {max_retries} attempts: {e}")
+                _drop_test_db()
+                raise RuntimeError(
+                    f"PostgreSQL never became available after {max_retries} attempts: {exc}"
+                )
 
 
 @pytest.fixture
-def session(pg_engine) -> Generator[Session, None, None]:
-    """Provide clean session for each test with rollback."""
-    # Clear tables before test
-    with pg_engine.connect() as conn:
-        with conn.begin():
-            conn.execute(sa.text(f"TRUNCATE TABLE concept CASCADE"))
+def pg_backend(pg_engine: sa.Engine):
+    """Function-scoped PGVectorEmbeddingBackend with a clean registry per test."""
+    from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
+    from omop_emb.backends.embedding_table import EmbeddingTableBase
 
-    Session = sessionmaker(bind=pg_engine, future=True)
-    db_session = Session()
+    backend = PGVectorEmbeddingBackend(emb_engine=pg_engine)
 
-    # Add data
-    add_concepts_to_db(db_session)
+    yield backend
+
+    # Tear down: remove all models registered during the test
+    for record in backend.get_registered_models():
+        try:
+            backend.delete_model(model_name=record.model_name)
+        except Exception:
+            pass
     
-    yield db_session
-
-    db_session.close()
-
-
-@pytest.fixture
-def mock_llm_client() -> Mock:
-    """Mock EmbeddingClient with deterministic, low-dimensional embeddings."""
-    client = Mock(spec=EmbeddingClient)
-    client.embedding_dim = EMBEDDING_DIM
-    client.canonical_model_name = MODEL_NAME
-
-    mock_provider = Mock()
-    mock_provider.canonical_model_name.side_effect = lambda name: name  # Return input as-is
-    mock_provider.provider_type = ProviderType.OLLAMA
-    client.provider = mock_provider
-
-    def create_embeddings(
-        concept_names: list[str] | str,
-        embedding_role: EmbeddingRole,
-        batch_size: Optional[int] = None
-    ) -> np.ndarray:
-        if isinstance(concept_names, str):
-            concept_names = [concept_names]
-        else:
-            concept_names = list(concept_names)
-
-        embeddings: list[np.ndarray] = [CONCEPTS[name].embeddings for name in concept_names]
-        return np.vstack(embeddings).astype(np.float32)
-
-    client.embeddings = Mock(side_effect=create_embeddings)
-    return client
-
-
-@pytest.fixture
-def temp_storage_dir():
-    """Temporary directory for embedding registry"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
-
-
-@pytest.fixture
-def faiss_backend(session, temp_storage_dir) -> FaissEmbeddingBackend:
-    """FAISS backend with model registry initialized."""
-    backend = FaissEmbeddingBackend(storage_base_dir=temp_storage_dir)
-    backend.initialise_store(session.bind)
-    return backend
-
-
-@pytest.fixture
-def pgvector_backend(session, temp_storage_dir) -> PGVectorEmbeddingBackend:
-    """PGVector backend with vector extension and model registry initialized."""
-    backend = PGVectorEmbeddingBackend(storage_base_dir=temp_storage_dir)
-    backend.initialise_store(session.bind)
-    return backend
-
-
-@pytest.fixture
-def embedding_reader_interface(session, temp_storage_dir) -> EmbeddingReaderInterface:
-    """Read-only embedding interface sharing the same local registry as writer fixtures."""
-    reader = EmbeddingReaderInterface(
-        canonical_model_name=MODEL_NAME,
-        provider_name_or_type=PROVIDER_TYPE,
-        backend_name_or_type=BackendType.FAISS,
-        storage_base_dir=str(temp_storage_dir),
-    )
-    reader.initialise_store(session.bind)
-    return reader
-
-
-@pytest.fixture
-def embedding_writer_interface(session, mock_llm_client, temp_storage_dir) -> EmbeddingWriterInterface:
-    """Full embedding interface ready for testing."""
-    interface = EmbeddingWriterInterface(
-        embedding_client=mock_llm_client,
-        backend_name_or_type=BackendType.FAISS,
-        storage_base_dir=temp_storage_dir,
-    )
-    interface.initialise_store(session.bind)
-    return interface
-
-
-@pytest.fixture
-def registered_embedding_writer_interface(session, embedding_writer_interface: EmbeddingWriterInterface) -> EmbeddingWriterInterface:
-    """Embedding interface with a pre-registered model for testing read operations."""
-    embedding_writer_interface.register_model(
-        engine=session.bind,
-        index_type=IndexType.FLAT,
-    )
-    return embedding_writer_interface
-
-
-# ================ Test Data ================
-@dataclass
-class TestConcept:
-    concept_id: int
-    concept_name: str
-    domain_id: str
-    vocabulary_id: str
-    concept_code: str
-    standard_concept: str
-    concept_class_id: str
-    valid_start_date: str
-    valid_end_date: str
-    embeddings: np.ndarray
-
-    def to_db(self) -> Dict[str, Any]:
-        return {
-            "concept_id": self.concept_id,
-            "concept_name": self.concept_name,
-            "domain_id": self.domain_id,
-            "vocabulary_id": self.vocabulary_id,
-            "concept_code": self.concept_code,
-            "standard_concept": self.standard_concept,
-            "concept_class_id": self.concept_class_id,
-            "valid_start_date": self.valid_start_date,
-            "valid_end_date": self.valid_end_date,
-        }
-
-
-CONCEPTS: Dict[str, TestConcept] = {
-    "Hypertension": TestConcept(
-        concept_id=1, concept_name="Hypertension", domain_id="Condition", 
-        vocabulary_id="SNOMED", concept_code="38341003", standard_concept="S", 
-        concept_class_id="Clinical Finding",
-        valid_start_date="2000-01-01", valid_end_date="2099-12-31",
-        embeddings=np.array([[-10.0]], dtype=np.float32)
-    ),
-    "Diabetes": TestConcept(
-        concept_id=2, concept_name="Diabetes", domain_id="Condition",
-        vocabulary_id="SNOMED", concept_code="73211009", standard_concept="S", 
-        concept_class_id="Clinical Finding",
-        valid_start_date="2000-01-01", valid_end_date="2099-12-31",
-        embeddings=np.array([[0.0]], dtype=np.float32)
-    ),
-    "Aspirin": TestConcept(
-        concept_id=3, concept_name="Aspirin", domain_id="Drug",
-        vocabulary_id="RxNorm", concept_code="1191", standard_concept="S", 
-        concept_class_id="Ingredient",
-        valid_start_date="2000-01-01", valid_end_date="2099-12-31",
-        embeddings=np.array([[10.0]], dtype=np.float32)
-    ),
-}
-
-TEST_CONCEPT_EMB = np.array([[-1.0]], dtype=np.float32)
-
-
-MODEL_NAME = "test-model:v1"
-PROVIDER = "ollama"
-PROVIDER_TYPE = ProviderType(PROVIDER)
-EMBEDDING_DIM = 1
-
-
-def add_concepts_to_db(session: Session):
-    """Helper to add test concepts to database (disables FK checks temporarily)."""
-    try:
-        session.execute(sa.text("SET session_replication_role = 'replica';"))
-        
-        for concept_data in CONCEPTS.values():
-            concept = Concept(**concept_data.to_db())
-            session.add(concept)
-        session.commit()
-    finally:
-        # Re-enable triggers/constraints
-        session.execute(sa.text("SET session_replication_role = 'origin';"))
-        session.commit()
+    # Remove the tables from the ORM cache
+    EmbeddingTableBase.metadata.clear()
+    EmbeddingTableBase.registry._class_registry.clear()

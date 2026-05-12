@@ -1,31 +1,63 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Mapping
+from datetime import datetime
+from typing import Mapping, Optional
 
-from omop_emb.config import (
-    IndexType,
-    BackendType,
-    ProviderType
-)
+from omop_emb.config import IndexType, MetricType, ProviderType
+from omop_emb.backends.index_config import IndexConfig
+
 
 @dataclass(frozen=True)
 class EmbeddingModelRecord:
-    """
-    Canonical description of a registered embedding model.
+    """Immutable snapshot of one registered embedding model.
 
-    ``storage_identifier`` is intentionally backend-specific. For example:
-    - PostgreSQL backend: dynamic embedding table name
-    - FAISS backend: on-disk index path or logical collection name
+    Each record maps to exactly one row in the ``model_registry`` table,
+    identified by ``model_name``.
 
-    ``provider_type`` identifies which embedding provider was used to register
-    the model (e.g. "OllamaProvider", "OpenAICompatProvider").
+    Attributes
+    ----------
+    model_name : str
+        Canonical model name including tag (e.g. ``'nomic-embed-text:v1.5'``).
+    provider_type : ProviderType
+        Provider that serves the model.
+    index_config : IndexConfig
+        Active index configuration. ``index_type`` and ``metric_type`` are
+        derived from this field via properties.
+    dimensions : int
+        Embedding vector dimensionality.
+    storage_identifier : str
+        Physical table name. Unique per model; format ``<backend>_<safe_model>``.
+    metadata : Mapping[str, object]
+        Free-form operational data.
+    created_at : datetime, optional
+        Row creation timestamp (UTC).
+    updated_at : datetime, optional
+        Row last-updated timestamp (UTC).
+
+    Notes
+    -----
+    ``metric_type`` is ``None`` when the model is registered with a FLAT
+    index (exact scan). In that case any backend-supported metric is valid
+    at query time. When ``metric_type`` is set (HNSW), queries must use
+    that metric exactly.
     """
 
     model_name: str
     provider_type: ProviderType
+    index_config: IndexConfig
     dimensions: int
-    backend_type: BackendType
-    index_type: IndexType
     storage_identifier: str
     metadata: Mapping[str, object] = field(default_factory=dict)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    @property
+    def index_type(self) -> IndexType:
+        """Index type derived from ``index_config``."""
+        return self.index_config.index_type
+
+    @property
+    def metric_type(self) -> Optional[MetricType]:
+        """Distance metric locked to the index, or ``None`` for FLAT."""
+        return self.index_config.metric_type

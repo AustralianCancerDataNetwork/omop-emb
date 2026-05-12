@@ -1,7 +1,7 @@
 [project]
 name = "omop-emb"
 version = "0.4.1"
-description = "Embedding extension to omop-graph"
+description = "Embedding extension for OMOP CDM. Utilises sqlite-vec by default and provides an optional pgvector backend, and optionall FAISS export."
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [
@@ -17,6 +17,8 @@ keywords = [
   "sqlalchemy",
   "knowledge-graph",
   "LLM-grounding",
+  "pgvector",
+  "embeddings",
 ]
 
 classifiers = [
@@ -35,42 +37,38 @@ dependencies = [
     "orm-loader>=0.3.15",
     "sqlalchemy>=2.0.45",
     "typing-extensions>=4.15.0",
-    "psycopg2-binary>=2.9.11",
+    "sqlite-vec>=0.1.9",
     "openai",
-    "numpy",
     "requests",
-    "typer"
+    "urllib3>=2.7.0", # CVE-2026-44432, CVE-2026-44431
+    "typer",
+    "tqdm"
 ]
 
 [project.optional-dependencies]
 pgvector = [
-    "pgvector",
+    "psycopg[binary]>=3.1.0",
+    "pgvector>=0.3.0",
 ]
-faiss = [
+faiss-cpu = [
     "faiss-cpu>=1.8.0",
-    "h5py",
 ]
-all = [
-    "pgvector",
-    "faiss-cpu>=1.8.0",
-    "h5py"
-]
-
 [dependency-groups]
 dev = [
-    "faiss-cpu>=1.8.0",
-    "pgvector",
-    "psycopg2-binary>=2.9.11",
+    "omop-emb[faiss-cpu,pgvector]", 
     "mypy>=1.19.1",
-    "pytest>=9.0.2",
+    "pytest>=9.0.3",  # CVE-2025-71176
     "pytest-cov>=7.0.0",
     "rich>=14.2.0",
+    "pygments>=2.20.0",  # CVE-2026-4539
     "ruff>=0.14.10",
     "h5py",
-    "openai",
-    "numpy",
-    "requests",
-    "typer"
+    "mkdocs<2.0",
+    "mkdocs-material",
+    "mkdocstrings[python]",
+    "mkdocs-mermaid2-plugin",
+    "mkdocs-table-reader-plugin",
+    "mkdocs-macros-plugin", 
 ]
 
 [build-system]
@@ -81,7 +79,7 @@ build-backend = "hatchling.build"
 packages = ["src/omop_emb"]
 
 [project.scripts]
-omop-emb = "omop_emb.cli:app"
+omop-emb = "omop_emb.cli.cli_app:app"
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py"]
@@ -89,8 +87,10 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
   "unit: Unit tests",
-  "faiss: FAISS backend tests",
+  "integration: Integration tests",
+  "sqlitevec: sqlite-vec backend tests",
   "pgvector: pgvector backend tests",
+  "faiss: FAISS sidecar tests",
 ]
 testpaths = ["tests"]
 addopts = "-v --tb=short"

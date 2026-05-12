@@ -1,96 +1,122 @@
-# Backend Selection for embeddings
+# Embedding Storage Backends
 
-`omop-emb` now has a backend abstraction layer so embedding storage and
-retrieval can be selected explicitly instead of being inferred implicitly from
-whatever happens to be installed.
+`omop-emb` selects the storage backend at runtime via the `OMOP_EMB_BACKEND`
+environment variable (default: `sqlitevec`).
 
-## Supported backend names
+## Supported backends
 
-The current backend factory recognizes:
+| Backend | Value | Requires | Notes |
+|---|---|---|---|
+| **sqlite-vec** | `sqlitevec` | nothing extra | Default. File or in-memory. |
+| **pgvector** | `pgvector` | `omop-emb[pgvector]` + PostgreSQL | Scales to large corpora. HNSW indexing and `halfvec` storage. |
 
-- `pgvector`: The [pgvector](https://github.com/pgvector/pgvector) extension to a standard PostgreSQL database to store embeddings directly in the database.
-- `faiss`: The [FAISS](https://github.com/facebookresearch/faiss) storage solution for on-disk storage.
-
-There is no implicit default backend name. You must pass one explicitly or set
-`OMOP_EMB_BACKEND`.
+!!! note "FAISS is a sidecar, not a backend"
+    FAISS (`omop-emb[faiss-cpu]`) is a read-acceleration layer that sits on top
+    of sqlite-vec or pgvector.  It is not a primary backend and cannot be
+    selected via `OMOP_EMB_BACKEND`.  See the [CLI reference](cli.md#faiss-sidecar)
+    for how to export and use FAISS indices.
 
 ## Runtime selection
 
-The intended pattern is:
-
-1. choose the backend at install time with package extras
-2. choose the backend again at runtime explicitly
-
-Examples:
-
 ```bash
-export OMOP_EMB_BACKEND=pgvector
-export OMOP_EMB_BACKEND=faiss
-export OMOP_EMB_BASE_STORAGE_DIR=$PWD/.omop_emb
+export OMOP_EMB_BACKEND=sqlitevec   # default — set OMOP_EMB_SQLITE_PATH
+export OMOP_EMB_BACKEND=pgvector    # set OMOP_EMB_DB_* vars or OMOP_EMB_DB_URL
 ```
 
-You can also pass the backend name directly in Python.
+See [Installation](installation.md) for the full list of connection variables
+for each backend.
 
-Storage directory behavior:
+## Index types
 
-- If `OMOP_EMB_BASE_STORAGE_DIR` is unset and no explicit path is passed, `omop-emb` defaults to `./.omop_emb` in the current working directory.
-- If a path includes `~`, it is expanded (for example `~/.omop_emb`).
+Each primary backend supports index types controlled by an `IndexConfig` object.
 
-## Python factory
+!!! important "Registration always uses FLAT"
+    Models must always be registered with a `FlatIndexConfig`. After data has
+    been ingested, call `rebuild_index` (or the `rebuild-index` CLI command) to
+    switch to an HNSW index. Registering directly with `HNSWIndexConfig` raises
+    a `ValueError`.
 
-The backend factory lives in `omop_emb.backends`:
+### FLAT
+
+Sequential scan — no index structure is built. Every query compares the query
+vector against all stored embeddings. Always correct, requires no build step.
 
 ```python
-from omop_emb.backends import get_embedding_backend
+from omop_emb.backends.index_config import FlatIndexConfig
 
-backend = get_embedding_backend("pgvector")
-backend = get_embedding_backend("faiss")
+FlatIndexConfig()  # no parameters
 ```
 
-The factory currently exposes:
+Use FLAT when the corpus is small (tens of thousands of concepts) or when exact
+results are required.
 
-- `get_embedding_backend(...)`
-- `normalize_backend_name(...)`
+### HNSW
 
-## Why explicit selection is necessary
+Hierarchical Navigable Small World graph. Approximate nearest-neighbour search
+with sub-linear query time. Supported by pgvector only; **not** supported by
+sqlite-vec.
 
-Explicit backend selection improves clarity in a multi-backend world:
+| Parameter | Default | Effect |
+|---|---|---|
+| `num_neighbors` | `32` | Graph connectivity (`M`). Higher = better recall, larger index. |
+| `ef_construction` | `64` | Build quality. Higher = better recall at build time, slower build. |
+| `ef_search` | `16` | Query recall. Higher = better recall at query time, slower query. |
 
-- users can see which backend they intended to use
-- missing optional dependencies fail clearly
-- the system avoids silent fallback between incompatible storage implementations
+```python
+from omop_emb.backends.index_config import HNSWIndexConfig
+from omop_emb.config import MetricType
 
-This is especially important when embeddings affect retrieval behavior, because
-silent fallback can make users think semantic retrieval is active when it is
-not.
+HNSWIndexConfig(
+    metric_type=MetricType.COSINE,  # locked in at build time for HNSW
+    num_neighbors=32,
+    ef_construction=64,
+    ef_search=16,
+)
+```
 
-## Dependency errors
+The HNSW workflow is always: **register (FLAT) → ingest → rebuild index**:
 
-If a backend is requested but its optional dependencies are missing, the
-factory raises an explicit backend dependency error rather than falling back to
-another backend.
+```python
+# 1. Register with FLAT — always
+backend.register_model(model_name=..., provider_type=...,
+                        index_config=FlatIndexConfig(), dimensions=768)
 
-This is the intended behavior.
+# 2. Ingest data
+backend.upsert_embeddings(...)
 
-Examples of the error classes exposed by the backend layer:
+# 3. Build HNSW index
+backend.rebuild_index(model_name=...,
+                       index_config=HNSWIndexConfig(metric_type=MetricType.COSINE))
+```
 
-- `EmbeddingBackendDependencyError`
-- `UnknownEmbeddingBackendError`
-- `EmbeddingBackendConfigurationError`
+Or via the CLI:
 
-## Current scope
+```bash
+omop-emb embeddings add-embeddings --api-base ... --api-key ... --model nomic-embed-text
+omop-emb maintenance rebuild-index --model nomic-embed-text --index-type hnsw --metric-type cosine
+```
 
-At the moment:
+!!! info "pgvector HNSW"
+    HNSW is a SQL `CREATE INDEX USING hnsw` object built by `rebuild_index`.
+    Without it, pgvector falls back to a sequential scan automatically.
+    `ef_search` is applied per session at query time.
 
-- the backend abstraction and backend factory exist
-- PostgreSQL and FAISS backend classes exist
-- the production CLI path still targets the PostgreSQL embedding workflow
-- PostgreSQL-specific embedding dependencies are optional, but OMOP database
-  access is still required for concept metadata
-- model registration metadata is stored locally in SQLite (`metadata.db`) under
-  `OMOP_EMB_BASE_STORAGE_DIR`
-- database backends other than PostgreSQL have not yet been tested
+!!! warning "pgvector dimension limit"
+    The pgvector `vector` column type supports **at most 2,000 dimensions**.
+    Models with more than 2,000 dimensions automatically use the `halfvec`
+    column type (up to 4,000 dimensions). Registering above 4,000 dimensions
+    raises a `ValueError`.
 
-So this page documents the selection model and Python interface shape now, even
-before every runtime path has been migrated to delegate through the backend
-factory.
+## Metrics
+
+Each backend supports a subset of distance metrics:
+
+| Backend | FLAT | HNSW |
+|---|---|---|
+| sqlite-vec | L2, Cosine, L1 | — |
+| pgvector | L2, Cosine, L1 | L2, Cosine, L1 |
+| FAISS sidecar | L2, Cosine | L2, Cosine |
+
+For FLAT models, the metric is supplied by the caller at query time. For HNSW
+models, the metric is locked in at `rebuild_index` time and must be supplied
+consistently at every query.

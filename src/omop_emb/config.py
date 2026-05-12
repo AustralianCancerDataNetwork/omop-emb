@@ -1,44 +1,129 @@
+import os
 from enum import StrEnum
-from typing import Dict, Tuple
+from typing import Dict, Tuple, TYPE_CHECKING
+if TYPE_CHECKING:
+    from sqlalchemy import URL
 
-ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
-ENV_BASE_STORAGE_DIR = "OMOP_EMB_BASE_STORAGE_DIR"
 ENV_DOCUMENT_EMBEDDING_PREFIX = "OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX"
 ENV_QUERY_EMBEDDING_PREFIX = "OMOP_EMB_QUERY_EMBEDDING_PREFIX"
+ENV_EMBEDDING_DIM = "OMOP_EMB_EMBEDDING_DIM"
+
+ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
+ENV_OMOP_EMBEDDING_MODEL = "OMOP_EMBEDDING_MODEL"
+
+# Database connection 
+# Individual components (used to compose URL at runtime)
+ENV_OMOP_EMB_DB_USER = "OMOP_EMB_DB_USER"
+ENV_OMOP_EMB_DB_PASSWORD = "OMOP_EMB_DB_PASSWORD"
+ENV_OMOP_EMB_DB_HOST = "OMOP_EMB_DB_HOST"
+ENV_OMOP_EMB_DB_PORT = "OMOP_EMB_DB_PORT"
+ENV_OMOP_EMB_DB_NAME = "OMOP_EMB_DB_NAME"
+# Override the SQLAlchemy driver string (e.g. "postgresql+psycopg2")
+ENV_OMOP_EMB_DB_DRIVER = "OMOP_EMB_DB_DRIVER"
+# Optional full connection string.
+ENV_OMOP_EMB_DB_URL = "OMOP_EMB_DB_URL"
+
+# sqlite-vec backend (default)
+ENV_OMOP_EMB_SQLITE_PATH = "OMOP_EMB_SQLITE_PATH"
+
+# OMOP CDM (always required for concept ingestion in CLI)
+# NOTE: Should be the same str value as in omop-graph `omop_graph.config.ENV_OMOP_CDM_DB_URL`
+ENV_OMOP_CDM_DATABASE_URL = "OMOP_CDM_DB_URL"
+
+# Optional FAISS sidecar cache directory (auto-activates FAISS in EmbeddingReaderInterface)
+ENV_OMOP_EMB_FAISS_CACHE_DIR = "OMOP_EMB_FAISS_CACHE_DIR"
+
 
 class ProviderType(StrEnum):
-    """Enum for supported embedding model providers."""
+    """Embedding model provider.
+
+    Members
+    -------
+    OLLAMA
+        Self-hosted models served via the Ollama runtime.
+    """
+
     OLLAMA = "ollama"
-    OPENAI = "openai"
+
 
 class BackendType(StrEnum):
-    """Enum for supported embedding backends."""
+    """Embedding storage backend.
 
+    Members
+    -------
+    SQLITEVEC
+        Default backend. Requires no external database server.
+    PGVECTOR
+        Optional backend. Requires a PostgreSQL instance with the pgvector
+        extension (``pip install omop-emb[pgvector]``).
+    """
+
+    SQLITEVEC = "sqlitevec"
     PGVECTOR = "pgvector"
-    FAISS = "faiss"
+
+
+class VectorColumnType(StrEnum):
+    """PostgreSQL column type used to store embedding vectors (pgvector only).
+
+    Selected automatically by the pgvector backend based on dimensionality.
+    Not applicable to the sqlite-vec backend.
+
+    Members
+    -------
+    VECTOR
+        ``pgvector`` ``vector`` type (float32, up to 2 000 dims).
+    HALFVEC
+        ``pgvector`` ``halfvec`` type (float16, up to 4 000 dims).
+
+    Notes
+    -----
+    .. TODO: Include the storage options also for sqlite-vec
+       https://alexgarcia.xyz/sqlite-vec/guides/scalar-quant.html
+    """
+
+    VECTOR = "vector"
+    HALFVEC = "halfvec"
+
+
+PGVECTOR_VECTOR_MAX_DIMENSIONS = 2_000
+PGVECTOR_HALFVEC_MAX_DIMENSIONS = 4_000
+
 
 class IndexType(StrEnum):
-    """Enum for index types used for nearest neighbor search.
-    Index types are specific to backends and have different performance characteristics and supported metrics.
+    """Index structure built on an embedding table for nearest-neighbor search.
 
-    
-    Notes
-    -----
-    Not each index type is supported by each backend
+    Members
+    -------
+    FLAT
+        Exact sequential scan. Always correct, slower at scale.
+    HNSW
+        Approximate nearest-neighbor index. Supported by pgvector and FAISS
+        only, not by sqlite-vec.
     """
-    FLAT = "flat"  # Exact search, no index
-    HNSW = "hnsw"  # Hierarchical Navigable Small World graph
-    IVF = "ivf" # Inverted File Index
-    IVF_PQ = "ivf_pq" # IVF with Product Quantization
+
+    FLAT = "flat"
+    HNSW = "hnsw"
+    IVFFLAT = "ivfflat"  # faiss only
+    IVFPQ = "ivfpq"  # faiss only
+
 
 class MetricType(StrEnum):
-    """Defines the distance type used for nearest neighbor search. 
+    """Distance metric used for nearest-neighbor search.
 
-    Notes
-    -----
-    Not all metrics are supported for all index types and backends.
-    
+    Members
+    -------
+    L2
+        Euclidean (L2) distance.
+    COSINE
+        Cosine distance.
+    L1
+        Manhattan (L1) distance.
+    HAMMING
+        Hamming distance (bit vectors).
+    JACCARD
+        Jaccard distance (bit vectors).
     """
+
     L2 = "l2"
     COSINE = "cosine"
     L1 = "l1"
@@ -47,7 +132,22 @@ class MetricType(StrEnum):
 
 
 def parse_backend_type(value: str | BackendType) -> BackendType:
-    """Normalize a backend value to ``BackendType`` with a clear error message."""
+    """Parse a string or ``BackendType`` into a ``BackendType``.
+
+    Parameters
+    ----------
+    value : str | BackendType
+        Backend identifier string or enum member.
+
+    Returns
+    -------
+    BackendType
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not a recognised backend type.
+    """
     if isinstance(value, BackendType):
         return value
     try:
@@ -60,7 +160,22 @@ def parse_backend_type(value: str | BackendType) -> BackendType:
 
 
 def parse_index_type(value: str | IndexType) -> IndexType:
-    """Normalize an index value to ``IndexType`` with a clear error message."""
+    """Parse a string or ``IndexType`` into an ``IndexType``.
+
+    Parameters
+    ----------
+    value : str | IndexType
+        Index type identifier string or enum member.
+
+    Returns
+    -------
+    IndexType
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not a recognised index type.
+    """
     if isinstance(value, IndexType):
         return value
     try:
@@ -73,7 +188,22 @@ def parse_index_type(value: str | IndexType) -> IndexType:
 
 
 def parse_metric_type(value: str | MetricType) -> MetricType:
-    """Normalize a metric value to ``MetricType`` with a clear error message."""
+    """Parse a string or ``MetricType`` into a ``MetricType``.
+
+    Parameters
+    ----------
+    value : str | MetricType
+        Metric type identifier string or enum member.
+
+    Returns
+    -------
+    MetricType
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not a recognised metric type.
+    """
     if isinstance(value, MetricType):
         return value
     try:
@@ -84,27 +214,178 @@ def parse_metric_type(value: str | MetricType) -> MetricType:
             f"{[member.value for member in MetricType]}."
         ) from exc
 
-# TODO: Support non-flat indices in the future
+
+# Supported index + metric combinations per backend.
 SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tuple[MetricType, ...]]] = {
-    #https://github.com/pgvector/pgvector?tab=readme-ov-file#querying
-    BackendType.PGVECTOR: {
-        IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1, MetricType.HAMMING, MetricType.JACCARD),
+    # https://alexgarcia.xyz/sqlite-vec/features/vec0.html
+    BackendType.SQLITEVEC: {
+        IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1),
     },
-    # Check here: https://github.com/facebookresearch/faiss/wiki/Faiss-indexes
-    BackendType.FAISS: {
-        IndexType.FLAT: (MetricType.L2, MetricType.COSINE)
-    }
+    # https://github.com/pgvector/pgvector?tab=readme-ov-file#querying
+    BackendType.PGVECTOR: {
+        IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1),
+        IndexType.HNSW: (MetricType.L2, MetricType.COSINE, MetricType.L1),
+    },
 }
 
-def is_supported_index_metric_combination_for_backend(backend: BackendType, index: IndexType, metric: MetricType) -> bool:
-    supported_indices_and_metrics = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
-    supported_metrics = supported_indices_and_metrics.get(index, ())
-    return metric in supported_metrics
+
+def is_supported_index_metric_combination_for_backend(
+    backend: BackendType, index: IndexType, metric: MetricType
+) -> bool:
+    """Return whether a backend supports a given index and metric combination.
+
+    Parameters
+    ----------
+    backend : BackendType
+    index : IndexType
+    metric : MetricType
+
+    Returns
+    -------
+    bool
+    """
+    supported = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
+    return metric in supported.get(index, ())
+
 
 def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) -> bool:
-    supported_indices_and_metrics = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
-    return index in supported_indices_and_metrics
+    """Return whether a backend supports a given index type.
+
+    Parameters
+    ----------
+    backend : BackendType
+    index : IndexType
+
+    Returns
+    -------
+    bool
+    """
+    return index in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
+
 
 def get_supported_index_types_for_backend(backend: BackendType) -> Tuple[IndexType, ...]:
-    supported_indices_and_metrics = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
-    return tuple(supported_indices_and_metrics.keys())
+    """Return all index types supported by a backend.
+
+    Parameters
+    ----------
+    backend : BackendType
+
+    Returns
+    -------
+    tuple[IndexType, ...]
+    """
+    return tuple(SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {}).keys())
+
+
+def get_supported_metrics_for_backend(backend: BackendType) -> Tuple[MetricType, ...]:
+    """Return all metrics supported by any index type for a backend.
+
+    Parameters
+    ----------
+    backend : BackendType
+
+    Returns
+    -------
+    tuple[MetricType, ...]
+    """
+    seen: set[MetricType] = set()
+    for metrics in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {}).values():
+        seen.update(metrics)
+    return tuple(seen)
+
+
+def build_engine_string(backend: "BackendType") -> "URL":
+    """Compose a SQLAlchemy ``URL`` for the given backend at runtime.
+
+    Parameters
+    ----------
+    backend : BackendType
+        The storage backend that determines which driver and which environment
+        variables are required.
+
+    Returns
+    -------
+    sqlalchemy.URL
+
+    Notes
+    -----
+    If ``ENV_OMOP_EMB_DB_URL`` is set it is used as-is for any backend, allowing
+    callers to supply a fully-qualified connection string without setting the
+    individual component variables.
+    Otherwise, the following environment variables are read based on the selected backend:
+    - SQLITEVEC: 
+        - ``ENV_OMOP_EMB_SQLITE_PATH`` (required): the file path to the sqlite database. Use the special value ``:memory:`` for a transient in-memory database (useful in tests).
+
+    - PGVECTOR: 
+        - ``ENV_OMOP_EMB_DB_DRIVER`` (default: 'postgresql+psycopg'): the SQLAlchemy driver name (e.g. 'postgresql', 'mysql', 'sqlite').
+        - ``ENV_OMOP_EMB_DB_USER`` (required): the username for database authentication.
+        - ``ENV_OMOP_EMB_DB_PASSWORD`` (required): the password for database authentication.
+        - ``ENV_OMOP_EMB_DB_HOST`` (required): the hostname or IP address of the database server.
+        - ``ENV_OMOP_EMB_DB_NAME`` (required): the name of the database to connect to.
+        - ``ENV_OMOP_EMB_DB_PORT`` (optional, default 5432): the port number on which the database server is listening.
+
+    Raises
+    ------
+    RuntimeError
+        If a required environment variable is missing.
+    ValueError
+        If ``backend`` does not support URL composition from environment
+        variables (e.g. ``FAISS``).
+    """
+    from sqlalchemy import URL
+    from sqlalchemy.engine import make_url
+
+    optional_url = os.getenv(ENV_OMOP_EMB_DB_URL)
+    if optional_url:
+        return make_url(optional_url)
+
+    if backend == BackendType.SQLITEVEC:
+        path = _get_required_env_variable(ENV_OMOP_EMB_SQLITE_PATH)
+        return URL.create(drivername="sqlite", database=path)
+
+    if backend == BackendType.PGVECTOR:
+        driver = os.getenv(ENV_OMOP_EMB_DB_DRIVER, "postgresql+psycopg")
+        user = _get_required_env_variable(ENV_OMOP_EMB_DB_USER)
+        password = _get_required_env_variable(ENV_OMOP_EMB_DB_PASSWORD)
+        host = _get_required_env_variable(ENV_OMOP_EMB_DB_HOST)
+        database = _get_required_env_variable(ENV_OMOP_EMB_DB_NAME)
+        port_str = os.getenv(ENV_OMOP_EMB_DB_PORT, "5432")
+        port = int(port_str) if port_str else None
+        return URL.create(
+            drivername=driver,
+            username=user,
+            password=password,
+            host=host,
+            port=port,
+            database=database,
+        )
+
+    raise ValueError(
+        f"Cannot compose an engine URL for backend {backend!r} from environment variables. "
+        f"Set `{ENV_OMOP_EMB_DB_URL!r}` to supply a full connection string. "
+        f"FAISS is not a backend. Use `{ENV_OMOP_EMB_FAISS_CACHE_DIR!r}` and EmbeddingReaderInterface(faiss_cache_dir=...) instead."
+    )
+
+
+def _get_required_env_variable(name: str) -> str:
+    """Get the value of a required environment variable.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name.
+
+    Returns
+    -------
+    str
+        Environment variable value.
+
+    Raises
+    ------
+    RuntimeError
+        If the environment variable is not set.
+    """
+    value = os.getenv(name)
+    if value is None:
+        raise RuntimeError(f"Required environment variable {name!r} is not set.")
+    return value

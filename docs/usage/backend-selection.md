@@ -92,8 +92,8 @@ backend.rebuild_index(model_name=...,
 Or via the CLI:
 
 ```bash
-omop-emb add-embeddings --api-base ... --api-key ... --model nomic-embed-text
-omop-emb rebuild-index --model nomic-embed-text --index-type hnsw --metric-type cosine
+omop-emb embeddings add-embeddings --api-base ... --api-key ... --model nomic-embed-text
+omop-emb maintenance rebuild-index --model nomic-embed-text --index-type hnsw --metric-type cosine
 ```
 
 !!! info "pgvector HNSW"

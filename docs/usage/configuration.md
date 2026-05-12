@@ -150,6 +150,18 @@ OMOP_CDM_DB_URL=postgresql+psycopg://user:pass@localhost:5432/omop_cdm
 
 ---
 
+## FAISS sidecar
+
+| Variable | Required | Description |
+|---|---|---|
+| `OMOP_EMB_FAISS_CACHE_DIR` | no | Default directory for FAISS index files. Read by `EmbeddingReaderInterface` when `faiss_cache_dir` is not passed explicitly, and equivalent to the `--faiss-cache-dir` option on `embeddings search`. |
+
+```bash
+OMOP_EMB_FAISS_CACHE_DIR=/data/faiss_cache
+```
+
+---
+
 ## Complete example
 
 A typical `.env` for local development with pgvector:

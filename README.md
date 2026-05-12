@@ -26,14 +26,14 @@ export OMOP_EMB_BACKEND=sqlitevec
 export OMOP_EMB_SQLITE_PATH=/data/omop_emb.db
 export OMOP_CDM_DB_URL=postgresql+psycopg://user:pass@host:5432/omop_cdm
 
-omop-emb add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
+omop-emb embeddings add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
     --model nomic-embed-text:v1.5
 ```
 
 **Search:**
 
 ```bash
-omop-emb search --api-base http://localhost:11434/v1 --api-key ollama \
+omop-emb embeddings search --api-base http://localhost:11434/v1 --api-key ollama \
     --model nomic-embed-text:v1.5 \
     --query "hypertension" --query "type 2 diabetes" \
     --standard-only --domain Condition --k 5
@@ -48,9 +48,9 @@ export OMOP_EMB_DB_USER=omop_emb
 export OMOP_EMB_DB_PASSWORD=omop_emb
 export OMOP_EMB_DB_NAME=omop_emb
 
-omop-emb add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
+omop-emb embeddings add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
     --model nomic-embed-text:v1.5
-omop-emb rebuild-index --model nomic-embed-text:v1.5 --index-type hnsw --metric-type cosine
+omop-emb maintenance rebuild-index --model nomic-embed-text:v1.5 --index-type hnsw --metric-type cosine
 ```
 
 ## Environment variables
@@ -66,6 +66,7 @@ omop-emb rebuild-index --model nomic-embed-text:v1.5 --index-type hnsw --metric-
 | `OMOP_EMB_DB_NAME` | — | pgvector: database name. |
 | `OMOP_EMB_DB_URL` | — | pgvector: full SQLAlchemy URL (overrides individual vars). |
 | `OMOP_CDM_DB_URL` | — | OMOP CDM connection (required for ingestion commands only). |
+| `OMOP_EMB_FAISS_CACHE_DIR` | — | Default FAISS cache directory (alternative to `--faiss-cache-dir`). |
 
 See the [Configuration Reference](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/configuration/)
 for the complete list including asymmetric embedding prefixes and driver overrides.

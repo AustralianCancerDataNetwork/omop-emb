@@ -305,6 +305,11 @@ def add_embeddings_with_index(
         help="Limit the number of concepts to embed. Useful for testing.",
         rich_help_panel="Concept Filters",
     )] = None,
+    cdm_batch_size: Annotated[int, typer.Option(
+        "--cdm-batch-size",
+        help="Batch size for fetching concept metadata from the CDM during ingestion. Adjust if you encounter performance issues or database limits during ingestion.",
+        rich_help_panel="CDM Fetch Options",
+    )] = 50_000,
     index_hnsw_num_neighbors: Annotated[Optional[int], typer.Option(
         "--index-hnsw-num-neighbors",
         help="HNSW: number of neighbors per graph node.",
@@ -339,6 +344,7 @@ def add_embeddings_with_index(
         vocabularies=vocabularies,
         domains=domains,
         num_embeddings=num_embeddings,
+        cdm_batch_size=cdm_batch_size,
         verbosity=verbosity,
     )
 

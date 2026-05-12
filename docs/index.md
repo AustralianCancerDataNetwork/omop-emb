@@ -8,10 +8,11 @@ The package supports:
 
 - dynamic embedding model registration — multiple models per backend, tracked in the embedding database
 - embedding and lookup for OMOP concepts across configurable storage backends
-- three storage backends:
+- two storage backends:
   - **sqlite-vec** (default): zero-config, file-based or in-memory — no external service required
   - **pgvector**: PostgreSQL with the pgvector extension (FLAT sequential scan or HNSW SQL index)
-  - **FAISS**: approximate nearest-neighbour sidecar on top of any primary backend
+- sidecar on top of `sqlite-vec` backend for extended on-disk search:
+  - **FAISS**: approximate nearest-neighbour search
 - CLI scripts to ingest OMOP CDM concepts and manage registered models
 
 ## Installation

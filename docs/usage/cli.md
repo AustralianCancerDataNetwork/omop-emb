@@ -21,8 +21,7 @@ Run `omop-emb <group> --help` to list commands within a group.
   `pip install "omop-emb[pgvector]"`.
 - **Backend configured**: set `OMOP_EMB_BACKEND` and the matching connection
   variables (see [Installation](installation.md)).
-- **Embedding API**: an OpenAI-compatible embeddings endpoint (e.g. Ollama or
-  OpenAI). Required for ingestion and search commands.
+- **Embedding API**: an OpenAI-compatible embeddings endpoint. Required for ingestion and search commands.
 - **OMOP CDM** (`OMOP_CDM_DB_URL`): required only for concept ingestion
   (`add-embeddings`, `add-embeddings-with-index`). Not required for search,
   `list-models`, `rebuild-index`, `delete-model`, or diagnostics.
@@ -225,7 +224,7 @@ omop-emb maintenance list-models [OPTIONS]
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--model` | `-m` | `None` | Filter by model name. |
-| `--provider-type` | | `None` | Filter by provider (`ollama`, `openai`). |
+| `--provider-type` | | `None` | Filter by provider. |
 | `--verbose` | `-v` | | Increase log verbosity. |
 
 ---

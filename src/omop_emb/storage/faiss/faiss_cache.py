@@ -51,7 +51,7 @@ try:
 except ImportError as _faiss_err:
     raise ImportError(
         "FAISSCache requires the 'faiss-cpu' optional dependency. "
-        "Install it with: pip install omop-emb[faiss]"
+        "Install it with: pip install omop-emb[faiss-cpu]"
     ) from _faiss_err
 
 from omop_emb.config import MetricType, IndexType, ProviderType

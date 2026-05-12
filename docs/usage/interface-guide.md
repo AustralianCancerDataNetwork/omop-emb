@@ -14,7 +14,7 @@ Both interfaces accept a **pre-constructed** `EmbeddingBackend` (sqlite-vec or p
 Resolve the active backend from environment variables using `resolve_backend`:
 
 ```python
-from omop_emb.cli.utils import resolve_backend
+from omop_emb.backends import resolve_backend
 
 backend = resolve_backend()  # reads OMOP_EMB_BACKEND + connection variables
 ```
@@ -26,10 +26,10 @@ from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 
 # sqlite-vec
-backend = SQLiteVecEmbeddingBackend(db_path="/data/omop_emb.db")
+backend = SQLiteVecEmbeddingBackend.from_path(db_path="/data/omop_emb.db")
 
 # pgvector
-backend = PGVectorEmbeddingBackend(db_url="postgresql+psycopg://user:pass@host:5432/db")
+backend = PGVectorEmbeddingBackend.from_db_url(db_url="postgresql+psycopg://user:pass@host:5432/db")
 ```
 
 ---
@@ -213,24 +213,20 @@ primary backend — no CDM round-trip at query time.
 
 ## EmbeddingClient and providers
 
+!!! note
+    Currently, only `OllamaProvider` is supported.
+
 `EmbeddingClient` wraps any OpenAI-compatible endpoint. It canonicalises the
 model name at construction time and exposes `canonical_model_name` as the stable
 identifier used in the registry.
 
 ```python
-from omop_emb import EmbeddingClient, OllamaProvider, OpenAIProvider
+from omop_emb import EmbeddingClient, OllamaProvider
 
 # Ollama — provider inferred from URL
 client = EmbeddingClient(
     model="nomic-embed-text:v1.5",
-    api_base="http://localhost:11434/v1",
-)
-
-# OpenAI — provider inferred from URL + API key
-client = EmbeddingClient(
-    model="text-embedding-3-small",
-    api_base="https://api.openai.com/v1",
-    api_key="sk-...",
+    api_base="http://ollama:11434/v1",
 )
 
 # Explicit provider (custom or future backends)
@@ -241,18 +237,8 @@ client = EmbeddingClient(
 )
 
 print(client.canonical_model_name)  # "nomic-embed-text:v1.5"
-print(client.embedding_dim)         # auto-discovered via Ollama /api/show
+print(client.embedding_dim)         # auto-discovered based on provider
 ```
-
-Provider inference rules (evaluated in order):
-
-| Condition | Provider |
-|-----------|----------|
-| `"ollama"` in `api_base` | `OllamaProvider` |
-| `localhost` or `127.0.0.1` in `api_base` **and** `api_key == "ollama"` | `OllamaProvider` |
-| everything else | `OpenAIProvider` |
-
-Pass `provider=` explicitly to override inference for any custom backend.
 
 ---
 
@@ -265,11 +251,6 @@ Pass `provider=` explicitly to override inference for any custom backend.
 - ✅ `nomic-embed-text:v1.5`
 - ✅ `llama3:8b`
 - Any name with an explicit, immutable tag
-
-**OpenAI-compatible:**
-
-- ✅ `text-embedding-3-small`
-- ✅ `text-embedding-3-large`
 
 ### Invalid names (raise `ValueError`)
 

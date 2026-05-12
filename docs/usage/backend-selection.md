@@ -58,7 +58,7 @@ sqlite-vec.
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `num_neighbors` | `16` | Graph connectivity (`M`). Higher = better recall, larger index. |
+| `num_neighbors` | `32` | Graph connectivity (`M`). Higher = better recall, larger index. |
 | `ef_construction` | `64` | Build quality. Higher = better recall at build time, slower build. |
 | `ef_search` | `16` | Query recall. Higher = better recall at query time, slower query. |
 
@@ -68,7 +68,7 @@ from omop_emb.config import MetricType
 
 HNSWIndexConfig(
     metric_type=MetricType.COSINE,  # locked in at build time for HNSW
-    num_neighbors=16,
+    num_neighbors=32,
     ef_construction=64,
     ef_search=16,
 )

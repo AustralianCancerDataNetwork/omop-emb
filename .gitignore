@@ -211,3 +211,4 @@ __marimo__/
 # Own files
 docker-compose.override.yaml
 REFACTOR_PLAN.md
+*.DS_Store

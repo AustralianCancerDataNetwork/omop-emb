@@ -586,6 +586,7 @@ class EmbeddingBackend(ABC):
         model_name: str,
         metric_type: MetricType,
         batches: Iterable[Tuple[Sequence[ConceptEmbeddingRecord], ndarray]],
+        total_n_batches: Optional[int] = None,
     ) -> None:
         """Upsert embeddings in multiple batches, delegating to ``upsert_embeddings``.
 
@@ -597,8 +598,13 @@ class EmbeddingBackend(ABC):
             Validated once per batch via ``upsert_embeddings``.
         batches : Iterable[tuple[Sequence[ConceptEmbeddingRecord], ndarray]]
             Iterable of ``(records, embeddings)`` pairs.
+        total_n_batches : Optional[int]
+            Total number of batches for the progress bar.
         """
-        for records, embeddings in batches:
+        import tqdm
+
+        pbar = tqdm.tqdm(batches, desc=f"Upserting embeddings into {model_name} ({metric_type.value})", total=total_n_batches)
+        for records, embeddings in pbar:
             self.upsert_embeddings(
                 model_name=model_name,
                 metric_type=metric_type,

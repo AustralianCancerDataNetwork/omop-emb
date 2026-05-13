@@ -556,12 +556,14 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
     def bulk_upsert_concept_embeddings(
         self,
         batches: Iterable[Tuple[Sequence[ConceptEmbeddingRecord], ndarray]],
+        total_n_batches: Optional[int] = None,
     ) -> None:
         """Upsert from a lazy ``(records, embeddings)`` iterable."""
         self._backend.bulk_upsert_embeddings(
             model_name=self.canonical_model_name,
             metric_type=self._metric_type,
             batches=batches,
+            total_n_batches=total_n_batches,
         )
 
     def embed_and_upsert_concepts(

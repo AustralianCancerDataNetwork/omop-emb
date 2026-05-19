@@ -6,9 +6,8 @@ from typing import Annotated, Generator, List, Optional, Sequence, Union
 
 import typer
 from dotenv import load_dotenv
+from sqlalchemy.exc import DBAPIError
 from tqdm import tqdm
-
-from orm_loader.helpers import create_db
 
 from .utils import configure_logging_level, resolve_omop_cdm_engine
 from omop_emb.backends.index_config import index_config_from_index_type
@@ -124,7 +123,6 @@ def add_embeddings(
 
     backend = resolve_backend()
     omop_cdm_engine = resolve_omop_cdm_engine()
-    create_db(omop_cdm_engine)
 
     embedding_client = EmbeddingClient(
         model=model,
@@ -147,10 +145,19 @@ def add_embeddings(
         vocabularies=tuple(vocabularies) if vocabularies else None,
     )
 
-    missing = embedding_writer.get_concepts_without_embedding(
-        omop_cdm_engine=omop_cdm_engine,
-        concept_filter=concept_filter,
-    )
+    try:
+        missing = embedding_writer.get_concepts_without_embedding(
+            omop_cdm_engine=omop_cdm_engine,
+            concept_filter=concept_filter,
+        )
+    except DBAPIError as e:
+        # ORM not ingested with orm-loader/omop-maint
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "no such table" in error_msg:
+            logger.error("Database schema is missing! Did you forget to run the ingestion CLI?")
+            raise RuntimeError("Database not initialized.") from e
+        raise
+    
     if num_embeddings is not None:
         missing = dict(list(missing.items())[:num_embeddings])
 

@@ -629,15 +629,18 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
     def get_nearest_concepts_from_query_texts(
         self,
         query_texts: Union[str, Tuple[str, ...], List[str]],
+        embedding_client: Optional[EmbeddingClient] = None,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         batch_size: Optional[int] = None,
         k: Optional[int] = None,
+        faiss_index_config: Optional[IndexConfig] = None,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         return super().get_nearest_concepts_from_query_texts(
             query_texts=query_texts,
-            embedding_client=self._embedding_client,
+            embedding_client=embedding_client or self._embedding_client,
             concept_filter=concept_filter,
             batch_size=batch_size,
             k=k,
+            faiss_index_config=faiss_index_config,
         )

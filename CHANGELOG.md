@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v1.0.0...v1.0.1) (2026-05-25)
+
+
+### Bug Fixes
+
+* Upsert from faiss-cache to DB ([#18](https://github.com/AustralianCancerDataNetwork/omop-emb/issues/18)) ([691de69](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/691de6938442139c39bb6907e10c79c82e3fe525))
+
 # [1.0.0](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v0.4.1...v1.0.0) (2026-05-12)
 
 

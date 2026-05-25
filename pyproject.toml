@@ -33,7 +33,7 @@ classifiers = [
 
 dependencies = [
     "numpy>=1.26",
-    "omop-alchemy>=0.6.0, <=0.6.2",  # prevent orm-loader >= 0.4.0 for now
+    "omop-alchemy>=0.6.3",
     "sqlalchemy>=2.0.45",
     "typing-extensions>=4.15.0",
     "sqlite-vec>=0.1.9",

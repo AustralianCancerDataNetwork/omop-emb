@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, fields, is_dataclass
 from enum import Enum
 from typing import Any, Callable, Mapping, Optional, Self, cast, get_type_hints
 
-from omop_emb.config import IndexType, MetricType
+from omop_emb.config import IndexType, MetricType, parse_index_type
 
 # ----------------------------------------------------------------------------
 # Resevered metadata keys
@@ -245,6 +245,7 @@ def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexC
     ValueError
         If ``index_type`` has no registered ``IndexConfig`` subclass.
     """
+    index_type = parse_index_type(index_type)
     if index_type == IndexType.FLAT:
         return FlatIndexConfig()
     if index_type == IndexType.HNSW:

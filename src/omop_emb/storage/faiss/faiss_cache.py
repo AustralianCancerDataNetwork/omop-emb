@@ -56,7 +56,7 @@ except ImportError as _faiss_err:
 
 from omop_emb.config import MetricType, IndexType, ProviderType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
-from omop_emb.backends.index_config import IndexConfig
+from omop_emb.backends.index_config import IndexConfig, index_config_from_index_type
 from omop_emb.backends.base_backend import EmbeddingBackend
 from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
 
@@ -191,11 +191,14 @@ class CacheMetadata:
             If the JSON is malformed or contains an unknown enum value.
         """
         d = json.loads(text)
+        if not "index_config" in d:
+            raise ValueError("Missing 'index_config' field in cache metadata JSON.")
+
         return cls(
             model_name=d.get("model_name", ""),
             dimensions=int(d.get("dimensions", 0)),
             metric_type=MetricType(d["metric_type"]),
-            index_config=IndexConfig.from_dict(d.get("index_config", {})),
+            index_config=index_config_from_index_type(**d["index_config"]),
             row_count=int(d.get("row_count", -1)),
             exported_at=d.get("exported_at", ""),
             model_updated_at=d.get("model_updated_at"),
@@ -834,6 +837,7 @@ class FAISSCache:
             model_name=self._model_name,
             metric_type=metric_type,
             batches=_batches(),
+            total_n_batches=n//batch_size + (1 if n % batch_size else 0)
         )
         logger.info(
             "Imported %d vectors for '%s' (metric=%s) into backend.",

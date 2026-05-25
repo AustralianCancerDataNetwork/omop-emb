@@ -6,10 +6,10 @@ from typing import Annotated, Generator, List, Optional, Sequence, Union
 
 import typer
 from dotenv import load_dotenv
-from sqlalchemy.exc import DBAPIError
 from tqdm import tqdm
 
 from .utils import configure_logging_level, resolve_omop_cdm_engine
+from omop_emb.utils.cdm import check_concept_cdm
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.backends import resolve_backend
 from omop_emb.config import IndexType, MetricType
@@ -103,11 +103,6 @@ def add_embeddings(
         help="Limit the number of concepts to embed. Useful for testing.",
         rich_help_panel="Concept Filters",
     )] = None,
-    cdm_batch_size: Annotated[int, typer.Option(
-        "--cdm-batch-size",
-        help="Batch size for fetching concept metadata from the CDM during ingestion. Adjust if you encounter performance issues or database limits during ingestion.",
-        rich_help_panel="CDM Fetch Options",
-    )] = 50_000,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
         help="Increase verbosity (up to two levels)",
@@ -137,6 +132,7 @@ def add_embeddings(
         metric_type=MetricType.COSINE,
         embedding_client=embedding_client,
     )
+    check_concept_cdm(omop_cdm_engine)
     embedding_writer.register_model()
 
     concept_filter = EmbeddingConceptFilter(
@@ -145,18 +141,10 @@ def add_embeddings(
         vocabularies=tuple(vocabularies) if vocabularies else None,
     )
 
-    try:
-        missing = embedding_writer.get_concepts_without_embedding(
-            omop_cdm_engine=omop_cdm_engine,
-            concept_filter=concept_filter,
-        )
-    except DBAPIError as e:
-        # ORM not ingested with orm-loader/omop-maint
-        error_msg = str(e).lower()
-        if "does not exist" in error_msg or "no such table" in error_msg:
-            logger.error("Database schema is missing! Did you forget to run the ingestion CLI?")
-            raise RuntimeError("Database not initialized.") from e
-        raise
+    missing = embedding_writer.get_concepts_without_embedding(
+        omop_cdm_engine=omop_cdm_engine,
+        concept_filter=concept_filter,
+    )
     
     if num_embeddings is not None:
         missing = dict(list(missing.items())[:num_embeddings])
@@ -169,11 +157,10 @@ def add_embeddings(
         for batch in _batched(missing.items(), batch_size):
             batch_dict = dict(batch)
             embedding_writer.embed_and_upsert_concepts(
-                omop_cdm_engine=omop_cdm_engine,
                 concept_ids=tuple(batch_dict.keys()),
-                concept_texts=tuple(batch_dict.values()),
+                concept_texts=tuple(row.concept_name for row in batch_dict.values()),
+                concept_meta=batch_dict,
                 batch_size=batch_size,
-                cdm_batch_size=cdm_batch_size,
             )
             pbar.update(len(batch_dict))
 
@@ -312,11 +299,6 @@ def add_embeddings_with_index(
         help="Limit the number of concepts to embed. Useful for testing.",
         rich_help_panel="Concept Filters",
     )] = None,
-    cdm_batch_size: Annotated[int, typer.Option(
-        "--cdm-batch-size",
-        help="Batch size for fetching concept metadata from the CDM during ingestion. Adjust if you encounter performance issues or database limits during ingestion.",
-        rich_help_panel="CDM Fetch Options",
-    )] = 50_000,
     index_hnsw_num_neighbors: Annotated[Optional[int], typer.Option(
         "--index-hnsw-num-neighbors",
         help="HNSW: number of neighbors per graph node.",
@@ -351,7 +333,6 @@ def add_embeddings_with_index(
         vocabularies=vocabularies,
         domains=domains,
         num_embeddings=num_embeddings,
-        cdm_batch_size=cdm_batch_size,
         verbosity=verbosity,
     )
 

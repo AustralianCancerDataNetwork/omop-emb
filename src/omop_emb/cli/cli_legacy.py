@@ -9,13 +9,11 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 
 import sqlalchemy as sa
-from sqlalchemy.orm import sessionmaker
-
 from .utils import configure_logging_level
 from omop_emb.backends import resolve_backend
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.config import MetricType, ProviderType
-from omop_emb.interface import _fetch_cdm_concepts_for_ingestion
+from omop_emb.utils.cdm import fetch_cdm_concepts_for_ingestion
 from omop_emb.utils.embedding_utils import ConceptEmbeddingRecord
 
 logger = logging.getLogger(__name__)
@@ -132,7 +130,6 @@ def add_embeddings_from_h5(
         typer.echo(f"Registered model '{model}' ({dimensions}d, metric={metric_type.value}).")
 
         cdm_engine = sa.create_engine(omop_cdm_db_url, future=True, echo=False)
-        cdm_factory = sessionmaker(cdm_engine)
 
         n_batches = (total + batch_size - 1) // batch_size
         typer.echo(f"Ingesting {total:,} embeddings in {n_batches} batch(es) of {batch_size:,}...")
@@ -142,8 +139,9 @@ def add_embeddings_from_h5(
             end = min(start + batch_size, total)
             batch_cids: np.ndarray = np.asarray(cid_ds[start:end])
             batch_emb = np.asarray(emb_ds[start:end], dtype=np.float32)
-            meta = _fetch_cdm_concepts_for_ingestion(
-                {int(cid) for cid in batch_cids}, cdm_factory,
+            meta = fetch_cdm_concepts_for_ingestion(
+                {int(cid) for cid in batch_cids},
+                cdm_engine,
                 batch_size=cdm_batch_size,
             )
             records = []

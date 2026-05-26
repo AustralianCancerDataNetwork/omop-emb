@@ -51,7 +51,7 @@ writer = EmbeddingWriterInterface(
     backend=backend,
     metric_type=MetricType.COSINE,
     embedding_client=embedding_client,
-    omop_cdm_engine=cdm_engine,  # optional; required for embed_and_upsert_concepts
+    omop_cdm_engine=cdm_engine,  # optional; used to enrich search results
 )
 ```
 
@@ -71,13 +71,16 @@ is safe and returns the existing record.
 ### Generate and store embeddings
 
 ```python
-# Generate embeddings from CDM concepts and upsert in one step.
-# omop_cdm_engine is used to fetch domain_id, vocabulary_id, standard_concept,
-# and invalid_reason from the CDM and store them as filter metadata.
-writer.embed_and_upsert_concepts(
+# Fetch candidate concepts from the CDM, then pass the returned rows back as
+# concept_meta so filter columns can be stored alongside the embeddings.
+missing = writer.get_concepts_without_embedding(
     omop_cdm_engine=cdm_engine,
-    concept_ids=(1, 2, 3),
-    concept_texts=("Hypertension", "Diabetes mellitus", "Aspirin"),
+)
+
+writer.embed_and_upsert_concepts(
+    concept_ids=tuple(missing.keys()),
+    concept_texts=tuple(row.concept_name for row in missing.values()),
+    concept_meta=missing,
 )
 ```
 

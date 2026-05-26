@@ -18,14 +18,13 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import replace as dc_replace
-from itertools import batched
 from typing import TYPE_CHECKING, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from numpy import ndarray
 from sqlalchemy import Engine, Row
 
-from omop_emb.utils.cdm import fetch_cdm_concepts_for_filter
+from omop_emb.utils.cdm import count_missing_concepts, fetch_cdm_concepts_for_filter, iter_cdm_concepts_for_filter
 from omop_emb.embeddings import (
     EmbeddingClient,
     EmbeddingRole,
@@ -332,20 +331,55 @@ class EmbeddingReaderInterface:
         )
         return {cid: row for cid, row in all_concepts.items() if cid not in embedded_ids}
 
+    def count_concepts_without_embedding(
+        self,
+        omop_cdm_engine: Engine,
+        *,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+    ) -> int:
+        """Return how many CDM concepts match *concept_filter* but lack an embedding."""
+        embedded_ids = self._backend.get_all_stored_concept_ids(
+            model_name=self.canonical_model_name,
+            metric_type=self._metric_type,
+        )
+        return count_missing_concepts(concept_filter, omop_cdm_engine, embedded_ids)
+
     def get_concepts_without_embedding_batched(
         self,
         omop_cdm_engine: Engine,
         *,
         batch_size: int,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
+        limit: Optional[int] = None,
     ) -> Iterable[Mapping[int, Row]]:
-        missing = self.get_concepts_without_embedding(
-            omop_cdm_engine=omop_cdm_engine,
-            concept_filter=concept_filter,
+        """Yield ``{concept_id: Row}`` batches for concepts lacking embeddings.
+
+        Streams CDM rows and filters against already-embedded IDs on-the-fly,
+        so only one batch of CDM rows is in memory at a time.
+        """
+        embedded_ids = self._backend.get_all_stored_concept_ids(
+            model_name=self.canonical_model_name,
+            metric_type=self._metric_type,
         )
-        items = list(missing.items())
-        for batch in batched(items, batch_size):
-            yield dict(batch)
+        batch: dict[int, Row] = {}
+        n_yielded = 0
+        for row in iter_cdm_concepts_for_filter(concept_filter, omop_cdm_engine):
+            if row.concept_id in embedded_ids:
+                continue
+            batch[row.concept_id] = row
+            if len(batch) >= batch_size:
+                yield batch
+                n_yielded += len(batch)
+                batch = {}
+                if limit is not None and n_yielded >= limit:
+                    return
+        if batch:
+            if limit is not None:
+                trimmed = dict(list(batch.items())[: limit - n_yielded])
+                if trimmed:
+                    yield trimmed
+            else:
+                yield batch
 
     # ------------------------------------------------------------------
     # CDM enrichment (internal)
@@ -526,6 +560,8 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         batch_size: Optional[int] = None,
     ) -> ndarray:
         """Generate embeddings from CDM concepts and upsert with filter metadata.
+        Concept_ids, concept_texts and concept_meta must be aligned (same length, same order).
+        `fetch_cdm_concepts_for_filter` can be used to get aligned concept_meta for a set of concept_ids.
 
         Parameters
         ----------

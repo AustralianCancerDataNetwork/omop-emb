@@ -141,29 +141,31 @@ def add_embeddings(
         vocabularies=tuple(vocabularies) if vocabularies else None,
     )
 
-    missing = embedding_writer.get_concepts_without_embedding(
+    n_missing = embedding_writer.count_concepts_without_embedding(
         omop_cdm_engine=omop_cdm_engine,
         concept_filter=concept_filter,
     )
-    
-    if num_embeddings is not None:
-        missing = dict(list(missing.items())[:num_embeddings])
+    n_total = min(n_missing, num_embeddings) if num_embeddings is not None else n_missing
+    typer.echo(f"Total concepts to process: {n_total:,}")
 
-    total_concepts = len(missing)
-    typer.echo(f"Total concepts to process: {total_concepts:,}")
-
-    from itertools import batched as _batched
-    with tqdm(total=total_concepts, desc="Processing", unit="concept") as pbar:
-        for batch in _batched(missing.items(), batch_size):
-            batch_dict = dict(batch)
+    n_processed = 0
+    with tqdm(total=n_total, desc="Processing", unit="concept") as pbar:
+        for batch_dict in embedding_writer.get_concepts_without_embedding_batched(
+            omop_cdm_engine=omop_cdm_engine,
+            concept_filter=concept_filter,
+            batch_size=batch_size,
+            limit=num_embeddings,
+        ):
             embedding_writer.embed_and_upsert_concepts(
                 concept_ids=tuple(batch_dict.keys()),
                 concept_texts=tuple(row.concept_name for row in batch_dict.values()),
                 concept_meta=batch_dict,
                 batch_size=batch_size,
             )
+            n_processed += len(batch_dict)
             pbar.update(len(batch_dict))
 
+    typer.echo(f"Processed {n_processed:,} concepts.")
     logger.info("Completed embedding generation and storage.")
 
 

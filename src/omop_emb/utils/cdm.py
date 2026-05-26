@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
-from typing import Generator, Optional
+from typing import Generator, Iterator, Optional
 
 from sqlalchemy import Engine, Row, select
 from sqlalchemy.exc import DBAPIError
@@ -61,6 +61,57 @@ def fetch_cdm_concepts_for_filter(
         query = concept_filter.apply(query, Concept)
     with cdm_session(cdm_engine) as session:
         return {row.concept_id: row for row in session.execute(query)}
+
+
+def iter_cdm_concepts_for_filter(
+    concept_filter: Optional[EmbeddingConceptFilter],
+    cdm_engine: Engine,
+    chunk_size: int = 5_000,
+) -> Iterator[Row]:
+    """Stream CDM concept rows matching *concept_filter*, server-side chunked.
+
+    Uses ``yield_per`` so the database driver fetches *chunk_size* rows at a
+    time instead of buffering the full result set.  The session is held open
+    for the lifetime of the generator.
+    """
+    query = select(
+        Concept.concept_id,
+        Concept.concept_name,
+        Concept.domain_id,
+        Concept.vocabulary_id,
+        Concept.standard_concept,
+        Concept.invalid_reason,
+    )
+    if concept_filter is not None:
+        query = concept_filter.apply(query, Concept)
+    with cdm_session(cdm_engine) as session:
+        yield from session.execute(
+            query.execution_options(stream_results=True, yield_per=chunk_size)
+        )
+
+
+def count_missing_concepts(
+    concept_filter: Optional[EmbeddingConceptFilter],
+    cdm_engine: Engine,
+    embedded_ids: set[int],
+    chunk_size: int = 10_000,
+) -> int:
+    """Return how many CDM concepts match *concept_filter* but lack an embedding.
+
+    Streams only ``concept_id`` (one integer column) and checks each against
+    *embedded_ids* via O(1) set lookup — far cheaper than fetching full rows.
+    """
+    query = select(Concept.concept_id)
+    if concept_filter is not None:
+        query = concept_filter.apply(query, Concept)
+    count = 0
+    with cdm_session(cdm_engine) as session:
+        for row in session.execute(
+            query.execution_options(stream_results=True, yield_per=chunk_size)
+        ):
+            if row.concept_id not in embedded_ids:
+                count += 1
+    return count
 
 
 def fetch_cdm_concepts_for_ingestion(

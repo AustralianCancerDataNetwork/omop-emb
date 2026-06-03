@@ -133,40 +133,48 @@ def add_embeddings(
         embedding_client=embedding_client,
     )
     check_concept_cdm(omop_cdm_engine)
-    embedding_writer.register_model()
 
-    concept_filter = EmbeddingConceptFilter(
-        require_standard=standard_only,
-        domains=tuple(domains) if domains else None,
-        vocabularies=tuple(vocabularies) if vocabularies else None,
-    )
+    try:
+        embedding_writer.register_model()
 
-    n_missing = embedding_writer.count_concepts_without_embedding(
-        omop_cdm_engine=omop_cdm_engine,
-        concept_filter=concept_filter,
-    )
-    n_total = min(n_missing, num_embeddings) if num_embeddings is not None else n_missing
-    typer.echo(f"Total concepts to process: {n_total:,}")
-
-    n_processed = 0
-    with tqdm(total=n_total, desc="Processing", unit="concept") as pbar:
-        for batch_dict in embedding_writer.get_concepts_without_embedding_batched(
+        # Filter concepts
+        concept_filter = EmbeddingConceptFilter(
+            require_standard=standard_only,
+            domains=tuple(domains) if domains else None,
+            vocabularies=tuple(vocabularies) if vocabularies else None,
+        )
+        n_missing = embedding_writer.count_concepts_without_embedding(
             omop_cdm_engine=omop_cdm_engine,
             concept_filter=concept_filter,
-            batch_size=batch_size,
-            limit=num_embeddings,
-        ):
-            embedding_writer.embed_and_upsert_concepts(
-                concept_ids=tuple(batch_dict.keys()),
-                concept_texts=tuple(row.concept_name for row in batch_dict.values()),
-                concept_meta=batch_dict,
-                batch_size=batch_size,
-            )
-            n_processed += len(batch_dict)
-            pbar.update(len(batch_dict))
+        )
+        n_total = min(n_missing, num_embeddings) if num_embeddings is not None else n_missing
+        typer.echo(f"Total concepts to process: {n_total:,}")
 
-    typer.echo(f"Processed {n_processed:,} concepts.")
-    logger.info("Completed embedding generation and storage.")
+        n_processed = 0
+        with tqdm(total=n_total, desc="Processing", unit="concept") as pbar:
+            for batch_dict in embedding_writer.get_concepts_without_embedding_batched(
+                omop_cdm_engine=omop_cdm_engine,
+                concept_filter=concept_filter,
+                batch_size=batch_size,
+                limit=num_embeddings,
+            ):
+                embedding_writer.embed_and_upsert_concepts(
+                    concept_ids=tuple(batch_dict.keys()),
+                    concept_texts=tuple(row.concept_name for row in batch_dict.values()),
+                    concept_meta=batch_dict,
+                    batch_size=batch_size,
+                )
+                n_processed += len(batch_dict)
+                pbar.update(len(batch_dict))
+
+        typer.echo(f"Processed {n_processed:,} concepts.")
+        logger.info("Completed embedding generation and storage.")
+    except Exception as e:
+        logger.exception(f"Error during embedding generation and storage.\n{e}")
+        if not embedding_writer.has_any_embeddings():
+            logger.info("No embeddings were stored. Cleaning up model registration.")
+            embedding_writer.delete_model()
+        raise typer.Exit(code=1)
 
 
 @app.command()

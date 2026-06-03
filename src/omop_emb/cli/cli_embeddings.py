@@ -8,9 +8,8 @@ import typer
 from dotenv import load_dotenv
 from tqdm import tqdm
 
-from orm_loader.helpers import create_db
-
 from .utils import configure_logging_level, resolve_omop_cdm_engine
+from omop_emb.utils.cdm import check_concept_cdm
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.backends import resolve_backend
 from omop_emb.config import IndexType, MetricType
@@ -104,11 +103,6 @@ def add_embeddings(
         help="Limit the number of concepts to embed. Useful for testing.",
         rich_help_panel="Concept Filters",
     )] = None,
-    cdm_batch_size: Annotated[int, typer.Option(
-        "--cdm-batch-size",
-        help="Batch size for fetching concept metadata from the CDM during ingestion. Adjust if you encounter performance issues or database limits during ingestion.",
-        rich_help_panel="CDM Fetch Options",
-    )] = 50_000,
     verbosity: Annotated[int, typer.Option(
         "--verbose", "-v", count=True,
         help="Increase verbosity (up to two levels)",
@@ -124,7 +118,6 @@ def add_embeddings(
 
     backend = resolve_backend()
     omop_cdm_engine = resolve_omop_cdm_engine()
-    create_db(omop_cdm_engine)
 
     embedding_client = EmbeddingClient(
         model=model,
@@ -139,38 +132,49 @@ def add_embeddings(
         metric_type=MetricType.COSINE,
         embedding_client=embedding_client,
     )
-    embedding_writer.register_model()
+    check_concept_cdm(omop_cdm_engine)
 
-    concept_filter = EmbeddingConceptFilter(
-        require_standard=standard_only,
-        domains=tuple(domains) if domains else None,
-        vocabularies=tuple(vocabularies) if vocabularies else None,
-    )
+    try:
+        embedding_writer.register_model()
 
-    missing = embedding_writer.get_concepts_without_embedding(
-        omop_cdm_engine=omop_cdm_engine,
-        concept_filter=concept_filter,
-    )
-    if num_embeddings is not None:
-        missing = dict(list(missing.items())[:num_embeddings])
+        # Filter concepts
+        concept_filter = EmbeddingConceptFilter(
+            require_standard=standard_only,
+            domains=tuple(domains) if domains else None,
+            vocabularies=tuple(vocabularies) if vocabularies else None,
+        )
+        n_missing = embedding_writer.count_concepts_without_embedding(
+            omop_cdm_engine=omop_cdm_engine,
+            concept_filter=concept_filter,
+        )
+        n_total = min(n_missing, num_embeddings) if num_embeddings is not None else n_missing
+        typer.echo(f"Total concepts to process: {n_total:,}")
 
-    total_concepts = len(missing)
-    typer.echo(f"Total concepts to process: {total_concepts:,}")
-
-    from itertools import batched as _batched
-    with tqdm(total=total_concepts, desc="Processing", unit="concept") as pbar:
-        for batch in _batched(missing.items(), batch_size):
-            batch_dict = dict(batch)
-            embedding_writer.embed_and_upsert_concepts(
+        n_processed = 0
+        with tqdm(total=n_total, desc="Processing", unit="concept") as pbar:
+            for batch_dict in embedding_writer.get_concepts_without_embedding_batched(
                 omop_cdm_engine=omop_cdm_engine,
-                concept_ids=tuple(batch_dict.keys()),
-                concept_texts=tuple(batch_dict.values()),
+                concept_filter=concept_filter,
                 batch_size=batch_size,
-                cdm_batch_size=cdm_batch_size,
-            )
-            pbar.update(len(batch_dict))
+                limit=num_embeddings,
+            ):
+                embedding_writer.embed_and_upsert_concepts(
+                    concept_ids=tuple(batch_dict.keys()),
+                    concept_texts=tuple(row.concept_name for row in batch_dict.values()),
+                    concept_meta=batch_dict,
+                    batch_size=batch_size,
+                )
+                n_processed += len(batch_dict)
+                pbar.update(len(batch_dict))
 
-    logger.info("Completed embedding generation and storage.")
+        typer.echo(f"Processed {n_processed:,} concepts.")
+        logger.info("Completed embedding generation and storage.")
+    except Exception as e:
+        logger.exception(f"Error during embedding generation and storage.\n{e}")
+        if not embedding_writer.has_any_embeddings():
+            logger.info("No embeddings were stored. Cleaning up model registration.")
+            embedding_writer.delete_model()
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -305,11 +309,6 @@ def add_embeddings_with_index(
         help="Limit the number of concepts to embed. Useful for testing.",
         rich_help_panel="Concept Filters",
     )] = None,
-    cdm_batch_size: Annotated[int, typer.Option(
-        "--cdm-batch-size",
-        help="Batch size for fetching concept metadata from the CDM during ingestion. Adjust if you encounter performance issues or database limits during ingestion.",
-        rich_help_panel="CDM Fetch Options",
-    )] = 50_000,
     index_hnsw_num_neighbors: Annotated[Optional[int], typer.Option(
         "--index-hnsw-num-neighbors",
         help="HNSW: number of neighbors per graph node.",
@@ -344,7 +343,6 @@ def add_embeddings_with_index(
         vocabularies=vocabularies,
         domains=domains,
         num_embeddings=num_embeddings,
-        cdm_batch_size=cdm_batch_size,
         verbosity=verbosity,
     )
 

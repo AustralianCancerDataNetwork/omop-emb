@@ -18,16 +18,13 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import replace as dc_replace
-from itertools import batched
 from typing import TYPE_CHECKING, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from numpy import ndarray
-from sqlalchemy import Engine, select, Row
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import Engine, Row
 
-from omop_alchemy.cdm.model.vocabulary import Concept
-
+from omop_emb.utils.cdm import count_missing_concepts, fetch_cdm_concepts_for_filter, iter_cdm_concepts_for_filter
 from omop_emb.embeddings import (
     EmbeddingClient,
     EmbeddingRole,
@@ -77,54 +74,6 @@ def list_registered_models(
         model_name=model_name,
         provider_type=provider_type,
     )
-
-
-# ---------------------------------------------------------------------------
-# CDM fetch helpers (private)
-# ---------------------------------------------------------------------------
-
-def _fetch_cdm_concepts_for_ingestion(
-    concept_ids: set[int],
-    cdm_session_factory: sessionmaker,
-    batch_size: int = 50_000,
-) -> dict[int, Row]:
-    """Return CDM rows needed to build ``ConceptEmbeddingRecord`` filter columns.
-
-    Fetches ``domain_id``, ``vocabulary_id``, and ``standard_concept`` 
-    (the three columns written into the embedding table at upsert time.)
-    
-    Warnings
-    --------
-    This method allows sub-batching to avoid bind-parameter limits when fetching large numbers of concepts from the CDM. This is not designed for high performance retrieval of concept metadata; it is intended for ingestion workflows where the number of concepts is large and the CDM database may have an unknown dialect. 
-    """
-    if not concept_ids:
-        return {}
-    id_list = list(concept_ids)
-    result: dict[int, Row] = {}
-    for start in range(0, len(id_list), batch_size):
-        chunk = id_list[start : start + batch_size]
-        query = select(
-            Concept.concept_id,
-            Concept.domain_id,
-            Concept.vocabulary_id,
-            Concept.standard_concept,
-            Concept.invalid_reason,
-        ).where(Concept.concept_id.in_(chunk))
-        with cdm_session_factory() as session:
-            result.update({row.concept_id: row for row in session.execute(query)})
-    return result
-
-
-def _fetch_cdm_concepts_for_filter(
-    concept_filter: Optional[EmbeddingConceptFilter],
-    cdm_session_factory: sessionmaker,
-) -> dict[int, str]:
-    """Return {concept_id: concept_name} from CDM matching the filter."""
-    query = select(Concept.concept_id, Concept.concept_name)
-    if concept_filter is not None:
-        query = concept_filter.apply(query, Concept)
-    with cdm_session_factory() as session:
-        return {row.concept_id: row.concept_name for row in session.execute(query)}
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +144,6 @@ class EmbeddingReaderInterface:
         self._canonical_model_name = canonical_model_name
         self._k = k
         self._cdm_engine = omop_cdm_engine
-        self._cdm_session_factory = sessionmaker(omop_cdm_engine) if omop_cdm_engine else None
 
         # FAISS fast path activated at construction, not mid-search
         _faiss_dir = faiss_cache_dir or os.getenv(ENV_OMOP_EMB_FAISS_CACHE_DIR)
@@ -366,18 +314,35 @@ class EmbeddingReaderInterface:
         omop_cdm_engine: Engine,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-    ) -> Mapping[int, str]:
-        """Return ``{concept_id: concept_name}`` for concepts lacking embeddings.
+    ) -> Mapping[int, Row]:
+        """Return CDM rows for concepts lacking embeddings, keyed by concept_id.
 
-        Requires *omop_cdm_engine* to query the CDM for candidate concepts.
+        Each row contains concept_name, domain_id, vocabulary_id,
+        standard_concept, and invalid_reason — all columns needed for both
+        text lookup and embedding-record metadata.
         """
-        cdm_factory = sessionmaker(omop_cdm_engine)
-        all_concepts = _fetch_cdm_concepts_for_filter(concept_filter, cdm_factory)
+        all_concepts = fetch_cdm_concepts_for_filter(
+            concept_filter=concept_filter,
+            cdm_engine=omop_cdm_engine,
+        )
         embedded_ids = self._backend.get_all_stored_concept_ids(
             model_name=self.canonical_model_name,
             metric_type=self._metric_type,
         )
-        return {cid: name for cid, name in all_concepts.items() if cid not in embedded_ids}
+        return {cid: row for cid, row in all_concepts.items() if cid not in embedded_ids}
+
+    def count_concepts_without_embedding(
+        self,
+        omop_cdm_engine: Engine,
+        *,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+    ) -> int:
+        """Return how many CDM concepts match *concept_filter* but lack an embedding."""
+        embedded_ids = self._backend.get_all_stored_concept_ids(
+            model_name=self.canonical_model_name,
+            metric_type=self._metric_type,
+        )
+        return count_missing_concepts(concept_filter, omop_cdm_engine, embedded_ids)
 
     def get_concepts_without_embedding_batched(
         self,
@@ -385,14 +350,36 @@ class EmbeddingReaderInterface:
         *,
         batch_size: int,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-    ) -> Iterable[Mapping[int, str]]:
-        missing = self.get_concepts_without_embedding(
-            omop_cdm_engine=omop_cdm_engine,
-            concept_filter=concept_filter,
+        limit: Optional[int] = None,
+    ) -> Iterable[Mapping[int, Row]]:
+        """Yield ``{concept_id: Row}`` batches for concepts lacking embeddings.
+
+        Streams CDM rows and filters against already-embedded IDs on-the-fly,
+        so only one batch of CDM rows is in memory at a time.
+        """
+        embedded_ids = self._backend.get_all_stored_concept_ids(
+            model_name=self.canonical_model_name,
+            metric_type=self._metric_type,
         )
-        items = list(missing.items())
-        for batch in batched(items, batch_size):
-            yield dict(batch)
+        batch: dict[int, Row] = {}
+        n_yielded = 0
+        for row in iter_cdm_concepts_for_filter(concept_filter, omop_cdm_engine):
+            if row.concept_id in embedded_ids:
+                continue
+            batch[row.concept_id] = row
+            if len(batch) >= batch_size:
+                yield batch
+                n_yielded += len(batch)
+                batch = {}
+                if limit is not None and n_yielded >= limit:
+                    return
+        if batch:
+            if limit is not None:
+                trimmed = dict(list(batch.items())[: limit - n_yielded])
+                if trimmed:
+                    yield trimmed
+            else:
+                yield batch
 
     # ------------------------------------------------------------------
     # CDM enrichment (internal)
@@ -407,16 +394,16 @@ class EmbeddingReaderInterface:
         Only ``concept_name`` is populated here.  ``is_standard`` is already
         set by the backend from the embedding table filter columns.
         """
-        if not self._cdm_session_factory:
+        if not self._cdm_engine:
             return raw
 
         unique_ids = {r.concept_id for results in raw for r in results}
         concept_filter = EmbeddingConceptFilter(concept_ids=tuple(unique_ids))
-        names = _fetch_cdm_concepts_for_filter(concept_filter, self._cdm_session_factory)
+        rows = fetch_cdm_concepts_for_filter(concept_filter=concept_filter, cdm_engine=self._cdm_engine)
 
         return tuple(
             tuple(
-                dc_replace(r, concept_name=names.get(r.concept_id))
+                dc_replace(r, concept_name=rows[r.concept_id].concept_name if r.concept_id in rows else None)
                 for r in query_results
             )
             for query_results in raw
@@ -569,23 +556,25 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
     def embed_and_upsert_concepts(
         self,
         *,
-        omop_cdm_engine: Engine,
         concept_ids: Sequence[int],
         concept_texts: Sequence[str],
+        concept_meta: Mapping[int, Row],
         batch_size: Optional[int] = None,
-        cdm_batch_size: int = 50_000,
     ) -> ndarray:
         """Generate embeddings from CDM concepts and upsert with filter metadata.
+        Concept_ids, concept_texts and concept_meta must be aligned (same length, same order).
+        `fetch_cdm_concepts_for_filter` can be used to get aligned concept_meta for a set of concept_ids.
 
         Parameters
         ----------
-        omop_cdm_engine : Engine
-            CDM engine used to fetch concept filter attributes
-            (domain_id, vocabulary_id, standard_concept) for each concept_id.
         concept_ids : Sequence[int]
             OMOP concept IDs to embed.
         concept_texts : Sequence[str]
             Text strings to embed (aligned with *concept_ids*).
+        concept_meta : Mapping[int, Row]
+            CDM rows keyed by concept_id, as returned by
+            ``get_concepts_without_embedding``.  Used to populate
+            domain_id, vocabulary_id, is_standard, and is_valid.
         """
         if len(concept_ids) != len(concept_texts):
             raise ValueError(
@@ -593,21 +582,13 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
                 "must have the same length."
             )
 
-        # Fetch concept metadata from CDM for filter columns
-        cdm_factory = sessionmaker(omop_cdm_engine)
-        meta = _fetch_cdm_concepts_for_ingestion(
-            set(concept_ids), 
-            cdm_factory,
-            batch_size=cdm_batch_size,
-        )
-
         records = [
             ConceptEmbeddingRecord(
                 concept_id=cid,
-                domain_id=meta[cid].domain_id if cid in meta else "",
-                vocabulary_id=meta[cid].vocabulary_id if cid in meta else "",
-                is_standard=meta[cid].standard_concept in ("S", "C") if cid in meta else False,
-                is_valid=meta[cid].invalid_reason not in ("D", "U") if cid in meta else True,
+                domain_id=concept_meta[cid].domain_id if cid in concept_meta else "",
+                vocabulary_id=concept_meta[cid].vocabulary_id if cid in concept_meta else "",
+                is_standard=concept_meta[cid].standard_concept in ("S", "C") if cid in concept_meta else False,
+                is_valid=concept_meta[cid].invalid_reason not in ("D", "U") if cid in concept_meta else True,
             )
             for cid in concept_ids
         ]
@@ -631,15 +612,18 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
     def get_nearest_concepts_from_query_texts(
         self,
         query_texts: Union[str, Tuple[str, ...], List[str]],
+        embedding_client: Optional[EmbeddingClient] = None,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         batch_size: Optional[int] = None,
         k: Optional[int] = None,
+        faiss_index_config: Optional[IndexConfig] = None,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         return super().get_nearest_concepts_from_query_texts(
             query_texts=query_texts,
-            embedding_client=self._embedding_client,
+            embedding_client=embedding_client or self._embedding_client,
             concept_filter=concept_filter,
             batch_size=batch_size,
             k=k,
+            faiss_index_config=faiss_index_config,
         )

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 from typing import Generator
+
+from dotenv import load_dotenv
 
 import numpy as np
 import pytest
@@ -12,8 +15,9 @@ import sqlalchemy as sa
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
-from omop_emb.config import MetricType, ProviderType
+from omop_emb.config import ProviderType
 
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 # ---------------------------------------------------------------------------
 # Test data constants

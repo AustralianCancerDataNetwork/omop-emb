@@ -1,3 +1,10 @@
+## [1.0.2](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v1.0.1...v1.0.2) (2026-06-03)
+
+
+### Bug Fixes
+
+* Support orm-loader >0.4.0 ([#22](https://github.com/AustralianCancerDataNetwork/omop-emb/issues/22)) ([b9601dc](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/b9601dc8a6d5bd7d70bdb3e1b7455cadc0eb6cfc))
+
 ## [1.0.1](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v1.0.0...v1.0.1) (2026-05-25)
 
 

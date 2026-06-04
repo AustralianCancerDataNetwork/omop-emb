@@ -30,6 +30,8 @@ class OmopEmbConfig(PackageConfigBase):
             display_name="Embedding Database",
             description="pgvector database for storing OMOP concept embeddings.",
             connection_name_hint="emb",
+            cdm_schema_default="public",
+            is_cdm_database=False,
         ),
     )
 

@@ -23,8 +23,8 @@ services:
     image: pgvector/pgvector:pg18
     restart: always
     environment:
-      POSTGRES_USER: ${OMOP_EMB_DB_USER:-omop_emb}
-      POSTGRES_PASSWORD: ${OMOP_EMB_DB_PASSWORD:-omop_emb}
+      POSTGRES_USER: ${OMOP_EMB_DB_USER:-omop}
+      POSTGRES_PASSWORD: ${OMOP_EMB_DB_PASSWORD:-omop}
       POSTGRES_DB: ${OMOP_EMB_DB_NAME:-omop_emb}
     ports:
       - "5433:5432"
@@ -38,13 +38,13 @@ services:
     networks:
       - omop-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${OMOP_EMB_DB_USER:-omop_emb}"]
+      test: ["CMD-SHELL", "pg_isready -U ${OMOP_EMB_DB_USER:-omop}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   ollama:
-    image: ollama/ollama:0.14.2
+    image: ollama/ollama:0.30.4
     profiles: ["standalone"]
     ports:
       - "11434:11434"
@@ -59,7 +59,7 @@ services:
       - omop-net
     stop_grace_period: 1m
 
-  python-emb:
+  python-spires:
     build: .
     restart: unless-stopped
     depends_on:
@@ -82,8 +82,8 @@ services:
         omop-config configure omop_emb --skip-if-configured
           --conn-name emb --dialect postgresql+psycopg
           --host omop-emb-db --port 5432
-          --user ${OMOP_EMB_DB_USER:-omop_emb}
-          --password ${OMOP_EMB_DB_PASSWORD:-omop_emb}
+          --user ${OMOP_EMB_DB_USER:-omop}
+          --password ${OMOP_EMB_DB_PASSWORD:-omop}
           --database ${OMOP_EMB_DB_NAME:-omop_emb} &&
         sleep infinity
       "

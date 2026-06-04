@@ -75,6 +75,30 @@ docker compose up
 The `.env` file is only read by Docker Compose for variable substitution — it is not
 loaded by omop-emb at runtime.
 
+## Multiple instances
+
+To configure a second embedding database (e.g. for production), use `--resource-name`:
+
+```bash
+omop-config configure omop_emb --resource-name emb_db_prod
+```
+
+This creates `emb_db_prod` without touching the existing `emb_db`. Re-run without
+`--resource-name` afterwards to select which one omop_emb uses by default:
+
+```bash
+omop-config configure omop_emb   # prompts for default_resource
+```
+
+To use a second CDM database instead, configure omop-alchemy with `--resource-name`:
+
+```bash
+omop-config configure omop_alchemy --resource-name cdm_db_prod
+omop-config configure omop_alchemy   # select default_resource
+```
+
+See the [oa-configurator integration guide](https://AustralianCancerDataNetwork.github.io/oa-configurator/integration/#multiple-environments) for the full multi-environment guide.
+
 ## Further reading
 
 - [oa-configurator integration guide](https://AustralianCancerDataNetwork.github.io/oa-configurator/integration/) — full config reference, profiles, multi-package setups

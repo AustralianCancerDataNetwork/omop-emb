@@ -83,18 +83,21 @@ To configure a second embedding database (e.g. for production), use `--resource-
 omop-config configure omop_emb --resource-name emb_db_prod
 ```
 
-This creates `emb_db_prod` without touching the existing `emb_db`. Re-run without
-`--resource-name` afterwards to select which one omop_emb uses by default:
+This creates `emb_db_prod` without touching the existing `emb_db`. Because two
+resources now exist, configure automatically prompts you to choose the default at
+the end of the same run — no second invocation needed.
 
-```bash
-omop-config configure omop_emb   # prompts for default_resource
-```
-
-To use a second CDM database instead, configure omop-alchemy with `--resource-name`:
+To use a second CDM database instead, configure omop-alchemy the same way:
 
 ```bash
 omop-config configure omop_alchemy --resource-name cdm_db_prod
-omop-config configure omop_alchemy   # select default_resource
+```
+
+To change the default later, set `default_resource` directly in `config.toml`:
+
+```toml
+[tools.omop_emb]
+default_resource = "emb_db_prod"
 ```
 
 See the [oa-configurator integration guide](https://AustralianCancerDataNetwork.github.io/oa-configurator/integration/#multiple-environments) for the full multi-environment guide.

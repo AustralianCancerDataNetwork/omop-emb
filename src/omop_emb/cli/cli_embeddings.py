@@ -5,14 +5,12 @@ import logging
 from typing import Annotated, Generator, List, Optional, Sequence, Union
 
 import typer
-from dotenv import load_dotenv
 from tqdm import tqdm
 
-from .utils import configure_logging_level, resolve_omop_cdm_engine
 from omop_emb.utils.cdm import check_concept_cdm
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.backends import resolve_backend
-from omop_emb.config import IndexType, MetricType
+from omop_emb.config import IndexType, MetricType, resolve_omop_cdm_engine
 from omop_emb.embeddings import EmbeddingClient
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
@@ -103,18 +101,12 @@ def add_embeddings(
         help="Limit the number of concepts to embed. Useful for testing.",
         rich_help_panel="Concept Filters",
     )] = None,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)",
-    )] = 0,
 ):
     """Bulk generate and store embeddings for OMOP concepts.
 
     Models are always registered with a FLAT (exact scan) index. Use
     ``create-index`` afterwards to upgrade to an HNSW approximate index.
     """
-    configure_logging_level(verbosity)
-    load_dotenv()
 
     backend = resolve_backend()
     omop_cdm_engine = resolve_omop_cdm_engine()
@@ -219,10 +211,6 @@ def create_index(
         help="HNSW: ef parameter controlling graph quality during construction.",
         rich_help_panel="Index Options",
     )] = None,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)",
-    )] = 0,
 ):
     """Create or rebuild the index on an existing embedding table.
 
@@ -230,8 +218,6 @@ def create_index(
     embeddings are generated. When --index-type is HNSW the --metric-type is
     locked in and all subsequent queries must use the same metric.
     """
-    configure_logging_level(verbosity)
-    load_dotenv()
 
     backend = resolve_backend()
     embedding_client = EmbeddingClient(
@@ -324,10 +310,6 @@ def add_embeddings_with_index(
         help="HNSW: ef parameter controlling graph quality during construction.",
         rich_help_panel="Index Options",
     )] = None,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)",
-    )] = 0,
 ):
     """Generate embeddings then build an index. Combines ``add-embeddings`` and ``create-index``.
 
@@ -343,7 +325,6 @@ def add_embeddings_with_index(
         vocabularies=vocabularies,
         domains=domains,
         num_embeddings=num_embeddings,
-        verbosity=verbosity,
     )
 
     create_index(
@@ -355,7 +336,6 @@ def add_embeddings_with_index(
         index_hnsw_num_neighbors=index_hnsw_num_neighbors,
         index_hnsw_ef_search=index_hnsw_ef_search,
         index_hnsw_ef_construction=index_hnsw_ef_construction,
-        verbosity=verbosity,
     )
 
 
@@ -419,13 +399,7 @@ def search(
         help="Directory to cache FAISS index files for on-disk search with FAISS instead of the regular backend.",
         rich_help_panel="Search Options",
     )] = None,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)",
-    )] = 0,
 ):
-    configure_logging_level(verbosity)
-    load_dotenv()
 
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
     backend = resolve_backend()

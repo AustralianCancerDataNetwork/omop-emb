@@ -5,11 +5,9 @@ from typing import Annotated
 
 import numpy as np
 import typer
-from dotenv import load_dotenv
 from tqdm import tqdm
 
 import sqlalchemy as sa
-from .utils import configure_logging_level
 from omop_emb.backends import resolve_backend
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.config import MetricType, ProviderType
@@ -50,10 +48,6 @@ def add_embeddings_from_h5(
         "--cdm-batch-size",
         help="Batch size for fetching concept metadata from the CDM during ingestion. Adjust if you encounter performance issues or database limits during ingestion.",
     )] = 50_000,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)",
-    )] = 0,
 ):
     """Ingest pre-built embeddings from an HDF5 file into the configured backend.
 
@@ -66,8 +60,6 @@ def add_embeddings_from_h5(
     fetched from the OMOP CDM per batch and stored alongside the embeddings.
     Concept IDs not found in the CDM are stored with empty metadata.
     """
-    configure_logging_level(verbosity)
-    load_dotenv()
 
     CONCEPT_ID_KEY = "concept_ids"
     EMBEDDINGS_KEY = "embeddings"

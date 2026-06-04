@@ -1,37 +1,84 @@
-import os
+"""Configuration for omop-emb via oa-configurator."""
+
+from __future__ import annotations
+
 from enum import StrEnum
-from typing import Dict, Tuple, TYPE_CHECKING
-if TYPE_CHECKING:
-    from sqlalchemy import URL
+from typing import ClassVar, Dict, Final, Tuple
 
-ENV_DOCUMENT_EMBEDDING_PREFIX = "OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX"
-ENV_QUERY_EMBEDDING_PREFIX = "OMOP_EMB_QUERY_EMBEDDING_PREFIX"
-ENV_EMBEDDING_DIM = "OMOP_EMB_EMBEDDING_DIM"
+from pydantic import Field
+from sqlalchemy import Engine
+from oa_configurator import PackageConfigBase, ResourceSpec, Resolver, load_stack_config
+from oa_configurator import configure_logging as _configure_logging
+from omop_alchemy.config import CDM_DB_RESOURCE
 
-ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
-ENV_OMOP_EMBEDDING_MODEL = "OMOP_EMBEDDING_MODEL"
+EMB_DB_RESOURCE: Final[str] = "emb_db"
+TOOL_NAME: Final[str] = "omop_emb"
 
-# Database connection 
-# Individual components (used to compose URL at runtime)
-ENV_OMOP_EMB_DB_USER = "OMOP_EMB_DB_USER"
-ENV_OMOP_EMB_DB_PASSWORD = "OMOP_EMB_DB_PASSWORD"
-ENV_OMOP_EMB_DB_HOST = "OMOP_EMB_DB_HOST"
-ENV_OMOP_EMB_DB_PORT = "OMOP_EMB_DB_PORT"
-ENV_OMOP_EMB_DB_NAME = "OMOP_EMB_DB_NAME"
-# Override the SQLAlchemy driver string (e.g. "postgresql+psycopg2")
-ENV_OMOP_EMB_DB_DRIVER = "OMOP_EMB_DB_DRIVER"
-# Optional full connection string.
-ENV_OMOP_EMB_DB_URL = "OMOP_EMB_DB_URL"
 
-# sqlite-vec backend (default)
-ENV_OMOP_EMB_SQLITE_PATH = "OMOP_EMB_SQLITE_PATH"
+class OmopEmbConfig(PackageConfigBase):
+    """oa-configurator config class for omop-emb.
 
-# OMOP CDM (always required for concept ingestion in CLI)
-# NOTE: Should be the same str value as in omop-graph `omop_graph.config.ENV_OMOP_CDM_DB_URL`
-ENV_OMOP_CDM_DATABASE_URL = "OMOP_CDM_DB_URL"
+    omop-emb owns the embedding database and requires the CDM database
+    configured by omop-alchemy.
+    """
 
-# Optional FAISS sidecar cache directory (auto-activates FAISS in EmbeddingReaderInterface)
-ENV_OMOP_EMB_FAISS_CACHE_DIR = "OMOP_EMB_FAISS_CACHE_DIR"
+    tool_name: ClassVar[str] = TOOL_NAME
+    required_resources: ClassVar[tuple[str, ...]] = (CDM_DB_RESOURCE,)
+    owned_resources: ClassVar[tuple[ResourceSpec, ...]] = (
+        ResourceSpec(
+            semantic_name=EMB_DB_RESOURCE,
+            display_name="Embedding Database",
+            description="pgvector database for storing OMOP concept embeddings.",
+            connection_name_hint="emb",
+        ),
+    )
+
+    backend: str = Field(
+        default="pgvector",
+        description="Embedding storage backend: 'pgvector' or 'sqlitevec'.",
+    )
+    sqlite_path: str | None = Field(
+        default=None,
+        description="Path to the SQLite database file (sqlitevec backend only).",
+    )
+    document_embedding_prefix: str = Field(
+        default="",
+        description="Text prefix prepended to documents before embedding.",
+    )
+    query_embedding_prefix: str = Field(
+        default="",
+        description="Text prefix prepended to queries before embedding.",
+    )
+    faiss_cache_dir: str | None = Field(
+        default=None,
+        description="Default directory for FAISS index files.",
+    )
+    embedding_dim: int | None = Field(
+        default=None,
+        description="Embedding dimensionality hint (rarely needed; usually auto-discovered from the model API).",
+    )
+
+
+def get_resolver() -> Resolver:
+    """Return a Resolver loaded from the active stack config."""
+    return Resolver(load_stack_config())
+
+
+def get_config() -> OmopEmbConfig:
+    """Return the omop-emb typed config from the active stack config."""
+    return OmopEmbConfig.from_stack(load_stack_config())
+
+def resolve_omop_cdm_engine() -> Engine:
+    """Resolve CDM engine via oa-configurator, used read-only."""
+    return get_resolver().resolve_resource(CDM_DB_RESOURCE).create_engine()
+
+def resolve_omop_emb_engine() -> Engine:
+    """Resolve embedding database engine via oa-configurator."""
+    return get_resolver().resolve_resource(EMB_DB_RESOURCE).create_engine()
+
+def configure_logging(verbosity: int = 0) -> None:
+    """Configure logging for omop-emb and its dependencies."""
+    _configure_logging(verbosity=verbosity, extra_namespaces=["omop_alchemy", TOOL_NAME])
 
 
 class ProviderType(StrEnum):
@@ -292,100 +339,3 @@ def get_supported_metrics_for_backend(backend: BackendType) -> Tuple[MetricType,
     for metrics in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {}).values():
         seen.update(metrics)
     return tuple(seen)
-
-
-def build_engine_string(backend: "BackendType") -> "URL":
-    """Compose a SQLAlchemy ``URL`` for the given backend at runtime.
-
-    Parameters
-    ----------
-    backend : BackendType
-        The storage backend that determines which driver and which environment
-        variables are required.
-
-    Returns
-    -------
-    sqlalchemy.URL
-
-    Notes
-    -----
-    If ``ENV_OMOP_EMB_DB_URL`` is set it is used as-is for any backend, allowing
-    callers to supply a fully-qualified connection string without setting the
-    individual component variables.
-    Otherwise, the following environment variables are read based on the selected backend:
-    - SQLITEVEC: 
-        - ``ENV_OMOP_EMB_SQLITE_PATH`` (required): the file path to the sqlite database. Use the special value ``:memory:`` for a transient in-memory database (useful in tests).
-
-    - PGVECTOR: 
-        - ``ENV_OMOP_EMB_DB_DRIVER`` (default: 'postgresql+psycopg'): the SQLAlchemy driver name (e.g. 'postgresql', 'mysql', 'sqlite').
-        - ``ENV_OMOP_EMB_DB_USER`` (required): the username for database authentication.
-        - ``ENV_OMOP_EMB_DB_PASSWORD`` (required): the password for database authentication.
-        - ``ENV_OMOP_EMB_DB_HOST`` (required): the hostname or IP address of the database server.
-        - ``ENV_OMOP_EMB_DB_NAME`` (required): the name of the database to connect to.
-        - ``ENV_OMOP_EMB_DB_PORT`` (optional, default 5432): the port number on which the database server is listening.
-
-    Raises
-    ------
-    RuntimeError
-        If a required environment variable is missing.
-    ValueError
-        If ``backend`` does not support URL composition from environment
-        variables (e.g. ``FAISS``).
-    """
-    from sqlalchemy import URL
-    from sqlalchemy.engine import make_url
-
-    optional_url = os.getenv(ENV_OMOP_EMB_DB_URL)
-    if optional_url:
-        return make_url(optional_url)
-
-    if backend == BackendType.SQLITEVEC:
-        path = _get_required_env_variable(ENV_OMOP_EMB_SQLITE_PATH)
-        return URL.create(drivername="sqlite", database=path)
-
-    if backend == BackendType.PGVECTOR:
-        driver = os.getenv(ENV_OMOP_EMB_DB_DRIVER, "postgresql+psycopg")
-        user = _get_required_env_variable(ENV_OMOP_EMB_DB_USER)
-        password = _get_required_env_variable(ENV_OMOP_EMB_DB_PASSWORD)
-        host = _get_required_env_variable(ENV_OMOP_EMB_DB_HOST)
-        database = _get_required_env_variable(ENV_OMOP_EMB_DB_NAME)
-        port_str = os.getenv(ENV_OMOP_EMB_DB_PORT, "5432")
-        port = int(port_str) if port_str else None
-        return URL.create(
-            drivername=driver,
-            username=user,
-            password=password,
-            host=host,
-            port=port,
-            database=database,
-        )
-
-    raise ValueError(
-        f"Cannot compose an engine URL for backend {backend!r} from environment variables. "
-        f"Set `{ENV_OMOP_EMB_DB_URL!r}` to supply a full connection string. "
-        f"FAISS is not a backend. Use `{ENV_OMOP_EMB_FAISS_CACHE_DIR!r}` and EmbeddingReaderInterface(faiss_cache_dir=...) instead."
-    )
-
-
-def _get_required_env_variable(name: str) -> str:
-    """Get the value of a required environment variable.
-
-    Parameters
-    ----------
-    name : str
-        Environment variable name.
-
-    Returns
-    -------
-    str
-        Environment variable value.
-
-    Raises
-    ------
-    RuntimeError
-        If the environment variable is not set.
-    """
-    value = os.getenv(name)
-    if value is None:
-        raise RuntimeError(f"Required environment variable {name!r} is not set.")
-    return value

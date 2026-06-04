@@ -94,3 +94,46 @@ Full documentation: <https://AustralianCancerDataNetwork.github.io/omop-emb>
 - [ ] FAISS GPU support
 - [ ] [`pgvectorscale`](https://github.com/timescale/pgvectorscale) support
 - [ ] Vector quantisation for more efficient storage
+
+---
+
+## Configuration via oa-configurator
+
+The database connection can also be configured via
+[oa-configurator](https://github.com/AustralianCancerDataNetwork/oa-configurator),
+which stores settings in `~/.config/omop/config.toml` and eliminates the need
+for environment variables at runtime:
+
+```bash
+omop-config init
+omop-config configure omop_alchemy   # CDM database (required for ingestion)
+omop-config configure omop_emb       # embedding database
+```
+
+See [oa-configurator Setup](docs/getting-started/configuration.md) for details.
+
+---
+
+## Docker Compose
+
+The included `docker-compose.yaml` provides both a CDM PostgreSQL database and a
+pgvector embedding database, plus a Python container with all optional backends
+pre-installed (`[pgvector,faiss-cpu]`). Default credentials work out of the box:
+
+```bash
+docker compose up
+```
+
+Include Ollama by adding the `standalone` profile:
+
+```bash
+docker compose --profile standalone up
+```
+
+The `python-emb` service runs `omop-config configure` at startup. To override
+credentials:
+
+```bash
+cp .env.example .env
+docker compose up
+```

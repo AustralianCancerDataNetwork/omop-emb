@@ -4,9 +4,6 @@ import logging
 from typing import Annotated, Optional
 
 import typer
-from dotenv import load_dotenv
-
-from .utils import configure_logging_level
 from omop_emb.backends import resolve_backend
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.config import (
@@ -31,13 +28,7 @@ def list_models(
         "--model", "-m",
         help="Filter by model name.",
     )] = None,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)",
-    )] = 0,
 ):
-    configure_logging_level(verbosity)
-    load_dotenv()
 
     backend = resolve_backend()
     records = list_registered_models(
@@ -97,13 +88,7 @@ def rebuild_index(
         help="HNSW: ef parameter controlling graph quality during construction.",
         rich_help_panel="Index Options",
     )] = None,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)",
-    )] = 0,
 ):
-    configure_logging_level(verbosity)
-    load_dotenv()
 
     if provider_type is not None:
         embedding_provider = get_provider_from_provider_type(provider_type)
@@ -149,13 +134,7 @@ def delete_model(
         "--yes", "-y",
         help="Skip confirmation prompt.",
     )] = False,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)",
-    )] = 0,
 ):
-    configure_logging_level(verbosity)
-    load_dotenv()
 
     if provider_type is not None:
         embedding_provider = get_provider_from_provider_type(provider_type)
@@ -215,13 +194,7 @@ def export_faiss_cache(
         "--batch-size", "-b",
         help="Batch size when streaming embeddings from the backend.",
     )] = 100_000,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)",
-    )] = 0,
 ):
-    configure_logging_level(verbosity)
-    load_dotenv()
 
     if provider_type is not None:
         embedding_provider = get_provider_from_provider_type(provider_type)
@@ -273,13 +246,7 @@ def check_faiss_cache(
         "--provider-type",
         help="Embedding provider type. Used to canonicalize the model name if provided.",
     )] = None,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)",
-    )] = 0,
 ):
-    configure_logging_level(verbosity)
-    load_dotenv()
 
     if provider_type is not None:
         embedding_provider = get_provider_from_provider_type(provider_type)
@@ -348,13 +315,7 @@ def import_faiss_cache(
         "--force",
         help="Overwrite existing embeddings without prompting.",
     )] = False,
-    verbosity: Annotated[int, typer.Option(
-        "--verbose", "-v", count=True,
-        help="Increase verbosity (up to two levels)",
-    )] = 0,
 ):
-    configure_logging_level(verbosity)
-    load_dotenv()
 
     index_config = index_config_from_index_type(index_type, metric_type=metric_type)
     backend = resolve_backend()

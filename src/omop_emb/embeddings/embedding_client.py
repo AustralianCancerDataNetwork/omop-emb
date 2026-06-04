@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 logger = logging.getLogger(__name__)
-import os
 from typing import Any, List, Optional, Tuple, Union, Dict
 from enum import StrEnum
 
@@ -18,11 +17,7 @@ import numpy as np
 from openai import OpenAI
 
 from .embedding_providers import EmbeddingProvider, get_provider_for_api_base
-from omop_emb.config import (
-    ENV_DOCUMENT_EMBEDDING_PREFIX,
-    ENV_QUERY_EMBEDDING_PREFIX,
-    ENV_EMBEDDING_DIM,
-)
+from omop_emb.config import get_config
 
 
 class EmbeddingRole(StrEnum):
@@ -128,10 +123,10 @@ class EmbeddingClient:
         if self._embedding_dim is not None:
             return self._embedding_dim
 
-        env_val = os.getenv(ENV_EMBEDDING_DIM)
-        if env_val is not None:
-            self._embedding_dim = int(env_val)
-            logger.debug(f"Embedding dimension set from env {ENV_EMBEDDING_DIM}={self._embedding_dim}.")
+        cfg_dim = get_config().embedding_dim
+        if cfg_dim is not None:
+            self._embedding_dim = cfg_dim
+            logger.debug(f"Embedding dimension set from config: {self._embedding_dim}.")
             return self._embedding_dim
 
         provider_dim = self._provider.get_embedding_dim(model=self._model, api_base=self.api_base)
@@ -251,25 +246,25 @@ class EmbeddingClient:
         Tuple[str, str]
             A tuple containing the document embedding prefix and the query embedding prefix.
         """
-        document_embedding_prefix = os.getenv(ENV_DOCUMENT_EMBEDDING_PREFIX, "")
-        query_embedding_prefix = os.getenv(ENV_QUERY_EMBEDDING_PREFIX, "")
+        cfg = get_config()
+        document_embedding_prefix = cfg.document_embedding_prefix
+        query_embedding_prefix = cfg.query_embedding_prefix
 
-        for role, prefix, var_name in [
-            (EmbeddingRole.DOCUMENT, document_embedding_prefix, ENV_DOCUMENT_EMBEDDING_PREFIX),
-            (EmbeddingRole.QUERY, query_embedding_prefix, ENV_QUERY_EMBEDDING_PREFIX),
+        for role, prefix in [
+            (EmbeddingRole.DOCUMENT, document_embedding_prefix),
+            (EmbeddingRole.QUERY, query_embedding_prefix),
         ]:
             if prefix:
                 logger.info(
-                    f"{role.value.capitalize()} embedding prefix loaded from {var_name}={prefix!r}. "
+                    f"{role.value.capitalize()} embedding prefix loaded from config: {prefix!r}. "
                     f"All {role.value} texts will be prepended with this prefix."
                 )
             else:
                 logger.warning(
-                    f"{role.value.capitalize()} embedding prefix is not set ({var_name} is empty). "
+                    f"{role.value.capitalize()} embedding prefix is not set in config. "
                     f"This is fine for symmetric models. For asymmetric models (e.g. nomic-embed-text, "
-                    f"E5, BGE), set {var_name} to the required task prefix.\n"
-                    f"Example (nomic-embed-text): {ENV_DOCUMENT_EMBEDDING_PREFIX}='search_document: ' for {EmbeddingRole.DOCUMENT.value} "
-                    f"and {ENV_QUERY_EMBEDDING_PREFIX}='search_query: ' for {EmbeddingRole.QUERY.value}."
+                    f"E5, BGE), set document_embedding_prefix / query_embedding_prefix via "
+                    f"'omop-config configure omop_emb'."
                 )
 
         return document_embedding_prefix, query_embedding_prefix

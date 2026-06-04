@@ -34,6 +34,7 @@ classifiers = [
 dependencies = [
     "numpy>=1.26",
     "omop-alchemy>=0.6.3",
+    #"oa-configurator>=0.0.1",  # uncomment once published to PyPI
     "sqlalchemy>=2.0.45",
     "typing-extensions>=4.15.0",
     "sqlite-vec>=0.1.9",
@@ -79,6 +80,9 @@ packages = ["src/omop_emb"]
 
 [project.scripts]
 omop-emb = "omop_emb.cli.cli_app:app"
+
+[project.entry-points."omop.config"]
+omop_emb = "omop_emb.config:OmopEmbConfig"
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py"]

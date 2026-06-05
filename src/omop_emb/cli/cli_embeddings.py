@@ -10,7 +10,7 @@ from tqdm import tqdm
 from omop_emb.utils.cdm import check_concept_cdm
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.backends import resolve_backend
-from omop_emb.config import IndexType, MetricType, resolve_omop_cdm_engine
+from omop_emb.config import IndexType, MetricType, get_config, resolve_omop_cdm_engine
 from omop_emb.embeddings import EmbeddingClient
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
@@ -61,16 +61,16 @@ def _render_search_results(
 
 @app.command()
 def add_embeddings(
-    api_base: Annotated[str, typer.Option(
+    api_base: Annotated[Optional[str], typer.Option(
         "--api-base",
-        help="Base URL for the embedding API.",
+        help="Base URL for the embedding API. Defaults to the value configured via omop-config.",
         rich_help_panel="Embedding API Options",
-    )],
-    api_key: Annotated[str, typer.Option(
+    )] = None,
+    api_key: Annotated[Optional[str], typer.Option(
         "--api-key",
-        help="API key for the embedding API.",
+        help="API key for the embedding API. Defaults to the value configured via omop-config.",
         rich_help_panel="Embedding API Options",
-    )],
+    )] = None,
     batch_size: Annotated[int, typer.Option(
         "--batch-size", "-b",
         help="Batch size for generating and inserting embeddings.",
@@ -108,13 +108,17 @@ def add_embeddings(
     ``create-index`` afterwards to upgrade to an HNSW approximate index.
     """
 
+    cfg = get_config()
+    resolved_api_base = api_base or cfg.ollama_api_base
+    resolved_api_key = api_key or cfg.api_key
+
     backend = resolve_backend()
     omop_cdm_engine = resolve_omop_cdm_engine()
 
     embedding_client = EmbeddingClient(
         model=model,
-        api_base=api_base,
-        api_key=api_key,
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
         embedding_batch_size=batch_size,
     )
     # FLAT registration: metric_type=COSINE is used only for upsert validation;
@@ -171,16 +175,16 @@ def add_embeddings(
 
 @app.command()
 def create_index(
-    api_base: Annotated[str, typer.Option(
+    api_base: Annotated[Optional[str], typer.Option(
         "--api-base",
-        help="Base URL for the embedding API.",
+        help="Base URL for the embedding API. Defaults to the value configured via omop-config.",
         rich_help_panel="Embedding API Options",
-    )],
-    api_key: Annotated[str, typer.Option(
+    )] = None,
+    api_key: Annotated[Optional[str], typer.Option(
         "--api-key",
-        help="API key for the embedding API.",
+        help="API key for the embedding API. Defaults to the value configured via omop-config.",
         rich_help_panel="Embedding API Options",
-    )],
+    )] = None,
     model: Annotated[str, typer.Option(
         "--model", "-m",
         help="Embedding model name to build the index for.",
@@ -219,11 +223,15 @@ def create_index(
     locked in and all subsequent queries must use the same metric.
     """
 
+    cfg = get_config()
+    resolved_api_base = api_base or cfg.ollama_api_base
+    resolved_api_key = api_key or cfg.api_key
+
     backend = resolve_backend()
     embedding_client = EmbeddingClient(
         model=model,
-        api_base=api_base,
-        api_key=api_key,
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
     )
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
@@ -245,16 +253,16 @@ def create_index(
 
 @app.command()
 def add_embeddings_with_index(
-    api_base: Annotated[str, typer.Option(
+    api_base: Annotated[Optional[str], typer.Option(
         "--api-base",
-        help="Base URL for the embedding API.",
+        help="Base URL for the embedding API. Defaults to the value configured via omop-config.",
         rich_help_panel="Embedding API Options",
-    )],
-    api_key: Annotated[str, typer.Option(
+    )] = None,
+    api_key: Annotated[Optional[str], typer.Option(
         "--api-key",
-        help="API key for the embedding API.",
+        help="API key for the embedding API. Defaults to the value configured via omop-config.",
         rich_help_panel="Embedding API Options",
-    )],
+    )] = None,
     metric_type: Annotated[MetricType, typer.Option(
         "--metric-type",
         help="Distance metric for the index. Locked in when --index-type is HNSW.",
@@ -341,16 +349,16 @@ def add_embeddings_with_index(
 
 @app.command()
 def search(
-    api_base: Annotated[str, typer.Option(
+    api_base: Annotated[Optional[str], typer.Option(
         "--api-base",
-        help="Base URL for the embedding API.",
+        help="Base URL for the embedding API. Defaults to the value configured via omop-config.",
         rich_help_panel="Embedding API Options",
-    )],
-    api_key: Annotated[str, typer.Option(
+    )] = None,
+    api_key: Annotated[Optional[str], typer.Option(
         "--api-key",
-        help="API key for the embedding API.",
+        help="API key for the embedding API. Defaults to the value configured via omop-config.",
         rich_help_panel="Embedding API Options",
-    )],
+    )] = None,
     queries: Annotated[Optional[List[str]], typer.Option(
         "--query",
         help="Query text to search. Repeat to search multiple queries.",
@@ -401,6 +409,10 @@ def search(
     )] = None,
 ):
 
+    cfg = get_config()
+    resolved_api_base = api_base or cfg.ollama_api_base
+    resolved_api_key = api_key or cfg.api_key
+
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
     backend = resolve_backend()
 
@@ -413,8 +425,8 @@ def search(
 
     embedding_client = EmbeddingClient(
         model=model,
-        api_base=api_base,
-        api_key=api_key,
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
         embedding_batch_size=batch_size,
     )
     embedding_reader = EmbeddingReaderInterface(

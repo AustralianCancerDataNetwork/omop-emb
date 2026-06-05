@@ -59,6 +59,14 @@ class OmopEmbConfig(PackageConfigBase):
         default=None,
         description="Embedding dimensionality hint (rarely needed; usually auto-discovered from the model API).",
     )
+    ollama_api_base: str = Field(
+        default="http://ollama:11434/v1",
+        description="Base URL for the Ollama API (OpenAI-compatible).",
+    )
+    api_key: str = Field(
+        default="ollama",
+        description="API key for the model provider ('ollama' for local Ollama).",
+    )
 
 
 def get_resolver() -> Resolver:

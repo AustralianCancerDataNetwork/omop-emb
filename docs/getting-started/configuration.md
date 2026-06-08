@@ -41,8 +41,7 @@ docker compose up
 
 The `python-emb` container runs `omop-config configure` for `omop_alchemy` and
 `omop_emb` at startup. Your `~/.config/omop/config.toml` on the host is written on
-first start and skipped on subsequent starts (`--skip-if-configured` makes this
-idempotent).
+safe to re-run on subsequent starts: connection flags always apply, and any values already stored in `config.toml` are preserved for fields not explicitly provided.
 
 To also start Ollama (for local model inference), use the `standalone` profile:
 

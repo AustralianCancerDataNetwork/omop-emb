@@ -16,7 +16,7 @@ from omop_emb.config import (
     get_supported_index_types_for_backend,
     is_supported_index_metric_combination_for_backend,
     is_index_type_supported_for_backend,
-    get_config,
+    OmopEmbConfig,
     resolve_omop_emb_engine
 )
 
@@ -901,7 +901,7 @@ def resolve_backend(backend_type: Optional[Union[str, BackendType]] = None) -> E
     - ``sqlitevec``: uses sqlite_path from config (defaults to ``:memory:``).
     - ``pgvector``: uses the ``emb_db`` resource from oa-configurator.
     """
-    cfg = get_config()
+    cfg = OmopEmbConfig.get_config()
     if backend_type is None:
         backend_str = cfg.backend
     else:

@@ -36,7 +36,7 @@ from omop_emb.backends.base_backend import (
     EmbeddingModelRecord,
 )
 from omop_emb.backends.index_config import IndexConfig
-from omop_emb.config import BackendType, MetricType, ProviderType, get_config
+from omop_emb.config import BackendType, MetricType, OmopEmbConfig, ProviderType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
 
 if TYPE_CHECKING:
@@ -145,7 +145,7 @@ class EmbeddingReaderInterface:
         self._cdm_engine = omop_cdm_engine
 
         # FAISS fast path activated at construction, not mid-search
-        _faiss_dir = faiss_cache_dir or get_config().faiss_cache_dir
+        _faiss_dir = faiss_cache_dir or OmopEmbConfig.get_config().faiss_cache_dir
         self._faiss_cache: Optional["FAISSCache"] = None
         if _faiss_dir is not None:
             try:

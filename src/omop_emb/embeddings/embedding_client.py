@@ -17,7 +17,7 @@ import numpy as np
 from openai import OpenAI
 
 from .embedding_providers import EmbeddingProvider, get_provider_for_api_base
-from omop_emb.config import get_config
+from omop_emb.config import OmopEmbConfig
 
 
 class EmbeddingRole(StrEnum):
@@ -123,7 +123,7 @@ class EmbeddingClient:
         if self._embedding_dim is not None:
             return self._embedding_dim
 
-        cfg_dim = get_config().embedding_dim
+        cfg_dim = OmopEmbConfig.get_config().embedding_dim
         if cfg_dim is not None:
             self._embedding_dim = cfg_dim
             logger.debug(f"Embedding dimension set from config: {self._embedding_dim}.")
@@ -246,7 +246,7 @@ class EmbeddingClient:
         Tuple[str, str]
             A tuple containing the document embedding prefix and the query embedding prefix.
         """
-        cfg = get_config()
+        cfg = OmopEmbConfig.get_config()
         document_embedding_prefix = cfg.document_embedding_prefix
         query_embedding_prefix = cfg.query_embedding_prefix
 

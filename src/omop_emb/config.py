@@ -7,7 +7,7 @@ from typing import ClassVar, Dict, Final, Tuple
 
 from pydantic import Field
 from sqlalchemy import Engine
-from oa_configurator import PackageConfigBase, ResourceSpec, Resolver, load_stack_config
+from oa_configurator import PackageConfigBase, ResourceSpec, Resolver
 from oa_configurator import configure_logging as _configure_logging
 from omop_alchemy.config import CDM_DB_RESOURCE
 
@@ -69,22 +69,13 @@ class OmopEmbConfig(PackageConfigBase):
     )
 
 
-def get_resolver() -> Resolver:
-    """Return a Resolver loaded from the active stack config."""
-    return Resolver(load_stack_config())
-
-
-def get_config() -> OmopEmbConfig:
-    """Return the omop-emb typed config from the active stack config."""
-    return OmopEmbConfig.from_stack(load_stack_config())
-
 def resolve_omop_cdm_engine() -> Engine:
     """Resolve CDM engine via oa-configurator, used read-only."""
-    return get_resolver().resolve_resource(CDM_DB_RESOURCE).create_engine()
+    return Resolver.from_active_config().resolve_resource(CDM_DB_RESOURCE).create_engine()
 
 def resolve_omop_emb_engine() -> Engine:
     """Resolve embedding database engine via oa-configurator."""
-    return get_resolver().resolve_resource(EMB_DB_RESOURCE).create_engine()
+    return Resolver.from_active_config().resolve_resource(EMB_DB_RESOURCE).create_engine()
 
 def configure_logging(verbosity: int = 0) -> None:
     """Configure logging for omop-emb and its dependencies."""

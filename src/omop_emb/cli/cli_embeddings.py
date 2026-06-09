@@ -10,7 +10,7 @@ from tqdm import tqdm
 from omop_emb.utils.cdm import check_concept_cdm
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.backends import resolve_backend
-from omop_emb.config import IndexType, MetricType, get_config, resolve_omop_cdm_engine
+from omop_emb.config import IndexType, MetricType, OmopEmbConfig, resolve_omop_cdm_engine
 from omop_emb.embeddings import EmbeddingClient
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
@@ -108,7 +108,7 @@ def add_embeddings(
     ``create-index`` afterwards to upgrade to an HNSW approximate index.
     """
 
-    cfg = get_config()
+    cfg = OmopEmbConfig.get_config()
     resolved_api_base = api_base or cfg.ollama_api_base
     resolved_api_key = api_key or cfg.api_key
 
@@ -223,7 +223,7 @@ def create_index(
     locked in and all subsequent queries must use the same metric.
     """
 
-    cfg = get_config()
+    cfg = OmopEmbConfig.get_config()
     resolved_api_base = api_base or cfg.ollama_api_base
     resolved_api_key = api_key or cfg.api_key
 
@@ -409,7 +409,7 @@ def search(
     )] = None,
 ):
 
-    cfg = get_config()
+    cfg = OmopEmbConfig.get_config()
     resolved_api_base = api_base or cfg.ollama_api_base
     resolved_api_key = api_key or cfg.api_key
 

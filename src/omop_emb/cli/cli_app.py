@@ -2,7 +2,7 @@ from typing import Annotated
 
 import typer
 
-from omop_emb.config import configure_logging
+from omop_emb.config import OmopEmbConfig
 from . import (
     cli_embeddings as embeddings,
     cli_legacy as legacy,
@@ -23,7 +23,7 @@ def _main(
         typer.Option("--verbose", "-v", count=True, help="Increase log verbosity (-v INFO, -vv DEBUG)."),
     ] = 0,
 ) -> None:
-    configure_logging(verbosity=verbose)
+    OmopEmbConfig.configure_logging(verbosity=verbose)
 
 
 app.add_typer(embeddings.app, name="embeddings")

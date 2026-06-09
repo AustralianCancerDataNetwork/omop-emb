@@ -8,7 +8,7 @@ from typing import ClassVar, Dict, Final, Tuple
 from pydantic import Field
 from sqlalchemy import Engine
 from oa_configurator import PackageConfigBase, ResourceSpec, Resolver
-from oa_configurator import configure_logging as _configure_logging
+
 from omop_alchemy.config import CDM_DB_RESOURCE
 
 EMB_DB_RESOURCE: Final[str] = "emb_db"
@@ -23,6 +23,7 @@ class OmopEmbConfig(PackageConfigBase):
     """
 
     tool_name: ClassVar[str] = TOOL_NAME
+    extra_logging_namespaces: ClassVar[tuple[str, ...]] = ("omop_alchemy",)
     required_resources: ClassVar[tuple[str, ...]] = (CDM_DB_RESOURCE,)
     owned_resources: ClassVar[tuple[ResourceSpec, ...]] = (
         ResourceSpec(
@@ -77,9 +78,6 @@ def resolve_omop_emb_engine() -> Engine:
     """Resolve embedding database engine via oa-configurator."""
     return Resolver.from_active_config().resolve_resource(EMB_DB_RESOURCE).create_engine()
 
-def configure_logging(verbosity: int = 0) -> None:
-    """Configure logging for omop-emb and its dependencies."""
-    _configure_logging(verbosity=verbosity, extra_namespaces=["omop_alchemy", TOOL_NAME])
 
 
 class ProviderType(StrEnum):

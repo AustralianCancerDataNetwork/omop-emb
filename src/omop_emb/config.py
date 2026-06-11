@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar, Dict, Final, Tuple
+from typing import ClassVar, Dict, Tuple
 
 from pydantic import Field
 from sqlalchemy import Engine
 from oa_configurator import PackageConfigBase, ResourceSpec, Resolver
 
-from omop_alchemy.config import CDM_DB_RESOURCE
-
-EMB_DB_RESOURCE: Final[str] = "emb_db"
-TOOL_NAME: Final[str] = "omop_emb"
+from omop_alchemy.config import OmopAlchemyConfig
 
 
 class OmopEmbConfig(PackageConfigBase):
@@ -22,19 +19,39 @@ class OmopEmbConfig(PackageConfigBase):
     configured by omop-alchemy.
     """
 
-    tool_name: ClassVar[str] = TOOL_NAME
-    extra_logging_namespaces: ClassVar[tuple[str, ...]] = ("omop_alchemy",)
-    required_resources: ClassVar[tuple[str, ...]] = (CDM_DB_RESOURCE,)
-    owned_resources: ClassVar[tuple[ResourceSpec, ...]] = (
-        ResourceSpec(
-            semantic_name=EMB_DB_RESOURCE,
-            display_name="Embedding Database",
-            description="pgvector database for storing OMOP concept embeddings.",
-            connection_name_hint="emb",
-            cdm_schema_default="public",
-            is_cdm_database=False,
-        ),
+    EMB_DB: ClassVar[ResourceSpec] = ResourceSpec(
+        semantic_name="emb_db",
+        display_name="Embedding Database",
+        description="pgvector database for storing OMOP concept embeddings.",
+        connection_name_hint="emb",
+        cdm_schema_default="public",
+        is_cdm_database=False,
     )
+    TEST_DB: ClassVar[ResourceSpec] = ResourceSpec(
+        semantic_name="test_emb_db",
+        display_name="Test Embedding Database",
+        description=(
+            "Dedicated PostgreSQL/pgvector database for running omop-emb integration tests."
+        ),
+        connection_name_hint="pg_test_emb",
+        is_cdm_database=False,
+        cdm_schema_default="public",
+        defaults={
+            "dialect": "postgresql+psycopg",
+            "host": "localhost",
+            "port": "55432",
+            "user": "test",
+            "password": "test",
+            "database_name": "test_omop_emb",
+            "cdm_schema": "public",
+        },
+    )
+
+    tool_name: ClassVar[str] = "omop_emb"
+    extra_logging_namespaces: ClassVar[tuple[str, ...]] = ("orm_loader", "omop_alchemy")
+    required_resources: ClassVar[tuple[str, ...]] = (OmopAlchemyConfig.CDM_DB.semantic_name,)
+    owned_resources: ClassVar[tuple[ResourceSpec, ...]] = (EMB_DB,)
+    test_resources: ClassVar[tuple[ResourceSpec, ...]] = (TEST_DB,)
 
     backend: str = Field(
         default="pgvector",
@@ -72,11 +89,11 @@ class OmopEmbConfig(PackageConfigBase):
 
 def resolve_omop_cdm_engine() -> Engine:
     """Resolve CDM engine via oa-configurator, used read-only."""
-    return Resolver.from_active_config().resolve_resource(CDM_DB_RESOURCE).create_engine()
+    return Resolver.from_active_config().resolve_resource(OmopAlchemyConfig.CDM_DB.semantic_name).create_engine()
 
 def resolve_omop_emb_engine() -> Engine:
     """Resolve embedding database engine via oa-configurator."""
-    return Resolver.from_active_config().resolve_resource(EMB_DB_RESOURCE).create_engine()
+    return Resolver.from_active_config().resolve_resource(OmopEmbConfig.EMB_DB.semantic_name).create_engine()
 
 
 

@@ -15,6 +15,17 @@ Commands are organised into four subcommand groups:
 
 Run `omop-emb <group> --help` to list commands within a group.
 
+!!! note "Verbosity flag placement"
+    The `--verbose` / `-v` flag is a **global option** and must appear **before** the
+    subcommand name, not after it:
+
+    ```
+    omop-emb -v embeddings add-embeddings   # ✓ correct
+    omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
+    ```
+
+    Use `-v` for INFO level and `-vv` for DEBUG level.
+
 ## Prerequisites
 
 - **Backend installed**: `pip install omop-emb` (sqlite-vec) or

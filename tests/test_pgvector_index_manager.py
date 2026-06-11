@@ -21,6 +21,7 @@ from omop_emb.backends.pgvector.pg_index_manager import (
     PGVectorHNSWIndexManager,
 )
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
+from omop_emb.config import OmopEmbConfig
 from omop_emb.utils.embedding_utils import vector_column_type_for_dimensions
 
 
@@ -223,6 +224,7 @@ class TestMetricSupportGuards:
 # PGVectorHNSWIndexManager — integration tests (need DB)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.requires_resource(OmopEmbConfig.TEST_DB)
 @pytest.mark.pgvector
 @pytest.mark.integration
 class TestPGVectorHNSWIndexManagerIntegration:

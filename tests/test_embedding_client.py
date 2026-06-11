@@ -11,10 +11,17 @@ from unittest.mock import MagicMock, Mock, patch
 import numpy as np
 import pytest
 
-from omop_emb.config import ProviderType
+from omop_emb.config import OmopEmbConfig, ProviderType
 from omop_emb.embeddings import EmbeddingClient, EmbeddingRole, OllamaProvider
 from omop_emb.embeddings.embedding_client import EmbeddingClientError
-from omop_emb.config import ENV_DOCUMENT_EMBEDDING_PREFIX, ENV_QUERY_EMBEDDING_PREFIX
+
+
+def _make_emb_config(doc_prefix: str = "", query_prefix: str = "") -> OmopEmbConfig:
+    """Build a minimal OmopEmbConfig with the requested embedding prefixes."""
+    return OmopEmbConfig(
+        document_embedding_prefix=doc_prefix,
+        query_embedding_prefix=query_prefix,
+    )
 
 OLLAMA_BASE = "http://localhost:11434/v1"
 OPENAI_BASE = "https://api.openai.com/v1"
@@ -378,59 +385,56 @@ class TestEmbeddingClientError:
 
 @pytest.mark.unit
 class TestLoadEmbeddingPrefixes:
-    def test_returns_empty_strings_when_env_not_set(self, monkeypatch):
-        monkeypatch.delenv(ENV_DOCUMENT_EMBEDDING_PREFIX, raising=False)
-        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+    def test_returns_empty_strings_when_not_configured(self, monkeypatch):
+        monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: _make_emb_config())
         doc_prefix, query_prefix = EmbeddingClient.load_embedding_prefixes()
         assert doc_prefix == ""
         assert query_prefix == ""
 
     def test_returns_configured_prefixes(self, monkeypatch):
-        monkeypatch.setenv(ENV_DOCUMENT_EMBEDDING_PREFIX, "search_document: ")
-        monkeypatch.setenv(ENV_QUERY_EMBEDDING_PREFIX, "search_query: ")
+        monkeypatch.setattr(
+            OmopEmbConfig, "get_config",
+            lambda: _make_emb_config("search_document: ", "search_query: "),
+        )
         doc_prefix, query_prefix = EmbeddingClient.load_embedding_prefixes()
         assert doc_prefix == "search_document: "
         assert query_prefix == "search_query: "
 
     def test_logs_info_when_document_prefix_is_set(self, monkeypatch, caplog):
-        monkeypatch.setenv(ENV_DOCUMENT_EMBEDDING_PREFIX, "passage: ")
-        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        monkeypatch.setattr(
+            OmopEmbConfig, "get_config",
+            lambda: _make_emb_config(doc_prefix="passage: "),
+        )
         import logging
         with caplog.at_level(logging.INFO, logger="omop_emb.embeddings.embedding_client"):
             EmbeddingClient.load_embedding_prefixes()
-        assert any(
-            "passage: " in r.message and r.levelname == "INFO"
-            for r in caplog.records
-        )
+        assert any("passage: " in r.message and r.levelname == "INFO" for r in caplog.records)
 
     def test_logs_info_when_query_prefix_is_set(self, monkeypatch, caplog):
-        monkeypatch.delenv(ENV_DOCUMENT_EMBEDDING_PREFIX, raising=False)
-        monkeypatch.setenv(ENV_QUERY_EMBEDDING_PREFIX, "search_query: ")
+        monkeypatch.setattr(
+            OmopEmbConfig, "get_config",
+            lambda: _make_emb_config(query_prefix="search_query: "),
+        )
         import logging
         with caplog.at_level(logging.INFO, logger="omop_emb.embeddings.embedding_client"):
             EmbeddingClient.load_embedding_prefixes()
-        assert any(
-            "search_query: " in r.message and r.levelname == "INFO"
-            for r in caplog.records
-        )
+        assert any("search_query: " in r.message and r.levelname == "INFO" for r in caplog.records)
 
     def test_logs_warning_when_document_prefix_not_set(self, monkeypatch, caplog):
-        monkeypatch.delenv(ENV_DOCUMENT_EMBEDDING_PREFIX, raising=False)
-        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: _make_emb_config())
         import logging
         with caplog.at_level(logging.WARNING, logger="omop_emb.embeddings.embedding_client"):
             EmbeddingClient.load_embedding_prefixes()
         warning_messages = [r.message for r in caplog.records if r.levelname == "WARNING"]
-        assert any(ENV_DOCUMENT_EMBEDDING_PREFIX in m for m in warning_messages)
+        assert any("omop-config configure omop_emb" in m for m in warning_messages)
 
     def test_logs_warning_when_query_prefix_not_set(self, monkeypatch, caplog):
-        monkeypatch.delenv(ENV_DOCUMENT_EMBEDDING_PREFIX, raising=False)
-        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: _make_emb_config())
         import logging
         with caplog.at_level(logging.WARNING, logger="omop_emb.embeddings.embedding_client"):
             EmbeddingClient.load_embedding_prefixes()
         warning_messages = [r.message for r in caplog.records if r.levelname == "WARNING"]
-        assert any(ENV_QUERY_EMBEDDING_PREFIX in m for m in warning_messages)
+        assert any("omop-config configure omop_emb" in m for m in warning_messages)
 
 
 # ---------------------------------------------------------------------------
@@ -441,14 +445,12 @@ class TestLoadEmbeddingPrefixes:
 class TestApplyEmbeddingPrefix:
     @pytest.fixture
     def client_with_prefixes(self, monkeypatch, mock_openai):
-        monkeypatch.setenv(ENV_DOCUMENT_EMBEDDING_PREFIX, "doc: ")
-        monkeypatch.setenv(ENV_QUERY_EMBEDDING_PREFIX, "query: ")
+        monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: _make_emb_config("doc: ", "query: "))
         return EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
 
     @pytest.fixture
     def client_no_prefixes(self, monkeypatch, mock_openai):
-        monkeypatch.delenv(ENV_DOCUMENT_EMBEDDING_PREFIX, raising=False)
-        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: _make_emb_config())
         return EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
 
     def test_document_prefix_prepended_to_string(self, client_with_prefixes):
@@ -490,8 +492,7 @@ class TestApplyEmbeddingPrefix:
     def test_prefix_reflected_in_api_call(self, monkeypatch, mock_openai):
         """Verify the prefixed text reaches the OpenAI API call."""
         _, oi = mock_openai
-        monkeypatch.setenv(ENV_DOCUMENT_EMBEDDING_PREFIX, "passage: ")
-        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: _make_emb_config(doc_prefix="passage: "))
         c = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
         oi.embeddings.create.return_value = _make_embedding_response([[0.1, 0.2]])
         c.embeddings("diabetes", embedding_role=EmbeddingRole.DOCUMENT)
@@ -500,8 +501,7 @@ class TestApplyEmbeddingPrefix:
 
     def test_no_prefix_passes_text_verbatim_to_api(self, monkeypatch, mock_openai):
         _, oi = mock_openai
-        monkeypatch.delenv(ENV_DOCUMENT_EMBEDDING_PREFIX, raising=False)
-        monkeypatch.delenv(ENV_QUERY_EMBEDDING_PREFIX, raising=False)
+        monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: _make_emb_config())
         c = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())
         oi.embeddings.create.return_value = _make_embedding_response([[0.1, 0.2]])
         c.embeddings("diabetes", embedding_role=EmbeddingRole.DOCUMENT)

@@ -86,6 +86,7 @@ services:
           --user ${OMOP_EMB_DB_USER:-omop}
           --password ${OMOP_EMB_DB_PASSWORD:-omop}
           --database-name ${OMOP_EMB_DB_NAME:-omop_emb} &&
+        omop-config configure orm_loader &&
         sleep infinity
       "
 

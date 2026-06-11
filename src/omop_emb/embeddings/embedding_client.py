@@ -239,16 +239,20 @@ class EmbeddingClient:
 
     @staticmethod
     def load_embedding_prefixes() -> Tuple[str, str]:
-        """Load embedding prefixes for document and query roles from environment variables.
+        """Load embedding prefixes for document and query roles from the OA_Configurator config.
 
         Returns
         -------
         Tuple[str, str]
             A tuple containing the document embedding prefix and the query embedding prefix.
         """
-        cfg = OmopEmbConfig.get_config()
-        document_embedding_prefix = cfg.document_embedding_prefix
-        query_embedding_prefix = cfg.query_embedding_prefix
+        try:
+            cfg = OmopEmbConfig.get_config()
+            document_embedding_prefix = cfg.document_embedding_prefix
+            query_embedding_prefix = cfg.query_embedding_prefix
+        except Exception:
+            document_embedding_prefix = ""
+            query_embedding_prefix = ""
 
         for role, prefix in [
             (EmbeddingRole.DOCUMENT, document_embedding_prefix),

@@ -7,7 +7,7 @@ from typing import ClassVar, Dict, Tuple
 
 from pydantic import Field
 from sqlalchemy import Engine
-from oa_configurator import PackageConfigBase, ResourceSpec, Resolver
+from oa_configurator import PackageConfigBase, ResourceSpec
 
 from omop_alchemy.config import OmopAlchemyConfig
 
@@ -89,11 +89,11 @@ class OmopEmbConfig(PackageConfigBase):
 
 def resolve_omop_cdm_engine() -> Engine:
     """Resolve CDM engine via oa-configurator, used read-only."""
-    return Resolver.from_active_config().resolve_resource(OmopAlchemyConfig.CDM_DB.semantic_name).create_engine()
+    return OmopEmbConfig.get_engine(OmopAlchemyConfig.CDM_DB.semantic_name)
 
 def resolve_omop_emb_engine() -> Engine:
     """Resolve embedding database engine via oa-configurator."""
-    return Resolver.from_active_config().resolve_resource(OmopEmbConfig.EMB_DB.semantic_name).create_engine()
+    return OmopEmbConfig.get_engine(OmopEmbConfig.EMB_DB.semantic_name)
 
 
 

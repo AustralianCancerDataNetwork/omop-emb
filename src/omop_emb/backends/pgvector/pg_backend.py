@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Mapping, Optional, Sequence, Tuple, Type
+from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
 from sqlalchemy import Engine, select, text, create_engine
 
 try:
-    from pgvector.sqlalchemy import Vector
+    from pgvector.sqlalchemy import Vector  # noqa: F401
 except ImportError as _e:
     raise ImportError(
         "pgvector is not installed. Install it with: pip install omop-emb[pgvector]"
@@ -31,7 +31,6 @@ from omop_emb.backends.embedding_table import (
 from omop_emb.backends.pgvector.pg_sql import (
     EMBEDDING_COLUMN_NAME,
     drop_pg_embedding_table,
-    get_distance,
     q_all_concept_ids,
     q_nearest_concept_ids,
     q_upsert_embeddings,

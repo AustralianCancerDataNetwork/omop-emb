@@ -104,4 +104,4 @@ See the [oa-configurator integration guide](https://AustralianCancerDataNetwork.
 ## Further reading
 
 - [oa-configurator integration guide](https://AustralianCancerDataNetwork.github.io/oa-configurator/integration/) — full config reference, profiles, multi-package setups
-- [Backend selection](backend-selection.md) — choosing between pgvector and sqlite-vec
+- [Backend selection](../usage/backend-selection.md) — choosing between pgvector and sqlite-vec

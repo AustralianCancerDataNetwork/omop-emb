@@ -1,11 +1,10 @@
 """Validation tests for EmbeddingInterface input contracts and naming guarantees."""
 
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 
-import numpy as np
 import pytest
 
-from omop_emb.config import IndexType, MetricType, ProviderType
+from omop_emb.config import MetricType, ProviderType
 from omop_emb.embeddings import OllamaProvider
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.model_registry.model_registry_manager import RegistryManager

@@ -65,7 +65,7 @@ def add_embeddings_from_h5(
     EMBEDDINGS_KEY = "embeddings"
 
     try:
-        import h5py
+        import h5py  # type: ignore[import-unresolved]
     except ImportError:
         typer.echo(
             "h5py is required for this command. Install it with: pip install h5py",

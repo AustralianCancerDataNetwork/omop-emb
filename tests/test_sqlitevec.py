@@ -13,8 +13,6 @@ from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.config import MetricType
 
 from .conftest import (
-    CONCEPT_EMBEDDINGS,
-    CONCEPT_RECORDS,
     EMBEDDING_DIM,
     MODEL_NAME,
     PROVIDER_TYPE,

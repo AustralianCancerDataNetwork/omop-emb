@@ -4,7 +4,7 @@ import inspect
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, fields, is_dataclass
 from enum import Enum
-from typing import Any, Callable, Mapping, Optional, Self, cast, get_type_hints
+from typing import Any, Callable, Optional, Self, cast, get_type_hints
 
 from omop_emb.config import IndexType, MetricType, parse_index_type
 

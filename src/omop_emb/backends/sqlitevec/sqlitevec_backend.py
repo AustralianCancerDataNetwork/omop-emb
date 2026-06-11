@@ -11,7 +11,6 @@ from typing import Mapping, Optional, Sequence, Tuple
 import numpy as np
 from numpy import ndarray
 from sqlalchemy import Engine, create_engine, event, text
-from sqlalchemy.orm import sessionmaker
 
 try:
     import sqlite_vec
@@ -20,7 +19,7 @@ except ImportError as _e:
         "sqlite-vec is not installed. Install it with: pip install sqlite-vec"
     ) from _e
 
-from omop_emb.config import BackendType, MetricType, ProviderType
+from omop_emb.config import BackendType, MetricType
 from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
     EmbeddingBackend,

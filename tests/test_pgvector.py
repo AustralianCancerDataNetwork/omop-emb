@@ -22,7 +22,6 @@ from .conftest import (
     HYPERTENSION_ID,
     MODEL_NAME,
     PROVIDER_TYPE,
-    QUERY_EMBEDDING,
 )
 from .shared_backend_tests import SharedBackendTests
 

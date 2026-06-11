@@ -10,17 +10,15 @@ from __future__ import annotations
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import inspect
-from sqlalchemy.engine import Engine
 
 pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed — skipping pgvector tests")
 
-from omop_emb.config import IndexType, MetricType, ProviderType, VectorColumnType
+from omop_emb.config import IndexType, MetricType, VectorColumnType
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.pgvector.pg_index_manager import (
     PGVectorFlatIndexManager,
     PGVectorHNSWIndexManager,
 )
-from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 from omop_emb.config import OmopEmbConfig
 from omop_emb.utils.embedding_utils import vector_column_type_for_dimensions
 

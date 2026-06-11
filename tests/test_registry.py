@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import pytest
-import sqlalchemy as sa
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
-from omop_emb.config import IndexType, MetricType, ProviderType
+from omop_emb.config import IndexType, MetricType
 from omop_emb.model_registry import RegistryManager
 from omop_emb.utils.errors import ModelRegistrationConflictError
 
@@ -126,7 +125,6 @@ class TestRegistryManager:
             index_config=FLAT,
             dimensions=EMBEDDING_DIM,
         )
-        other_safe = RegistryManager.safe_model_name("other-model")
         registry.register_model(
             model_name="other-model",
             provider_type=PROVIDER_TYPE,

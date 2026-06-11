@@ -2,11 +2,9 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Optional, overload
 import logging
-logger = logging.getLogger(__name__)
 
 from sqlalchemy import Select, func
 from sqlalchemy.sql.elements import ColumnElement
-from omop_alchemy.cdm.model.vocabulary import Concept
 
 from omop_emb.config import (
     MetricType,
@@ -14,6 +12,8 @@ from omop_emb.config import (
     PGVECTOR_VECTOR_MAX_DIMENSIONS,
     VectorColumnType
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)

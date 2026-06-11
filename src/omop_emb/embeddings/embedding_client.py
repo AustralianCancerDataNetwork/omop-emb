@@ -9,7 +9,6 @@ in the omop-emb registry.
 from __future__ import annotations
 
 import logging
-logger = logging.getLogger(__name__)
 from typing import Any, List, Optional, Tuple, Union, Dict
 from enum import StrEnum
 
@@ -18,6 +17,8 @@ from openai import OpenAI
 
 from .embedding_providers import EmbeddingProvider, get_provider_for_api_base
 from omop_emb.config import OmopEmbConfig
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingRole(StrEnum):
@@ -126,23 +127,24 @@ class EmbeddingClient:
         cfg_dim = OmopEmbConfig.get_config().embedding_dim
         if cfg_dim is not None:
             self._embedding_dim = cfg_dim
-            logger.debug(f"Embedding dimension set from config: {self._embedding_dim}.")
-            return self._embedding_dim
+            logger.debug(f"Embedding dimension set from config: {cfg_dim}.")
+            return cfg_dim
 
         provider_dim = self._provider.get_embedding_dim(model=self._model, api_base=self.api_base)
         if provider_dim is not None:
             self._embedding_dim = provider_dim
-            logger.debug(f"Embedding dimension discovered via provider API: {self._embedding_dim}.")
-            return self._embedding_dim
+            logger.debug(f"Embedding dimension discovered via provider API: {provider_dim}.")
+            return provider_dim
 
         logger.info(
             "Provider cannot discover embedding dimension automatically. "
             "Probing via a test API call. This happens once and is then cached."
         )
         response = self._base_client.embeddings.create(model=self._model, input=["test"])
-        self._embedding_dim = len(response.data[0].embedding)
-        logger.info(f"Embedding dimension discovered via live probe: {self._embedding_dim}.")
-        return self._embedding_dim
+        dim = len(response.data[0].embedding)
+        self._embedding_dim = dim
+        logger.info(f"Embedding dimension discovered via live probe: {dim}.")
+        return dim
 
     def embeddings(
         self,

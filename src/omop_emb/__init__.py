@@ -6,12 +6,12 @@ from omop_emb.embeddings import (
     EmbeddingClient,
     EmbeddingProvider,
     OllamaProvider,
-    get_provider_for_api_base
+    get_provider_for_api_base,
 )
 from omop_emb.config import (
-    BackendType, 
-    IndexType, 
-    MetricType, 
+    BackendType,
+    IndexType,
+    MetricType,
     ProviderType,
     parse_backend_type,
     parse_index_type,
@@ -24,13 +24,41 @@ from omop_emb.backends.index_config import (
     index_config_from_index_type,
 )
 from omop_emb.model_registry import (
-    EmbeddingModelRecord, 
-    RegistryManager
+    EmbeddingModelRecord,
+    RegistryManager,
 )
 from omop_emb.utils.embedding_utils import (
-    EmbeddingConceptFilter, 
+    EmbeddingConceptFilter,
     NearestConceptMatch,
-    ConceptEmbeddingRecord
+    ConceptEmbeddingRecord,
 )
 from omop_emb.backends.base_backend import EmbeddingBackend
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
+
+__all__ = [
+    "EmbeddingReaderInterface",
+    "EmbeddingWriterInterface",
+    "EmbeddingClient",
+    "EmbeddingProvider",
+    "OllamaProvider",
+    "get_provider_for_api_base",
+    "BackendType",
+    "IndexType",
+    "MetricType",
+    "ProviderType",
+    "parse_backend_type",
+    "parse_index_type",
+    "parse_metric_type",
+    "IndexConfig",
+    "FlatIndexConfig",
+    "HNSWIndexConfig",
+    "index_config_from_index_type",
+    "EmbeddingModelRecord",
+    "RegistryManager",
+    "EmbeddingConceptFilter",
+    "NearestConceptMatch",
+    "ConceptEmbeddingRecord",
+    "EmbeddingBackend",
+    "SQLiteVecEmbeddingBackend",
+    "create_sqlitevec_engine",
+]

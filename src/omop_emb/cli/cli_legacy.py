@@ -7,10 +7,9 @@ import numpy as np
 import typer
 from tqdm import tqdm
 
-import sqlalchemy as sa
 from omop_emb.backends import resolve_backend
 from omop_emb.backends.index_config import FlatIndexConfig
-from omop_emb.config import MetricType, ProviderType
+from omop_emb.config import MetricType, ProviderType, resolve_omop_cdm_engine
 from omop_emb.utils.cdm import fetch_cdm_concepts_for_ingestion
 from omop_emb.utils.embedding_utils import ConceptEmbeddingRecord
 
@@ -27,10 +26,6 @@ def add_embeddings_from_h5(
     model: Annotated[str, typer.Option(
         "--model", "-m",
         help="Canonical model name to register the embeddings under (e.g. 'nomic-embed-text:v1.5').",
-    )],
-    omop_cdm_db_url: Annotated[str, typer.Option(
-        "--omop-cdm-db-url",
-        help="Database URL for the OMOP CDM instance (e.g. postgresql://user:pass@host:port/db). Required to validate concept IDs and populate metadata.",
     )],
     provider_type: Annotated[ProviderType, typer.Option(
         "--provider-type",
@@ -121,7 +116,7 @@ def add_embeddings_from_h5(
         )
         typer.echo(f"Registered model '{model}' ({dimensions}d, metric={metric_type.value}).")
 
-        cdm_engine = sa.create_engine(omop_cdm_db_url, future=True, echo=False)
+        cdm_engine = resolve_omop_cdm_engine()
 
         n_batches = (total + batch_size - 1) // batch_size
         typer.echo(f"Ingesting {total:,} embeddings in {n_batches} batch(es) of {batch_size:,}...")

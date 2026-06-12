@@ -85,7 +85,10 @@ services:
           --host omop-emb-db --port 5432
           --user ${OMOP_EMB_DB_USER:-omop}
           --password ${OMOP_EMB_DB_PASSWORD:-omop}
-          --database-name ${OMOP_EMB_DB_NAME:-omop_emb} &&
+          --database-name ${OMOP_EMB_DB_NAME:-omop_emb}
+          --ollama-api-base ${OLLAMA_API_BASE:-http://ollama:11434/v1}
+          --api-key ollama
+          --embedding-model ${OMOP_EMB_MODEL:-qwen3-embedding:0.6b} &&
         omop-config configure orm_loader &&
         sleep infinity
       "

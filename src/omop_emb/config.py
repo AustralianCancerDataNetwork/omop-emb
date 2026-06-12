@@ -85,6 +85,10 @@ class OmopEmbConfig(PackageConfigBase):
         default="ollama",
         description="API key for the model provider ('ollama' for local Ollama).",
     )
+    embedding_model: str = Field(
+        default="qwen3-embedding:0.6b",
+        description="Model name for generating concept embeddings.",
+    )
 
 
 def resolve_omop_cdm_engine() -> Engine:

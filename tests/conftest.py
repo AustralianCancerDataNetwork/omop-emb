@@ -83,13 +83,13 @@ def pg_engine() -> Iterator[sa.Engine]:
     """Session-scoped PostgreSQL engine. Skipped when test_emb_db is not configured."""
     from oa_configurator.pytest_plugin import (
         create_fresh_test_db, drop_test_db,
-        ensure_db_extension_exists, ensure_test_user_exists, resolve_test_resource,
+        ensure_test_user_exists, require_pg_extension, resolve_test_resource,
     )
 
     raw_url = resolve_test_resource(OmopEmbConfig.TEST_DB)
     ensure_test_user_exists(raw_url)
-    url = create_fresh_test_db(raw_url)
-    ensure_db_extension_exists(url, "vector")
+    url = create_fresh_test_db(raw_url, extensions=["vector"])
+    require_pg_extension(url, "vector")  # defensive: verify installation succeeded
     engine = sa.create_engine(url, echo=False, future=True)
     try:
         with engine.connect() as conn:

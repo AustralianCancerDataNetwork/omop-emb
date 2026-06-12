@@ -31,7 +31,6 @@ DEFAULT_HNSW_CONFIG = HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=1
 @pytest.fixture(scope="module")
 def hnsw_table(pg_engine):
     with pg_engine.begin() as conn:
-        conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector CASCADE"))
         conn.execute(sa.text(
             f"CREATE TABLE IF NOT EXISTS {TABLENAME} "
             f"(concept_id INT PRIMARY KEY, {EMBEDDING_COL} vector(4))"

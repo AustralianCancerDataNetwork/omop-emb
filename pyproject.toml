@@ -34,7 +34,7 @@ classifiers = [
 dependencies = [
     "numpy>=1.26",
     "omop-alchemy>=0.6.3",
-    #"oa-configurator>=0.0.1",  # uncomment once published to PyPI
+    "oa-configurator>=0.1.0",
     "sqlalchemy>=2.0.45",
     "typing-extensions>=4.15.0",
     "sqlite-vec>=0.1.9",
@@ -55,7 +55,8 @@ faiss-cpu = [
 ]
 [dependency-groups]
 dev = [
-    "omop-emb[faiss-cpu,pgvector]", 
+    "oa-configurator[postgres]>=0.1.0",
+    "omop-emb[faiss-cpu,pgvector]",
     "mypy>=1.19.1",
     "pytest>=9.0.3",  # CVE-2025-71176
     "pytest-cov>=7.0.0",

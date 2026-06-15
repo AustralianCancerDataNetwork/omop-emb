@@ -40,11 +40,12 @@ backend = PGVectorEmbeddingBackend.from_db_url(db_url="postgresql+psycopg://user
 
 ```python
 from omop_emb import EmbeddingWriterInterface, EmbeddingClient
-from omop_emb.config import MetricType
+from omop_emb.config import MetricType, ProviderType
 
 embedding_client = EmbeddingClient(
     model="nomic-embed-text:v1.5",
     api_base="http://localhost:11434/v1",
+    provider_type=ProviderType.OLLAMA,
 )
 
 writer = EmbeddingWriterInterface(
@@ -154,10 +155,12 @@ results = reader.get_nearest_concepts(
 
 ```python
 from omop_emb import EmbeddingClient
+from omop_emb.config import ProviderType
 
 embedding_client = EmbeddingClient(
     model="nomic-embed-text:v1.5",
     api_base="http://localhost:11434/v1",
+    provider_type=ProviderType.OLLAMA,
 )
 
 results = reader.get_nearest_concepts_from_query_texts(
@@ -224,23 +227,18 @@ model name at construction time and exposes `canonical_model_name` as the stable
 identifier used in the registry.
 
 ```python
-from omop_emb import EmbeddingClient, OllamaProvider
+from omop_emb import EmbeddingClient
+from omop_emb.config import ProviderType
 
-# Ollama — provider inferred from URL
+# Ollama — provider specified explicitly (works with any hostname or IP)
 client = EmbeddingClient(
     model="nomic-embed-text:v1.5",
-    api_base="http://ollama:11434/v1",
-)
-
-# Explicit provider (custom or future backends)
-client = EmbeddingClient(
-    model="nomic-embed-text:v1.5",
-    api_base="http://my-custom-host/v1",
-    provider=OllamaProvider(),
+    api_base="http://host.docker.internal:11434/v1",
+    provider_type=ProviderType.OLLAMA,
 )
 
 print(client.canonical_model_name)  # "nomic-embed-text:v1.5"
-print(client.embedding_dim)         # auto-discovered based on provider
+print(client.embedding_dim)         # auto-discovered via Ollama /api/show
 ```
 
 ---

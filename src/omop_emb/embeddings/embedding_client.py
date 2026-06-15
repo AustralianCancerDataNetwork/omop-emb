@@ -15,8 +15,8 @@ from enum import StrEnum
 import numpy as np
 from openai import OpenAI
 
-from .embedding_providers import EmbeddingProvider, get_provider_for_api_base
-from omop_emb.config import OmopEmbConfig
+from .embedding_providers import EmbeddingProvider, get_provider_from_provider_type
+from omop_emb.config import OmopEmbConfig, ProviderType
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +43,15 @@ class EmbeddingClient:
         construction ``self.model`` is the stable key used in the omop-emb
         registry.
     api_base : str
-        API endpoint base URL, e.g. ``'http://localhost:11434/v1'``.
+        API endpoint base URL, e.g. ``'http://host.docker.internal:11434/v1'``.
     api_key : str, optional
         API key.  Defaults to ``'ollama'`` (ignored by Ollama, required by
         the OpenAI SDK).
     embedding_batch_size : int, optional
         Number of texts per API call.  Default is 32.
-    provider : EmbeddingProvider, optional
+    provider_type : ProviderType, optional
         Controls model-name canonicalisation and embedding-dimension
-        discovery.  Inferred from *api_base* / *api_key* when omitted.
+        discovery.  Defaults to ``ProviderType.OLLAMA``.
     """
 
     def __init__(
@@ -60,10 +60,9 @@ class EmbeddingClient:
         api_base: str,
         api_key: str = "ollama",
         embedding_batch_size: int = 32,
-        provider: Optional[EmbeddingProvider] = None,
+        provider_type: ProviderType = ProviderType.OLLAMA,
     ) -> None:
-        if provider is None:
-            provider = get_provider_for_api_base(api_base, api_key)
+        provider = get_provider_from_provider_type(provider_type)
         self._provider = provider
         self._model = provider.canonical_model_name(model)
         self._embedding_batch_size = embedding_batch_size

@@ -88,7 +88,7 @@ embeddings. Models are registered with a FLAT index; use
 `maintenance rebuild-index` afterwards to build an HNSW index.
 
 ```bash
-omop-emb embeddings add-embeddings --api-base <URL> --api-key <KEY> [OPTIONS]
+omop-emb embeddings add-embeddings --api-base <URL> --provider <TYPE> [OPTIONS]
 ```
 
 **Embedding API Options**
@@ -96,7 +96,8 @@ omop-emb embeddings add-embeddings --api-base <URL> --api-key <KEY> [OPTIONS]
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--api-base` | | **required** | Base URL of the embedding API. |
-| `--api-key` | | **required** | API key for the embedding API. |
+| `--api-key` | | `ollama` | API key for the embedding API. |
+| `--provider` | | `ollama` | Embedding provider type (e.g. `ollama`). |
 | `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
 | `--batch-size` | `-b` | `100` | Concepts per API batch. |
 
@@ -127,7 +128,7 @@ Ingest embeddings and immediately build an index in one step. Equivalent to
 running `add-embeddings` followed by `create-index`.
 
 ```bash
-omop-emb embeddings add-embeddings-with-index --api-base <URL> --api-key <KEY> [OPTIONS]
+omop-emb embeddings add-embeddings-with-index --api-base <URL> --provider <TYPE> [OPTIONS]
 ```
 
 Accepts all options from `add-embeddings`, plus:
@@ -147,10 +148,10 @@ Accepts all options from `add-embeddings`, plus:
 ### `create-index`
 
 Build or rebuild the index for a model that already has embeddings stored.
-`--api-base` and `--api-key` are used only to resolve the canonical model name.
+`--api-base`, `--api-key`, and `--provider` are used only to resolve the canonical model name.
 
 ```bash
-omop-emb embeddings create-index --api-base <URL> --api-key <KEY> --model <NAME> [OPTIONS]
+omop-emb embeddings create-index --api-base <URL> --provider <TYPE> --model <NAME> [OPTIONS]
 ```
 
 **Embedding API Options**
@@ -158,7 +159,8 @@ omop-emb embeddings create-index --api-base <URL> --api-key <KEY> --model <NAME>
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--api-base` | | **required** | Base URL of the embedding API. |
-| `--api-key` | | **required** | API key. |
+| `--api-key` | | `ollama` | API key. |
+| `--provider` | | `ollama` | Embedding provider type (e.g. `ollama`). |
 | `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
 
 **Index Options**
@@ -186,7 +188,7 @@ If `OMOP_CDM_DB_URL` is set, results are enriched with concept names from the
 CDM. Without it, the `concept_name` column is left empty.
 
 ```bash
-omop-emb embeddings search --api-base <URL> --api-key <KEY> --query "hypertension" [OPTIONS]
+omop-emb embeddings search --api-base <URL> --provider <TYPE> --query "hypertension" [OPTIONS]
 ```
 
 **Embedding API Options**
@@ -194,7 +196,8 @@ omop-emb embeddings search --api-base <URL> --api-key <KEY> --query "hypertensio
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--api-base` | | **required** | Base URL of the embedding API. |
-| `--api-key` | | **required** | API key. |
+| `--api-key` | | `ollama` | API key. |
+| `--provider` | | `ollama` | Embedding provider type (e.g. `ollama`). |
 | `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
 | `--batch-size` | `-b` | `100` | Batch size for embedding generation. |
 

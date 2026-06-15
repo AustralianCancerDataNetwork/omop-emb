@@ -6,7 +6,6 @@ from omop_emb.embeddings import (
     EmbeddingClient,
     EmbeddingProvider,
     OllamaProvider,
-    get_provider_for_api_base,
 )
 from omop_emb.config import (
     BackendType,
@@ -41,7 +40,6 @@ __all__ = [
     "EmbeddingClient",
     "EmbeddingProvider",
     "OllamaProvider",
-    "get_provider_for_api_base",
     "BackendType",
     "IndexType",
     "MetricType",

@@ -5,7 +5,6 @@ import pytest
 from omop_emb.config import ProviderType
 from omop_emb.embeddings import (
     OllamaProvider,
-    get_provider_for_api_base,
     get_provider_from_provider_type,
 )
 
@@ -49,34 +48,6 @@ class TestOllamaProviderCanonicalModelName:
 
     def test_strips_whitespace_with_explicit_tag(self):
         assert OllamaProvider().canonical_model_name("  llama3:8b  ") == "llama3:8b"
-
-
-class TestGetProviderForApiBase:
-    def test_ollama_in_url(self):
-        assert isinstance(get_provider_for_api_base("http://ollama.internal/v1"), OllamaProvider)
-
-    def test_localhost_with_ollama_key(self):
-        assert isinstance(get_provider_for_api_base("http://localhost:11434/v1", "ollama"), OllamaProvider)
-
-    def test_127_0_0_1_with_ollama_key(self):
-        assert isinstance(get_provider_for_api_base("http://127.0.0.1:11434/v1", "ollama"), OllamaProvider)
-
-    def test_non_ollama_url_raises(self):
-        with pytest.raises(ValueError, match="Only Ollama"):
-            get_provider_for_api_base("http://localhost:8000/v1", "sk-real-key")
-
-    def test_openai_api_raises(self):
-        with pytest.raises(ValueError, match="Only Ollama"):
-            get_provider_for_api_base("https://api.openai.com/v1", "sk-abc")
-
-    def test_ollama_detection_is_case_sensitive(self):
-        """'Ollama' with a capital O is not detected as Ollama — raises ValueError."""
-        with pytest.raises(ValueError, match="Only Ollama"):
-            get_provider_for_api_base("http://Ollama.internal/v1")
-
-    def test_arbitrary_remote_url_raises(self):
-        with pytest.raises(ValueError, match="Only Ollama"):
-            get_provider_for_api_base("https://embeddings.example.com/v1", "sk-x")
 
 
 @pytest.mark.unit

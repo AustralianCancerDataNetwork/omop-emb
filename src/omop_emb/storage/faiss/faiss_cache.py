@@ -37,7 +37,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import batched
 from pathlib import Path
@@ -191,7 +191,7 @@ class CacheMetadata:
             If the JSON is malformed or contains an unknown enum value.
         """
         d = json.loads(text)
-        if not "index_config" in d:
+        if "index_config" not in d:
             raise ValueError("Missing 'index_config' field in cache metadata JSON.")
 
         return cls(
@@ -259,6 +259,7 @@ class FAISSCache:
     ) -> None:
         self._model_name = model_name
         self._cache_dir = Path(cache_dir).expanduser().resolve()
+        self._index_cache: Optional[Tuple[MetricType, IndexConfig, faiss.Index]] = None
 
     # ------------------------------------------------------------------
     # Paths
@@ -528,10 +529,7 @@ class FAISSCache:
                 params = faiss.SearchParameters()
                 params.sel = sel
 
-        if params is not None:
-            distances, ids_matrix = index.search(query, k, params=params)
-        else:
-            distances, ids_matrix = index.search(query, k)
+        distances, ids_matrix = index.search(query, k, params=params)  # type: ignore
 
         results: list[tuple[NearestConceptMatch, ...]] = []
         for dist_row, id_row in zip(distances, ids_matrix):
@@ -669,12 +667,19 @@ class FAISSCache:
         raise ValueError(f"No FAISS index factory for {type(index_config).__name__}.")
 
     def _load_index(self, metric_type: MetricType, index_config: IndexConfig):
+        if self._index_cache is not None:
+            cached_metric, cached_config, cached_index = self._index_cache
+            if cached_metric == metric_type and cached_config == index_config:
+                return cached_index
+        
+        logger.debug("Loading FAISS index for metric=%s, index=%s from disk.", metric_type.value, index_config.index_type.value)
         path = self._faiss_path(metric_type, index_config)
         if not path.exists():
             raise FileNotFoundError(
                 f"FAISS index not found at '{path}'. Run FAISSCache.export() first."
             )
         index = faiss.read_index(str(path))
+        self._index_cache = (metric_type, index_config, index)
         return index
 
     def _load_meta(

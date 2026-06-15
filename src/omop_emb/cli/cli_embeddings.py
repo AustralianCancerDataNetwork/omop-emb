@@ -10,7 +10,7 @@ from tqdm import tqdm
 from omop_emb.utils.cdm import check_concept_cdm
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.backends import resolve_backend
-from omop_emb.config import IndexType, MetricType, OmopEmbConfig, resolve_omop_cdm_engine
+from omop_emb.config import IndexType, MetricType, OmopEmbConfig, ProviderType, resolve_omop_cdm_engine
 from omop_emb.embeddings import EmbeddingClient
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
@@ -71,6 +71,11 @@ def add_embeddings(
         help="API key for the embedding API. Defaults to the value configured via omop-config.",
         rich_help_panel="Embedding API Options",
     )] = None,
+    provider: Annotated[Optional[ProviderType], typer.Option(
+        "--provider",
+        help="Embedding provider type (e.g. 'ollama'). Defaults to the value configured via omop-config.",
+        rich_help_panel="Embedding API Options",
+    )] = None,
     batch_size: Annotated[int, typer.Option(
         "--batch-size", "-b",
         help="Batch size for generating and inserting embeddings.",
@@ -109,8 +114,9 @@ def add_embeddings(
     """
 
     cfg = OmopEmbConfig.get_config()
-    resolved_api_base = api_base or cfg.ollama_api_base
+    resolved_api_base = api_base or cfg.api_base
     resolved_api_key = api_key or cfg.api_key
+    resolved_provider = provider or cfg.provider_type
 
     backend = resolve_backend()
     omop_cdm_engine = resolve_omop_cdm_engine()
@@ -120,6 +126,7 @@ def add_embeddings(
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         embedding_batch_size=batch_size,
+        provider_type=resolved_provider,
     )
     # FLAT registration: metric_type=COSINE is used only for upsert validation;
     # FLAT accepts any backend-supported metric, so COSINE is always valid here.
@@ -185,6 +192,11 @@ def create_index(
         help="API key for the embedding API. Defaults to the value configured via omop-config.",
         rich_help_panel="Embedding API Options",
     )] = None,
+    provider: Annotated[Optional[ProviderType], typer.Option(
+        "--provider",
+        help="Embedding provider type (e.g. 'ollama'). Defaults to the value configured via omop-config.",
+        rich_help_panel="Embedding API Options",
+    )] = None,
     model: Annotated[str, typer.Option(
         "--model", "-m",
         help="Embedding model name to build the index for.",
@@ -224,14 +236,16 @@ def create_index(
     """
 
     cfg = OmopEmbConfig.get_config()
-    resolved_api_base = api_base or cfg.ollama_api_base
+    resolved_api_base = api_base or cfg.api_base
     resolved_api_key = api_key or cfg.api_key
+    resolved_provider = provider or cfg.provider_type
 
     backend = resolve_backend()
     embedding_client = EmbeddingClient(
         model=model,
         api_base=resolved_api_base,
         api_key=resolved_api_key,
+        provider_type=resolved_provider,
     )
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
@@ -261,6 +275,11 @@ def add_embeddings_with_index(
     api_key: Annotated[Optional[str], typer.Option(
         "--api-key",
         help="API key for the embedding API. Defaults to the value configured via omop-config.",
+        rich_help_panel="Embedding API Options",
+    )] = None,
+    provider: Annotated[Optional[ProviderType], typer.Option(
+        "--provider",
+        help="Embedding provider type (e.g. 'ollama'). Defaults to the value configured via omop-config.",
         rich_help_panel="Embedding API Options",
     )] = None,
     metric_type: Annotated[MetricType, typer.Option(
@@ -327,6 +346,7 @@ def add_embeddings_with_index(
     add_embeddings(
         api_base=api_base,
         api_key=api_key,
+        provider=provider,
         batch_size=batch_size,
         model=model,
         standard_only=standard_only,
@@ -338,6 +358,7 @@ def add_embeddings_with_index(
     create_index(
         api_base=api_base,
         api_key=api_key,
+        provider=provider,
         model=model,
         metric_type=metric_type,
         index_type=index_type,
@@ -357,6 +378,11 @@ def search(
     api_key: Annotated[Optional[str], typer.Option(
         "--api-key",
         help="API key for the embedding API. Defaults to the value configured via omop-config.",
+        rich_help_panel="Embedding API Options",
+    )] = None,
+    provider: Annotated[Optional[ProviderType], typer.Option(
+        "--provider",
+        help="Embedding provider type (e.g. 'ollama'). Defaults to the value configured via omop-config.",
         rich_help_panel="Embedding API Options",
     )] = None,
     queries: Annotated[Optional[List[str]], typer.Option(
@@ -410,8 +436,9 @@ def search(
 ):
 
     cfg = OmopEmbConfig.get_config()
-    resolved_api_base = api_base or cfg.ollama_api_base
+    resolved_api_base = api_base or cfg.api_base
     resolved_api_key = api_key or cfg.api_key
+    resolved_provider = provider or cfg.provider_type
 
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
     backend = resolve_backend()
@@ -428,6 +455,7 @@ def search(
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         embedding_batch_size=batch_size,
+        provider_type=resolved_provider,
     )
     embedding_reader = EmbeddingReaderInterface(
         model=embedding_client.canonical_model_name,

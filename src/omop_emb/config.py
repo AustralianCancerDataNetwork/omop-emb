@@ -12,6 +12,18 @@ from oa_configurator import PackageConfigBase, ResourceSpec
 from omop_alchemy.config import OmopAlchemyConfig
 
 
+class ProviderType(StrEnum):
+    """Embedding model provider.
+
+    Members
+    -------
+    OLLAMA
+        Self-hosted models served via the Ollama runtime.
+    """
+
+    OLLAMA = "ollama"
+
+
 class OmopEmbConfig(PackageConfigBase):
     """oa-configurator config class for omop-emb.
 
@@ -77,13 +89,17 @@ class OmopEmbConfig(PackageConfigBase):
         default=None,
         description="Embedding dimensionality hint (rarely needed; usually auto-discovered from the model API).",
     )
-    ollama_api_base: str = Field(
+    api_base: str = Field(
         default="http://ollama:11434/v1",
-        description="Base URL for the Ollama API (OpenAI-compatible).",
+        description="Base URL for the embedding API (OpenAI-compatible).",
     )
     api_key: str = Field(
         default="ollama",
         description="API key for the model provider ('ollama' for local Ollama).",
+    )
+    provider_type: ProviderType = Field(
+        default=ProviderType.OLLAMA,
+        description="Embedding provider type (e.g. 'ollama').",
     )
     embedding_model: str = Field(
         default="qwen3-embedding:0.6b",
@@ -99,18 +115,6 @@ def resolve_omop_emb_engine() -> Engine:
     """Resolve embedding database engine via oa-configurator."""
     return OmopEmbConfig.get_engine(OmopEmbConfig.EMB_DB.semantic_name)
 
-
-
-class ProviderType(StrEnum):
-    """Embedding model provider.
-
-    Members
-    -------
-    OLLAMA
-        Self-hosted models served via the Ollama runtime.
-    """
-
-    OLLAMA = "ollama"
 
 
 class BackendType(StrEnum):

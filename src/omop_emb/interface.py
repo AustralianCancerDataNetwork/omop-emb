@@ -29,7 +29,6 @@ from omop_emb.embeddings import (
     EmbeddingRole,
     get_provider_from_provider_type,
 )
-from omop_emb.embeddings.embedding_providers import get_provider_for_api_base
 from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
     EmbeddingBackend,
@@ -97,9 +96,6 @@ class EmbeddingReaderInterface:
     canonical_model_name : str, optional
     provider_name_or_type : str | ProviderType, optional
         Embedding provider.
-    api_base / api_key : str, optional
-        Used for automatic provider detection when *provider_name_or_type*
-        is not given.
     k : int
         Default number of nearest neighbors to return.
     """
@@ -112,8 +108,6 @@ class EmbeddingReaderInterface:
         *,
         omop_cdm_engine: Optional[Engine] = None,
         provider_name_or_type: Optional[Union[str, ProviderType]] = None,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
         faiss_cache_dir: Optional[str] = None,
     ):
@@ -123,11 +117,7 @@ class EmbeddingReaderInterface:
         elif isinstance(provider_name_or_type, ProviderType):
             provider_type = provider_name_or_type
         elif provider_name_or_type is None:
-            if api_base is None or api_key is None:
-                raise ValueError(
-                    "Either 'provider_name_or_type' or both 'api_base' and 'api_key' must be provided."
-                )
-            provider_type = get_provider_for_api_base(api_base, api_key).provider_type
+            provider_type = ProviderType.OLLAMA
         else:
             raise ValueError(f"Invalid provider_name_or_type: {type(provider_name_or_type).__name__}.")
 

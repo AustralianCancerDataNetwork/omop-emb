@@ -27,14 +27,14 @@ export OMOP_EMB_SQLITE_PATH=/data/omop_emb.db
 export OMOP_CDM_DB_URL=postgresql+psycopg://user:pass@host:5432/omop_cdm
 
 omop-emb embeddings add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
-    --model nomic-embed-text:v1.5
+    --provider ollama --model nomic-embed-text:v1.5
 ```
 
 **Search:**
 
 ```bash
 omop-emb embeddings search --api-base http://localhost:11434/v1 --api-key ollama \
-    --model nomic-embed-text:v1.5 \
+    --provider ollama --model nomic-embed-text:v1.5 \
     --query "hypertension" --query "type 2 diabetes" \
     --standard-only --domain Condition --k 5
 ```
@@ -49,7 +49,7 @@ export OMOP_EMB_DB_PASSWORD=omop_emb
 export OMOP_EMB_DB_NAME=omop_emb
 
 omop-emb embeddings add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
-    --model nomic-embed-text:v1.5
+    --provider ollama --model nomic-embed-text:v1.5
 omop-emb maintenance rebuild-index --model nomic-embed-text:v1.5 --index-type hnsw --metric-type cosine
 ```
 

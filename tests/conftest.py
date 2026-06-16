@@ -15,6 +15,12 @@ from omop_emb.backends.sqlitevec import (
 )
 from omop_emb.config import OmopEmbConfig, ProviderType
 
+
+@pytest.fixture(autouse=True)
+def _omop_emb_config(monkeypatch):
+    """Simulate a minimal config.toml so tests don't require ~/.config/omop/config.toml."""
+    monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: OmopEmbConfig())
+
 # ---------------------------------------------------------------------------
 # Test data constants
 # ---------------------------------------------------------------------------

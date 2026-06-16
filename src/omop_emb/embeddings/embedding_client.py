@@ -23,12 +23,14 @@ logger = logging.getLogger(__name__)
 
 class EmbeddingRole(StrEnum):
     """Enum for embedding roles, used to apply different prefixes to texts based on their role."""
+
     DOCUMENT = "document"
     QUERY = "query"
 
 
 class EmbeddingClientError(RuntimeError):
     """Custom exception for embedding client runtime errors."""
+
     pass
 
 
@@ -70,11 +72,17 @@ class EmbeddingClient:
         provider: Optional[EmbeddingProvider] = None,
         provider_type: Optional[ProviderType] = None,
     ) -> None:
-        if provider is None and provider_type is None:
-            raise ValueError("Must supply either provider or provider_type.")
         if provider is not None and provider_type is not None:
-            logger.warning("Both provider and provider_type supplied. Ignoring provider_type and using provider instance directly.")
-        self._provider = provider if provider is not None else get_provider_from_provider_type(provider_type)
+            logger.warning(
+                "Both provider and provider_type supplied. Ignoring provider_type and using provider instance directly."
+            )
+
+        if provider is not None:
+            self._provider = provider
+        elif provider_type is not None:
+            self._provider = get_provider_from_provider_type(provider_type)
+        else:
+            raise ValueError("Must supply either provider or provider_type.")
         self._model = self._provider.canonical_model_name(model)
         self._embedding_batch_size = embedding_batch_size
         self._embedding_dim: Optional[int] = None
@@ -114,11 +122,10 @@ class EmbeddingClient:
     @property
     def base_client(self) -> OpenAI:
         return self._base_client
-    
+
     def embedding_role_prefixes(self) -> Dict[EmbeddingRole, str]:
         """Return a mapping of embedding roles to their configured prefixes."""
         return self._embedding_prefixes
-
 
     @property
     def embedding_dim(self) -> int:
@@ -140,17 +147,23 @@ class EmbeddingClient:
             logger.debug(f"Embedding dimension set from config: {cfg_dim}.")
             return cfg_dim
 
-        provider_dim = self._provider.get_embedding_dim(model=self._model, api_base=self.api_base)
+        provider_dim = self._provider.get_embedding_dim(
+            model=self._model, api_base=self.api_base
+        )
         if provider_dim is not None:
             self._embedding_dim = provider_dim
-            logger.debug(f"Embedding dimension discovered via provider API: {provider_dim}.")
+            logger.debug(
+                f"Embedding dimension discovered via provider API: {provider_dim}."
+            )
             return provider_dim
 
         logger.info(
             "Provider cannot discover embedding dimension automatically. "
             "Probing via a test API call. This happens once and is then cached."
         )
-        response = self._base_client.embeddings.create(model=self._model, input=["test"])
+        response = self._base_client.embeddings.create(
+            model=self._model, input=["test"]
+        )
         dim = len(response.data[0].embedding)
         self._embedding_dim = dim
         logger.info(f"Embedding dimension discovered via live probe: {dim}.")
@@ -185,7 +198,7 @@ class EmbeddingClient:
             text = (text,)
         elif isinstance(text, list):
             text = tuple(text)
-            
+
         text = self._apply_embedding_prefix(text, text_role=embedding_role)
 
         buffer: list[list[float]] = []
@@ -199,9 +212,13 @@ class EmbeddingClient:
 
         result = np.array(buffer)
         if result.ndim != 2:
-            raise RuntimeError(f"Expected 2-D embedding array, got shape {result.shape}")
+            raise RuntimeError(
+                f"Expected 2-D embedding array, got shape {result.shape}"
+            )
         if result.shape[0] != len(text):
-            raise RuntimeError(f"Expected {len(text)} embeddings, got {result.shape[0]}")
+            raise RuntimeError(
+                f"Expected {len(text)} embeddings, got {result.shape[0]}"
+            )
         return result
 
     def similarity(
@@ -216,14 +233,18 @@ class EmbeddingClient:
         if isinstance(terms, (str, list)):
             terms = self.embeddings(terms, embedding_role=terms_role, **kwargs)
         if isinstance(terms_to_match, (str, list)):
-            terms_to_match = self.embeddings(terms_to_match, embedding_role=terms_to_match_role, **kwargs)
+            terms_to_match = self.embeddings(
+                terms_to_match, embedding_role=terms_to_match_role, **kwargs
+            )
         return self.cosine_similarity(terms, terms_to_match)
 
     @staticmethod
     def cosine_similarity(vecs_a: np.ndarray, vecs_b: np.ndarray) -> np.ndarray:
         """Cosine similarity between row-vector matrices (MxD, NxD → MxN)."""
         if vecs_a.ndim != 2 or vecs_b.ndim != 2:
-            raise RuntimeError(f"Expected 2-D arrays, got shapes {vecs_a.shape} and {vecs_b.shape}")
+            raise RuntimeError(
+                f"Expected 2-D arrays, got shapes {vecs_a.shape} and {vecs_b.shape}"
+            )
         norm_a = np.linalg.norm(vecs_a, axis=1, keepdims=True)
         norm_b = np.linalg.norm(vecs_b, axis=1, keepdims=True)
         norm_a[norm_a == 0] = 1e-10
@@ -234,7 +255,6 @@ class EmbeddingClient:
     def l2_norm(vecs_a: np.ndarray, vecs_b: np.ndarray) -> float:
         """L2 norm between row-vector matrices (MxD, NxD → MxN)."""
         return float(np.linalg.norm(vecs_a - vecs_b))
-    
 
     def euclidean_distance(
         self,
@@ -247,7 +267,6 @@ class EmbeddingClient:
         a = self.embeddings(text1, embedding_role=text1_role)
         b = self.embeddings(text2, embedding_role=text2_role)
         return float(np.linalg.norm(a - b))
-        
 
     @staticmethod
     def load_embedding_prefixes() -> Tuple[str, str]:
@@ -284,19 +303,21 @@ class EmbeddingClient:
                 )
 
         return document_embedding_prefix, query_embedding_prefix
-    
+
     def _apply_embedding_prefix(
         self,
         texts: str | Tuple[str, ...] | List[str],
         *,
         text_role: EmbeddingRole,
     ) -> str | Tuple[str, ...] | List[str]:
-        
+
         try:
             prefix = self._embedding_prefixes[text_role]
         except KeyError:
-            raise ValueError(f"Invalid embedding role {text_role!r}. Expected one of {[role.value for role in EmbeddingRole]}.")
-        
+            raise ValueError(
+                f"Invalid embedding role {text_role!r}. Expected one of {[role.value for role in EmbeddingRole]}."
+            )
+
         if not prefix:
             return texts
         if isinstance(texts, str):
@@ -305,4 +326,6 @@ class EmbeddingClient:
             return tuple(f"{prefix}{text}" for text in texts)
         if isinstance(texts, list):
             return [f"{prefix}{text}" for text in texts]
-        raise ValueError(f"Invalid type for texts: {type(texts)}. Expected str, list, or tuple.")
+        raise ValueError(
+            f"Invalid type for texts: {type(texts)}. Expected str, list, or tuple."
+        )

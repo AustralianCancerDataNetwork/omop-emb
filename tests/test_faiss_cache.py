@@ -12,7 +12,10 @@ import pytest
 import faiss
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
-from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
+from omop_emb.backends.sqlitevec import (
+    SQLiteVecEmbeddingBackend,
+    create_sqlitevec_engine,
+)
 from omop_emb.config import MetricType, ProviderType
 from omop_emb.storage.faiss.faiss_cache import FAISSCache
 
@@ -36,7 +39,9 @@ _COSINE_QUERY = np.array([[1, 0]], dtype=np.float32)
 _COSINE_EXPECTED = {1: 1.0, 2: 0.5, 3: 0.0}
 
 _COSINE_RECORDS = [
-    ConceptEmbeddingRecord(concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True)
+    ConceptEmbeddingRecord(
+        concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True
+    )
     for i in _COSINE_IDS
 ]
 
@@ -52,7 +57,9 @@ _L2_QUERY = np.array([[0, 0]], dtype=np.float32)
 _L2_EXPECTED = {1: 1.0, 2: 0.5, 3: 1 / 3, 4: 0.2}
 
 _L2_RECORDS = [
-    ConceptEmbeddingRecord(concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True)
+    ConceptEmbeddingRecord(
+        concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True
+    )
     for i in _L2_IDS
 ]
 
@@ -60,6 +67,7 @@ _L2_RECORDS = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_svec_backend(dim: int) -> SQLiteVecEmbeddingBackend:
     engine = create_sqlitevec_engine(":memory:")
@@ -105,6 +113,7 @@ def _build_faiss(
 # COSINE metric correctness
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 class TestCosineCorrectness:
     """FAISS COSINE path: inner product → cosine distance → similarity."""
@@ -112,32 +121,53 @@ class TestCosineCorrectness:
     @pytest.fixture
     def faiss_cosine(self, tmp_path) -> FAISSCache:
         backend = _make_svec_backend(_COSINE_DIM)
-        _populate_backend(backend, dim=_COSINE_DIM, records=_COSINE_RECORDS,
-                          vecs=_COSINE_VECS, metric_type=MetricType.COSINE)
+        _populate_backend(
+            backend,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.COSINE,
+        )
         return _build_faiss(tmp_path, backend, MetricType.COSINE)
 
     def test_identical_vectors_score_one(self, faiss_cosine: FAISSCache):
-        results = faiss_cosine.search(_COSINE_QUERY, k=3, metric_type=MetricType.COSINE,
-                                      index_config=FlatIndexConfig())
+        results = faiss_cosine.search(
+            _COSINE_QUERY,
+            k=3,
+            metric_type=MetricType.COSINE,
+            index_config=FlatIndexConfig(),
+        )
         by_id = {r.concept_id: r.similarity for r in results[0]}
         assert by_id[1] == pytest.approx(1.0, abs=1e-5)
 
     def test_orthogonal_vectors_score_half(self, faiss_cosine: FAISSCache):
-        results = faiss_cosine.search(_COSINE_QUERY, k=3, metric_type=MetricType.COSINE,
-                                      index_config=FlatIndexConfig())
+        results = faiss_cosine.search(
+            _COSINE_QUERY,
+            k=3,
+            metric_type=MetricType.COSINE,
+            index_config=FlatIndexConfig(),
+        )
         by_id = {r.concept_id: r.similarity for r in results[0]}
         assert by_id[2] == pytest.approx(0.5, abs=1e-5)
 
     def test_opposite_vectors_score_zero(self, faiss_cosine: FAISSCache):
-        results = faiss_cosine.search(_COSINE_QUERY, k=3, metric_type=MetricType.COSINE,
-                                      index_config=FlatIndexConfig())
+        results = faiss_cosine.search(
+            _COSINE_QUERY,
+            k=3,
+            metric_type=MetricType.COSINE,
+            index_config=FlatIndexConfig(),
+        )
         by_id = {r.concept_id: r.similarity for r in results[0]}
         assert by_id[3] == pytest.approx(0.0, abs=1e-5)
 
     def test_ranking_order(self, faiss_cosine: FAISSCache):
         """Most-similar concept returned first."""
-        results = faiss_cosine.search(_COSINE_QUERY, k=3, metric_type=MetricType.COSINE,
-                                      index_config=FlatIndexConfig())
+        results = faiss_cosine.search(
+            _COSINE_QUERY,
+            k=3,
+            metric_type=MetricType.COSINE,
+            index_config=FlatIndexConfig(),
+        )
         ids_in_order = [r.concept_id for r in results[0]]
         assert ids_in_order == [1, 2, 3]
 
@@ -146,6 +176,7 @@ class TestCosineCorrectness:
 # L2 metric correctness
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 class TestL2Correctness:
     """FAISS L2 path: squared distance → sqrt → true L2 → similarity."""
@@ -153,14 +184,22 @@ class TestL2Correctness:
     @pytest.fixture
     def faiss_l2(self, tmp_path) -> FAISSCache:
         backend = _make_svec_backend(_L2_DIM)
-        _populate_backend(backend, dim=_L2_DIM, records=_L2_RECORDS,
-                          vecs=_L2_VECS, metric_type=MetricType.L2)
+        _populate_backend(
+            backend,
+            dim=_L2_DIM,
+            records=_L2_RECORDS,
+            vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
         return _build_faiss(tmp_path, backend, MetricType.L2)
 
     @pytest.mark.parametrize("concept_id,expected_sim", list(_L2_EXPECTED.items()))
-    def test_l2_similarity_values(self, faiss_l2: FAISSCache, concept_id: int, expected_sim: float):
-        results = faiss_l2.search(_L2_QUERY, k=4, metric_type=MetricType.L2,
-                                  index_config=FlatIndexConfig())
+    def test_l2_similarity_values(
+        self, faiss_l2: FAISSCache, concept_id: int, expected_sim: float
+    ):
+        results = faiss_l2.search(
+            _L2_QUERY, k=4, metric_type=MetricType.L2, index_config=FlatIndexConfig()
+        )
         by_id = {r.concept_id: r.similarity for r in results[0]}
         assert by_id[concept_id] == pytest.approx(expected_sim, abs=1e-5)
 
@@ -168,6 +207,7 @@ class TestL2Correctness:
 # ---------------------------------------------------------------------------
 # Cross-backend parity: FAISS vs SQLiteVec
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 class TestCrossBackendParity:
@@ -190,13 +230,24 @@ class TestCrossBackendParity:
 
     def test_cosine_parity(self, tmp_path):
         backend = _make_svec_backend(_COSINE_DIM)
-        _populate_backend(backend, dim=_COSINE_DIM, records=_COSINE_RECORDS,
-                          vecs=_COSINE_VECS, metric_type=MetricType.COSINE)
+        _populate_backend(
+            backend,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.COSINE,
+        )
         cache = _build_faiss(tmp_path, backend, MetricType.COSINE)
 
-        svec = self._svec_search(backend, _COSINE_QUERY, k=3, metric_type=MetricType.COSINE)
-        faiss_results = cache.search(_COSINE_QUERY, k=3, metric_type=MetricType.COSINE,
-                                     index_config=FlatIndexConfig())
+        svec = self._svec_search(
+            backend, _COSINE_QUERY, k=3, metric_type=MetricType.COSINE
+        )
+        faiss_results = cache.search(
+            _COSINE_QUERY,
+            k=3,
+            metric_type=MetricType.COSINE,
+            index_config=FlatIndexConfig(),
+        )
         faiss_sims = {r.concept_id: r.similarity for r in faiss_results[0]}
 
         for cid in _COSINE_IDS:
@@ -206,13 +257,19 @@ class TestCrossBackendParity:
 
     def test_l2_parity(self, tmp_path):
         backend = _make_svec_backend(_L2_DIM)
-        _populate_backend(backend, dim=_L2_DIM, records=_L2_RECORDS,
-                          vecs=_L2_VECS, metric_type=MetricType.L2)
+        _populate_backend(
+            backend,
+            dim=_L2_DIM,
+            records=_L2_RECORDS,
+            vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
 
         svec = self._svec_search(backend, _L2_QUERY, k=4, metric_type=MetricType.L2)
-        faiss_results = cache.search(_L2_QUERY, k=4, metric_type=MetricType.L2,
-                                     index_config=FlatIndexConfig())
+        faiss_results = cache.search(
+            _L2_QUERY, k=4, metric_type=MetricType.L2, index_config=FlatIndexConfig()
+        )
         faiss_sims = {r.concept_id: r.similarity for r in faiss_results[0]}
 
         for cid in _L2_IDS:
@@ -225,14 +282,20 @@ class TestCrossBackendParity:
 # Cache identity
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 class TestIndexCache:
     """Single-entry cache returns the same object on repeated loads."""
 
     def test_cache_hit_returns_same_object(self, tmp_path):
         backend = _make_svec_backend(_L2_DIM)
-        _populate_backend(backend, dim=_L2_DIM, records=_L2_RECORDS,
-                          vecs=_L2_VECS, metric_type=MetricType.L2)
+        _populate_backend(
+            backend,
+            dim=_L2_DIM,
+            records=_L2_RECORDS,
+            vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
 
         idx_a = cache._load_index(MetricType.L2, FlatIndexConfig())
@@ -242,14 +305,30 @@ class TestIndexCache:
     def test_cache_miss_on_different_metric(self, tmp_path):
         """Switching metric evicts the old entry; a new load returns a fresh object."""
         backend = _make_svec_backend(_COSINE_DIM)
-        _populate_backend(backend, dim=_COSINE_DIM, records=_COSINE_RECORDS,
-                          vecs=_COSINE_VECS, metric_type=MetricType.L2)
-        _populate_backend_metric(backend, dim=_COSINE_DIM, records=_COSINE_RECORDS,
-                                  vecs=_COSINE_VECS, metric_type=MetricType.COSINE)
+        _populate_backend(
+            backend,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.L2,
+        )
+        _populate_backend_metric(
+            backend,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.COSINE,
+        )
 
         cache = FAISSCache(model_name=_MODEL, cache_dir=tmp_path)
-        cache.export(backend=backend, metric_type=MetricType.L2, index_config=FlatIndexConfig())
-        cache.export(backend=backend, metric_type=MetricType.COSINE, index_config=FlatIndexConfig())
+        cache.export(
+            backend=backend, metric_type=MetricType.L2, index_config=FlatIndexConfig()
+        )
+        cache.export(
+            backend=backend,
+            metric_type=MetricType.COSINE,
+            index_config=FlatIndexConfig(),
+        )
 
         idx_l2 = cache._load_index(MetricType.L2, FlatIndexConfig())
         idx_cosine = cache._load_index(MetricType.COSINE, FlatIndexConfig())
@@ -264,17 +343,25 @@ class TestIndexCache:
 # HNSW efSearch applied at load time
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 class TestHNSWEfSearch:
     """efSearch from HNSWIndexConfig is applied to the loaded index."""
 
     def test_ef_search_applied(self, tmp_path):
         backend = _make_svec_backend(_COSINE_DIM)
-        _populate_backend(backend, dim=_COSINE_DIM, records=_COSINE_RECORDS,
-                          vecs=_COSINE_VECS, metric_type=MetricType.COSINE)
+        _populate_backend(
+            backend,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.COSINE,
+        )
 
         index_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=32)
-        cache = _build_faiss(tmp_path, backend, MetricType.COSINE, index_config=index_config)
+        cache = _build_faiss(
+            tmp_path, backend, MetricType.COSINE, index_config=index_config
+        )
 
         index = cache._load_index(MetricType.COSINE, index_config)
         # IndexIDMap wraps the HNSW index; downcast to expose .hnsw
@@ -286,11 +373,18 @@ class TestHNSWEfSearch:
         """Index was built (and serialised) with FAISS default efSearch=16;
         loading with ef_search=64 applies the new value."""
         backend = _make_svec_backend(_COSINE_DIM)
-        _populate_backend(backend, dim=_COSINE_DIM, records=_COSINE_RECORDS,
-                          vecs=_COSINE_VECS, metric_type=MetricType.COSINE)
+        _populate_backend(
+            backend,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.COSINE,
+        )
 
         build_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=16)
-        cache = _build_faiss(tmp_path, backend, MetricType.COSINE, index_config=build_config)
+        cache = _build_faiss(
+            tmp_path, backend, MetricType.COSINE, index_config=build_config
+        )
 
         load_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=64)
         index = cache._load_index(MetricType.COSINE, load_config)
@@ -301,6 +395,7 @@ class TestHNSWEfSearch:
 # ---------------------------------------------------------------------------
 # Internal helper (not a test class)
 # ---------------------------------------------------------------------------
+
 
 def _populate_backend_metric(
     backend: SQLiteVecEmbeddingBackend,

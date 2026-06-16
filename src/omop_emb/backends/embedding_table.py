@@ -41,14 +41,19 @@ class ConceptEmbeddingMixin:
 
 def _build_pg_embedding_cls(model_record: EmbeddingModelRecord) -> type:
     """Build the SQLAlchemy ORM class for a pgvector embedding table."""
-    from omop_emb.utils.embedding_utils import VectorColumnType, vector_column_type_for_dimensions
+    from omop_emb.utils.embedding_utils import (
+        VectorColumnType,
+        vector_column_type_for_dimensions,
+    )
     from pgvector.sqlalchemy import VECTOR, HALFVEC  # optional dependency
 
     tablename = model_record.storage_identifier
     dimensions = model_record.dimensions
     col_type = vector_column_type_for_dimensions(dimensions)
     emb_col = mapped_column(
-        HALFVEC(dimensions) if col_type == VectorColumnType.HALFVEC else VECTOR(dimensions),
+        HALFVEC(dimensions)
+        if col_type == VectorColumnType.HALFVEC
+        else VECTOR(dimensions),
         nullable=False,
         index=False,
     )
@@ -79,7 +84,9 @@ def load_pg_embedding_table(model_record: EmbeddingModelRecord) -> type:
     return _build_pg_embedding_cls(model_record)
 
 
-def create_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) -> type:
+def create_pg_embedding_table(
+    engine: Engine, model_record: EmbeddingModelRecord
+) -> type:
     """Create a pgvector embedding table and return its ORM class.
 
     Parameters
@@ -102,5 +109,3 @@ def create_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord
     table_cls = _build_pg_embedding_cls(model_record)
     EmbeddingTableBase.metadata.create_all(engine, tables=[table_cls.__table__])  # type: ignore[arg-type]
     return table_cls
-
-

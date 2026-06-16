@@ -17,7 +17,7 @@ from omop_emb.config import (
     is_supported_index_metric_combination_for_backend,
     is_index_type_supported_for_backend,
     OmopEmbConfig,
-    resolve_omop_emb_engine
+    resolve_omop_emb_engine,
 )
 
 from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Decorator
 # ---------------------------------------------------------------------------
+
 
 def require_registered_model(func: Callable) -> Callable:
     """Resolve and validate a registry record before the wrapped method runs.
@@ -68,6 +69,7 @@ def require_registered_model(func: Callable) -> Callable:
         incompatible with the registered index, or the metric is not
         supported by the backend.
     """
+
     @wraps(func)
     def wrapper(
         self: "EmbeddingBackend",
@@ -131,6 +133,7 @@ def require_registered_model(func: Callable) -> Callable:
 # Abstract backend
 # ---------------------------------------------------------------------------
 
+
 class EmbeddingBackend(ABC):
     """Abstract base class for embedding storage and retrieval backends.
 
@@ -154,8 +157,8 @@ class EmbeddingBackend(ABC):
 
     Notes
     -----
-    The SQLAlchemy engine is obtained from the RegistryManager to prevent 
-    duplication in code but also to have a single source of truth for the database connection.  
+    The SQLAlchemy engine is obtained from the RegistryManager to prevent
+    duplication in code but also to have a single source of truth for the database connection.
     """
 
     DEFAULT_K_NEAREST = 10
@@ -197,7 +200,9 @@ class EmbeddingBackend(ABC):
         self.pre_initialise_store()
         for record in self._registry.get_registered_models():
             if record.storage_identifier not in self._table_cache:
-                self._table_cache[record.storage_identifier] = self._load_storage_table(record)
+                self._table_cache[record.storage_identifier] = self._load_storage_table(
+                    record
+                )
 
     def pre_initialise_store(self) -> None:
         """Hook for backend-specific setup before the registry is queried.
@@ -259,7 +264,7 @@ class EmbeddingBackend(ABC):
             index_config = FlatIndexConfig()
 
         if index_config != FlatIndexConfig():
-            # non-flat index is super expensive to continuously ingest so we don't 
+            # non-flat index is super expensive to continuously ingest so we don't
             # allow it at the moment
             raise ValueError(
                 "Only FLAT index is allowed at registration as it is expensive to continously inject it.\n"
@@ -276,7 +281,7 @@ class EmbeddingBackend(ABC):
         )
         self._ensure_storage_table(record)
         # Disable for now as we prevent non-FLAT index registration
-        #self._rebuild_index_impl(model_record=record, index_config=index_config)
+        # self._rebuild_index_impl(model_record=record, index_config=index_config)
         logger.info(
             f"Registered model '{model_name}' (provider='{provider_type.value}') in backend '{self.backend_type.value}'."
         )
@@ -322,7 +327,7 @@ class EmbeddingBackend(ABC):
         logger.info(
             f"Deleted model '{model_name}' from backend '{self.backend_type.value}' and dropped storage table."
         )
-    
+
     def rebuild_index(
         self,
         *,
@@ -388,7 +393,7 @@ class EmbeddingBackend(ABC):
     def _rebuild_index_impl(
         self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig
     ) -> None: ...
-    
+
     # ------------------------------------------------------------------
     # Registry queries
     # ------------------------------------------------------------------
@@ -411,7 +416,7 @@ class EmbeddingBackend(ABC):
         """
         registered_models = self.get_registered_models(model_name=model_name)
         return registered_models[0] if registered_models else None
-    
+
     def get_registered_models(
         self,
         *,
@@ -503,8 +508,7 @@ class EmbeddingBackend(ABC):
 
     @abstractmethod
     def _storage_table_exists(self, model_record: EmbeddingModelRecord) -> bool:
-        """Return ``True`` if the physical embedding table exists in the database.
-        """
+        """Return ``True`` if the physical embedding table exists in the database."""
         ...
 
     @abstractmethod
@@ -603,7 +607,11 @@ class EmbeddingBackend(ABC):
         """
         import tqdm
 
-        pbar = tqdm.tqdm(batches, desc=f"Upserting embeddings into {model_name} ({metric_type.value})", total=total_n_batches)
+        pbar = tqdm.tqdm(
+            batches,
+            desc=f"Upserting embeddings into {model_name} ({metric_type.value})",
+            total=total_n_batches,
+        )
         for records, embeddings in pbar:
             self.upsert_embeddings(
                 model_name=model_name,
@@ -742,7 +750,9 @@ class EmbeddingBackend(ABC):
         return self._has_any_embeddings_impl(model_record=_model_record)
 
     @abstractmethod
-    def _has_any_embeddings_impl(self, *, model_record: EmbeddingModelRecord) -> bool: ...
+    def _has_any_embeddings_impl(
+        self, *, model_record: EmbeddingModelRecord
+    ) -> bool: ...
 
     @require_registered_model
     def get_all_stored_concept_ids(
@@ -768,7 +778,9 @@ class EmbeddingBackend(ABC):
         return self._get_all_stored_concept_ids_impl(model_record=_model_record)
 
     @abstractmethod
-    def _get_all_stored_concept_ids_impl(self, *, model_record: EmbeddingModelRecord) -> set[int]: ...
+    def _get_all_stored_concept_ids_impl(
+        self, *, model_record: EmbeddingModelRecord
+    ) -> set[int]: ...
 
     @require_registered_model
     def get_concept_filter_metadata(
@@ -827,10 +839,12 @@ class EmbeddingBackend(ABC):
         -------
         int
         """
-        return len(self.get_all_stored_concept_ids(
-            model_name=model_name,
-            metric_type=metric_type,
-        ))
+        return len(
+            self.get_all_stored_concept_ids(
+                model_name=model_name,
+                metric_type=metric_type,
+            )
+        )
 
     # ------------------------------------------------------------------
     # Validation helpers
@@ -892,7 +906,9 @@ class EmbeddingBackend(ABC):
             )
 
 
-def resolve_backend(backend_type: Optional[Union[str, BackendType]] = None) -> EmbeddingBackend:
+def resolve_backend(
+    backend_type: Optional[Union[str, BackendType]] = None,
+) -> EmbeddingBackend:
     """Return the configured embedding backend via oa-configurator.
 
     When backend_type is omitted, reads from the active oa-configurator config.
@@ -905,7 +921,9 @@ def resolve_backend(backend_type: Optional[Union[str, BackendType]] = None) -> E
     if backend_type is None:
         backend_str = cfg.backend
     else:
-        backend_str = backend_type if isinstance(backend_type, str) else backend_type.value
+        backend_str = (
+            backend_type if isinstance(backend_type, str) else backend_type.value
+        )
 
     try:
         resolved_backend = BackendType(backend_str.lower())
@@ -917,6 +935,7 @@ def resolve_backend(backend_type: Optional[Union[str, BackendType]] = None) -> E
 
     if resolved_backend == BackendType.SQLITEVEC:
         from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+
         path = cfg.sqlite_path or ":memory:"
         logger.info(f"Using SQLiteVec backend with database file: {path}")
         return SQLiteVecEmbeddingBackend.from_path(path)

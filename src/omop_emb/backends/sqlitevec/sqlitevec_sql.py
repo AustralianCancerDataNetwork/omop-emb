@@ -1,4 +1,5 @@
 """SQL helpers for the sqlite-vec backend."""
+
 from __future__ import annotations
 
 import logging
@@ -43,10 +44,13 @@ def table_exists(engine: Engine, table_name: str) -> bool:
     tables, indexes, views) regardless of type.
     """
     with engine.connect() as conn:
-        return conn.execute(
-            text("SELECT 1 FROM sqlite_master WHERE name = :n"),
-            {"n": table_name},
-        ).first() is not None
+        return (
+            conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE name = :n"),
+                {"n": table_name},
+            ).first()
+            is not None
+        )
 
 
 def ddl_create_vec0(
@@ -144,10 +148,14 @@ def dml_upsert_rows(
     """
     concept_ids = [r.concept_id for r in records]
 
-    with temp_filter_table(session, concept_ids, "INTEGER", table_name="_tmp_del_cids", dialect=dialect) as temp_table_name:
-        session.execute(text(
-            f'DELETE FROM "{table_name}" WHERE concept_id IN (SELECT id FROM "{temp_table_name}")'
-        ))
+    with temp_filter_table(
+        session, concept_ids, "INTEGER", table_name="_tmp_del_cids", dialect=dialect
+    ) as temp_table_name:
+        session.execute(
+            text(
+                f'DELETE FROM "{table_name}" WHERE concept_id IN (SELECT id FROM "{temp_table_name}")'
+            )
+        )
 
     for rec, emb in zip(records, embeddings):
         session.execute(
@@ -225,7 +233,9 @@ def query_knn(
         if concept_filter.domains is not None:
             where_clauses.append(f'domain_id IN (SELECT id FROM "{KNN_DOMS_TABLE}")')
         if concept_filter.vocabularies is not None:
-            where_clauses.append(f'vocabulary_id IN (SELECT id FROM "{KNN_VOCS_TABLE}")')
+            where_clauses.append(
+                f'vocabulary_id IN (SELECT id FROM "{KNN_VOCS_TABLE}")'
+            )
         if concept_filter.require_standard:
             where_clauses.append("is_standard = 1")
         if concept_filter.require_active:
@@ -233,7 +243,7 @@ def query_knn(
 
     where_str = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
     sql = text(
-        f'SELECT concept_id, {dist_func}(embedding, :emb) as distance, is_standard '
+        f"SELECT concept_id, {dist_func}(embedding, :emb) as distance, is_standard "
         f'FROM "{table_name}" '
         f"{where_str}"
         f"ORDER BY distance LIMIT :k"
@@ -277,11 +287,19 @@ def query_embeddings_by_ids(
     dict[int, list[float]]
         Mapping of concept ID to embedding vector.
     """
-    with temp_filter_table(session, list(concept_ids), "INTEGER", table_name="_tmp_emb_cids", dialect=dialect) as temp_table_name:
-        rows = session.execute(text(
-            f'SELECT concept_id, embedding FROM "{table_name}" '
-            f'WHERE concept_id IN (SELECT id FROM "{temp_table_name}")'
-        )).all()
+    with temp_filter_table(
+        session,
+        list(concept_ids),
+        "INTEGER",
+        table_name="_tmp_emb_cids",
+        dialect=dialect,
+    ) as temp_table_name:
+        rows = session.execute(
+            text(
+                f'SELECT concept_id, embedding FROM "{table_name}" '
+                f'WHERE concept_id IN (SELECT id FROM "{temp_table_name}")'
+            )
+        ).all()
     return {int(row[0]): _blob_to_embedding(row[1]) for row in rows}
 
 
@@ -297,14 +315,16 @@ def query_has_any(session: Session, table_name: str) -> bool:
     -------
     bool
     """
-    return session.execute(
-        text(f'SELECT concept_id FROM "{table_name}" LIMIT 1')
-    ).first() is not None
+    return (
+        session.execute(text(f'SELECT concept_id FROM "{table_name}" LIMIT 1')).first()
+        is not None
+    )
 
 
 # ---------------------------------------------------------------------------
 # Encoding helpers
 # ---------------------------------------------------------------------------
+
 
 def _embedding_to_blob(emb: ndarray) -> bytes:
     return emb.astype(np.float32).tobytes()
@@ -336,11 +356,15 @@ def query_filter_metadata_by_ids(
     """
     if not concept_ids:
         return {}
-    with temp_filter_table(session, list(concept_ids), "INTEGER", "_tmp_qf_cids", dialect=dialect) as temp_table_name:
-        rows = session.execute(text(
-            f'SELECT concept_id, domain_id, vocabulary_id, is_standard, is_valid '
-            f'FROM "{table_name}" WHERE concept_id IN (SELECT id FROM "{temp_table_name}")'
-        )).all()
+    with temp_filter_table(
+        session, list(concept_ids), "INTEGER", "_tmp_qf_cids", dialect=dialect
+    ) as temp_table_name:
+        rows = session.execute(
+            text(
+                f"SELECT concept_id, domain_id, vocabulary_id, is_standard, is_valid "
+                f'FROM "{table_name}" WHERE concept_id IN (SELECT id FROM "{temp_table_name}")'
+            )
+        ).all()
     return {
         int(row[0]): {
             "domain_id": row[1] or "",

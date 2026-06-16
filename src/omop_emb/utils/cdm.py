@@ -1,4 +1,5 @@
 """OMOP CDM utilities. Since embeddings and OMOP CDM are separate, we have this helper utility in case we need to query the OMOP CDM."""
+
 from __future__ import annotations
 
 import logging
@@ -13,6 +14,7 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
+
 
 @contextmanager
 def cdm_session(cdm_engine: Engine) -> Generator[Session, None, None]:
@@ -34,7 +36,9 @@ def check_concept_cdm(cdm_engine: Engine) -> None:
     except DBAPIError as e:
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "no such table" in error_msg:
-            logger.error("Database schema is missing! Did you forget to run the ingestion CLI?")
+            logger.error(
+                "Database schema is missing! Did you forget to run the ingestion CLI?"
+            )
             raise RuntimeError("Database not initialized.") from e
         raise
 

@@ -15,6 +15,7 @@ from omop_emb.backends.index_config import IndexConfig
 
 class ModelRegistryBase(DeclarativeBase):
     """Dedicated declarative base for local model registry metadata."""
+
     pass
 
 
@@ -84,18 +85,25 @@ class ModelRegistry(ModelRegistryBase):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     @validates("provider_type")
     def _validate_provider_type(self, _key: str, value: str) -> str:
         """Reject unknown provider types on assignment."""
         if value not in ProviderType:
-            raise ValueError(f"Unsupported provider type: {value!r}. Supported: {list(ProviderType)}")
+            raise ValueError(
+                f"Unsupported provider type: {value!r}. Supported: {list(ProviderType)}"
+            )
         return value
 
     @validates("index_config")
-    def _validate_and_sync_index_config(self, _key: str, index_config: IndexConfig) -> Optional[dict[str, Any]]:
+    def _validate_and_sync_index_config(
+        self, _key: str, index_config: IndexConfig
+    ) -> Optional[dict[str, Any]]:
         """Unpack an ``IndexConfig`` into the row's index columns.
 
         Parameters

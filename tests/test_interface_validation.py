@@ -41,11 +41,13 @@ class TestCanonicalModelName:
             embedding_client=_make_mock_client("pseudo-model:v1"),
         )
 
-        backend.register_model = Mock(return_value=Mock(
-            model_name="pseudo-model:v1",
-            provider_type=ProviderType.OLLAMA,
-            storage_identifier="pgvector_pseudo_model_v1",
-        ))
+        backend.register_model = Mock(
+            return_value=Mock(
+                model_name="pseudo-model:v1",
+                provider_type=ProviderType.OLLAMA,
+                storage_identifier="pgvector_pseudo_model_v1",
+            )
+        )
 
         interface.register_model(index_config=FlatIndexConfig())
 
@@ -60,7 +62,10 @@ class TestCanonicalModelName:
 
     def test_explicit_tag_is_not_modified(self):
         provider = OllamaProvider()
-        assert provider.canonical_model_name("nomic-embed-text:v1.5") == "nomic-embed-text:v1.5"
+        assert (
+            provider.canonical_model_name("nomic-embed-text:v1.5")
+            == "nomic-embed-text:v1.5"
+        )
 
     def test_storage_name_reflects_tag(self):
         safe = RegistryManager.safe_model_name("pseudo-model:v1")

@@ -1,4 +1,5 @@
 """Backend-agnostic database utilities shared across storage backends."""
+
 from contextlib import contextmanager
 from typing import Iterator, Sequence
 
@@ -61,13 +62,15 @@ def temp_filter_table(
     when the connection is returned to the pool.
     """
     if dialect == "postgresql":
-        session.execute(text(
-            f'CREATE TEMPORARY TABLE "{table_name}" (id {col_type}) ON COMMIT DROP'
-        ))
+        session.execute(
+            text(
+                f'CREATE TEMPORARY TABLE "{table_name}" (id {col_type}) ON COMMIT DROP'
+            )
+        )
     elif dialect == "sqlite":
-        session.execute(text(
-            f'CREATE TEMPORARY TABLE IF NOT EXISTS "{table_name}" (id {col_type})'
-        ))
+        session.execute(
+            text(f'CREATE TEMPORARY TABLE IF NOT EXISTS "{table_name}" (id {col_type})')
+        )
         session.execute(text(f'DELETE FROM "{table_name}"'))
     else:
         raise ValueError(f"Unsupported dialect: {dialect}")
@@ -110,18 +113,30 @@ def setup_concept_filter_temps(
     """
     if concept_filter.concept_ids is not None:
         with temp_filter_table(
-            session, list(concept_filter.concept_ids), "INTEGER", KNN_CIDS_TABLE, dialect=dialect
+            session,
+            list(concept_filter.concept_ids),
+            "INTEGER",
+            KNN_CIDS_TABLE,
+            dialect=dialect,
         ):
             pass
 
     if concept_filter.domains is not None:
         with temp_filter_table(
-            session, list(concept_filter.domains), "TEXT", KNN_DOMS_TABLE, dialect=dialect
+            session,
+            list(concept_filter.domains),
+            "TEXT",
+            KNN_DOMS_TABLE,
+            dialect=dialect,
         ):
             pass
 
     if concept_filter.vocabularies is not None:
         with temp_filter_table(
-            session, list(concept_filter.vocabularies), "TEXT", KNN_VOCS_TABLE, dialect=dialect
+            session,
+            list(concept_filter.vocabularies),
+            "TEXT",
+            KNN_VOCS_TABLE,
+            dialect=dialect,
         ):
             pass

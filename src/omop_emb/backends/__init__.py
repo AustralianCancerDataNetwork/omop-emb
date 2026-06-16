@@ -18,7 +18,10 @@ __all__ = [
 
 def __getattr__(name: str):
     if name == "PGVectorEmbeddingBackend":
-        from .pgvector import PGVectorEmbeddingBackend  # raises ImportError with install hint if absent
+        from .pgvector import (
+            PGVectorEmbeddingBackend,
+        )  # raises ImportError with install hint if absent
+
         globals()[name] = PGVectorEmbeddingBackend
         return PGVectorEmbeddingBackend
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

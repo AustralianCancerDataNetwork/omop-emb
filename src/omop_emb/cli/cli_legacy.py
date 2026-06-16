@@ -17,32 +17,55 @@ logger = logging.getLogger(__name__)
 app = typer.Typer(help="Legacy commands for importing pre-built embeddings.")
 
 
-@app.command(name="add-embeddings-from-h5", help="Ingest raw embeddings from an HDF5 file into the embedding store.")
+@app.command(
+    name="add-embeddings-from-h5",
+    help="Ingest raw embeddings from an HDF5 file into the embedding store.",
+)
 def add_embeddings_from_h5(
-    h5_file: Annotated[str, typer.Option(
-        "--h5-file",
-        help="Path to the HDF5 file. Must contain 'concept_id' and 'embedding' datasets.",
-    )],
-    model: Annotated[str, typer.Option(
-        "--model", "-m",
-        help="Canonical model name to register the embeddings under (e.g. 'nomic-embed-text:v1.5').",
-    )],
-    provider_type: Annotated[ProviderType, typer.Option(
-        "--provider-type",
-        help="Embedding provider that produced these embeddings.",
-    )] = ProviderType.OLLAMA,
-    metric_type: Annotated[MetricType, typer.Option(
-        "--metric-type",
-        help="Distance metric to use when storing and searching embeddings.",
-    )] = MetricType.COSINE,
-    batch_size: Annotated[int, typer.Option(
-        "--batch-size", "-b",
-        help="Number of embeddings written to the backend per batch.",
-    )] = 10_000,
-    cdm_batch_size: Annotated[int, typer.Option(
-        "--cdm-batch-size",
-        help="Batch size for fetching concept metadata from the CDM during ingestion. Adjust if you encounter performance issues or database limits during ingestion.",
-    )] = 50_000,
+    h5_file: Annotated[
+        str,
+        typer.Option(
+            "--h5-file",
+            help="Path to the HDF5 file. Must contain 'concept_id' and 'embedding' datasets.",
+        ),
+    ],
+    model: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            "-m",
+            help="Canonical model name to register the embeddings under (e.g. 'nomic-embed-text:v1.5').",
+        ),
+    ],
+    provider_type: Annotated[
+        ProviderType,
+        typer.Option(
+            "--provider-type",
+            help="Embedding provider that produced these embeddings.",
+        ),
+    ] = ProviderType.OLLAMA,
+    metric_type: Annotated[
+        MetricType,
+        typer.Option(
+            "--metric-type",
+            help="Distance metric to use when storing and searching embeddings.",
+        ),
+    ] = MetricType.COSINE,
+    batch_size: Annotated[
+        int,
+        typer.Option(
+            "--batch-size",
+            "-b",
+            help="Number of embeddings written to the backend per batch.",
+        ),
+    ] = 10_000,
+    cdm_batch_size: Annotated[
+        int,
+        typer.Option(
+            "--cdm-batch-size",
+            help="Batch size for fetching concept metadata from the CDM during ingestion. Adjust if you encounter performance issues or database limits during ingestion.",
+        ),
+    ] = 50_000,
 ):
     """Ingest pre-built embeddings from an HDF5 file into the configured backend.
 
@@ -69,6 +92,7 @@ def add_embeddings_from_h5(
         raise typer.Exit(1)
 
     from pathlib import Path
+
     h5_path = Path(h5_file).expanduser().resolve()
     if not h5_path.exists():
         typer.echo(f"HDF5 file not found: {h5_path}", err=True)
@@ -77,7 +101,9 @@ def add_embeddings_from_h5(
     with h5py.File(h5_path, "r") as f:
         for _ds_name in (CONCEPT_ID_KEY, EMBEDDINGS_KEY):
             if _ds_name not in f or not isinstance(f[_ds_name], h5py.Dataset):
-                typer.echo(f"HDF5 file is missing required dataset '{_ds_name}'.", err=True)
+                typer.echo(
+                    f"HDF5 file is missing required dataset '{_ds_name}'.", err=True
+                )
                 raise typer.Exit(1)
 
         cid_ds = f[CONCEPT_ID_KEY]
@@ -114,12 +140,16 @@ def add_embeddings_from_h5(
             dimensions=dimensions,
             index_config=FlatIndexConfig(),
         )
-        typer.echo(f"Registered model '{model}' ({dimensions}d, metric={metric_type.value}).")
+        typer.echo(
+            f"Registered model '{model}' ({dimensions}d, metric={metric_type.value})."
+        )
 
         cdm_engine = resolve_omop_cdm_engine()
 
         n_batches = (total + batch_size - 1) // batch_size
-        typer.echo(f"Ingesting {total:,} embeddings in {n_batches} batch(es) of {batch_size:,}...")
+        typer.echo(
+            f"Ingesting {total:,} embeddings in {n_batches} batch(es) of {batch_size:,}..."
+        )
 
         ingested = 0
         for start in tqdm(range(0, total, batch_size), desc="Ingesting embeddings"):
@@ -135,13 +165,17 @@ def add_embeddings_from_h5(
             for j in range(len(batch_cids)):
                 cid = int(batch_cids[j])
                 row = meta.get(cid)
-                records.append(ConceptEmbeddingRecord(
-                    concept_id=cid,
-                    domain_id=row.domain_id if row else "",
-                    vocabulary_id=row.vocabulary_id if row else "",
-                    is_standard=row.standard_concept in ("S", "C") if row else False,
-                    is_valid=row.invalid_reason not in ("D", "U") if row else True,
-                ))
+                records.append(
+                    ConceptEmbeddingRecord(
+                        concept_id=cid,
+                        domain_id=row.domain_id if row else "",
+                        vocabulary_id=row.vocabulary_id if row else "",
+                        is_standard=row.standard_concept in ("S", "C")
+                        if row
+                        else False,
+                        is_valid=row.invalid_reason not in ("D", "U") if row else True,
+                    )
+                )
             backend.upsert_embeddings(
                 model_name=model,
                 metric_type=metric_type,

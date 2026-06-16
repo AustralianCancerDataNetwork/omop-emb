@@ -10,7 +10,7 @@ from omop_emb.config import (
     MetricType,
     PGVECTOR_HALFVEC_MAX_DIMENSIONS,
     PGVECTOR_VECTOR_MAX_DIMENSIONS,
-    VectorColumnType
+    VectorColumnType,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ class EmbeddingConceptFilter:
         When ``True``, only standard concepts (``standard_concept`` in
         ``('S', 'C')``) are returned. Default ``False``.
     require_active : bool
-        When ``True``, only active concepts (``invalid_reason`` not in 
+        When ``True``, only active concepts (``invalid_reason`` not in
         ``('D', 'U')``) are returned. Default ``False``.
     limit : int, optional
         Maximum number of nearest neighbours to return. If not set, the
@@ -108,12 +108,12 @@ class EmbeddingConceptFilter:
     def is_empty(self) -> bool:
         """Return ``True`` if no constraints are set."""
         return (
-            self.concept_ids is None and
-            self.domains is None and
-            self.vocabularies is None and
-            not self.require_standard and
-            not self.require_active and
-            self.limit is None
+            self.concept_ids is None
+            and self.domains is None
+            and self.vocabularies is None
+            and not self.require_standard
+            and not self.require_active
+            and self.limit is None
         )
 
 
@@ -184,6 +184,7 @@ def get_similarity_from_distance(
     metric: MetricType,
 ) -> float: ...
 
+
 @overload
 def get_similarity_from_distance(
     distance_col: ColumnElement,
@@ -241,6 +242,7 @@ def get_similarity_from_distance(
         return func.least(func.greatest(similarity, 0.0), 1.0)
     else:
         return min(1.0, max(0.0, similarity))
+
 
 def vector_column_type_for_dimensions(dimensions: int) -> VectorColumnType:
     """Return the appropriate PostgreSQL column type for a given dimensionality.

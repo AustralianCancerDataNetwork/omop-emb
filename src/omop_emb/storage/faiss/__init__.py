@@ -2,12 +2,17 @@
 
 Requires: ``pip install omop-emb[faiss-cpu]``
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from omop_emb.storage.faiss.faiss_cache import FAISSCache, IVFFlatIndexConfig, IVFPQIndexConfig
+    from omop_emb.storage.faiss.faiss_cache import (
+        FAISSCache,
+        IVFFlatIndexConfig,
+        IVFPQIndexConfig,
+    )
 
 __all__ = ["FAISSCache", "IVFFlatIndexConfig", "IVFPQIndexConfig"]
 
@@ -21,6 +26,7 @@ def __getattr__(name: str):
             IVFFlatIndexConfig,
             IVFPQIndexConfig,
         )
+
         g = globals()
         g["FAISSCache"] = FAISSCache
         g["IVFFlatIndexConfig"] = IVFFlatIndexConfig

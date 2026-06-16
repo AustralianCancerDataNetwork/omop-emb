@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Iterator
-
-from dotenv import load_dotenv
 
 import numpy as np
 import pytest
 import sqlalchemy as sa
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
+from omop_emb.backends.sqlitevec import (
+    SQLiteVecEmbeddingBackend,
+    create_sqlitevec_engine,
+)
 from omop_emb.config import OmopEmbConfig, ProviderType
-
-load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 # ---------------------------------------------------------------------------
 # Test data constants
@@ -28,10 +26,18 @@ EMBEDDING_DIM = 1
 # Fixed 1-D embeddings: Hypertension=-10, Diabetes=0, Aspirin=+10
 # This makes L2 and cosine tests fully deterministic.
 CONCEPT_RECORDS: tuple[ConceptEmbeddingRecord, ...] = (
-    ConceptEmbeddingRecord(concept_id=1, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True),
-    ConceptEmbeddingRecord(concept_id=2, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True),
-    ConceptEmbeddingRecord(concept_id=3, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True),
-    ConceptEmbeddingRecord(concept_id=4, domain_id="Drug", vocabulary_id="RxNorm", is_standard=False),
+    ConceptEmbeddingRecord(
+        concept_id=1, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True
+    ),
+    ConceptEmbeddingRecord(
+        concept_id=2, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True
+    ),
+    ConceptEmbeddingRecord(
+        concept_id=3, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True
+    ),
+    ConceptEmbeddingRecord(
+        concept_id=4, domain_id="Drug", vocabulary_id="RxNorm", is_standard=False
+    ),
 )
 
 CONCEPT_EMBEDDINGS = np.array([[-10.0], [0.0], [10.0], [20.0]], dtype=np.float32)
@@ -60,6 +66,7 @@ QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
 # Fixtures — SQLiteVec (in-memory, function-scoped)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def svec_engine():
     """In-memory SQLiteVec engine, fresh per test."""
@@ -78,12 +85,16 @@ def svec_backend(svec_engine) -> SQLiteVecEmbeddingBackend:
 # Fixtures — pgvector (session-scoped engine, function-scoped backend)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="session")
 def pg_engine() -> Iterator[sa.Engine]:
     """Session-scoped PostgreSQL engine. Skipped when test_emb_db is not configured."""
     from oa_configurator.pytest_plugin import (
-        create_fresh_test_db, drop_test_db,
-        ensure_test_user_exists, require_pg_extension, resolve_test_resource,
+        create_fresh_test_db,
+        drop_test_db,
+        ensure_test_user_exists,
+        require_pg_extension,
+        resolve_test_resource,
     )
 
     raw_url = resolve_test_resource(OmopEmbConfig.TEST_DB)
@@ -116,7 +127,7 @@ def pg_backend(pg_engine: sa.Engine):
             backend.delete_model(model_name=record.model_name)
         except Exception:
             pass
-    
+
     # Remove the tables from the ORM cache
     EmbeddingTableBase.metadata.clear()
     EmbeddingTableBase.registry._class_registry.clear()

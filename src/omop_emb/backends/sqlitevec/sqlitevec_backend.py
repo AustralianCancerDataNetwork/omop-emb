@@ -3,6 +3,7 @@
 All data lives in a single .db file. vec0 virtual tables (embeddings) and
 the registry table share the same file and SQLAlchemy engine.
 """
+
 from __future__ import annotations
 
 import logging
@@ -46,7 +47,6 @@ from omop_emb.utils.embedding_utils import (
 logger = logging.getLogger(__name__)
 
 
-
 def create_sqlitevec_engine(db_path: str) -> Engine:
     """Create a SQLAlchemy engine for sqlite-vec with the extension pre-loaded.
 
@@ -82,10 +82,10 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend):
     - Only ``FLAT`` index type is supported. Supports ``L2``, ``COSINE``, and
     ``L1`` distance metrics.
 
-    - **No SQLAlchemy ORM for embeddings.** 
-        - vec0 is a SQLite virtual table type that the SQLAlchemy ORM cannot introspect or query. 
+    - **No SQLAlchemy ORM for embeddings.**
+        - vec0 is a SQLite virtual table type that the SQLAlchemy ORM cannot introspect or query.
         - All embedding operations therefore use raw ``text()`` SQL, passing the physical table name directly.
-        - ``_table_cache`` (inherited from :class:`~omop_emb.backends.base_backend.EmbeddingBackend`) stores only the table name string as a presence marker. 
+        - ``_table_cache`` (inherited from :class:`~omop_emb.backends.base_backend.EmbeddingBackend`) stores only the table name string as a presence marker.
         - ``_table_cache`` is used solely to prevent redundant existence checks and DDL
         - All operations resolve the table via ``model_record.storage_identifier``.
     """
@@ -242,11 +242,17 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend):
 
     def _has_any_embeddings_impl(self, *, model_record: EmbeddingModelRecord) -> bool:
         with self.emb_session_factory() as session:
-            return query_has_any(session=session, table_name=model_record.storage_identifier)
+            return query_has_any(
+                session=session, table_name=model_record.storage_identifier
+            )
 
-    def _get_all_stored_concept_ids_impl(self, *, model_record: EmbeddingModelRecord) -> set[int]:
+    def _get_all_stored_concept_ids_impl(
+        self, *, model_record: EmbeddingModelRecord
+    ) -> set[int]:
         with self.emb_session_factory() as session:
-            return query_all_concept_ids(session=session, table_name=model_record.storage_identifier)
+            return query_all_concept_ids(
+                session=session, table_name=model_record.storage_identifier
+            )
 
     def _get_concept_filter_metadata_impl(
         self,

@@ -11,7 +11,9 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import inspect
 
-pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed — skipping pgvector tests")
+pytest.importorskip(
+    "pgvector", reason="omop-emb[pgvector] not installed — skipping pgvector tests"
+)
 
 from omop_emb.config import IndexType, MetricType, VectorColumnType
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
@@ -25,16 +27,20 @@ from omop_emb.utils.embedding_utils import vector_column_type_for_dimensions
 
 TABLENAME = "test_emb_idx_mgr"
 EMBEDDING_COL = "embedding"
-DEFAULT_HNSW_CONFIG = HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=16, ef_search=64, ef_construction=128)
+DEFAULT_HNSW_CONFIG = HNSWIndexConfig(
+    metric_type=MetricType.L2, num_neighbors=16, ef_search=64, ef_construction=128
+)
 
 
 @pytest.fixture(scope="module")
 def hnsw_table(pg_engine):
     with pg_engine.begin() as conn:
-        conn.execute(sa.text(
-            f"CREATE TABLE IF NOT EXISTS {TABLENAME} "
-            f"(concept_id INT PRIMARY KEY, {EMBEDDING_COL} vector(4))"
-        ))
+        conn.execute(
+            sa.text(
+                f"CREATE TABLE IF NOT EXISTS {TABLENAME} "
+                f"(concept_id INT PRIMARY KEY, {EMBEDDING_COL} vector(4))"
+            )
+        )
     yield
     with pg_engine.begin() as conn:
         conn.execute(sa.text(f"DROP TABLE IF EXISTS {TABLENAME} CASCADE"))
@@ -58,9 +64,9 @@ def hnsw_manager(pg_engine, hnsw_table) -> PGVectorHNSWIndexManager:
 # PGVectorFlatIndexManager — unit tests (no DB)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 class TestPGVectorFlatIndexManagerUnit:
-
     def test_supported_index_type(self):
         mgr = PGVectorFlatIndexManager.__new__(PGVectorFlatIndexManager)
         mgr._index_config = FlatIndexConfig()
@@ -68,30 +74,42 @@ class TestPGVectorFlatIndexManagerUnit:
 
     def test_has_index_always_true(self):
         mgr = PGVectorFlatIndexManager(
-            emb_engine=None, tablename="t", embedding_column="e",  # type: ignore[arg-type]
-            index_config=FlatIndexConfig(), dimensions=4,
+            emb_engine=None,
+            tablename="t",
+            embedding_column="e",  # type: ignore[arg-type]
+            index_config=FlatIndexConfig(),
+            dimensions=4,
         )
         assert mgr.has_index(MetricType.L2) is True
         assert mgr.has_index(MetricType.COSINE) is True
 
     def test_create_index_noop(self):
         mgr = PGVectorFlatIndexManager(
-            emb_engine=None, tablename="t", embedding_column="e",  # type: ignore[arg-type]
-            index_config=FlatIndexConfig(), dimensions=4,
+            emb_engine=None,
+            tablename="t",
+            embedding_column="e",  # type: ignore[arg-type]
+            index_config=FlatIndexConfig(),
+            dimensions=4,
         )
         mgr.create_index(MetricType.L2)
 
     def test_drop_index_noop(self):
         mgr = PGVectorFlatIndexManager(
-            emb_engine=None, tablename="t", embedding_column="e",  # type: ignore[arg-type]
-            index_config=FlatIndexConfig(), dimensions=4,
+            emb_engine=None,
+            tablename="t",
+            embedding_column="e",  # type: ignore[arg-type]
+            index_config=FlatIndexConfig(),
+            dimensions=4,
         )
         mgr.drop_index(MetricType.L2)
 
     def test_create_index_ddl_returns_none(self):
         mgr = PGVectorFlatIndexManager(
-            emb_engine=None, tablename="t", embedding_column="e",  # type: ignore[arg-type]
-            index_config=FlatIndexConfig(), dimensions=4,
+            emb_engine=None,
+            tablename="t",
+            embedding_column="e",  # type: ignore[arg-type]
+            index_config=FlatIndexConfig(),
+            dimensions=4,
         )
         assert mgr._create_index_ddl(MetricType.L2) is None
 
@@ -101,7 +119,7 @@ class TestPGVectorFlatIndexManagerUnit:
                 emb_engine=None,  # type: ignore
                 tablename="t",
                 embedding_column="e",
-                index_config=HNSWIndexConfig(metric_type=MetricType.L2), # type: ignore
+                index_config=HNSWIndexConfig(metric_type=MetricType.L2),  # type: ignore
                 dimensions=4,
             )
 
@@ -110,16 +128,21 @@ class TestPGVectorFlatIndexManagerUnit:
 # PGVectorHNSWIndexManager — DDL generation (pure unit, no DB)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 class TestPGVectorHNSWIndexManagerDDL:
-
     @pytest.fixture
     def mgr(self) -> PGVectorHNSWIndexManager:
         m = PGVectorHNSWIndexManager.__new__(PGVectorHNSWIndexManager)
         m._engine = None  # type: ignore
         m._tablename = "my_table"
         m._embedding_column = "embedding"
-        m._index_config = HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=32, ef_search=64, ef_construction=128)
+        m._index_config = HNSWIndexConfig(
+            metric_type=MetricType.L2,
+            num_neighbors=32,
+            ef_search=64,
+            ef_construction=128,
+        )
         m._vector_col_type = VectorColumnType.VECTOR
         return m
 
@@ -156,7 +179,7 @@ class TestPGVectorHNSWIndexManagerDDL:
                 emb_engine=None,  # type: ignore
                 tablename="t",
                 embedding_column="e",
-                index_config=FlatIndexConfig(), # type: ignore
+                index_config=FlatIndexConfig(),  # type: ignore
                 dimensions=4,
             )
 
@@ -165,7 +188,12 @@ class TestPGVectorHNSWIndexManagerDDL:
         m._engine = None  # type: ignore
         m._tablename = "my_table"
         m._embedding_column = "embedding"
-        m._index_config = HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=16, ef_search=64, ef_construction=128)
+        m._index_config = HNSWIndexConfig(
+            metric_type=MetricType.L2,
+            num_neighbors=16,
+            ef_search=64,
+            ef_construction=128,
+        )
         m._vector_col_type = VectorColumnType.HALFVEC
         ddl = m._create_index_ddl(MetricType.L2)
         assert "halfvec_l2_ops" in ddl
@@ -178,6 +206,7 @@ class TestPGVectorHNSWIndexManagerDDL:
 
     def test_vector_column_type_rejects_oversized(self):
         from omop_emb.config import PGVECTOR_HALFVEC_MAX_DIMENSIONS
+
         with pytest.raises(ValueError):
             vector_column_type_for_dimensions(PGVECTOR_HALFVEC_MAX_DIMENSIONS + 1)
 
@@ -186,15 +215,16 @@ class TestPGVectorHNSWIndexManagerDDL:
 # Metric support guards — unit tests (no DB)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 class TestMetricSupportGuards:
-
     @pytest.mark.parametrize("metric", [MetricType.HAMMING, MetricType.JACCARD])
     def test_bit_metrics_not_in_pgvector_supported_metrics(self, metric):
         from omop_emb.config import (
             BackendType,
             is_supported_index_metric_combination_for_backend,
         )
+
         assert not is_supported_index_metric_combination_for_backend(
             backend=BackendType.PGVECTOR,
             index=IndexType.FLAT,
@@ -213,6 +243,7 @@ class TestMetricSupportGuards:
 
     def test_get_similarity_raises_valueerror_for_hamming(self):
         from omop_emb.utils.embedding_utils import get_similarity_from_distance
+
         with pytest.raises(ValueError, match="HAMMING"):
             get_similarity_from_distance(0.5, MetricType.HAMMING)
 
@@ -221,11 +252,11 @@ class TestMetricSupportGuards:
 # PGVectorHNSWIndexManager — integration tests (need DB)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.requires_resource(OmopEmbConfig.TEST_DB)
 @pytest.mark.pgvector
 @pytest.mark.integration
 class TestPGVectorHNSWIndexManagerIntegration:
-
     def test_has_index_false_before_creation(self, hnsw_manager):
         assert hnsw_manager.has_index(MetricType.L2) is False
 
@@ -278,13 +309,27 @@ class TestPGVectorHNSWIndexManagerIntegration:
 
     def test_new_config_produces_different_ddl(self, pg_engine, hnsw_table):
         mgr_a = PGVectorHNSWIndexManager(
-            emb_engine=pg_engine, tablename=TABLENAME, embedding_column=EMBEDDING_COL,
-            index_config=HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=8, ef_search=16, ef_construction=32),
+            emb_engine=pg_engine,
+            tablename=TABLENAME,
+            embedding_column=EMBEDDING_COL,
+            index_config=HNSWIndexConfig(
+                metric_type=MetricType.L2,
+                num_neighbors=8,
+                ef_search=16,
+                ef_construction=32,
+            ),
             dimensions=4,
         )
         mgr_b = PGVectorHNSWIndexManager(
-            emb_engine=pg_engine, tablename=TABLENAME, embedding_column=EMBEDDING_COL,
-            index_config=HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=64, ef_search=128, ef_construction=256),
+            emb_engine=pg_engine,
+            tablename=TABLENAME,
+            embedding_column=EMBEDDING_COL,
+            index_config=HNSWIndexConfig(
+                metric_type=MetricType.L2,
+                num_neighbors=64,
+                ef_search=128,
+                ef_construction=256,
+            ),
             dimensions=4,
         )
         ddl_a = mgr_a._create_index_ddl(MetricType.L2)

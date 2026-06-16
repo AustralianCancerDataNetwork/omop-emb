@@ -32,6 +32,7 @@ FAISS-specific acceleration.  They subclass the backend
 :class:`~omop_emb.backends.index_config.IndexConfig` with ``IndexType.IVFFLAT``
 / ``IndexType.IVFPQ`` and are **NOT** officially supported at the moment.
 """
+
 from __future__ import annotations
 
 import json
@@ -73,6 +74,7 @@ _FAISS_SUPPORTED_METRICS = frozenset({MetricType.L2, MetricType.COSINE})
 # FAISS-only index configuration dataclasses
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, kw_only=True)
 class IVFFlatIndexConfig(IndexConfig):
     """Inverted-file flat index (FAISS only).
@@ -88,6 +90,7 @@ class IVFFlatIndexConfig(IndexConfig):
     metric_type : MetricType
         Distance metric. Must be L2 or COSINE.
     """
+
     metric_type: MetricType
     index_type: IndexType = IndexType.IVFFLAT
     n_lists: int = 100
@@ -116,6 +119,7 @@ class IVFPQIndexConfig(IndexConfig):
     metric_type : MetricType
         Distance metric. Must be L2 or COSINE.
     """
+
     metric_type: MetricType
     index_type: IndexType = IndexType.IVFPQ
     n_lists: int = 100
@@ -130,6 +134,7 @@ class IVFPQIndexConfig(IndexConfig):
 # ---------------------------------------------------------------------------
 # Cache metadata dataclass
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class CacheMetadata:
@@ -210,6 +215,7 @@ class CacheMetadata:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _validate_faiss_metric(metric_type: MetricType) -> None:
     """Raise ``ValueError`` if *metric_type* is not supported by FAISS."""
     if metric_type not in _FAISS_SUPPORTED_METRICS:
@@ -238,6 +244,7 @@ def _now_iso() -> str:
 # FAISSCache
 # ---------------------------------------------------------------------------
 
+
 class FAISSCache:
     """Model-level FAISS sidecar cache.
 
@@ -247,7 +254,7 @@ class FAISSCache:
 
     Notes
     -----
-    Caches the index file in-memory on first load for faster subsequent queries.  
+    Caches the index file in-memory on first load for faster subsequent queries.
     To prevent RAM saturation, only one index is cached at a time: switching to a different
     metric+index pair triggers a disk reload and GC of the previous index.
 
@@ -350,7 +357,9 @@ class FAISSCache:
             "is_fresh": self.is_fresh(model_record, metric_type, index_config),
             "exported_at": meta.exported_at if meta else None,
             "cached_row_count": meta.row_count if meta else None,
-            "model_updated_at": model_record.updated_at.isoformat() if model_record.updated_at else None,
+            "model_updated_at": model_record.updated_at.isoformat()
+            if model_record.updated_at
+            else None,
             "cache_dir": str(self.model_dir),
         }
 
@@ -402,12 +411,16 @@ class FAISSCache:
 
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
-        all_ids = sorted(backend.get_all_stored_concept_ids(
-            model_name=self._model_name,
-            metric_type=metric_type,
-        ))
+        all_ids = sorted(
+            backend.get_all_stored_concept_ids(
+                model_name=self._model_name,
+                metric_type=metric_type,
+            )
+        )
         if not all_ids:
-            logger.warning("No embeddings found for '%s'. FAISS export skipped.", self._model_name)
+            logger.warning(
+                "No embeddings found for '%s'. FAISS export skipped.", self._model_name
+            )
             return
 
         concept_ids_list: list[int] = []
@@ -420,7 +433,7 @@ class FAISSCache:
         for id_batch in tqdm(
             batched(all_ids, batch_size),
             total=(len(all_ids) + batch_size - 1) // batch_size,
-            desc="Batched export to FAISS"
+            desc="Batched export to FAISS",
         ):
             id_batch_list = list(id_batch)
             emb_map = backend.get_embeddings_by_concept_ids(
@@ -450,7 +463,11 @@ class FAISSCache:
         # Shared metadata. Overwrite on every export so it always reflects
         # the current set of concepts.  Stale per-index files are gated by
         # is_fresh() before any positional lookup into this array.
-        logger.info("Saving concept metadata arrays (%d rows) to '%s'.", total_rows, self._metadata_path())
+        logger.info(
+            "Saving concept metadata arrays (%d rows) to '%s'.",
+            total_rows,
+            self._metadata_path(),
+        )
         np.savez(
             self.model_dir / "metadata",  # NumPy appends .npz
             concept_ids=concept_ids_arr,
@@ -461,7 +478,13 @@ class FAISSCache:
         )
         logger.info("Saved concept metadata arrays (%d rows).", total_rows)
 
-        self._build_and_write_index(embeddings_arr, concept_ids_arr, record.dimensions, metric_type, index_config)
+        self._build_and_write_index(
+            embeddings_arr,
+            concept_ids_arr,
+            record.dimensions,
+            metric_type,
+            index_config,
+        )
 
         meta = CacheMetadata(
             model_name=self._model_name,
@@ -470,12 +493,17 @@ class FAISSCache:
             index_config=index_config,
             row_count=total_rows,
             exported_at=_now_iso(),
-            model_updated_at=record.updated_at.isoformat() if record.updated_at else None,
+            model_updated_at=record.updated_at.isoformat()
+            if record.updated_at
+            else None,
         )
         self._json_path(metric_type, index_config).write_text(meta.to_json())
         logger.info(
             "FAISS export complete: %d vectors, metric=%s, index=%s, dir='%s'.",
-            total_rows, metric_type.value, index_config.index_type.value, self.model_dir,
+            total_rows,
+            metric_type.value,
+            index_config.index_type.value,
+            self.model_dir,
         )
 
     # ------------------------------------------------------------------
@@ -545,8 +573,7 @@ class FAISSCache:
                     concept_id=int(cid),
                     similarity=float(
                         get_similarity_from_distance(
-                            self._to_metric_dist(float(dist), metric_type), 
-                            metric_type
+                            self._to_metric_dist(float(dist), metric_type), metric_type
                         )
                     ),
                 )
@@ -644,7 +671,9 @@ class FAISSCache:
             return faiss.IndexFlatIP(dimensions)
 
         if isinstance(index_config, HNSWIndexConfig):
-            idx = faiss.IndexHNSWFlat(dimensions, index_config.num_neighbors, faiss_metric)
+            idx = faiss.IndexHNSWFlat(
+                dimensions, index_config.num_neighbors, faiss_metric
+            )
             idx.hnsw.efConstruction = index_config.ef_construction
             return idx
 
@@ -654,7 +683,9 @@ class FAISSCache:
                 if metric_type == MetricType.L2
                 else faiss.IndexFlatIP(dimensions)
             )
-            idx = faiss.IndexIVFFlat(quantizer, dimensions, index_config.n_lists, faiss_metric)
+            idx = faiss.IndexIVFFlat(
+                quantizer, dimensions, index_config.n_lists, faiss_metric
+            )
             idx.train(train_vecs)  # type: ignore
             idx.nprobe = index_config.n_probe
             return idx
@@ -702,7 +733,11 @@ class FAISSCache:
             if cached_metric == metric_type and cached_config == index_config:
                 return cached_index
 
-        logger.debug("Loading FAISS index for metric=%s, index=%s from disk.", metric_type.value, index_config.index_type.value)
+        logger.debug(
+            "Loading FAISS index for metric=%s, index=%s from disk.",
+            metric_type.value,
+            index_config.index_type.value,
+        )
         path = self._faiss_path(metric_type, index_config)
         if not path.exists():
             raise FileNotFoundError(
@@ -882,10 +917,12 @@ class FAISSCache:
             model_name=self._model_name,
             metric_type=metric_type,
             batches=_batches(),
-            total_n_batches=n//batch_size + (1 if n % batch_size else 0)
+            total_n_batches=n // batch_size + (1 if n % batch_size else 0),
         )
         logger.info(
             "Imported %d vectors for '%s' (metric=%s) into backend.",
-            n, self._model_name, metric_type.value,
+            n,
+            self._model_name,
+            metric_type.value,
         )
         return n

@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 app = typer.Typer(help="Diagnostics for embedding storage and retrieval.")
 
 
-@app.command(name="health-check", help="Verify backend connectivity and list registered models.")
+@app.command(
+    name="health-check", help="Verify backend connectivity and list registered models."
+)
 def health_check():
     backend = resolve_backend()
     typer.echo(f"Backend: {backend.backend_type.value} | connected.")
@@ -35,7 +37,9 @@ def health_check():
         return
 
     typer.echo(f"\n{len(records)} registered model(s):")
-    typer.echo(f"  {'Model':<40} {'Provider':<10} {'Metric':<8} {'Index':<6} {'Dims':<6} {'Table'}")
+    typer.echo(
+        f"  {'Model':<40} {'Provider':<10} {'Metric':<8} {'Index':<6} {'Dims':<6} {'Table'}"
+    )
     typer.echo("  " + "-" * 95)
     for r in records:
         index_str = r.index_type.value if r.index_type else "none"

@@ -57,7 +57,10 @@ class TestGetProviderFromProviderType:
         assert isinstance(provider, OllamaProvider)
 
     def test_ollama_result_has_correct_provider_type(self):
-        assert get_provider_from_provider_type(ProviderType.OLLAMA).provider_type == ProviderType.OLLAMA
+        assert (
+            get_provider_from_provider_type(ProviderType.OLLAMA).provider_type
+            == ProviderType.OLLAMA
+        )
 
     def test_each_call_returns_a_fresh_instance(self):
         """Provider instances must not be shared/cached between calls."""

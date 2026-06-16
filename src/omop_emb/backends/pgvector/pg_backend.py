@@ -25,8 +25,8 @@ from omop_emb.backends.pgvector.pg_index_manager import (
     PGVectorHNSWIndexManager,
 )
 from omop_emb.backends.embedding_table import (
-    create_pg_embedding_table, 
-    load_pg_embedding_table
+    create_pg_embedding_table,
+    load_pg_embedding_table,
 )
 from omop_emb.backends.pgvector.pg_sql import (
     EMBEDDING_COLUMN_NAME,
@@ -43,7 +43,7 @@ from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,
     get_similarity_from_distance,
-    vector_column_type_for_dimensions
+    vector_column_type_for_dimensions,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,7 +121,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         return load_pg_embedding_table(model_record=model_record)
 
     def _create_storage_table(self, model_record: EmbeddingModelRecord) -> type:
-        return create_pg_embedding_table(engine=self.emb_engine, model_record=model_record)
+        return create_pg_embedding_table(
+            engine=self.emb_engine, model_record=model_record
+        )
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
         self._index_managers.pop(model_record.storage_identifier, None)
@@ -196,7 +198,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         manager.rebuild_index(metric)
         self._index_managers[model_record.storage_identifier] = manager
 
-    def get_index_manager(self, storage_identifier: str) -> Optional[PGVectorBaseIndexManager]:
+    def get_index_manager(
+        self, storage_identifier: str
+    ) -> Optional[PGVectorBaseIndexManager]:
         """Return the active index manager for a table, or ``None`` if not set.
 
         Parameters
@@ -255,11 +259,16 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory.begin() as session:
             with temp_filter_table(
-                session, list(concept_ids), "BIGINT", table_name="_tmp_emb_cids", dialect=self.emb_engine.dialect.name
+                session,
+                list(concept_ids),
+                "BIGINT",
+                table_name="_tmp_emb_cids",
+                dialect=self.emb_engine.dialect.name,
             ) as temp_table_name:
                 rows = session.execute(
-                    select(table.concept_id, table.embedding)
-                    .where(text(f'concept_id IN (SELECT id FROM "{temp_table_name}")'))
+                    select(table.concept_id, table.embedding).where(
+                        text(f'concept_id IN (SELECT id FROM "{temp_table_name}")')
+                    )
                 ).all()
         result = {int(row[0]): list(row[1]) for row in rows}
         missing = set(concept_ids) - set(result.keys())
@@ -301,7 +310,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
             )
             ann_rows = session.execute(stmt).all()
 
-        results: list[list[NearestConceptMatch]] = [[] for _ in range(len(query_embeddings))]
+        results: list[list[NearestConceptMatch]] = [
+            [] for _ in range(len(query_embeddings))
+        ]
         for row in ann_rows:
             similarity = get_similarity_from_distance(float(row.distance), metric_type)
             results[row.q_id].append(
@@ -321,9 +332,13 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
     def _has_any_embeddings_impl(self, *, model_record: EmbeddingModelRecord) -> bool:
         table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory() as session:
-            return session.execute(select(table.concept_id).limit(1)).first() is not None
+            return (
+                session.execute(select(table.concept_id).limit(1)).first() is not None
+            )
 
-    def _get_all_stored_concept_ids_impl(self, *, model_record: EmbeddingModelRecord) -> set[int]:
+    def _get_all_stored_concept_ids_impl(
+        self, *, model_record: EmbeddingModelRecord
+    ) -> set[int]:
         table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory() as session:
             return {row[0] for row in session.execute(q_all_concept_ids(table))}
@@ -339,7 +354,11 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory.begin() as session:
             with temp_filter_table(
-                session, list(concept_ids), "BIGINT", table_name="_tmp_cfm_cids", dialect=self.emb_engine.dialect.name
+                session,
+                list(concept_ids),
+                "BIGINT",
+                table_name="_tmp_cfm_cids",
+                dialect=self.emb_engine.dialect.name,
             ) as temp_table_name:
                 rows = session.execute(
                     select(

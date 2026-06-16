@@ -9,11 +9,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from omop_emb.backends.index_config import (
     RESERVED_METADATA_KEYS,
-    IndexConfig, 
-    index_config_from_orm_row
+    IndexConfig,
+    index_config_from_orm_row,
 )
 from omop_emb.config import ProviderType
-from omop_emb.model_registry.model_registry_orm import ModelRegistry, ensure_registry_schema
+from omop_emb.model_registry.model_registry_orm import (
+    ModelRegistry,
+    ensure_registry_schema,
+)
 from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
 from omop_emb.utils.errors import ModelRegistrationConflictError
 
@@ -45,7 +48,7 @@ class RegistryManager:
     def embedding_engine(self) -> Engine:
         """SQLAlchemy engine connected to the embedding store."""
         return self._embedding_engine
-    
+
     @property
     def emb_session_factory(self) -> sessionmaker:
         """Session factory bound to ``embedding_engine``."""
@@ -137,7 +140,7 @@ class RegistryManager:
                     raise ModelRegistrationConflictError(
                         f"Model '{model_name}' is already registered with different "
                         f"metadata. Reuse the existing model name or choose a new one.",
-                        conflict_field="metadata"
+                        conflict_field="metadata",
                     )
                 return self._row_to_record(existing)
 
@@ -259,10 +262,7 @@ class RegistryManager:
         return re.sub(r"_+", "_", sanitized).strip("_")
 
     @staticmethod
-    def storage_name(
-        safe_model_name: str,
-        embedding_table_prefix: str = "emb"
-    ) -> str:
+    def storage_name(safe_model_name: str, embedding_table_prefix: str = "emb") -> str:
         """Return the physical table name for a model.
 
         Parameters
@@ -307,6 +307,7 @@ class RegistryManager:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
 
 def _validate_metadata_keys(metadata: Optional[Mapping[str, object]]) -> None:
     """Raise ``ValueError`` if ``metadata`` contains a reserved key.

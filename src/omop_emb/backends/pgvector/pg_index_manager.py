@@ -10,6 +10,7 @@ Halfvec support
 The correct operator class is selected automatically based on
 :class:`~omop_emb.config.VectorColumnType` stored in ``EmbeddingModelRecord``.
 """
+
 from __future__ import annotations
 
 import abc
@@ -75,12 +76,16 @@ class PGVectorBaseIndexManager(BaseIndexManager[C], Generic[C]):
 
     def has_index(self, metric_type: MetricType) -> bool:
         with self._engine.connect() as conn:
-            existing = {idx["name"] for idx in inspect(conn).get_indexes(self._tablename)}
+            existing = {
+                idx["name"] for idx in inspect(conn).get_indexes(self._tablename)
+            }
         return self._index_name(metric_type) in existing
 
     def create_index(self, metric_type: MetricType, **_kwargs) -> None:
         if self.has_index(metric_type):
-            logger.debug(f"Index '{self._index_name(metric_type)}' already exists, skipping.")
+            logger.debug(
+                f"Index '{self._index_name(metric_type)}' already exists, skipping."
+            )
             return
         sql = self._create_index_ddl(metric_type)
         if sql is None:
@@ -145,6 +150,7 @@ _OPERATOR_CLASSES: dict[VectorColumnType, dict[MetricType, str]] = {
 # ---------------------------------------------------------------------------
 # Concrete managers
 # ---------------------------------------------------------------------------
+
 
 class PGVectorFlatIndexManager(PGVectorBaseIndexManager[FlatIndexConfig]):
     """No-op manager for FLAT search (sequential scan; no SQL index needed)."""

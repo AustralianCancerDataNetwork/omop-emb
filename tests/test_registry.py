@@ -29,7 +29,6 @@ _PG_STORAGE_ID = RegistryManager.storage_name(_SAFE, "pgvector")
 
 @pytest.mark.unit
 class TestRegistryManager:
-
     def test_register_and_retrieve(self, registry: RegistryManager):
         record = registry.register_model(
             model_name=MODEL_NAME,
@@ -43,40 +42,42 @@ class TestRegistryManager:
 
     def test_register_idempotent(self, registry: RegistryManager):
         r1 = registry.register_model(
-            model_name=MODEL_NAME, 
+            model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_config=FLAT, 
+            index_config=FLAT,
             dimensions=EMBEDDING_DIM,
         )
         r2 = registry.register_model(
-            model_name=MODEL_NAME, 
+            model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_config=FLAT, 
+            index_config=FLAT,
             dimensions=EMBEDDING_DIM,
         )
         assert r1.storage_identifier == r2.storage_identifier
 
     def test_dimension_conflict_raises(self, registry: RegistryManager):
         registry.register_model(
-            model_name=MODEL_NAME, 
+            model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_config=FLAT, 
+            index_config=FLAT,
             dimensions=EMBEDDING_DIM,
         )
         with pytest.raises(ModelRegistrationConflictError, match="dimensions"):
             registry.register_model(
-                model_name=MODEL_NAME, 
+                model_name=MODEL_NAME,
                 provider_type=PROVIDER_TYPE,
-                index_config=FLAT, 
+                index_config=FLAT,
                 dimensions=EMBEDDING_DIM + 1,
             )
 
-    def test_update_index_config_keeps_storage_identifier(self, registry: RegistryManager):
+    def test_update_index_config_keeps_storage_identifier(
+        self, registry: RegistryManager
+    ):
         """Rebuilding from FLAT to HNSW keeps the same physical table name."""
         r_flat = registry.register_model(
-            model_name=MODEL_NAME, 
+            model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_config=FLAT, 
+            index_config=FLAT,
             dimensions=EMBEDDING_DIM,
         )
         r_hnsw = registry.update_index_config(
@@ -105,7 +106,7 @@ class TestRegistryManager:
             dimensions=EMBEDDING_DIM,
         )
         records = registry.get_registered_models(
-            model_name=MODEL_NAME, 
+            model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
         )
         assert len(records) == 1
@@ -113,7 +114,7 @@ class TestRegistryManager:
 
     def test_get_model_returns_none_for_missing(self, registry: RegistryManager):
         records = registry.get_registered_models(
-            model_name="nonexistent", 
+            model_name="nonexistent",
             provider_type=PROVIDER_TYPE,
         )
         assert len(records) == 0
@@ -143,7 +144,7 @@ class TestRegistryManager:
         )
         registry.delete_model(model_name=MODEL_NAME)
         records = registry.get_registered_models(
-            model_name=MODEL_NAME, 
+            model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
         )
         assert len(records) == 0
@@ -163,7 +164,12 @@ class TestRegistryManager:
 
     def test_index_config_round_trips_in_metadata(self, registry: RegistryManager):
         """index_config serialised to details and deserialised back on retrieval."""
-        hnsw = HNSWIndexConfig(metric_type=MetricType.COSINE, num_neighbors=32, ef_search=64, ef_construction=128)
+        hnsw = HNSWIndexConfig(
+            metric_type=MetricType.COSINE,
+            num_neighbors=32,
+            ef_search=64,
+            ef_construction=128,
+        )
         registry.register_model(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
@@ -171,10 +177,11 @@ class TestRegistryManager:
             dimensions=EMBEDDING_DIM,
         )
         records = registry.get_registered_models(
-            model_name=MODEL_NAME, 
+            model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
         )
         from omop_emb.backends.index_config import HNSWIndexConfig as HNSWCfg
+
         assert isinstance(records[0].index_config, HNSWCfg)
         assert records[0].index_config.num_neighbors == 32
 

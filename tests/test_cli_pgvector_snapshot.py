@@ -39,4 +39,3 @@ def test_list_registered_models_after_registration(pg_backend) -> None:
     )
     assert len(results) == 1
     assert results[0].model_name == MODEL_NAME
-

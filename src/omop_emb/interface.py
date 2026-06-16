@@ -13,17 +13,31 @@ Design
   (``embed_and_upsert_concepts``) because concept metadata must be fetched
   from the CDM to populate the embedding table filter columns.
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import replace as dc_replace
-from typing import TYPE_CHECKING, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import numpy as np
 from numpy import ndarray
 from sqlalchemy import Engine, Row
 
-from omop_emb.utils.cdm import count_missing_concepts, fetch_cdm_concepts_for_filter, iter_cdm_concepts_for_filter
+from omop_emb.utils.cdm import (
+    count_missing_concepts,
+    fetch_cdm_concepts_for_filter,
+    iter_cdm_concepts_for_filter,
+)
 from omop_emb.embeddings import (
     EmbeddingClient,
     EmbeddingRole,
@@ -47,6 +61,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Standalone utility
 # ---------------------------------------------------------------------------
+
 
 def list_registered_models(
     backend: EmbeddingBackend,
@@ -77,6 +92,7 @@ def list_registered_models(
 # ---------------------------------------------------------------------------
 # Reader interface
 # ---------------------------------------------------------------------------
+
 
 class EmbeddingReaderInterface:
     """Backend-neutral read interface for embedding search and retrieval.
@@ -119,7 +135,9 @@ class EmbeddingReaderInterface:
         elif provider_name_or_type is None:
             provider_type = ProviderType.OLLAMA
         else:
-            raise ValueError(f"Invalid provider_name_or_type: {type(provider_name_or_type).__name__}.")
+            raise ValueError(
+                f"Invalid provider_name_or_type: {type(provider_name_or_type).__name__}."
+            )
 
         provider = get_provider_from_provider_type(provider_type)
         canonical_model_name = provider.canonical_model_name(model)
@@ -127,7 +145,9 @@ class EmbeddingReaderInterface:
         self._backend = backend
 
         if not isinstance(metric_type, MetricType):
-            raise ValueError(f"metric_type must be an instance of MetricType Enum, got {type(metric_type).__name__}")
+            raise ValueError(
+                f"metric_type must be an instance of MetricType Enum, got {type(metric_type).__name__}"
+            )
         self._metric_type = metric_type
         self._provider_type = provider_type
         self._canonical_model_name = canonical_model_name
@@ -140,6 +160,7 @@ class EmbeddingReaderInterface:
         if _faiss_dir is not None:
             try:
                 from omop_emb.storage.faiss import FAISSCache as _FAISSCache
+
                 self._faiss_cache = _FAISSCache(
                     model_name=canonical_model_name,
                     cache_dir=_faiss_dir,
@@ -179,7 +200,9 @@ class EmbeddingReaderInterface:
     # ------------------------------------------------------------------
 
     def get_model_table_name(self) -> Optional[str]:
-        record = self._backend.get_registered_model(model_name=self.canonical_model_name)
+        record = self._backend.get_registered_model(
+            model_name=self.canonical_model_name
+        )
         return record.storage_identifier if record is not None else None
 
     def is_model_registered(self) -> bool:
@@ -234,8 +257,12 @@ class EmbeddingReaderInterface:
                     "Pass FlatIndexConfig() for exact search or HNSWIndexConfig(metric_type=...) "
                     "for approximate search."
                 )
-            record = self._backend.get_registered_model(model_name=self.canonical_model_name)
-            if record is not None and self._faiss_cache.is_fresh(record, self._metric_type, faiss_index_config):
+            record = self._backend.get_registered_model(
+                model_name=self.canonical_model_name
+            )
+            if record is not None and self._faiss_cache.is_fresh(
+                record, self._metric_type, faiss_index_config
+            ):
                 logger.info(
                     "Using FAISS cache for search (model='%s', cache='%s').",
                     self.canonical_model_name,
@@ -318,7 +345,9 @@ class EmbeddingReaderInterface:
             model_name=self.canonical_model_name,
             metric_type=self._metric_type,
         )
-        return {cid: row for cid, row in all_concepts.items() if cid not in embedded_ids}
+        return {
+            cid: row for cid, row in all_concepts.items() if cid not in embedded_ids
+        }
 
     def count_concepts_without_embedding(
         self,
@@ -388,11 +417,18 @@ class EmbeddingReaderInterface:
 
         unique_ids = {r.concept_id for results in raw for r in results}
         concept_filter = EmbeddingConceptFilter(concept_ids=tuple(unique_ids))
-        rows = fetch_cdm_concepts_for_filter(concept_filter=concept_filter, cdm_engine=self._cdm_engine)
+        rows = fetch_cdm_concepts_for_filter(
+            concept_filter=concept_filter, cdm_engine=self._cdm_engine
+        )
 
         return tuple(
             tuple(
-                dc_replace(r, concept_name=rows[r.concept_id].concept_name if r.concept_id in rows else None)
+                dc_replace(
+                    r,
+                    concept_name=rows[r.concept_id].concept_name
+                    if r.concept_id in rows
+                    else None,
+                )
                 for r in query_results
             )
             for query_results in raw
@@ -402,6 +438,7 @@ class EmbeddingReaderInterface:
 # ---------------------------------------------------------------------------
 # Writer interface
 # ---------------------------------------------------------------------------
+
 
 class EmbeddingWriterInterface(EmbeddingReaderInterface):
     """Reader interface extended with embedding generation and write operations.
@@ -436,7 +473,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             model=embedding_client.canonical_model_name,
             provider_name_or_type=embedding_client.provider.provider_type,
         )
-
 
     @property
     def embedding_dim(self) -> int:
@@ -575,15 +611,23 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             ConceptEmbeddingRecord(
                 concept_id=cid,
                 domain_id=concept_meta[cid].domain_id if cid in concept_meta else "",
-                vocabulary_id=concept_meta[cid].vocabulary_id if cid in concept_meta else "",
-                is_standard=concept_meta[cid].standard_concept in ("S", "C") if cid in concept_meta else False,
-                is_valid=concept_meta[cid].invalid_reason not in ("D", "U") if cid in concept_meta else True,
+                vocabulary_id=concept_meta[cid].vocabulary_id
+                if cid in concept_meta
+                else "",
+                is_standard=concept_meta[cid].standard_concept in ("S", "C")
+                if cid in concept_meta
+                else False,
+                is_valid=concept_meta[cid].invalid_reason not in ("D", "U")
+                if cid in concept_meta
+                else True,
             )
             for cid in concept_ids
         ]
 
         # Check registered dimensions
-        record = self._backend.get_registered_model(model_name=self.canonical_model_name)
+        record = self._backend.get_registered_model(
+            model_name=self.canonical_model_name
+        )
         if record is not None and record.dimensions != self.embedding_dim:
             raise ValueError(
                 f"Embedding dimension mismatch: client produces {self.embedding_dim}d "

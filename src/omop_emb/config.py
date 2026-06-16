@@ -61,7 +61,9 @@ class OmopEmbConfig(PackageConfigBase):
 
     tool_name: ClassVar[str] = "omop_emb"
     extra_logging_namespaces: ClassVar[tuple[str, ...]] = ("orm_loader", "omop_alchemy")
-    required_resources: ClassVar[tuple[str, ...]] = (OmopAlchemyConfig.CDM_DB.semantic_name,)
+    required_resources: ClassVar[tuple[str, ...]] = (
+        OmopAlchemyConfig.CDM_DB.semantic_name,
+    )
     owned_resources: ClassVar[tuple[ResourceSpec, ...]] = (EMB_DB,)
     test_resources: ClassVar[tuple[ResourceSpec, ...]] = (TEST_DB,)
 
@@ -111,10 +113,10 @@ def resolve_omop_cdm_engine() -> Engine:
     """Resolve CDM engine via oa-configurator, used read-only."""
     return OmopEmbConfig.get_engine(OmopAlchemyConfig.CDM_DB.semantic_name)
 
+
 def resolve_omop_emb_engine() -> Engine:
     """Resolve embedding database engine via oa-configurator."""
     return OmopEmbConfig.get_engine(OmopEmbConfig.EMB_DB.semantic_name)
-
 
 
 class BackendType(StrEnum):
@@ -287,7 +289,9 @@ def parse_metric_type(value: str | MetricType) -> MetricType:
 
 
 # Supported index + metric combinations per backend.
-SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tuple[MetricType, ...]]] = {
+SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[
+    BackendType, Dict[IndexType, Tuple[MetricType, ...]]
+] = {
     # https://alexgarcia.xyz/sqlite-vec/features/vec0.html
     BackendType.SQLITEVEC: {
         IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1),
@@ -334,7 +338,9 @@ def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) 
     return index in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
 
 
-def get_supported_index_types_for_backend(backend: BackendType) -> Tuple[IndexType, ...]:
+def get_supported_index_types_for_backend(
+    backend: BackendType,
+) -> Tuple[IndexType, ...]:
     """Return all index types supported by a backend.
 
     Parameters

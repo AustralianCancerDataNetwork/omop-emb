@@ -18,6 +18,7 @@ RESERVED_METADATA_KEYS: frozenset[str] = frozenset({})
 # Abstract base
 # ---------------------------------------------------------------------------
 
+
 @dataclass(kw_only=True, frozen=True)
 class IndexConfig(ABC):
     """Abstract base class for index configurations.
@@ -142,7 +143,11 @@ class IndexConfig(ABC):
                 )
             value = config_dict[field.name]
             field_type = type_hints.get(field.name)
-            if value is not None and isinstance(field_type, type) and issubclass(field_type, Enum):
+            if (
+                value is not None
+                and isinstance(field_type, type)
+                and issubclass(field_type, Enum)
+            ):
                 try:
                     value = field_type(value)
                 except ValueError:
@@ -157,6 +162,7 @@ class IndexConfig(ABC):
 # ---------------------------------------------------------------------------
 # Concrete configs
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True, kw_only=True)
 class FlatIndexConfig(IndexConfig):
@@ -224,6 +230,7 @@ class HNSWIndexConfig(IndexConfig):
 # Factory helpers
 # ---------------------------------------------------------------------------
 
+
 def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexConfig:
     """Build an ``IndexConfig`` for a given index type from raw kwargs.
 
@@ -253,7 +260,9 @@ def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexC
     raise ValueError(f"No IndexConfig defined for index type {index_type!r}.")
 
 
-def index_config_from_orm_row(index_type: IndexType, config_dict: Optional[dict[str, Any]]) -> IndexConfig:
+def index_config_from_orm_row(
+    index_type: IndexType, config_dict: Optional[dict[str, Any]]
+) -> IndexConfig:
     """Reconstruct an ``IndexConfig`` from ORM column values.
 
     Parameters

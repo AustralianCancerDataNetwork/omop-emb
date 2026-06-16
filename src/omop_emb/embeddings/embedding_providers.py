@@ -32,6 +32,7 @@ class EmbeddingProvider(ABC):
     OpenAI-compatible ``/v1/embeddings`` endpoint, similarity helpers, etc.)
     is shared and lives in ``EmbeddingClient`` directly.
     """
+
     @property
     @abstractmethod
     def provider_type(self) -> ProviderType:
@@ -59,7 +60,9 @@ class EmbeddingProvider(ABC):
             ``'text-embedding-3-small'``.
         """
         canonical_model_name = self._canonical_model_name_impl(name)
-        logger.info(f"Set canonical model name for provider {self.provider_type.value!r}: {canonical_model_name!r}")
+        logger.info(
+            f"Set canonical model name for provider {self.provider_type.value!r}: {canonical_model_name!r}"
+        )
         return canonical_model_name
 
     @abstractmethod
@@ -69,7 +72,7 @@ class EmbeddingProvider(ABC):
 
     def get_embedding_dim(self, model: str, api_base: URL) -> Optional[int]:
         """Return the embedding dimension for *model* served at *api_base*.
-        Child classes should overwrite this method if the provider has a way to query 
+        Child classes should overwrite this method if the provider has a way to query
         the embedding dimension via the API.
 
         Parameters

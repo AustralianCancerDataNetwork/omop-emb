@@ -8,6 +8,7 @@ The embedding table carries filter columns alongside the vector:
 These are populated at upsert time by the caller and enable efficient
 pre-filtering during KNN without re-querying the OMOP CDM.
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,6 +33,7 @@ EMBEDDING_COLUMN_NAME = "embedding"
 def table_exists(engine: Engine, table_name: str) -> bool:
     """Return ``True`` if *table_name* exists in the current Postgres schema."""
     from sqlalchemy import inspect as sa_inspect
+
     return sa_inspect(engine).has_table(table_name)
 
 
@@ -52,6 +54,7 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
 # ---------------------------------------------------------------------------
 # DML helpers
 # ---------------------------------------------------------------------------
+
 
 def q_upsert_embeddings(
     records: Sequence[ConceptEmbeddingRecord],
@@ -113,6 +116,7 @@ def q_all_concept_ids(embedding_table: type) -> Select:
     """
     return select(embedding_table.concept_id)
 
+
 def q_create_extension_pgvector() -> TextClause:
     """Return a SQL statement to create the pgvector extension if it doesn't exist."""
     return text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;")
@@ -121,6 +125,7 @@ def q_create_extension_pgvector() -> TextClause:
 # ---------------------------------------------------------------------------
 # ANN query
 # ---------------------------------------------------------------------------
+
 
 def q_nearest_concept_ids(
     embedding_table: type,
@@ -153,6 +158,7 @@ def q_nearest_concept_ids(
     Uses a lateral join so all queries are batched in a single round-trip.
     """
     from pgvector.sqlalchemy import Vector  # optional dependency
+
     query_data = [(i, q) for i, q in enumerate(query_embeddings)]
     query_v = values(
         column("q_id", Integer),
@@ -210,6 +216,7 @@ def q_nearest_concept_ids(
 # ---------------------------------------------------------------------------
 # Distance helpers
 # ---------------------------------------------------------------------------
+
 
 def get_distance(
     embedding_table: type,

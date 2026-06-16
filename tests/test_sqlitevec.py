@@ -35,7 +35,9 @@ class TestSQLiteVecSpecific:
     """SQLiteVec-specific behaviour not covered by the shared suite."""
 
     def test_hnsw_registration_raises(self, svec_backend: SQLiteVecEmbeddingBackend):
-        with pytest.raises(ValueError, match="Only FLAT index is allowed at registration"):
+        with pytest.raises(
+            ValueError, match="Only FLAT index is allowed at registration"
+        ):
             svec_backend.register_model(
                 model_name=MODEL_NAME,
                 provider_type=PROVIDER_TYPE,
@@ -43,7 +45,9 @@ class TestSQLiteVecSpecific:
                 dimensions=EMBEDDING_DIM,
             )
 
-    def test_flat_registration_has_no_metric(self, svec_backend: SQLiteVecEmbeddingBackend):
+    def test_flat_registration_has_no_metric(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
         """FLAT-registered models have metric_type=None — metric is supplied at query time."""
         record = svec_backend.register_model(
             model_name=MODEL_NAME,
@@ -53,7 +57,9 @@ class TestSQLiteVecSpecific:
         )
         assert record.metric_type is None
 
-    def test_flat_model_accepts_cosine_metric_at_query_time(self, svec_backend: SQLiteVecEmbeddingBackend):
+    def test_flat_model_accepts_cosine_metric_at_query_time(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
         """FLAT models accept any metric at query time; sqlite-vec uses L2 internally.
 
         The vec0 table is created with L2 (FLAT default). Querying with COSINE is
@@ -63,8 +69,15 @@ class TestSQLiteVecSpecific:
         from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 
         nonzero_records = [
-            ConceptEmbeddingRecord(concept_id=1, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True),
-            ConceptEmbeddingRecord(concept_id=3, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True),
+            ConceptEmbeddingRecord(
+                concept_id=1,
+                domain_id="Condition",
+                vocabulary_id="SNOMED",
+                is_standard=True,
+            ),
+            ConceptEmbeddingRecord(
+                concept_id=3, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True
+            ),
         ]
         nonzero_embeddings = np.array([[-10.0], [10.0]], dtype=np.float32)
 
@@ -88,8 +101,8 @@ class TestSQLiteVecSpecific:
         )
         concept_ids_in_order = [r.concept_id for r in results[0]]
         # [-10] is closer to query [-1] than [+10] under both L2 and cosine
-        assert concept_ids_in_order[0] == 1   # Hypertension
-        assert concept_ids_in_order[1] == 3   # Aspirin
+        assert concept_ids_in_order[0] == 1  # Hypertension
+        assert concept_ids_in_order[1] == 3  # Aspirin
         # Similarities are in valid range
         for match in results[0]:
             assert 0.0 <= match.similarity <= 1.0

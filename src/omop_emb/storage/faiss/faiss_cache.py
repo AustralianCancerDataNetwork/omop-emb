@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -243,6 +244,12 @@ class FAISSCache:
     A single instance manages **all** FAISS indices for one model under
     ``model_dir``.  The metric and index type are supplied per-call so that
     multiple indices can coexist and be queried independently.
+
+    Notes
+    -----
+    Caches the index file in-memory on first load for faster subsequent queries.  
+    To prevent RAM saturation, only one index is cached at a time: switching to a different
+    metric+index pair triggers a disk reload and GC of the previous index.
 
     Parameters
     ----------
@@ -536,7 +543,12 @@ class FAISSCache:
             row_results = tuple(
                 NearestConceptMatch(
                     concept_id=int(cid),
-                    similarity=float(get_similarity_from_distance(float(dist), metric_type)),
+                    similarity=float(
+                        get_similarity_from_distance(
+                            self._to_metric_dist(float(dist), metric_type), 
+                            metric_type
+                        )
+                    ),
                 )
                 for dist, cid in zip(dist_row, id_row)
                 if cid != -1
@@ -666,12 +678,30 @@ class FAISSCache:
 
         raise ValueError(f"No FAISS index factory for {type(index_config).__name__}.")
 
+    @staticmethod
+    def _to_metric_dist(raw: float, metric_type: MetricType) -> float:
+        """Convert raw FAISS search output to the distance convention expected by
+        get_similarity_from_distance.
+
+        COSINE: FAISS returns inner product (L2-normalised IndexFlatIP) ∈ [-1, 1].
+                Convert to cosine distance: d = 1 - ip.
+        L2:     IndexFlatL2 returns squared Euclidean distance. Take sqrt.
+        Others: pass through unchanged.
+        """
+        if metric_type == MetricType.COSINE:
+            return 1.0 - raw
+        if metric_type == MetricType.L2:
+            return math.sqrt(max(0.0, raw))
+        return raw
+
     def _load_index(self, metric_type: MetricType, index_config: IndexConfig):
+        from omop_emb.backends.index_config import HNSWIndexConfig
+
         if self._index_cache is not None:
             cached_metric, cached_config, cached_index = self._index_cache
             if cached_metric == metric_type and cached_config == index_config:
                 return cached_index
-        
+
         logger.debug("Loading FAISS index for metric=%s, index=%s from disk.", metric_type.value, index_config.index_type.value)
         path = self._faiss_path(metric_type, index_config)
         if not path.exists():
@@ -679,6 +709,16 @@ class FAISSCache:
                 f"FAISS index not found at '{path}'. Run FAISSCache.export() first."
             )
         index = faiss.read_index(str(path))
+
+        if isinstance(index_config, HNSWIndexConfig):
+            # efSearch is a runtime parameter: apply the caller's config value
+            # regardless of what was baked into the file during build.
+            # index.index returns a generic faiss::Index* SWIG pointer; downcast
+            # to the concrete IndexHNSWFlat to expose the .hnsw property.
+            inner = faiss.downcast_index(index.index)
+            if hasattr(inner, "hnsw"):
+                inner.hnsw.efSearch = index_config.ef_search
+
         self._index_cache = (metric_type, index_config, index)
         return index
 

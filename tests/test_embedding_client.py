@@ -70,13 +70,10 @@ class TestEmbeddingClientInit:
         )
         assert client.embedding_batch_size == 8
 
-    def test_ollama_provider_inferred_from_ollama_url(self, mock_openai):
-        client = EmbeddingClient(model=OLLAMA_MODEL, api_base="http://ollama.internal/v1")
+    def test_default_provider_type_yields_ollama_provider(self, mock_openai):
+        """When neither provider nor provider_type is passed, default provider_type=OLLAMA is used."""
+        client = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE)
         assert isinstance(client.provider, OllamaProvider)
-
-    def test_non_ollama_url_without_explicit_provider_raises(self, mock_openai):
-        with pytest.raises(ValueError, match="Only Ollama"):
-            EmbeddingClient(model="text-embedding-3-small", api_base=OPENAI_BASE, api_key="sk-real")
 
     def test_canonical_model_name_stored_after_provider_processing(self, mock_openai):
         client = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())

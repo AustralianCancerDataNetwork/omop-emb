@@ -49,9 +49,11 @@ class EmbeddingClient:
         the OpenAI SDK).
     embedding_batch_size : int, optional
         Number of texts per API call.  Default is 32.
+    provider : EmbeddingProvider, optional
+        Explicit provider instance.  Takes precedence over *provider_type*
+        when both are supplied.
     provider_type : ProviderType, optional
-        Controls model-name canonicalisation and embedding-dimension
-        discovery.  Defaults to ``ProviderType.OLLAMA``.
+        Used to construct a provider when *provider* is not supplied.
     """
 
     def __init__(
@@ -60,11 +62,15 @@ class EmbeddingClient:
         api_base: str,
         api_key: str = "ollama",
         embedding_batch_size: int = 32,
-        provider_type: ProviderType = ProviderType.OLLAMA,
+        provider: Optional[EmbeddingProvider] = None,
+        provider_type: Optional[ProviderType] = None,
     ) -> None:
-        provider = get_provider_from_provider_type(provider_type)
-        self._provider = provider
-        self._model = provider.canonical_model_name(model)
+        if provider is None and provider_type is None:
+            raise ValueError("Must supply either provider or provider_type.")
+        if provider is not None and provider_type is not None:
+            logger.warning("Both provider and provider_type supplied. Ignoring provider_type and using provider instance directly.")
+        self._provider = provider if provider is not None else get_provider_from_provider_type(provider_type)
+        self._model = self._provider.canonical_model_name(model)
         self._embedding_batch_size = embedding_batch_size
         self._embedding_dim: Optional[int] = None
         self._base_client = OpenAI(base_url=api_base, api_key=api_key)

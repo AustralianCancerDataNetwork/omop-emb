@@ -70,10 +70,14 @@ class TestEmbeddingClientInit:
         )
         assert client.embedding_batch_size == 8
 
-    def test_default_provider_type_yields_ollama_provider(self, mock_openai):
-        """When neither provider nor provider_type is passed, default provider_type=OLLAMA is used."""
-        client = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE)
+    def test_explicit_provider_type_resolves_to_ollama_provider(self, mock_openai):
+        """provider_type=OLLAMA is resolved to an OllamaProvider instance."""
+        client = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider_type=ProviderType.OLLAMA)
         assert isinstance(client.provider, OllamaProvider)
+
+    def test_raises_if_neither_provider_nor_provider_type_given(self, mock_openai):
+        with pytest.raises(ValueError, match="Must supply either provider or provider_type"):
+            EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE)
 
     def test_canonical_model_name_stored_after_provider_processing(self, mock_openai):
         client = EmbeddingClient(model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=OllamaProvider())

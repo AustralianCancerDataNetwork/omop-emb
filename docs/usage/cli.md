@@ -97,7 +97,7 @@ omop-emb embeddings add-embeddings --api-base <URL> --provider <TYPE> [OPTIONS]
 |---|---|---|---|
 | `--api-base` | | **required** | Base URL of the embedding API. |
 | `--api-key` | | `ollama` | API key for the embedding API. |
-| `--provider` | | `ollama` | Embedding provider type (e.g. `ollama`). |
+| `--provider` | | from config (default `ollama`) | Embedding provider type (e.g. `ollama`). |
 | `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
 | `--batch-size` | `-b` | `100` | Concepts per API batch. |
 
@@ -160,7 +160,7 @@ omop-emb embeddings create-index --api-base <URL> --provider <TYPE> --model <NAM
 |---|---|---|---|
 | `--api-base` | | **required** | Base URL of the embedding API. |
 | `--api-key` | | `ollama` | API key. |
-| `--provider` | | `ollama` | Embedding provider type (e.g. `ollama`). |
+| `--provider` | | from config (default `ollama`) | Embedding provider type (e.g. `ollama`). |
 | `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
 
 **Index Options**
@@ -197,7 +197,7 @@ omop-emb embeddings search --api-base <URL> --provider <TYPE> --query "hypertens
 |---|---|---|---|
 | `--api-base` | | **required** | Base URL of the embedding API. |
 | `--api-key` | | `ollama` | API key. |
-| `--provider` | | `ollama` | Embedding provider type (e.g. `ollama`). |
+| `--provider` | | from config (default `ollama`) | Embedding provider type (e.g. `ollama`). |
 | `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
 | `--batch-size` | `-b` | `100` | Batch size for embedding generation. |
 

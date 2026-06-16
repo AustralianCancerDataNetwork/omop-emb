@@ -54,6 +54,11 @@ class EmbeddingClient:
         when both are supplied.
     provider_type : ProviderType, optional
         Used to construct a provider when *provider* is not supplied.
+
+    Raises
+    ------
+    ValueError
+        If neither *provider* nor *provider_type* is given.
     """
 
     def __init__(

@@ -105,14 +105,14 @@ def add_embeddings(
         ),
     ] = 100,
     model: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             "--model",
             "-m",
-            help="Embedding model name (e.g. 'text-embedding-3-small').",
+            help="Embedding model name (e.g. 'text-embedding-3-small'). Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
-    ] = "text-embedding-3-small",
+    ] = None,
     standard_only: Annotated[
         bool,
         typer.Option(
@@ -157,12 +157,13 @@ def add_embeddings(
     resolved_api_base = api_base or cfg.api_base
     resolved_api_key = api_key or cfg.api_key
     resolved_provider = provider or cfg.provider_type
+    resolved_model = model or cfg.embedding_model
 
     backend = resolve_backend()
     omop_cdm_engine = resolve_omop_cdm_engine()
 
     embedding_client = EmbeddingClient(
-        model=model,
+        model=resolved_model,
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         embedding_batch_size=batch_size,
@@ -251,14 +252,14 @@ def create_index(
         ),
     ] = None,
     model: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             "--model",
             "-m",
-            help="Embedding model name to build the index for.",
+            help="Embedding model name to build the index for. Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
-    ] = "text-embedding-3-small",
+    ] = None,
     metric_type: Annotated[
         MetricType,
         typer.Option(
@@ -311,10 +312,11 @@ def create_index(
     resolved_api_base = api_base or cfg.api_base
     resolved_api_key = api_key or cfg.api_key
     resolved_provider = provider or cfg.provider_type
+    resolved_model = model or cfg.embedding_model
 
     backend = resolve_backend()
     embedding_client = EmbeddingClient(
-        model=model,
+        model=resolved_model,
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         provider_type=resolved_provider,

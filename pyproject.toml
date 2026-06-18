@@ -41,7 +41,8 @@ dependencies = [
     "requests",
     "urllib3>=2.7.0", # CVE-2026-44432, CVE-2026-44431
     "typer",
-    "tqdm"
+    "tqdm",
+    "h5py>=3.0"  # used for export and import
 ]
 
 [project.optional-dependencies]
@@ -62,7 +63,6 @@ dev = [
     "rich>=14.2.0",
     "pygments>=2.20.0",  # CVE-2026-4539
     "ruff>=0.14.10",
-    "h5py",
     "mkdocs<2.0",
     "mkdocs-material",
     "mkdocstrings[python]",

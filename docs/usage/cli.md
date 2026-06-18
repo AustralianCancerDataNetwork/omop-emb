@@ -293,21 +293,59 @@ omop-emb maintenance delete-model --model <NAME> [OPTIONS]
 
 ---
 
-### `export-faiss-cache`
+### `export`
 
-Export all embeddings from the primary backend into a FAISS index on disk.
-Requires `pip install "omop-emb[faiss-cpu]"`.
+Stream all embeddings for one model from the primary backend into a
+single, self-describing HDF5 bundle (raw vectors, never normalized, plus
+concept metadata). This is the lossless source of truth for backup/restore
+and for migrating raw embeddings to another backend (see `import`). Peak
+memory stays close to one batch's worth regardless of table size.
+
+There is no `--metric-type` flag: the embeddings table has no
+metric-specific columns (metric only ever selects a distance operator at
+*query* time, which export never does), so it isn't something to choose
+here. The bundle records whatever metric the model's registry entry is
+already locked to (or `cosine`, if the model is FLAT/unconstrained, the
+only state a freshly registered model can be in) purely as metadata.
+The output filename is derived from the model's storage identifier, not a
+literal path you choose.
 
 ```bash
-omop-emb maintenance export-faiss-cache --model <NAME> --cache-dir <DIR> [OPTIONS]
+omop-emb maintenance export --model <NAME> --output-dir <DIR> [OPTIONS]
 ```
 
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--model` | `-m` | **required** | Canonical model name. |
-| `--cache-dir` | | **required** | Root directory for FAISS index files. |
+| `--output-dir` | `-o` | **required** | Directory to write the HDF5 bundle into. The filename is derived from the model's storage identifier. |
 | `--provider-type` | | `None` | Provider used to canonicalize the model name when needed. |
-| `--batch-size` | `-b` | `100000` | Embeddings fetched per backend round-trip. |
+| `--batch-size` | `-b` | `100000` | Rows streamed from the backend (and written to the bundle) per batch. |
+
+| Option | Short | Description |
+|---|---|---|
+| `--verbose` | `-v` | Increase log verbosity. |
+
+---
+
+### `build-faiss-cache`
+
+Build (or rebuild) a local FAISS search-acceleration cache directly from
+the backend. FAISS indices are a derived, disposable artifact, never the
+round-trip source of truth. This function streams every embedding for the model
+straight out of the backend in bounded-memory batches; it has no
+dependency on `export`/`import` or any bundle file. Requires
+`pip install "omop-emb[faiss-cpu]"`.
+
+```bash
+omop-emb maintenance build-faiss-cache --model <NAME> --faiss-cache-dir <DIR> [OPTIONS]
+```
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--model` | `-m` | **required** | Canonical model name to build the FAISS cache for. |
+| `--faiss-cache-dir` | | **required** | Root directory for FAISS index files. |
+| `--provider-type` | | `None` | Provider used to canonicalize the model name when needed. |
+| `--batch-size` | `-b` | `100000` | Rows streamed from the backend per batch. |
 
 **Index Options**
 
@@ -351,34 +389,58 @@ omop-emb maintenance check-faiss-cache --model <NAME> --cache-dir <DIR> [OPTIONS
 
 ---
 
-### `import-faiss-cache`
+### `import`
 
-Import embeddings from an on-disk FAISS index back into the primary backend.
-Reconstructs raw vectors from the `.faiss` file (exact reconstruction requires
-`flat` or `hnsw` index types; IVF/PQ indices are lossy and unsupported).
+Import embeddings from an export bundle into the primary backend. 
+Reads raw vectors straight from the bundle's `embeddings` dataset 
+so magnitudes are preserved exactly regardless of metric. 
+Registers the model from the bundle's own metadata if
+it isn't already registered. A brand-new registration is backdated to the
+bundle's own `exported_at` (the source data's snapshot time) rather than
+"now" (see "Reusing a FAISS cache across machines" below for why this
+matters).
 
 ```bash
-omop-emb maintenance import-faiss-cache --model <NAME> --cache-dir <DIR> --provider-type <TYPE> [OPTIONS]
+omop-emb maintenance import --bundle-file <FILE.h5> [OPTIONS]
 ```
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--model` | `-m` | **required** | Canonical model name. |
-| `--cache-dir` | | **required** | Root cache directory containing the FAISS index files. |
-| `--provider-type` | | **required** | Embedding provider. Used to register the model if not already present. |
-| `--batch-size` | `-b` | `10000` | Vectors upserted per backend call. |
+| `--bundle-file` | | **required** | Path to the HDF5 bundle produced by `export`. |
 | `--force` | | `False` | Overwrite existing embeddings without prompting. |
-
-**Index Options**
-
-| Option | Default | Description |
-|---|---|---|
-| `--metric-type` | `cosine` | Metric of the index to import from. |
-| `--index-type` | `flat` | Index type to import from (`flat` or `hnsw`). |
+| `--batch-size` | `-b` | `10000` | Vectors upserted per backend call. |
+| `--rebuild-index` | | `False` | Build the index recorded in the bundle's own `index_config` right after import. |
 
 | Option | Short | Description |
 |---|---|---|
 | `--verbose` | `-v` | Increase log verbosity. |
+
+---
+
+### Reusing a FAISS cache across machines
+
+A FAISS cache built on one machine can be shipped alongside its export
+bundle and reused directly on another, without rebuilding it. The
+build order matters: run `export` *then* `build-faiss-cache` from the same
+backend, so the cache's `exported_at` is later than the bundle's. Ship both
+the `.h5` bundle and the FAISS cache directory together. On the target
+machine:
+
+```bash
+omop-emb maintenance import --bundle-file model.h5
+```
+
+Point `faiss_cache_dir` (or `--cache-dir`) at the copied cache directory —
+`check-faiss-cache` now reports it as fresh, since the freshly-registered
+model is backdated to the bundle's `exported_at`, which the shipped cache's
+own `exported_at` is newer than.
+
+**Caveat**: passing `--rebuild-index` (or running `rebuild-index` at any
+point afterward) bumps the registry's `updated_at` back to "now" and
+invalidates any cache shipped this way. Run `build-faiss-cache` again in
+that case. This only matters when the bundle's `index_config` is HNSW
+(registration always starts as FLAT); for FLAT bundles, skip
+`--rebuild-index` and the shipped cache stays valid.
 
 ---
 
@@ -396,30 +458,34 @@ omop-emb diagnostics health-check [--verbose]
 
 ## `legacy` group
 
-### `add-embeddings-from-h5`
+### `import-legacy-faiss-cache`
 
-Ingest pre-built embeddings from an HDF5 file into the configured backend.
-Use this to import embeddings generated outside of `omop-emb`.
-
-The HDF5 file must contain two datasets:
-
-- `concept_ids`: 1-D integer array of OMOP concept IDs
-- `embeddings`: 2-D float array of shape `(N, dimensions)`
-
-Concept metadata (domain, vocabulary, standard status) is fetched from the
-OMOP CDM per batch. Requires `pip install h5py`.
+**Deprecated** migration path for FAISS caches built by an old version of
+`export-faiss-cache`, before the bundle format existed. Reconstructs vectors
+directly from the `.faiss` file. For `metric=cosine` caches, the
+reconstructed vectors are L2-normalized. As a result, they are **not** the original raw
+embeddings, and that magnitude cannot be recovered. New exports should use
+`maintenance export` / `maintenance import`, which round-trip losslessly via
+a bundle. Requires `pip install "omop-emb[faiss-cpu]"`.
 
 ```bash
-omop-emb legacy add-embeddings-from-h5 --h5-file <PATH> --model <NAME> --omop-cdm-db-url <URL> [OPTIONS]
+omop-emb legacy import-legacy-faiss-cache --model <NAME> --cache-dir <DIR> --provider-type <TYPE> [OPTIONS]
 ```
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--h5-file` | | **required** | Path to the HDF5 file. |
-| `--model` | `-m` | **required** | Canonical model name to register the embeddings under. |
-| `--omop-cdm-db-url` | | **required** | SQLAlchemy URL for the OMOP CDM (used to populate concept metadata). |
-| `--provider-type` | | `ollama` | Embedding provider that produced these embeddings. |
-| `--metric-type` | | `cosine` | Distance metric to use when storing. |
-| `--batch-size` | `-b` | `10000` | Embeddings written per backend call. |
-| `--cdm-batch-size` | | `50000` | Batch size for fetching concept metadata from the CDM. |
-| `--verbose` | `-v` | | Increase log verbosity. |
+| `--model` | `-m` | **required** | Canonical model name the FAISS cache was built for. |
+| `--cache-dir` | | **required** | Root cache directory containing the FAISS index files. |
+| `--provider-type` | | **required** | Embedding provider. Used to register the model if not already present. |
+| `--force` | | `False` | Overwrite existing embeddings without prompting. |
+
+**Index Options**
+
+| Option | Default | Description |
+|---|---|---|
+| `--metric-type` | `cosine` | Metric of the cache to import from. |
+| `--index-type` | `flat` | Index type to import from (`flat` or `hnsw`). |
+
+| Option | Short | Description |
+|---|---|---|
+| `--verbose` | `-v` | Increase log verbosity. |

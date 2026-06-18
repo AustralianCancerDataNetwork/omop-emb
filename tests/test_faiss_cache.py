@@ -17,6 +17,7 @@ from omop_emb.backends.sqlitevec import (
     create_sqlitevec_engine,
 )
 from omop_emb.config import MetricType, ProviderType
+from omop_emb.storage import embedding_bundle
 from omop_emb.storage.faiss.faiss_cache import FAISSCache
 
 pytest.importorskip("faiss", reason="faiss-cpu not installed")
@@ -104,8 +105,8 @@ def _build_faiss(
 ) -> FAISSCache:
     if index_config is None:
         index_config = FlatIndexConfig()
-    cache = FAISSCache(model_name=_MODEL, cache_dir=tmp_path)
-    cache.export(backend=backend, metric_type=metric_type, index_config=index_config)
+    cache = FAISSCache(model_name=_MODEL, cache_dir=tmp_path / "faiss_cache")
+    cache.build_from_backend(backend, metric_type=metric_type, index_config=index_config)
     return cache
 
 
@@ -320,14 +321,14 @@ class TestIndexCache:
             metric_type=MetricType.COSINE,
         )
 
-        cache = FAISSCache(model_name=_MODEL, cache_dir=tmp_path)
-        cache.export(
-            backend=backend, metric_type=MetricType.L2, index_config=FlatIndexConfig()
+        # The same raw vectors back both metrics -- build both FAISS indices
+        # straight from the backend (metric only matters to FAISS).
+        cache = FAISSCache(model_name=_MODEL, cache_dir=tmp_path / "faiss_cache")
+        cache.build_from_backend(
+            backend, metric_type=MetricType.L2, index_config=FlatIndexConfig()
         )
-        cache.export(
-            backend=backend,
-            metric_type=MetricType.COSINE,
-            index_config=FlatIndexConfig(),
+        cache.build_from_backend(
+            backend, metric_type=MetricType.COSINE, index_config=FlatIndexConfig()
         )
 
         idx_l2 = cache._load_index(MetricType.L2, FlatIndexConfig())
@@ -365,7 +366,9 @@ class TestHNSWEfSearch:
 
         index = cache._load_index(MetricType.COSINE, index_config)
         # IndexIDMap wraps the HNSW index; downcast to expose .hnsw
+        assert isinstance(index, faiss.IndexIDMap), "Expected IndexIDMap wrapper"
         inner = faiss.downcast_index(index.index)
+        assert isinstance(inner, faiss.IndexHNSWFlat), "Expected IndexHNSWFlat inner index"
         assert hasattr(inner, "hnsw"), "Expected an HNSW sub-index"
         assert inner.hnsw.efSearch == 32
 
@@ -388,8 +391,42 @@ class TestHNSWEfSearch:
 
         load_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=64)
         index = cache._load_index(MetricType.COSINE, load_config)
+        assert isinstance(index, faiss.IndexIDMap), "Expected IndexIDMap wrapper"
         inner = faiss.downcast_index(index.index)
+        assert isinstance(inner, faiss.IndexHNSWFlat), "Expected IndexHNSWFlat inner index"
         assert inner.hnsw.efSearch == 64
+
+
+@pytest.mark.unit
+class TestCrossMachineCacheReuse:
+    """A FAISS cache built on one backend, shipped alongside its export
+    bundle, must validate as fresh once the bundle is imported into a
+    different, freshly-registered backend (the motivating scenario for
+    backdating the registration timestamp in import_bundle())."""
+
+    def test_shipped_cache_is_fresh_after_import(self, tmp_path):
+        source = _make_svec_backend(_COSINE_DIM)
+        _populate_backend(
+            source,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.COSINE,
+        )
+
+        _, bundle_path = embedding_bundle.export_bundle(
+            backend=source, model_name=_MODEL, output_dir=tmp_path
+        )
+
+        index_config = FlatIndexConfig()
+        cache = _build_faiss(tmp_path, source, MetricType.COSINE, index_config=index_config)
+
+        target = _make_svec_backend(_COSINE_DIM)
+        embedding_bundle.import_bundle(backend=target, h5_path=bundle_path)
+
+        target_record = target.get_registered_model(model_name=_MODEL)
+        assert target_record is not None
+        assert cache.is_fresh(target_record, MetricType.COSINE, index_config)
 
 
 # ---------------------------------------------------------------------------

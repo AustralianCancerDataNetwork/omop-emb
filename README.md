@@ -87,7 +87,7 @@ Full documentation: <https://AustralianCancerDataNetwork.github.io/omop-emb>
 - [x] pgvector backend (PostgreSQL)
 - [x] HNSW index support for pgvector
 - [x] FAISS sidecar (approximate nearest-neighbour read acceleration)
-- [x] FAISS export / import CLI (`export-faiss-cache`, `import-faiss-cache`)
+- [x] Embedding bundle export / import CLI (`maintenance export`, `maintenance import`, `maintenance build-faiss-cache`)
 - [x] In-DB concept filtering (domain, vocabulary, standard status, active status)
 - [x] Transparent FAISS fast path in `EmbeddingReaderInterface`
 - [x] Extensive backend and registry testing

@@ -172,9 +172,10 @@ results = reader.get_nearest_concepts_from_query_texts(
 
 ### FAISS fast path
 
-Supply `faiss_cache_dir` to route searches through a pre-exported FAISS index
-instead of the primary backend SQL path.  The cache must have been exported
-first with `omop-emb maintenance export-faiss-cache`.  Requires `omop-emb[faiss-cpu]`.
+Supply `faiss_cache_dir` to route searches through a pre-built FAISS index
+instead of the primary backend SQL path.  The cache must have been built
+first with `omop-emb maintenance build-faiss-cache` (builds the FAISS index
+directly from the backend).  Requires `omop-emb[faiss-cpu]`.
 
 ```python
 reader = EmbeddingReaderInterface(
@@ -332,4 +333,4 @@ methods are available on the writer too.
 3. **Use `embedding_client.canonical_model_name`** when constructing a matching reader — it is guaranteed to be canonical.
 4. **Always register with `FlatIndexConfig`** first. Run `rebuild_index` or `omop-emb maintenance rebuild-index` after ingestion to build HNSW.
 5. **CDM enrichment is optional** — omit `omop_cdm_engine` when `concept_name` is not needed to avoid the CDM round-trip.
-6. **FAISS is a read-acceleration sidecar** — export with `omop-emb maintenance export-faiss-cache` and supply `faiss_cache_dir` to `EmbeddingReaderInterface` for faster approximate search.
+6. **FAISS is a read-acceleration sidecar, never the source of truth** — build it directly from the backend with `omop-emb maintenance build-faiss-cache` and supply `faiss_cache_dir` to `EmbeddingReaderInterface` for faster approximate search.

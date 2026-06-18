@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from functools import wraps
 import logging
+from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Tuple, Union
 from numpy import ndarray
 from sqlalchemy import Engine
@@ -229,6 +230,7 @@ class EmbeddingBackend(ABC):
         provider_type: ProviderType,
         index_config: Optional[IndexConfig] = None,
         metadata: Optional[Mapping[str, object]] = None,
+        registered_at: Optional[datetime] = None,
     ) -> EmbeddingModelRecord:
         """Register a model and create its physical storage table.
 
@@ -246,6 +248,9 @@ class EmbeddingBackend(ABC):
         metadata : Mapping[str, object], optional
             Free-form operational metadata. Must not contain reserved keys
             (see ``RESERVED_METADATA_KEYS`` in ``index_config.py``).
+        registered_at : datetime, optional
+            Backdate ``created_at``/``updated_at`` to this timestamp instead
+            of "now". Only applies to a brand-new registration.
 
         Returns
         -------
@@ -278,6 +283,7 @@ class EmbeddingBackend(ABC):
             dimensions=dimensions,
             index_config=index_config,
             metadata=metadata,
+            registered_at=registered_at,
         )
         self._ensure_storage_table(record)
         # Disable for now as we prevent non-FLAT index registration

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
@@ -140,7 +141,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         dimensions: int,
         provider_type: ProviderType,
         index_config: Optional[IndexConfig] = None,
-        metadata=None,
+        metadata: Optional[Mapping[str, object]] = None,
+        registered_at: Optional[datetime] = None,
     ) -> EmbeddingModelRecord:
         """Register a model, validating pgvector dimensionality limits.
 
@@ -156,6 +158,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
             Defaults to ``FlatIndexConfig()`` when not provided.
         metadata : Mapping[str, object], optional
             Free-form operational metadata.
+        registered_at : datetime, optional
+            Backdate ``created_at``/``updated_at`` to this timestamp instead
+            of "now". Only applies to a brand-new registration.
 
         Returns
         -------
@@ -173,6 +178,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
             provider_type=provider_type,
             index_config=index_config,
             metadata=metadata,
+            registered_at=registered_at,
         )
 
     # ------------------------------------------------------------------

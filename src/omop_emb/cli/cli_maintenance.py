@@ -13,6 +13,7 @@ from omop_emb.config import (
 )
 from omop_emb.embeddings.embedding_providers import get_provider_from_provider_type
 from omop_emb.interface import list_registered_models
+from omop_emb.storage import embedding_bundle
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(help="Maintenance and management commands for omop-emb.")
@@ -211,25 +212,89 @@ def delete_model(
 
 
 @app.command(
-    name="export-faiss-cache",
-    help="Export a FAISS sidecar cache from the embedding store.",
+    name="export",
+    help="Export raw embeddings + metadata into a single, self-describing HDF5 bundle.",
 )
-def export_faiss_cache(
+def export_bundle_cmd(
     model: Annotated[
         str,
         typer.Option(
             "--model",
             "-m",
-            help="Canonical model name to export FAISS cache for.",
+            help="Canonical model name to export.",
         ),
     ],
-    cache_dir: Annotated[
+    output_dir: Annotated[
         str,
         typer.Option(
-            "--cache-dir",
+            "--output-dir",
+            "-o",
+            help="Directory to write the HDF5 bundle into. The filename is derived "
+            "from the model's storage identifier.",
+        ),
+    ],
+    provider_type: Annotated[
+        Optional[ProviderType],
+        typer.Option(
+            "--provider-type",
+            help="Embedding provider type. Used to canonicalize the model name if provided.",
+        ),
+    ] = None,
+    batch_size: Annotated[
+        int,
+        typer.Option(
+            "--batch-size",
+            "-b",
+            help="Number of rows streamed from the backend (and written to the bundle) per batch.",
+        ),
+    ] = 100_000,
+):
+
+    if provider_type is not None:
+        embedding_provider = get_provider_from_provider_type(provider_type)
+        model = embedding_provider.canonical_model_name(model)
+
+    backend = resolve_backend()
+
+    meta, h5_path = embedding_bundle.export_bundle(
+        backend=backend,
+        model_name=model,
+        output_dir=output_dir,
+        batch_size=batch_size,
+    )
+    typer.echo(
+        f"Exported {meta.row_count} embeddings for '{model}' "
+        f"(metric={meta.metric_type.value}) to '{h5_path}'."
+    )
+
+
+@app.command(
+    name="build-faiss-cache",
+    help="Build (or rebuild) a local FAISS search cache directly from the backend.",
+)
+def build_faiss_cache(
+    model: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            "-m",
+            help="Canonical model name to build the FAISS cache for.",
+        ),
+    ],
+    faiss_cache_dir: Annotated[
+        str,
+        typer.Option(
+            "--faiss-cache-dir",
             help="Root directory where the FAISS index files will be written.",
         ),
     ],
+    provider_type: Annotated[
+        Optional[ProviderType],
+        typer.Option(
+            "--provider-type",
+            help="Embedding provider type. Used to canonicalize the model name if provided.",
+        ),
+    ] = None,
     metric_type: Annotated[
         MetricType,
         typer.Option(
@@ -254,51 +319,42 @@ def export_faiss_cache(
             rich_help_panel="Index Options",
         ),
     ] = 32,
-    provider_type: Annotated[
-        Optional[ProviderType],
-        typer.Option(
-            "--provider-type",
-            help="Embedding provider type. Used to canonicalize the model name if provided.",
-        ),
-    ] = None,
     batch_size: Annotated[
         int,
         typer.Option(
             "--batch-size",
             "-b",
-            help="Batch size when streaming embeddings from the backend.",
+            help="Number of rows streamed from the backend per batch.",
         ),
     ] = 100_000,
 ):
 
+    try:
+        from omop_emb.storage.faiss import FAISSCache
+    except ImportError as e:
+        typer.secho(str(e), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
     if provider_type is not None:
         embedding_provider = get_provider_from_provider_type(provider_type)
         model = embedding_provider.canonical_model_name(model)
+
+    backend = resolve_backend()
 
     index_config = index_config_from_index_type(
         index_type,
         metric_type=metric_type,
         num_neighbors=hnsw_m,
     )
-    backend = resolve_backend()
-
-    # Lazy import for optional FAISS dependency
-    try:
-        from omop_emb.storage.faiss import FAISSCache
-
-        cache = FAISSCache(model_name=model, cache_dir=cache_dir)
-    except ImportError as e:
-        typer.secho(str(e), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
-
-    cache.export(
+    cache = FAISSCache(model_name=model, cache_dir=faiss_cache_dir)
+    cache.build_from_backend(
         backend=backend,
         metric_type=metric_type,
         index_config=index_config,
         batch_size=batch_size,
     )
     typer.echo(
-        f"FAISS cache exported to '{cache.model_dir}' for '{model}' "
+        f"FAISS cache built at '{cache.model_dir}' for '{model}' "
         f"(metric={metric_type.value}, index={index_type.value})."
     )
 
@@ -384,48 +440,24 @@ def check_faiss_cache(
 
 
 @app.command(
-    name="import-faiss-cache",
-    help="Import embeddings from a FAISS index back into the backend.",
+    name="import",
+    help="Import embeddings from an export bundle into the backend.",
 )
-def import_faiss_cache(
-    model: Annotated[
+def import_bundle_cmd(
+    bundle_file: Annotated[
         str,
         typer.Option(
-            "--model",
-            "-m",
-            help="Canonical model name.",
+            "--bundle-file",
+            help="Path to the HDF5 bundle produced by 'maintenance export'.",
         ),
     ],
-    cache_dir: Annotated[
-        str,
+    force: Annotated[
+        bool,
         typer.Option(
-            "--cache-dir",
-            help="Root cache directory containing the FAISS index files.",
+            "--force",
+            help="Overwrite existing embeddings without prompting.",
         ),
-    ],
-    provider_type: Annotated[
-        ProviderType,
-        typer.Option(
-            "--provider-type",
-            help="Embedding provider. Required to register the model if it is not already in the backend.",
-        ),
-    ],
-    metric_type: Annotated[
-        MetricType,
-        typer.Option(
-            "--metric-type",
-            help="Distance metric of the index to import from.",
-            rich_help_panel="Index Options",
-        ),
-    ] = MetricType.COSINE,
-    index_type: Annotated[
-        IndexType,
-        typer.Option(
-            "--index-type",
-            help="Index type to import from (FLAT or HNSW).",
-            rich_help_panel="Index Options",
-        ),
-    ] = IndexType.FLAT,
+    ] = False,
     batch_size: Annotated[
         int,
         typer.Option(
@@ -434,38 +466,27 @@ def import_faiss_cache(
             help="Number of vectors upserted per backend call.",
         ),
     ] = 10_000,
-    force: Annotated[
+    rebuild_index: Annotated[
         bool,
         typer.Option(
-            "--force",
-            help="Overwrite existing embeddings without prompting.",
+            "--rebuild-index",
+            help="Build the index recorded in the bundle's metadata right after import.",
         ),
     ] = False,
 ):
 
-    index_config = index_config_from_index_type(index_type, metric_type=metric_type)
     backend = resolve_backend()
     try:
-        from omop_emb.storage.faiss import FAISSCache
-
-        cache = FAISSCache(model_name=model, cache_dir=cache_dir)
-    except ImportError as e:
-        typer.secho(str(e), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
-
-    try:
-        imported = cache.import_to_backend(
+        imported = embedding_bundle.import_bundle(
             backend=backend,
-            metric_type=metric_type,
-            index_config=index_config,
-            provider_type=provider_type,
+            h5_path=bundle_file,
             force=force,
             batch_size=batch_size,
+            rebuild_index=rebuild_index,
         )
-    except RuntimeError as exc:
+    except (RuntimeError, embedding_bundle.BundleCorruptionError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
-    typer.echo(
-        f"Imported {imported} concepts for '{model}' (metric={metric_type.value}, index={index_type.value})."
-    )
+    suffix = " and rebuilt its index" if rebuild_index else ""
+    typer.echo(f"Imported {imported} concepts from '{bundle_file}'{suffix}.")

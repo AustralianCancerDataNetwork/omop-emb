@@ -116,32 +116,3 @@ def count_missing_concepts(
             if row.concept_id not in embedded_ids:
                 count += 1
     return count
-
-
-def fetch_cdm_concepts_for_ingestion(
-    concept_ids: set[int],
-    cdm_engine: Engine,
-    batch_size: int = 50_000,
-) -> dict[int, Row]:
-    """Return CDM rows needed to build ``ConceptEmbeddingRecord`` filter columns.
-
-    Sub-batches to avoid bind-parameter limits on large concept sets.
-    Fetches ``domain_id``, ``vocabulary_id``, ``standard_concept``, and
-    ``invalid_reason`` for each concept_id.
-    """
-    if not concept_ids:
-        return {}
-    id_list = list(concept_ids)
-    result: dict[int, Row] = {}
-    for start in range(0, len(id_list), batch_size):
-        chunk = id_list[start : start + batch_size]
-        query = select(
-            Concept.concept_id,
-            Concept.domain_id,
-            Concept.vocabulary_id,
-            Concept.standard_concept,
-            Concept.invalid_reason,
-        ).where(Concept.concept_id.in_(chunk))
-        with cdm_session(cdm_engine) as session:
-            result.update({row.concept_id: row for row in session.execute(query)})
-    return result

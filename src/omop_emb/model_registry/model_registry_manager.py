@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Mapping, Optional
 
 from sqlalchemy import Engine, select
@@ -97,6 +98,7 @@ class RegistryManager:
         dimensions: int,
         provider_type: ProviderType,
         metadata: Optional[Mapping[str, object]] = None,
+        registered_at: Optional[datetime] = None,
     ) -> EmbeddingModelRecord:
         """Register a model or return the existing record if already registered.
 
@@ -112,6 +114,12 @@ class RegistryManager:
             Provider that serves the model.
         metadata : Mapping[str, object], optional
             Free-form operational metadata.
+        registered_at : datetime, optional
+            Backdate ``created_at``/``updated_at`` to this timestamp instead
+            of "now" (e.g. to match the source data's true snapshot time
+            when importing an export bundle on a different machine). Only
+            applies to a brand-new registration; ignored when the model is
+            already registered.
 
         Returns
         -------
@@ -152,6 +160,9 @@ class RegistryManager:
             details=dict(metadata) if metadata else {},
             index_config=index_config,
         )
+        if registered_at is not None:
+            new_row.created_at = registered_at
+            new_row.updated_at = registered_at
         with self.emb_session_factory(expire_on_commit=False) as session:
             session.add(new_row)
             session.commit()
@@ -299,14 +310,29 @@ class RegistryManager:
             dimensions=row.dimensions,
             storage_identifier=row.storage_identifier,
             metadata=dict(row.details or {}),
-            created_at=row.created_at,
-            updated_at=row.updated_at,
+            created_at=_as_utc(row.created_at),
+            updated_at=_as_utc(row.updated_at),
         )
 
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """Attach UTC tzinfo to a naive datetime, leaving aware ones untouched.
+
+    sqlite has no native timezone-aware storage, so SQLAlchemy round-trips
+    ``DateTime(timezone=True)`` columns as naive on that backend (pgvector
+    preserves tzinfo). Every timestamp this registry writes is UTC, so a
+    naive value read back is always UTC too -- normalize here, once, so
+    every caller can assume tz-aware and compare against other UTC-aware
+    datetimes (e.g. a bundle's ``exported_at``) without crashing.
+    """
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def _validate_metadata_keys(metadata: Optional[Mapping[str, object]]) -> None:

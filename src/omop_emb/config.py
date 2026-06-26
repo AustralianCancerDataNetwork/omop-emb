@@ -7,7 +7,7 @@ from typing import ClassVar, Dict, Tuple
 
 from pydantic import Field
 from sqlalchemy import Engine
-from oa_configurator import PackageConfigBase, ResourceSpec
+from oa_configurator import DatabaseConfig, PackageConfigBase, ResourceSpec
 
 from omop_alchemy.config import OmopAlchemyConfig
 
@@ -48,15 +48,14 @@ class OmopEmbConfig(PackageConfigBase):
         connection_name_hint="pg_test_emb",
         is_cdm_database=False,
         cdm_schema_default="public",
-        defaults={
-            "dialect": "postgresql+psycopg",
-            "host": "localhost",
-            "port": "55432",
-            "user": "test",
-            "password": "test",
-            "database_name": "test_omop_emb",
-            "cdm_schema": "public",
-        },
+        connection_defaults=DatabaseConfig(
+            dialect="postgresql+psycopg",
+            host="localhost",
+            port=55432,
+            user="test",
+            password="test",
+            database_name="test_omop_emb",
+        ),
     )
 
     tool_name: ClassVar[str] = "omop_emb"

@@ -16,33 +16,6 @@ from omop_emb.backends.sqlitevec import (
 from omop_emb.config import OmopEmbConfig, ProviderType
 
 
-@pytest.fixture(autouse=True, scope="session")
-def _test_stack_config():
-    """When no config.toml exists (CI), write a minimal one to the default config path.
-
-    Uses StackConfig.for_session() + save_stack_config() so the file is written
-    exactly as the CLI would produce it and load_stack_config() reads it normally.
-    On a local machine where config.toml already exists, this is a no-op.
-    test_emb_db is intentionally absent so pgvector tests skip via resolve_test_resource.
-    """
-    from oa_configurator.io import save_stack_config
-    from oa_configurator.loader import CONFIG_PATH
-    from oa_configurator.models import DatabaseConfig, ResourceConfig, StackConfig, ToolConfig
-
-    if CONFIG_PATH.exists():
-        yield
-        return
-
-    stack = StackConfig.for_session(
-        databases={"cdm": DatabaseConfig(dialect="sqlite", database_name=":memory:")},
-        resources={"cdm_db": ResourceConfig(database="cdm", cdm_schema="main")},
-        tools={"omop_emb": ToolConfig()},
-    )
-    save_stack_config(stack, CONFIG_PATH)
-    CONFIG_PATH.chmod(0o600)
-    yield
-    CONFIG_PATH.unlink()
-
 # ---------------------------------------------------------------------------
 # Test data constants
 # ---------------------------------------------------------------------------

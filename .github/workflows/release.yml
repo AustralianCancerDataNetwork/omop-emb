@@ -27,13 +27,6 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
-    env:
-      OMOP_EMB_DB_HOST: localhost
-      OMOP_EMB_DB_PORT: 5432
-      OMOP_EMB_DB_USER: omop_emb
-      OMOP_EMB_DB_PASSWORD: omop_emb
-      OMOP_EMB_DB_NAME: omop_emb
-
     steps:
       - uses: actions/checkout@v5
 
@@ -55,6 +48,19 @@ jobs:
         run: |
           PGPASSWORD=postgres psql -h localhost -U postgres -c \
             "CREATE EXTENSION IF NOT EXISTS vector;" template1
+
+      - name: Configure omop_emb via oa-configurator
+        run: |
+          uv run omop-config configure omop_emb \
+            --dialect postgresql+psycopg --database emb \
+            --host localhost --port 5432 --cdm-schema public \
+            --user omop_emb --password omop_emb --database-name omop_emb \
+            --backend pgvector --provider-type ollama \
+            --api-key ollama --api-base http://localhost:11434/v1 \
+            --embedding-model test-model \
+            --test-dialect postgresql+psycopg --test-database test_emb \
+            --test-host localhost --test-port 5432 --test-cdm-schema public \
+            --test-user omop_emb --test-password omop_emb --test-database-name test_omop_emb
 
       - name: Run tests
         run: uv run pytest

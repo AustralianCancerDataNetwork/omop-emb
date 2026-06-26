@@ -110,6 +110,11 @@ omop-config configure omop_alchemy   # CDM database (required for ingestion)
 omop-config configure omop_emb       # embedding database
 ```
 
+`omop-config configure omop_emb` is required for local-dev setup before running
+the pgvector-backed test suite (CI provisions this automatically). Without it,
+those tests skip with "Resource 'test_emb_db' not configured" rather than
+failing.
+
 See [oa-configurator Setup](docs/getting-started/configuration.md) for details.
 
 ---

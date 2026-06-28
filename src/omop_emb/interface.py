@@ -49,7 +49,7 @@ from omop_emb.backends.base_backend import (
     EmbeddingModelRecord,
 )
 from omop_emb.backends.index_config import IndexConfig
-from omop_emb.config import BackendType, MetricType, OmopEmbConfig, ProviderType
+from omop_emb.config import BackendType, MetricType, ProviderType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
 
 if TYPE_CHECKING:
@@ -114,6 +114,10 @@ class EmbeddingReaderInterface:
         Embedding provider.
     k : int
         Default number of nearest neighbors to return.
+    faiss_cache_dir : str, optional
+        Optional directory for FAISS index caching.  If provided, the interface
+        will attempt to use FAISS for faster KNN search.  Only supported
+        if the 'faiss' package is installed.  
     """
 
     def __init__(
@@ -154,21 +158,19 @@ class EmbeddingReaderInterface:
         self._k = k
         self._cdm_engine = omop_cdm_engine
 
-        # FAISS fast path activated at construction, not mid-search
-        _faiss_dir = faiss_cache_dir or OmopEmbConfig.get_config().faiss_cache_dir
         self._faiss_cache: Optional["FAISSCache"] = None
-        if _faiss_dir is not None:
+        if faiss_cache_dir is not None:
             try:
                 from omop_emb.storage.faiss import FAISSCache as _FAISSCache
 
                 self._faiss_cache = _FAISSCache(
                     model_name=canonical_model_name,
-                    cache_dir=_faiss_dir,
+                    cache_dir=faiss_cache_dir,
                 )
             except ImportError as exc:
                 raise ImportError(
                     "faiss_cache_dir was provided but the 'faiss' package is not installed. "
-                    "Install it with: pip install omop-emb[faiss]"
+                    "Install it with: pip install omop-emb[faiss-cpu]"
                 ) from exc
 
     # ------------------------------------------------------------------

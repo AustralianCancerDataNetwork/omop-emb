@@ -601,6 +601,7 @@ def search(
     resolved_api_base = api_base or cfg.api_base
     resolved_api_key = api_key or cfg.api_key
     resolved_provider = provider or cfg.provider_type
+    resolved_faiss_cache_dir = faiss_cache_dir or cfg.faiss_cache_dir
 
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
     backend = resolve_backend()
@@ -627,7 +628,7 @@ def search(
         metric_type=metric_type,
         omop_cdm_engine=omop_cdm_engine,
         provider_name_or_type=embedding_client.provider.provider_type,
-        faiss_cache_dir=faiss_cache_dir,
+        faiss_cache_dir=resolved_faiss_cache_dir,
     )
 
     concept_filter = EmbeddingConceptFilter(

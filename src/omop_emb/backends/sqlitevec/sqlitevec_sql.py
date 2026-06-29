@@ -258,6 +258,8 @@ def query_knn(
     if concept_filter is not None:
         setup_concept_filter_temps(session, concept_filter, "sqlite")
         stmt = apply_concept_filter_where(stmt, table.c, concept_filter)
+        if concept_filter.limit is not None:
+            stmt = stmt.limit(concept_filter.limit)
 
     rows = session.execute(stmt).all()
     return [(int(row[0]), float(row[1]), int(row[2])) for row in rows]

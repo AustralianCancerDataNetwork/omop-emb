@@ -971,7 +971,7 @@ def resolve_backend(
     When backend_type is omitted, reads from the active oa-configurator config.
     Connection details are resolved via the oa-configurator Resolver:
 
-    - ``sqlitevec``: uses sqlite_path from config (defaults to ``:memory:``).
+    - ``sqlitevec``: uses sqlite_path from config (required; must be set explicitly).
     - ``pgvector``: uses the ``emb_db`` resource from oa-configurator.
     """
     cfg = OmopEmbConfig.get_config()
@@ -993,7 +993,13 @@ def resolve_backend(
     if resolved_backend == BackendType.SQLITEVEC:
         from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 
-        path = cfg.sqlite_path or ":memory:"
+        if not cfg.sqlite_path:
+            raise RuntimeError(
+                "sqlitevec backend requires 'sqlite_path' to be configured. "
+                "Set it via `omop-config configure omop-emb`. "
+                "To use an ephemeral in-memory store intentionally, set sqlite_path = ':memory:'."
+            )
+        path = cfg.sqlite_path
         logger.info(f"Using SQLiteVec backend with database file: {path}")
         return SQLiteVecEmbeddingBackend.from_path(path)
 

@@ -38,7 +38,8 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from collections import OrderedDict
+from typing import Optional, Tuple
 
 import numpy as np
 from tqdm import tqdm
@@ -170,12 +171,8 @@ class FAISSCache:
     Notes
     -----
     Caches loaded index files in-memory, keyed on ``(metric_type, index_config)``,
-    for faster subsequent queries. A caller that alternates between multiple
-    metric/index combinations on the same instance gets a cache hit for each
-    one rather than thrashing a single-slot cache; there is currently no
-    eviction policy, so an instance queried against many distinct
-    metric/index combinations will hold all of their indices in memory for
-    its lifetime.
+    for faster subsequent queries. Both caches use LRU eviction with configurable
+    size caps so a long-lived instance cannot accumulate unbounded memory.
 
     Parameters
     ----------
@@ -183,16 +180,27 @@ class FAISSCache:
         Registered canonical model name.
     cache_dir : Path | str
         Root cache directory. Each model gets its own sub-directory.
+    max_cached_indices : int
+        Maximum number of FAISS index objects to hold in memory simultaneously.
+        Least-recently-used entries are evicted when the cap is reached.
+    max_cached_filters : int
+        Maximum number of concept-filter result sets to cache. Each entry is a
+        numpy int64 array of matching concept IDs. LRU eviction applies.
     """
 
     def __init__(
         self,
         model_name: str,
         cache_dir: "Path | str",
+        max_cached_indices: int = 4,
+        max_cached_filters: int = 4,
     ) -> None:
         self._model_name = model_name
         self._cache_dir = Path(cache_dir).expanduser().resolve()
-        self._index_cache: Dict[Tuple[MetricType, IndexConfig], "faiss.Index"] = {}
+        self._max_cached_indices = max_cached_indices
+        self._max_cached_filters = max_cached_filters
+        self._index_cache: OrderedDict[Tuple[MetricType, IndexConfig], "faiss.Index"] = OrderedDict()
+        self._filter_cache: OrderedDict[EmbeddingConceptFilter, Optional[np.ndarray]] = OrderedDict()
 
     # ------------------------------------------------------------------
     # Paths
@@ -483,19 +491,32 @@ class FAISSCache:
         FAISS ``SearchParameters.sel``.  Returns ``None`` if the filter matches
         everything (no selector needed).
 
+        Results are cached in an LRU cache keyed on ``concept_filter`` alone
+        (metric and index do not affect which concept IDs match a filter).
+
         Notes
         -----
         Only works if the real index is wrapped using an ``IndexIDMap``
-        as no translation is needed between FAISS positions and concept IDs.  
+        as no translation is needed between FAISS positions and concept IDs.
         """
+        if concept_filter in self._filter_cache:
+            self._filter_cache.move_to_end(concept_filter)
+            return self._filter_cache[concept_filter]
+
         matching_ids = backend.get_concept_ids_matching_filter(
             model_name=self._model_name,
             metric_type=metric_type,
             concept_filter=concept_filter,
         )
-        if len(matching_ids) >= index.ntotal:
-            return None
-        return np.fromiter(matching_ids, dtype=np.int64, count=len(matching_ids))
+        result = (
+            None
+            if len(matching_ids) >= index.ntotal
+            else np.fromiter(matching_ids, dtype=np.int64, count=len(matching_ids))
+        )
+        self._filter_cache[concept_filter] = result
+        if len(self._filter_cache) > self._max_cached_filters:
+            self._filter_cache.popitem(last=False)
+        return result
 
     def _create_inner_index(
         self,
@@ -579,6 +600,7 @@ class FAISSCache:
         cache_key = (metric_type, index_config)
         cached_index = self._index_cache.get(cache_key)
         if cached_index is not None:
+            self._index_cache.move_to_end(cache_key)
             return cached_index
 
         logger.debug(
@@ -607,4 +629,6 @@ class FAISSCache:
                 inner.hnsw.efSearch = index_config.ef_search
 
         self._index_cache[cache_key] = index
+        if len(self._index_cache) > self._max_cached_indices:
+            self._index_cache.popitem(last=False)
         return index

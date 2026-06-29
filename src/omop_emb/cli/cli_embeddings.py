@@ -52,6 +52,19 @@ def consolidate_queries(
         raise ValueError("No queries provided.")
 
 
+def _get_config() -> OmopEmbConfig:
+    """Load and return the active OmopEmbConfig, converting a missing-file
+    error into an actionable setup message.
+    """
+    try:
+        return OmopEmbConfig.get_config()
+    except FileNotFoundError:
+        raise RuntimeError(
+            "No omop-emb configuration file found. "
+            "Run `omop-config configure omop-emb` to set it up."
+        )
+
+
 def _render_search_results(
     *,
     query_id: int,
@@ -153,7 +166,7 @@ def add_embeddings(
     ``create-index`` afterwards to upgrade to an HNSW approximate index.
     """
 
-    cfg = OmopEmbConfig.get_config()
+    cfg = _get_config()
     resolved_api_base = api_base or cfg.api_base
     resolved_api_key = api_key or cfg.api_key
     resolved_provider = provider or cfg.provider_type
@@ -308,7 +321,7 @@ def create_index(
     locked in and all subsequent queries must use the same metric.
     """
 
-    cfg = OmopEmbConfig.get_config()
+    cfg = _get_config()
     resolved_api_base = api_base or cfg.api_base
     resolved_api_key = api_key or cfg.api_key
     resolved_provider = provider or cfg.provider_type
@@ -393,14 +406,14 @@ def add_embeddings_with_index(
         ),
     ] = 100,
     model: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             "--model",
             "-m",
-            help="Embedding model name (e.g. 'text-embedding-3-small').",
+            help="Embedding model name (e.g. 'text-embedding-3-small'). Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
-    ] = "text-embedding-3-small",
+    ] = None,
     standard_only: Annotated[
         bool,
         typer.Option(
@@ -547,14 +560,14 @@ def search(
         ),
     ] = 100,
     model: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             "--model",
             "-m",
-            help="Embedding model name.",
+            help="Embedding model name. Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
-    ] = "text-embedding-3-small",
+    ] = None,
     k: Annotated[
         int,
         typer.Option(
@@ -597,11 +610,12 @@ def search(
     ] = None,
 ):
 
-    cfg = OmopEmbConfig.get_config()
+    cfg = _get_config()
     resolved_api_base = api_base or cfg.api_base
     resolved_api_key = api_key or cfg.api_key
     resolved_provider = provider or cfg.provider_type
     resolved_faiss_cache_dir = faiss_cache_dir or cfg.faiss_cache_dir
+    resolved_model = model or cfg.embedding_model
 
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
     backend = resolve_backend()
@@ -616,7 +630,7 @@ def search(
         )
 
     embedding_client = EmbeddingClient(
-        model=model,
+        model=resolved_model,
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         embedding_batch_size=batch_size,

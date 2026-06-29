@@ -74,8 +74,9 @@ class IndexConfig(ABC):
         Parameters
         ----------
         **kwargs : Any
-            Keyword arguments matching the dataclass fields. Unknown keys are
-            discarded.
+            Keyword arguments matching the dataclass fields. Unknown keys and
+            explicit ``None`` values are discarded, so unset fields keep the
+            dataclass's own default instead of being overridden with ``None``.
 
         Returns
         -------
@@ -96,7 +97,9 @@ class IndexConfig(ABC):
             )
         known = {f.name for f in fields(cls)}
         factory = cast(Callable[..., Self], cls)
-        return factory(**{k: v for k, v in kwargs.items() if k in known})
+        return factory(
+            **{k: v for k, v in kwargs.items() if k in known and v is not None}
+        )
 
     @classmethod
     def from_dict(cls, config_dict: dict[str, Any]) -> Self:

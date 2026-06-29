@@ -183,6 +183,7 @@ class FAISSCache:
     max_cached_indices : int
         Maximum number of FAISS index objects to hold in memory simultaneously.
         Least-recently-used entries are evicted when the cap is reached.
+        Caches can easily exceed multiple GBs, so this should be tuned carefully.
     max_cached_filters : int
         Maximum number of concept-filter result sets to cache. Each entry is a
         numpy int64 array of matching concept IDs. LRU eviction applies.
@@ -192,7 +193,7 @@ class FAISSCache:
         self,
         model_name: str,
         cache_dir: "Path | str",
-        max_cached_indices: int = 4,
+        max_cached_indices: int = 2,
         max_cached_filters: int = 4,
     ) -> None:
         self._model_name = model_name

@@ -42,7 +42,7 @@ jobs:
       - name: Create omop_emb database user
         run: |
           PGPASSWORD=postgres psql -h localhost -U postgres -c \
-            "CREATE USER omop_emb WITH PASSWORD 'omop_emb' CREATEDB;"
+            "CREATE USER omop_emb WITH PASSWORD 'omop_emb' CREATEDB SUPERUSER;"
 
       - name: Pre-install vector extension in template1
         run: |

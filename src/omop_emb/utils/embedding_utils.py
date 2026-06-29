@@ -152,32 +152,6 @@ class NearestConceptMatch:
         return asdict(self)
 
 
-@dataclass(frozen=True)
-class ConceptEmbeddingRecord:
-    """Concept metadata for a single embedding upsert row.
-
-    Populated from the OMOP CDM by the caller (interface layer) before being
-    passed to the backend.
-
-    Attributes
-    ----------
-    concept_id : int
-        OMOP concept ID.
-    domain_id : str
-        OMOP domain (e.g. ``'Condition'``, ``'Drug'``).
-    vocabulary_id : str
-        Source vocabulary (e.g. ``'SNOMED'``, ``'RxNorm'``).
-    is_standard : bool
-        ``True`` if ``standard_concept`` is ``'S'`` or ``'C'``.
-    """
-
-    concept_id: int
-    domain_id: str
-    vocabulary_id: str
-    is_standard: bool
-    is_valid: bool = True
-
-
 @overload
 def get_similarity_from_distance(
     distance_col: float,

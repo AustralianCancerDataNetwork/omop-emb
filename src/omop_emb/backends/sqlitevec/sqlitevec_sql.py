@@ -7,17 +7,29 @@ from typing import Optional, Sequence
 
 import numpy as np
 from numpy import ndarray
-from sqlalchemy import Engine, text
+from sqlalchemy import (
+    Column, 
+    Engine, 
+    Integer, 
+    MetaData, 
+    Table, 
+    bindparam, 
+    delete, 
+    func, 
+    insert, 
+    select, 
+    text,
+    LargeBinary
+)
 from sqlalchemy.orm import Session
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.db_utils import (
-    KNN_CIDS_TABLE,
-    KNN_DOMS_TABLE,
-    KNN_VOCS_TABLE,
+    apply_concept_filter_where,
     setup_concept_filter_temps,
     temp_filter_table,
 )
+from omop_emb.backends.embedding_table import CONCEPT_METADATA_COLUMNS, EMBEDDING_COLUMN_NAME
 from omop_emb.config import MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
@@ -51,6 +63,27 @@ def table_exists(engine: Engine, table_name: str) -> bool:
             ).first()
             is not None
         )
+
+def sqlite_vec_table_descriptor(table_name: str, metadata: MetaData) -> Table:
+    """Return the Core ``Table`` descriptor for an existing sqlite-vec ``vec0`` table.
+
+    Parameters
+    ----------
+    table_name : str
+    metadata : MetaData
+
+    Returns
+    -------
+    Table
+        Usable for ``select``/``insert``/``delete`` against the virtual
+        table. Does not issue DDL -- the ``vec0`` table must already exist.
+    """
+    columns = [
+        Column(c.name, c.type_, primary_key=(c.name == "concept_id"))
+        for c in CONCEPT_METADATA_COLUMNS
+    ]
+    columns.append(Column(EMBEDDING_COLUMN_NAME, LargeBinary))
+    return Table(table_name, metadata, *columns, extend_existing=True)
 
 
 def ddl_create_vec0(
@@ -91,19 +124,15 @@ def ddl_create_vec0(
                 f"sqlite-vec does not support baked-in metric '{metric_type.value}'. "
                 f"Supported values for distance_metric=: {[m.value for m in _MATCH_METRIC_MAP]}"
             )
-        embedding_col = f"embedding FLOAT[{dimensions}] distance_metric={metric_str}"
+        embedding_col = f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}] distance_metric={metric_str}"
     else:
-        embedding_col = f"embedding FLOAT[{dimensions}]"
+        embedding_col = f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}]"
+
+    metadata_cols = ", ".join(f"{c.name} {c.vec0_ddl}" for c in CONCEPT_METADATA_COLUMNS)
 
     return (
         f'CREATE VIRTUAL TABLE IF NOT EXISTS "{table_name}" USING vec0('
-        f"concept_id INTEGER PRIMARY KEY, "
-        f"domain_id TEXT METADATA, "
-        f"vocabulary_id TEXT METADATA, "
-        f"is_standard BOOLEAN METADATA, "
-        f"is_valid BOOLEAN METADATA DEFAULT 1, "
-        f"{embedding_col}"
-        f")"
+        f"{metadata_cols}, {embedding_col})"
     )
 
 
@@ -124,7 +153,7 @@ def ddl_drop_vec0(table_name: str) -> str:
 
 def dml_upsert_rows(
     session: Session,
-    table_name: str,
+    table: Table,
     records: Sequence[ConceptEmbeddingRecord],
     embeddings: ndarray,
     dialect: str = "sqlite",
@@ -135,7 +164,7 @@ def dml_upsert_rows(
     ----------
     session : Session
         Active SQLAlchemy session (must be in a transaction).
-    table_name : str
+    table : Table
     records : Sequence[ConceptEmbeddingRecord]
         Concept metadata rows, one per embedding.
     embeddings : ndarray
@@ -151,33 +180,30 @@ def dml_upsert_rows(
     with temp_filter_table(
         session, concept_ids, "INTEGER", table_name="_tmp_del_cids", dialect=dialect
     ) as temp_table_name:
+        temp_table = Table(temp_table_name, MetaData(), Column("id", Integer))
         session.execute(
-            text(
-                f'DELETE FROM "{table_name}" WHERE concept_id IN (SELECT id FROM "{temp_table_name}")'
-            )
+            delete(table).where(table.c.concept_id.in_(select(temp_table.c.id)))
         )
 
-    for rec, emb in zip(records, embeddings):
-        session.execute(
-            text(
-                f'INSERT INTO "{table_name}" '
-                f"(concept_id, domain_id, vocabulary_id, is_standard, is_valid, embedding) "
-                f"VALUES (:cid, :did, :vid, :std, :valid, :emb)"
-            ),
+    session.execute(
+        insert(table),
+        [
             {
-                "cid": rec.concept_id,
-                "did": rec.domain_id,
-                "vid": rec.vocabulary_id,
-                "std": int(rec.is_standard),
-                "valid": int(rec.is_valid),
-                "emb": _embedding_to_blob(emb),
-            },
-        )
+                "concept_id": rec.concept_id,
+                "domain_id": rec.domain_id,
+                "vocabulary_id": rec.vocabulary_id,
+                "is_standard": rec.is_standard,
+                "is_valid": rec.is_valid,
+                EMBEDDING_COLUMN_NAME: _embedding_to_blob(emb),
+            }
+            for rec, emb in zip(records, embeddings)
+        ],
+    )
 
 
 def query_knn(
     session: Session,
-    table_name: str,
+    table: Table,
     query_vector: ndarray,
     metric_type: MetricType,
     k: int,
@@ -188,7 +214,7 @@ def query_knn(
     Parameters
     ----------
     session : Session
-    table_name : str
+    table : Table
     query_vector : ndarray
         Float32 array of shape ``(D,)``.
     metric_type : MetricType
@@ -215,87 +241,59 @@ def query_knn(
     vec0 MATCH syntax. For FLAT (full-scan) tables the performance is identical
     and the metric can be chosen freely at call time.
     """
-    dist_func = _QUERY_METRIC_FUNC.get(metric_type)
-    if dist_func is None:
+    dist_func_name = _QUERY_METRIC_FUNC.get(metric_type)
+    if dist_func_name is None:
         raise ValueError(
             f"sqlite-vec does not support metric '{metric_type.value}' for FLAT queries. "
             f"Supported: {[m.value for m in _QUERY_METRIC_FUNC]}"
         )
 
     emb_blob = _embedding_to_blob(query_vector)
-    params: dict = {"emb": emb_blob, "k": k}
-    where_clauses: list[str] = []
+    distance = getattr(func, dist_func_name)(
+        table.c[EMBEDDING_COLUMN_NAME], bindparam("q_emb", emb_blob)
+    ).label("distance")
+
+    stmt = select(table.c.concept_id, distance, table.c.is_standard).order_by(distance).limit(k)
 
     if concept_filter is not None:
         setup_concept_filter_temps(session, concept_filter, "sqlite")
-        where_clauses = _concept_filter_where_clauses(concept_filter)
+        stmt = apply_concept_filter_where(stmt, table.c, concept_filter)
 
-    where_str = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
-    sql = text(
-        f"SELECT concept_id, {dist_func}(embedding, :emb) as distance, is_standard "
-        f'FROM "{table_name}" '
-        f"{where_str}"
-        f"ORDER BY distance LIMIT :k"
-    )
-    rows = session.execute(sql, params).all()
+    rows = session.execute(stmt).all()
     return [(int(row[0]), float(row[1]), int(row[2])) for row in rows]
 
 
-def _concept_filter_where_clauses(concept_filter: EmbeddingConceptFilter) -> list[str]:
-    """Build the WHERE-clause fragments for concept_filter.
-
-    Notes
-    -----
-    IMPORTANT: Assumes :func:`~omop_emb.backends.db_utils.setup_concept_filter_temps`
-    has already populated the referenced temp tables in this session.
-    """
-    where_clauses: list[str] = []
-    if concept_filter.concept_ids is not None:
-        where_clauses.append(f'concept_id IN (SELECT id FROM "{KNN_CIDS_TABLE}")')
-    if concept_filter.domains is not None:
-        where_clauses.append(f'domain_id IN (SELECT id FROM "{KNN_DOMS_TABLE}")')
-    if concept_filter.vocabularies is not None:
-        where_clauses.append(f'vocabulary_id IN (SELECT id FROM "{KNN_VOCS_TABLE}")')
-    if concept_filter.require_standard:
-        where_clauses.append("is_standard = 1")
-    if concept_filter.require_active:
-        where_clauses.append("is_valid = 1")
-    return where_clauses
-
-
 def query_concept_ids_matching_filter(
-    session: Session, table_name: str, concept_filter: EmbeddingConceptFilter
+    session: Session, table: Table, concept_filter: EmbeddingConceptFilter
 ) -> set[int]:
-    """Return every ``concept_id`` in `table_name` satisfying `concept_filter`.
+    """Return every ``concept_id`` in `table` satisfying `concept_filter`.
     Used to build an exact FAISS pre-filter set, not for ranking.
     """
     setup_concept_filter_temps(session, concept_filter, "sqlite")
-    where_clauses = _concept_filter_where_clauses(concept_filter)
-    where_str = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
-    sql = text(f'SELECT concept_id FROM "{table_name}" {where_str}')
-    rows = session.execute(sql).all()
+    stmt = apply_concept_filter_where(select(table.c.concept_id), table.c, concept_filter)
+    rows = session.execute(stmt).all()
     return {int(row[0]) for row in rows}
 
 
-def query_all_concept_ids(session: Session, table_name: str) -> set[int]:
+def query_all_concept_ids(session: Session, table: Table) -> set[int]:
     """Return all concept IDs stored in a vec0 table.
 
     Parameters
     ----------
     session : Session
-    table_name : str
+    table : Table
 
     Returns
     -------
     set[int]
     """
-    rows = session.execute(text(f'SELECT concept_id FROM "{table_name}"')).all()
+    rows = session.execute(select(table.c.concept_id)).all()
     return {int(row[0]) for row in rows}
 
 
 def query_embeddings_by_ids(
     session: Session,
-    table_name: str,
+    table: Table,
     concept_ids: Sequence[int],
     dialect: str = "sqlite",
 ) -> dict[int, list[float]]:
@@ -304,7 +302,7 @@ def query_embeddings_by_ids(
     Parameters
     ----------
     session : Session
-    table_name : str
+    table : Table
     concept_ids : Sequence[int]
 
     Returns
@@ -319,31 +317,28 @@ def query_embeddings_by_ids(
         table_name="_tmp_emb_cids",
         dialect=dialect,
     ) as temp_table_name:
+        temp_table = Table(temp_table_name, MetaData(), Column("id", Integer))
         rows = session.execute(
-            text(
-                f'SELECT concept_id, embedding FROM "{table_name}" '
-                f'WHERE concept_id IN (SELECT id FROM "{temp_table_name}")'
+            select(table.c.concept_id, table.c[EMBEDDING_COLUMN_NAME]).where(
+                table.c.concept_id.in_(select(temp_table.c.id))
             )
         ).all()
     return {int(row[0]): _blob_to_embedding(row[1]) for row in rows}
 
 
-def query_has_any(session: Session, table_name: str) -> bool:
+def query_has_any(session: Session, table: Table) -> bool:
     """Return ``True`` if the vec0 table contains at least one row.
 
     Parameters
     ----------
     session : Session
-    table_name : str
+    table : Table
 
     Returns
     -------
     bool
     """
-    return (
-        session.execute(text(f'SELECT concept_id FROM "{table_name}" LIMIT 1')).first()
-        is not None
-    )
+    return session.execute(select(table.c.concept_id).limit(1)).first() is not None
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +356,7 @@ def _blob_to_embedding(blob: bytes) -> list[float]:
 
 def query_filter_metadata_by_ids(
     session: Session,
-    table_name: str,
+    table: Table,
     concept_ids: Sequence[int],
     dialect: str = "sqlite",
 ) -> dict[int, dict]:
@@ -370,7 +365,7 @@ def query_filter_metadata_by_ids(
     Parameters
     ----------
     session : Session
-    table_name : str
+    table : Table
     concept_ids : Sequence[int]
 
     Returns
@@ -383,13 +378,18 @@ def query_filter_metadata_by_ids(
         return {}
     concept_filter = EmbeddingConceptFilter(concept_ids=tuple(concept_ids))
     setup_concept_filter_temps(session, concept_filter, dialect)
-    where_clauses = _concept_filter_where_clauses(concept_filter)
-    where_str = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
-    sql = text(
-        f"SELECT concept_id, domain_id, vocabulary_id, is_standard, is_valid "
-        f'FROM "{table_name}" {where_str}'
+    stmt = apply_concept_filter_where(
+        select(
+            table.c.concept_id,
+            table.c.domain_id,
+            table.c.vocabulary_id,
+            table.c.is_standard,
+            table.c.is_valid,
+        ),
+        table.c,
+        concept_filter,
     )
-    rows = session.execute(sql).all()
+    rows = session.execute(stmt).all()
     return {
         int(row[0]): {
             "domain_id": row[1] or "",

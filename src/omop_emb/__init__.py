@@ -29,8 +29,8 @@ from omop_emb.model_registry import (
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,
-    ConceptEmbeddingRecord,
 )
+from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.base_backend import EmbeddingBackend
 from omop_emb.backends.sqlitevec import (
     SQLiteVecEmbeddingBackend,

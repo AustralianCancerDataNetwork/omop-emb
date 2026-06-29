@@ -11,7 +11,7 @@ from typing import Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from numpy import ndarray
-from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy import Engine, MetaData, Table, create_engine, event, text
 
 try:
     import sqlite_vec
@@ -37,6 +37,7 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     query_has_any,
     query_knn,
     table_exists,
+    sqlite_vec_table_descriptor,
 )
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
@@ -72,7 +73,7 @@ def create_sqlitevec_engine(db_path: str) -> Engine:
     return engine
 
 
-class SQLiteVecEmbeddingBackend(EmbeddingBackend):
+class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     """sqlite-vec embedding backend.
 
     All data lives in a single .db file. vec0 virtual tables (embeddings) and
@@ -82,14 +83,15 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend):
     -----
     - Only ``FLAT`` index type is supported. Supports ``L2``, ``COSINE``, and
     ``L1`` distance metrics.
-
-    - **No SQLAlchemy ORM for embeddings.**
-        - vec0 is a SQLite virtual table type that the SQLAlchemy ORM cannot introspect or query.
-        - All embedding operations therefore use raw ``text()`` SQL, passing the physical table name directly.
-        - ``_table_cache`` (inherited from :class:`~omop_emb.backends.base_backend.EmbeddingBackend`) stores only the table name string as a presence marker.
-        - ``_table_cache`` is used solely to prevent redundant existence checks and DDL
-        - All operations resolve the table via ``model_record.storage_identifier``.
+    - vec0 is a SQLite virtual table type the SQLAlchemy ORM cannot map, but
+      it accepts ordinary SQL once created. ``_table_cache`` therefore stores
+      a Core :class:`~sqlalchemy.Table` used for every query except the initial 
+      ``CREATE VIRTUAL TABLE``.
     """
+
+    def __init__(self, emb_engine: Engine) -> None:
+        self._sqlite_vec_metadata = MetaData()
+        super().__init__(emb_engine=emb_engine)
 
     @classmethod
     def from_path(cls, db_path: str) -> "SQLiteVecEmbeddingBackend":
@@ -121,12 +123,10 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend):
     def _storage_table_exists(self, model_record: EmbeddingModelRecord) -> bool:
         return table_exists(self.emb_engine, model_record.storage_identifier)
 
-    def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> str:
-        # The descriptor for sqlite-vec is just the table name: all operations
-        # use model_record.storage_identifier directly via raw SQL.
-        return model_record.storage_identifier
+    def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> Table:
+        return sqlite_vec_table_descriptor(model_record.storage_identifier, self._sqlite_vec_metadata)
 
-    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> str:
+    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> Table:
         ddl = ddl_create_vec0(
             table_name=model_record.storage_identifier,
             dimensions=model_record.dimensions,
@@ -134,7 +134,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend):
         )
         with self.emb_engine.begin() as conn:
             conn.execute(text(ddl))
-        return model_record.storage_identifier
+        return sqlite_vec_table_descriptor(model_record.storage_identifier, self._sqlite_vec_metadata)
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
         with self.emb_engine.begin() as conn:
@@ -169,10 +169,11 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend):
             records=records,
             dimensions=model_record.dimensions,
         )
+        table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory.begin() as session:
             dml_upsert_rows(
                 session=session,
-                table_name=model_record.storage_identifier,
+                table=table,
                 records=records,
                 embeddings=embeddings.astype(np.float32),
                 dialect=self.emb_engine.dialect.name,
@@ -189,10 +190,11 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend):
     ) -> Mapping[int, Sequence[float]]:
         if not concept_ids:
             return {}
+        table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory() as session:
             result = query_embeddings_by_ids(
                 session=session,
-                table_name=model_record.storage_identifier,
+                table=table,
                 concept_ids=concept_ids,
                 dialect=self.emb_engine.dialect.name,
             )
@@ -214,12 +216,13 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend):
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         self.validate_embeddings(query_embeddings, model_record.dimensions)
 
+        table = self._table_cache[model_record.storage_identifier]
         results: list[tuple[NearestConceptMatch, ...]] = []
         with self.emb_session_factory() as session:
             for query_vec in query_embeddings:
                 rows = query_knn(
                     session=session,
-                    table_name=model_record.storage_identifier,
+                    table=table,
                     query_vector=query_vec.astype(np.float32),
                     metric_type=metric_type,
                     k=k,
@@ -242,18 +245,16 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend):
     # ------------------------------------------------------------------
 
     def _has_any_embeddings_impl(self, *, model_record: EmbeddingModelRecord) -> bool:
+        table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory() as session:
-            return query_has_any(
-                session=session, table_name=model_record.storage_identifier
-            )
+            return query_has_any(session=session, table=table)
 
     def _get_all_stored_concept_ids_impl(
         self, *, model_record: EmbeddingModelRecord
     ) -> set[int]:
+        table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory() as session:
-            return query_all_concept_ids(
-                session=session, table_name=model_record.storage_identifier
-            )
+            return query_all_concept_ids(session=session, table=table)
 
     def _get_concept_filter_metadata_impl(
         self,
@@ -261,10 +262,11 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend):
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
     ) -> Mapping[int, Mapping[str, object]]:
+        table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory() as session:
             return query_filter_metadata_by_ids(
                 session=session,
-                table_name=model_record.storage_identifier,
+                table=table,
                 concept_ids=concept_ids,
                 dialect=self.emb_engine.dialect.name,
             )
@@ -277,9 +279,10 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend):
     ) -> set[int]:
         if concept_filter.is_empty():
             return self._get_all_stored_concept_ids_impl(model_record=model_record)
+        table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory() as session:
             return query_concept_ids_matching_filter(
                 session=session,
-                table_name=model_record.storage_identifier,
+                table=table,
                 concept_filter=concept_filter,
             )

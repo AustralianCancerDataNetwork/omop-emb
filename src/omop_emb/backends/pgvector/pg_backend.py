@@ -26,11 +26,11 @@ from omop_emb.backends.pgvector.pg_index_manager import (
     PGVectorHNSWIndexManager,
 )
 from omop_emb.backends.embedding_table import (
-    create_pg_embedding_table,
-    load_pg_embedding_table,
+    EMBEDDING_COLUMN_NAME,
+    PGEmbeddingTable,
 )
 from omop_emb.backends.pgvector.pg_sql import (
-    EMBEDDING_COLUMN_NAME,
+    create_pg_embedding_table,
     drop_pg_embedding_table,
     q_all_concept_ids,
     q_concept_filter_metadata,
@@ -39,6 +39,7 @@ from omop_emb.backends.pgvector.pg_sql import (
     q_upsert_embeddings,
     q_create_extension_pgvector,
     table_exists,
+    pg_embedding_table_descriptor,
 )
 from omop_emb.backends.db_utils import setup_concept_filter_temps, temp_filter_table
 from omop_emb.model_registry import EmbeddingModelRecord
@@ -57,7 +58,7 @@ _INDEX_MANAGER_FOR_CONFIG: dict[type[IndexConfig], type[PGVectorBaseIndexManager
 }
 
 
-class PGVectorEmbeddingBackend(EmbeddingBackend):
+class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     """pgvector-backed embedding backend.
 
     Both embedding tables and the model registry live in the same Postgres
@@ -120,10 +121,14 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
     def _storage_table_exists(self, model_record: EmbeddingModelRecord) -> bool:
         return table_exists(self.emb_engine, model_record.storage_identifier)
 
-    def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> type:
-        return load_pg_embedding_table(model_record=model_record)
+    def _get_storage_table_descriptor(
+        self, model_record: EmbeddingModelRecord
+    ) -> type[PGEmbeddingTable]:
+        return pg_embedding_table_descriptor(model_record=model_record)
 
-    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> type:
+    def _create_storage_table(
+        self, model_record: EmbeddingModelRecord
+    ) -> type[PGEmbeddingTable]:
         return create_pg_embedding_table(
             engine=self.emb_engine, model_record=model_record
         )
@@ -274,7 +279,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
                 dialect=self.emb_engine.dialect.name,
             ) as temp_table_name:
                 rows = session.execute(
-                    select(table.concept_id, table.embedding).where(
+                    select(table.concept_id, getattr(table, EMBEDDING_COLUMN_NAME)).where(
                         text(f'concept_id IN (SELECT id FROM "{temp_table_name}")')
                     )
                 ).all()

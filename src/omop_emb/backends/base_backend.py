@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from functools import wraps
 import logging
 from datetime import datetime
-from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Generic, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 from numpy import ndarray
 from sqlalchemy import Engine
 from sqlalchemy.orm import sessionmaker
@@ -21,15 +21,17 @@ from omop_emb.config import (
     resolve_omop_emb_engine,
 )
 
+from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig
 from omop_emb.model_registry import EmbeddingModelRecord, RegistryManager
 from omop_emb.utils.embedding_utils import (
-    ConceptEmbeddingRecord,
     EmbeddingConceptFilter,
     NearestConceptMatch,
 )
 
 logger = logging.getLogger(__name__)
+
+TEmbeddingTable = TypeVar("TEmbeddingTable")
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +137,7 @@ def require_registered_model(func: Callable) -> Callable:
 # ---------------------------------------------------------------------------
 
 
-class EmbeddingBackend(ABC):
+class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     """Abstract base class for embedding storage and retrieval backends.
 
     Parameters
@@ -167,7 +169,7 @@ class EmbeddingBackend(ABC):
     def __init__(self, emb_engine: Engine) -> None:
         super().__init__()
         self._registry = RegistryManager(emb_engine)
-        self._table_cache: dict[str, Any] = {}
+        self._table_cache: dict[str, TEmbeddingTable] = {}
         self._initialise_store()
 
     # ------------------------------------------------------------------
@@ -212,7 +214,7 @@ class EmbeddingBackend(ABC):
         created. The default implementation is a no-op.
         """
 
-    def _ensure_storage_table(self, model_record: EmbeddingModelRecord) -> Any:
+    def _ensure_storage_table(self, model_record: EmbeddingModelRecord) -> TEmbeddingTable:
         if model_record.storage_identifier not in self._table_cache:
             table = self._create_storage_table(model_record)
             self._table_cache[model_record.storage_identifier] = table
@@ -512,7 +514,7 @@ class EmbeddingBackend(ABC):
     # Storage table management (backend-specific)
     # ------------------------------------------------------------------
 
-    def _load_storage_table(self, model_record: EmbeddingModelRecord) -> Any:
+    def _load_storage_table(self, model_record: EmbeddingModelRecord) -> TEmbeddingTable:
         """Return the table descriptor for a registered model, recovering if missing
         by recreating the table as needed."""
         if not self._storage_table_exists(model_record):
@@ -529,27 +531,25 @@ class EmbeddingBackend(ABC):
         ...
 
     @abstractmethod
-    def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> Any:
+    def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> TEmbeddingTable:
         """Build the in-process descriptor for a table known to already exist.
         Must not issue any DDL.
 
         Returns
         -------
         descriptor
-            Opaque object used by the backend to identify the table in subsequent operations.
-            Differs between backends, e.g. SQLAlchemy ORM class for pgvector, table name string for sqlite-vec.
+            EmbeddingTable describing the physical table. Type depends on the backend.
         """
         ...
 
     @abstractmethod
-    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> Any:
+    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> TEmbeddingTable:
         """Create the physical table in the database and return its descriptor.
 
         Returns
         -------
         descriptor
-            Opaque object used by the backend to identify the table in subsequent operations.
-            Differs between backends, e.g. SQLAlchemy ORM class for pgvector, table name string for sqlite-vec.
+            EmbeddingTable describing the newly created table. Type depends on the backend.
         """
         ...
 

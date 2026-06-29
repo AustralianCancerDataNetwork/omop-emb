@@ -51,9 +51,9 @@ import numpy as np
 from tqdm import tqdm
 
 from omop_emb.backends.base_backend import EmbeddingBackend
+from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import IndexConfig, index_config_from_index_type
 from omop_emb.config import MetricType, ProviderType
-from omop_emb.utils.embedding_utils import ConceptEmbeddingRecord
 
 logger = logging.getLogger(__name__)
 

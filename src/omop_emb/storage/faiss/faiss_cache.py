@@ -445,7 +445,7 @@ class FAISSCache:
                 raise ValueError("backend is required when concept_filter is set.")
             selector_ids = self._build_filter_selector_ids(concept_filter, backend, metric_type, index)
             if selector_ids is not None:
-                sel = faiss.IDSelectorBatch(selector_ids)
+                sel = faiss.IDSelectorBatch(selector_ids)  # type: ignore[reportCallIssue]
                 params = faiss.SearchParameters()
                 params.sel = sel
 

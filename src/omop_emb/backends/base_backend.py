@@ -497,6 +497,17 @@ class EmbeddingBackend(ABC):
         updated = {**record.metadata, key: value}
         self._registry.update_metadata(model_name=model_name, metadata=updated)
 
+    def refresh_model_updated_at_timestamp(self, *, model_name: str) -> None:
+        """Bump a registry row's ``updated_at`` to now.
+        Required for faiss-cache freshness validation after live upserts.
+        No-op if the model is not registered.
+
+        Parameters
+        ----------
+        model_name : str
+        """
+        self._registry.refresh_model_updated_at_timestamp(model_name=model_name)
+
     # ------------------------------------------------------------------
     # Storage table management (backend-specific)
     # ------------------------------------------------------------------
@@ -826,6 +837,46 @@ class EmbeddingBackend(ABC):
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
     ) -> Mapping[int, Mapping[str, object]]: ...
+
+    @require_registered_model
+    def get_concept_ids_matching_filter(
+        self,
+        *,
+        model_name: str,
+        metric_type: MetricType,
+        concept_filter: EmbeddingConceptFilter,
+        _model_record: EmbeddingModelRecord,
+    ) -> set[int]:
+        """Return every concept ID (for this model) currently satisfying `concept_filter`.
+        Used to build an exact pre-filter for FAISS searches
+        (see :class:`~omop_emb.storage.faiss.faiss_cache.FAISSCache`).
+
+        Parameters
+        ----------
+        model_name : str
+            Canonical model name including tag.
+        metric_type : MetricType
+            Validated against the registry.
+        concept_filter : EmbeddingConceptFilter
+            Filter constraints to evaluate.
+
+        Returns
+        -------
+        set[int]
+            Concept IDs satisfying every constraint in *concept_filter*.
+        """
+        return self._get_concept_ids_matching_filter_impl(
+            model_record=_model_record,
+            concept_filter=concept_filter,
+        )
+
+    @abstractmethod
+    def _get_concept_ids_matching_filter_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_filter: EmbeddingConceptFilter,
+    ) -> set[int]: ...
 
     def get_embedding_count(
         self,

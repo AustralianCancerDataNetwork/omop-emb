@@ -228,18 +228,7 @@ def query_knn(
 
     if concept_filter is not None:
         setup_concept_filter_temps(session, concept_filter, "sqlite")
-        if concept_filter.concept_ids is not None:
-            where_clauses.append(f'concept_id IN (SELECT id FROM "{KNN_CIDS_TABLE}")')
-        if concept_filter.domains is not None:
-            where_clauses.append(f'domain_id IN (SELECT id FROM "{KNN_DOMS_TABLE}")')
-        if concept_filter.vocabularies is not None:
-            where_clauses.append(
-                f'vocabulary_id IN (SELECT id FROM "{KNN_VOCS_TABLE}")'
-            )
-        if concept_filter.require_standard:
-            where_clauses.append("is_standard = 1")
-        if concept_filter.require_active:
-            where_clauses.append("is_valid = 1")
+        where_clauses = _concept_filter_where_clauses(concept_filter)
 
     where_str = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
     sql = text(
@@ -250,6 +239,42 @@ def query_knn(
     )
     rows = session.execute(sql, params).all()
     return [(int(row[0]), float(row[1]), int(row[2])) for row in rows]
+
+
+def _concept_filter_where_clauses(concept_filter: EmbeddingConceptFilter) -> list[str]:
+    """Build the WHERE-clause fragments for concept_filter.
+
+    Notes
+    -----
+    IMPORTANT: Assumes :func:`~omop_emb.backends.db_utils.setup_concept_filter_temps`
+    has already populated the referenced temp tables in this session.
+    """
+    where_clauses: list[str] = []
+    if concept_filter.concept_ids is not None:
+        where_clauses.append(f'concept_id IN (SELECT id FROM "{KNN_CIDS_TABLE}")')
+    if concept_filter.domains is not None:
+        where_clauses.append(f'domain_id IN (SELECT id FROM "{KNN_DOMS_TABLE}")')
+    if concept_filter.vocabularies is not None:
+        where_clauses.append(f'vocabulary_id IN (SELECT id FROM "{KNN_VOCS_TABLE}")')
+    if concept_filter.require_standard:
+        where_clauses.append("is_standard = 1")
+    if concept_filter.require_active:
+        where_clauses.append("is_valid = 1")
+    return where_clauses
+
+
+def query_concept_ids_matching_filter(
+    session: Session, table_name: str, concept_filter: EmbeddingConceptFilter
+) -> set[int]:
+    """Return every ``concept_id`` in `table_name` satisfying `concept_filter`.
+    Used to build an exact FAISS pre-filter set, not for ranking.
+    """
+    setup_concept_filter_temps(session, concept_filter, "sqlite")
+    where_clauses = _concept_filter_where_clauses(concept_filter)
+    where_str = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
+    sql = text(f'SELECT concept_id FROM "{table_name}" {where_str}')
+    rows = session.execute(sql).all()
+    return {int(row[0]) for row in rows}
 
 
 def query_all_concept_ids(session: Session, table_name: str) -> set[int]:
@@ -356,15 +381,15 @@ def query_filter_metadata_by_ids(
     """
     if not concept_ids:
         return {}
-    with temp_filter_table(
-        session, list(concept_ids), "INTEGER", "_tmp_qf_cids", dialect=dialect
-    ) as temp_table_name:
-        rows = session.execute(
-            text(
-                f"SELECT concept_id, domain_id, vocabulary_id, is_standard, is_valid "
-                f'FROM "{table_name}" WHERE concept_id IN (SELECT id FROM "{temp_table_name}")'
-            )
-        ).all()
+    concept_filter = EmbeddingConceptFilter(concept_ids=tuple(concept_ids))
+    setup_concept_filter_temps(session, concept_filter, dialect)
+    where_clauses = _concept_filter_where_clauses(concept_filter)
+    where_str = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
+    sql = text(
+        f"SELECT concept_id, domain_id, vocabulary_id, is_standard, is_valid "
+        f'FROM "{table_name}" {where_str}'
+    )
+    rows = session.execute(sql).all()
     return {
         int(row[0]): {
             "domain_id": row[1] or "",

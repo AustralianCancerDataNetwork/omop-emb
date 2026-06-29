@@ -141,6 +141,63 @@ class TestBundleRoundTrip:
         )
         assert imported == len(ids)
 
+    def test_force_overwrite_bumps_updated_at(self, tmp_path):
+        """A force re-import must invalidate any FAISS cache built before it.
+
+        Regression test: import_bundle() used to call bulk_upsert_embeddings()
+        directly, bypassing the interface-layer wrapper that bumps
+        registry.updated_at -- so a FAISS cache built before a force
+        re-import kept reporting is_fresh()==True forever, even though the
+        re-import had replaced the embedding content underneath it.
+        """
+        dim = 2
+        ids = [1]
+        vecs = np.array([[1.0, 2.0]], dtype=np.float32)
+
+        backend = _make_backend()
+        _populate(backend, dim=dim, ids=ids, vecs=vecs, metric_type=MetricType.COSINE)
+
+        _, bundle_path = embedding_bundle.export_bundle(
+            backend=backend, model_name=_MODEL, output_dir=tmp_path
+        )
+
+        before = backend.get_registered_model(model_name=_MODEL)
+        assert before is not None
+
+        embedding_bundle.import_bundle(backend=backend, h5_path=bundle_path, force=True)
+
+        after = backend.get_registered_model(model_name=_MODEL)
+        assert after is not None
+        assert after.updated_at is not None
+        assert before.updated_at is not None
+        assert after.updated_at > before.updated_at
+
+    def test_fresh_registration_keeps_backdated_timestamp(self, tmp_path):
+        """A brand-new registration must NOT be bumped to "now" -- it stays
+        backdated to the bundle's own exported_at so a FAISS cache shipped
+        alongside the bundle still validates as fresh (see
+        TestCrossMachineCacheReuse). Only the *overwrite* path bumps
+        updated_at.
+        """
+        dim = 2
+        ids = [1]
+        vecs = np.array([[1.0, 2.0]], dtype=np.float32)
+
+        source_backend = _make_backend()
+        _populate(source_backend, dim=dim, ids=ids, vecs=vecs, metric_type=MetricType.COSINE)
+
+        meta, bundle_path = embedding_bundle.export_bundle(
+            backend=source_backend, model_name=_MODEL, output_dir=tmp_path
+        )
+
+        target_backend = _make_backend()
+        embedding_bundle.import_bundle(backend=target_backend, h5_path=bundle_path)
+
+        record = target_backend.get_registered_model(model_name=_MODEL)
+        assert record is not None
+        assert record.updated_at is not None
+        assert record.updated_at == datetime.fromisoformat(meta.exported_at)
+
 
 @pytest.mark.unit
 class TestImportRebuildIndex:

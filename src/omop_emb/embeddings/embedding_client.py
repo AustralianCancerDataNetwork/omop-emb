@@ -141,7 +141,10 @@ class EmbeddingClient:
         if self._embedding_dim is not None:
             return self._embedding_dim
 
-        cfg_dim = OmopEmbConfig.get_config().embedding_dim
+        try:
+            cfg_dim = OmopEmbConfig.get_config().embedding_dim
+        except FileNotFoundError:
+            cfg_dim = None
         if cfg_dim is not None:
             self._embedding_dim = cfg_dim
             logger.debug(f"Embedding dimension set from config: {cfg_dim}.")

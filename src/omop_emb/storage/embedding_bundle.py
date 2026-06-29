@@ -504,7 +504,8 @@ def import_bundle(
                     "Pass force=True to overwrite."
                 )
 
-        if not backend.is_model_registered(model_name=meta.model_name):
+        was_already_registered = backend.is_model_registered(model_name=meta.model_name)
+        if not was_already_registered:
             backend.register_model(
                 model_name=meta.model_name,
                 provider_type=meta.provider_type,
@@ -546,6 +547,9 @@ def import_bundle(
             batches=_batches(),
             total_n_batches=(n + batch_size - 1) // batch_size,
         )
+
+        if was_already_registered:
+            backend.refresh_model_updated_at_timestamp(model_name=meta.model_name)
 
     if rebuild_index:
         backend.rebuild_index(model_name=meta.model_name, index_config=meta.index_config)

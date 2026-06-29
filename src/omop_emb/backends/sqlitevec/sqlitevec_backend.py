@@ -31,6 +31,7 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     ddl_drop_vec0,
     dml_upsert_rows,
     query_all_concept_ids,
+    query_concept_ids_matching_filter,
     query_embeddings_by_ids,
     query_filter_metadata_by_ids,
     query_has_any,
@@ -266,4 +267,19 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend):
                 table_name=model_record.storage_identifier,
                 concept_ids=concept_ids,
                 dialect=self.emb_engine.dialect.name,
+            )
+
+    def _get_concept_ids_matching_filter_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_filter: EmbeddingConceptFilter,
+    ) -> set[int]:
+        if concept_filter.is_empty():
+            return self._get_all_stored_concept_ids_impl(model_record=model_record)
+        with self.emb_session_factory() as session:
+            return query_concept_ids_matching_filter(
+                session=session,
+                table_name=model_record.storage_identifier,
+                concept_filter=concept_filter,
             )

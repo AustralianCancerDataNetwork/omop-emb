@@ -276,6 +276,7 @@ class EmbeddingReaderInterface:
                     self._metric_type,
                     faiss_index_config,
                     concept_filter=concept_filter,
+                    backend=self._backend,
                 )
                 return self._enrich(raw)
 
@@ -566,6 +567,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             records=records,
             embeddings=embeddings,
         )
+        self._backend.refresh_model_updated_at_timestamp(model_name=self.canonical_model_name)
 
     def bulk_upsert_concept_embeddings(
         self,
@@ -579,6 +581,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             batches=batches,
             total_n_batches=total_n_batches,
         )
+        self._backend.refresh_model_updated_at_timestamp(model_name=self.canonical_model_name)
 
     def embed_and_upsert_concepts(
         self,

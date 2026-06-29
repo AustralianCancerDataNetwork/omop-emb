@@ -19,6 +19,7 @@ from omop_emb.backends.sqlitevec import (
 from omop_emb.config import MetricType, ProviderType
 from omop_emb.storage import embedding_bundle
 from omop_emb.storage.faiss.faiss_cache import FAISSCache
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 pytest.importorskip("faiss", reason="faiss-cpu not installed")
 
@@ -286,7 +287,7 @@ class TestCrossBackendParity:
 
 @pytest.mark.unit
 class TestIndexCache:
-    """Single-entry cache returns the same object on repeated loads."""
+    """Dict-keyed cache: each (metric_type, index_config) gets its own slot."""
 
     def test_cache_hit_returns_same_object(self, tmp_path):
         backend = _make_svec_backend(_L2_DIM)
@@ -303,8 +304,10 @@ class TestIndexCache:
         idx_b = cache._load_index(MetricType.L2, FlatIndexConfig())
         assert idx_a is idx_b
 
-    def test_cache_miss_on_different_metric(self, tmp_path):
-        """Switching metric evicts the old entry; a new load returns a fresh object."""
+    def test_alternating_metrics_both_stay_cached(self, tmp_path):
+        """Loading a second metric must not evict the first -- both should be
+        cache hits on subsequent loads, since each (metric, index_config) key
+        gets its own slot rather than sharing one single-entry cache."""
         backend = _make_svec_backend(_COSINE_DIM)
         _populate_backend(
             backend,
@@ -333,11 +336,14 @@ class TestIndexCache:
 
         idx_l2 = cache._load_index(MetricType.L2, FlatIndexConfig())
         idx_cosine = cache._load_index(MetricType.COSINE, FlatIndexConfig())
-        # After loading COSINE the cache slot holds the COSINE index
         idx_l2_reload = cache._load_index(MetricType.L2, FlatIndexConfig())
-        # They are different objects (cache was evicted between loads)
+        idx_cosine_reload = cache._load_index(MetricType.COSINE, FlatIndexConfig())
+
         assert idx_l2 is not idx_cosine
-        assert idx_l2_reload is not idx_cosine
+        # Both metrics are still cache hits after alternating between them --
+        # neither evicted the other.
+        assert idx_l2_reload is idx_l2
+        assert idx_cosine_reload is idx_cosine
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +433,133 @@ class TestCrossMachineCacheReuse:
         target_record = target.get_registered_model(model_name=_MODEL)
         assert target_record is not None
         assert cache.is_fresh(target_record, MetricType.COSINE, index_config)
+
+
+# ---------------------------------------------------------------------------
+# Pre-filtering correctness (live backend query, no metadata.npz)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestConceptFilterPrefiltering:
+    """concept_filter must restrict the FAISS traversal itself (pre-filter),
+    not just narrow an unfiltered top-k after the fact (post-filter)."""
+
+    def test_selective_filter_returns_full_top_k(self, tmp_path):
+        """A filter matching only 1 of 5 vectors must still return that 1
+        match at k=1, even though it isn't the nearest neighbour overall.
+
+        A post-filter (rank top-k first, then drop non-matching) would
+        return zero results here, since the single matching vector is the
+        single *worst* match for this query.
+        """
+        backend = _make_svec_backend(2)
+        records = [
+            ConceptEmbeddingRecord(
+                concept_id=i, domain_id="Drug" if i == 5 else "Condition",
+                vocabulary_id="Test", is_standard=True,
+            )
+            for i in range(1, 6)
+        ]
+        # Query is [0, 0]; concept 5 ("Drug") is the farthest away.
+        vecs = np.array([[1, 0], [2, 0], [3, 0], [4, 0], [100, 0]], dtype=np.float32)
+        backend.register_model(
+            model_name=_MODEL, provider_type=_PROVIDER,
+            index_config=FlatIndexConfig(), dimensions=2,
+        )
+        backend.upsert_embeddings(
+            model_name=_MODEL, metric_type=MetricType.L2, records=records, embeddings=vecs,
+        )
+        cache = _build_faiss(tmp_path, backend, MetricType.L2)
+
+        query = np.array([[0, 0]], dtype=np.float32)
+        results = cache.search(
+            query,
+            k=1,
+            metric_type=MetricType.L2,
+            index_config=FlatIndexConfig(),
+            concept_filter=EmbeddingConceptFilter(domains=("Drug",)),
+            backend=backend,
+        )
+        returned_ids = {r.concept_id for r in results[0]}
+        assert returned_ids == {5}
+
+    def test_search_with_filter_requires_backend(self, tmp_path):
+        backend = _make_svec_backend(_L2_DIM)
+        _populate_backend(
+            backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
+        cache = _build_faiss(tmp_path, backend, MetricType.L2)
+
+        with pytest.raises(ValueError):
+            cache.search(
+                _L2_QUERY,
+                k=4,
+                metric_type=MetricType.L2,
+                index_config=FlatIndexConfig(),
+                concept_filter=EmbeddingConceptFilter(concept_ids=(1,)),
+            )
+
+
+# ---------------------------------------------------------------------------
+# metadata.npz removal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestNoMetadataNpz:
+    """build_from_backend() must no longer write a metadata.npz file."""
+
+    def test_build_does_not_write_metadata_npz(self, tmp_path):
+        backend = _make_svec_backend(_L2_DIM)
+        _populate_backend(
+            backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
+        cache = _build_faiss(tmp_path, backend, MetricType.L2)
+        assert not cache.metadata_path().exists()
+        assert list(cache.model_dir.glob("*.npz")) == []
+
+
+# ---------------------------------------------------------------------------
+# Staleness after upsert
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestStalenessAfterUpsert:
+    """A cache built before new embeddings are upserted must go stale."""
+
+    def test_is_fresh_false_after_later_upsert(self, tmp_path):
+        backend = _make_svec_backend(_L2_DIM)
+        _populate_backend(
+            backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
+        index_config = FlatIndexConfig()
+        cache = _build_faiss(tmp_path, backend, MetricType.L2, index_config=index_config)
+
+        record = backend.get_registered_model(model_name=_MODEL)
+        if record is None:
+            pytest.fail("Model not found after registration")
+        assert cache.is_fresh(record, MetricType.L2, index_config)
+
+        backend.upsert_embeddings(
+            model_name=_MODEL,
+            metric_type=MetricType.L2,
+            records=[
+                ConceptEmbeddingRecord(
+                    concept_id=99, domain_id="Test", vocabulary_id="Test", is_standard=True
+                )
+            ],
+            embeddings=np.array([[5, 0]], dtype=np.float32),
+        )
+        backend.refresh_model_updated_at_timestamp(model_name=_MODEL)
+        updated_record = backend.get_registered_model(model_name=_MODEL)
+        if updated_record is None:
+            pytest.fail("Model disappeared after upsert")
+        assert not cache.is_fresh(updated_record, MetricType.L2, index_config)
 
 
 # ---------------------------------------------------------------------------

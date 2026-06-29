@@ -305,6 +305,41 @@ class SharedBackendTests:
             )
 
     # ------------------------------------------------------------------
+    # get_concept_ids_matching_filter (FAISS pre-filter source)
+    # ------------------------------------------------------------------
+
+    def test_get_concept_ids_matching_filter_domain(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
+        matching = backend.get_concept_ids_matching_filter(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            concept_filter=EmbeddingConceptFilter(domains=("Drug",)),
+        )
+        assert matching == {ASPIRIN_ID, NON_STANDARD_ID}
+
+    def test_get_concept_ids_matching_filter_require_standard(
+        self, backend: EmbeddingBackend
+    ):
+        self._upsert_all(backend)
+        matching = backend.get_concept_ids_matching_filter(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            concept_filter=EmbeddingConceptFilter(require_standard=True),
+        )
+        assert matching == {HYPERTENSION_ID, DIABETES_ID, ASPIRIN_ID}
+
+    def test_get_concept_ids_matching_filter_empty_returns_all(
+        self, backend: EmbeddingBackend
+    ):
+        self._upsert_all(backend)
+        matching = backend.get_concept_ids_matching_filter(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            concept_filter=EmbeddingConceptFilter(),
+        )
+        assert matching == {r.concept_id for r in CONCEPT_RECORDS}
+
+    # ------------------------------------------------------------------
     # Delete model
     # ------------------------------------------------------------------
 

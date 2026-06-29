@@ -180,22 +180,7 @@ def q_nearest_concept_ids(
     )
 
     if concept_filter is not None:
-        if concept_filter.concept_ids is not None:
-            inner_stmt = inner_stmt.where(
-                text(f'concept_id IN (SELECT id FROM "{KNN_CIDS_TABLE}")')
-            )
-        if concept_filter.domains is not None:
-            inner_stmt = inner_stmt.where(
-                text(f'domain_id IN (SELECT id FROM "{KNN_DOMS_TABLE}")')
-            )
-        if concept_filter.vocabularies is not None:
-            inner_stmt = inner_stmt.where(
-                text(f'vocabulary_id IN (SELECT id FROM "{KNN_VOCS_TABLE}")')
-            )
-        if concept_filter.require_standard:
-            inner_stmt = inner_stmt.where(embedding_table.is_standard == True)  # noqa: E712
-        if concept_filter.require_active:
-            inner_stmt = inner_stmt.where(embedding_table.is_valid == True)  # noqa: E712
+        inner_stmt = _apply_concept_filter_where(inner_stmt, embedding_table, concept_filter)
         if concept_filter.limit is not None:
             inner_stmt = inner_stmt.limit(concept_filter.limit)
 
@@ -211,6 +196,64 @@ def q_nearest_concept_ids(
         .select_from(query_v)
         .join(lateral_subq, literal(True))
     )
+
+
+def _apply_concept_filter_where(
+    stmt: Select, embedding_table: type, concept_filter: EmbeddingConceptFilter
+) -> Select:
+    """Apply concept_filter's WHERE-clause constraints to stmt.
+
+    Notes
+    -----
+    IMPORTANT: Assumes func:`~omop_emb.backends.db_utils.setup_concept_filter_temps`
+    has already populated the referenced temp tables in the same transaction.
+    """
+    if concept_filter.concept_ids is not None:
+        stmt = stmt.where(text(f'{embedding_table.concept_id} IN (SELECT id FROM "{KNN_CIDS_TABLE}")'))
+    if concept_filter.domains is not None:
+        stmt = stmt.where(text(f'{embedding_table.domain_id} IN (SELECT id FROM "{KNN_DOMS_TABLE}")'))
+    if concept_filter.vocabularies is not None:
+        stmt = stmt.where(text(f'{embedding_table.vocabulary_id} IN (SELECT id FROM "{KNN_VOCS_TABLE}")'))
+    if concept_filter.require_standard:
+        stmt = stmt.where(embedding_table.is_standard == True)  # noqa: E712
+    if concept_filter.require_active:
+        stmt = stmt.where(embedding_table.is_valid == True)  # noqa: E712
+    return stmt
+
+
+def q_concept_ids_matching_filter(
+    embedding_table: type, concept_filter: EmbeddingConceptFilter
+) -> Select:
+    """Build a query returning every ``concept_id`` satisfying *concept_filter*.
+
+    Notes
+    -----
+    Caller must have already called :func:`~omop_emb.backends.db_utils.setup_concept_filter_temps` 
+    in the same transaction.
+    """
+    stmt = select(embedding_table.concept_id)
+    return _apply_concept_filter_where(stmt, embedding_table, concept_filter)
+
+
+def q_concept_filter_metadata(
+    embedding_table: type, concept_filter: EmbeddingConceptFilter
+) -> Select:
+    """Build a query returning filter metadata columns for every concept ID
+    satisfying concept_filter.
+
+    Notes
+    -----
+    Caller must have already called :func:`~omop_emb.backends.db_utils.setup_concept_filter_temps` 
+    in the same transaction.
+    """
+    stmt = select(
+        embedding_table.concept_id,
+        embedding_table.domain_id,
+        embedding_table.vocabulary_id,
+        embedding_table.is_standard,
+        embedding_table.is_valid,
+    )
+    return _apply_concept_filter_where(stmt, embedding_table, concept_filter)
 
 
 # ---------------------------------------------------------------------------

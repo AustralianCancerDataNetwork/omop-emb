@@ -12,18 +12,13 @@ Disk layout
 Each model gets its own sub-directory inside ``cache_dir``::
 
     <cache_dir>/<safe_model_name>/
-        metadata.npz                            : concept_ids, domain_ids, vocabulary_ids, is_standard, is_valid (overwritten every build)
         <index_type>_<metric_type>.faiss        : IndexIDMap wrapping Flat index
         <index_type>_<metric_type>.json         : per-index: exported_at, row_count, index_config
         ...
 
-
-Multiple indices for the same model share ``metadata.npz``.  The file is
-always overwritten on build so it reflects the most recent build.  Staleness
-is tracked **per-index** via the ``.json`` sidecar: ``is_fresh()``  compares
-``exported_at`` against ``model_record.updated_at``.  A stale index is never
-queried, so any row-count mismatch with ``metadata.npz`` cannot produce wrong
-results.
+Staleness is tracked per-index via the ``.json`` sidecar: ``is_fresh()``
+compares ``exported_at`` against ``model_record.updated_at``. A stale index
+is never queried.
 
 
 FAISS-only index configs
@@ -31,7 +26,7 @@ FAISS-only index configs
 :class:`IVFFlatIndexConfig` and :class:`IVFPQIndexConfig` are defined here for
 FAISS-specific acceleration.  They subclass the backend
 :class:`~omop_emb.backends.index_config.IndexConfig` with ``IndexType.IVFFLAT``
-/ ``IndexType.IVFPQ`` and are **NOT** officially supported at the moment.
+/ ``IndexType.IVFPQ`` and are NOT officially supported at the moment.
 """
 
 from __future__ import annotations
@@ -43,7 +38,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 from tqdm import tqdm
@@ -65,7 +60,6 @@ from omop_emb.storage.embedding_bundle import ExportMetadata, stream_embedding_b
 
 logger = logging.getLogger(__name__)
 
-_METADATA_FILENAME = "metadata.npz"
 
 # Metrics supported by FAISS (L1, HAMMING, etc. are not available).
 _FAISS_SUPPORTED_METRICS = frozenset({MetricType.L2, MetricType.COSINE})
@@ -175,9 +169,13 @@ class FAISSCache:
 
     Notes
     -----
-    Caches the index file in-memory on first load for faster subsequent queries.
-    To prevent RAM saturation, only one index is cached at a time: switching to a different
-    metric+index pair triggers a disk reload and GC of the previous index.
+    Caches loaded index files in-memory, keyed on ``(metric_type, index_config)``,
+    for faster subsequent queries. A caller that alternates between multiple
+    metric/index combinations on the same instance gets a cache hit for each
+    one rather than thrashing a single-slot cache; there is currently no
+    eviction policy, so an instance queried against many distinct
+    metric/index combinations will hold all of their indices in memory for
+    its lifetime.
 
     Parameters
     ----------
@@ -194,7 +192,7 @@ class FAISSCache:
     ) -> None:
         self._model_name = model_name
         self._cache_dir = Path(cache_dir).expanduser().resolve()
-        self._index_cache: Optional[Tuple[MetricType, IndexConfig, faiss.Index]] = None
+        self._index_cache: Dict[Tuple[MetricType, IndexConfig], "faiss.Index"] = {}
 
     # ------------------------------------------------------------------
     # Paths
@@ -214,8 +212,16 @@ class FAISSCache:
         return self.model_dir / f"{_index_key(metric_type, index_config)}.json"
 
     def metadata_path(self) -> Path:
-        """Path to the shared ``metadata.npz`` concept metadata file."""
-        return self.model_dir / _METADATA_FILENAME
+        """Path to a legacy ``metadata.npz`` file, if one exists.
+
+        ``build_from_backend()`` no longer writes this file. Concept-filter
+        predicates are now evaluated live against the backend (see
+        :meth:`EmbeddingBackend.get_concept_ids_matching_filter`). This path
+        is kept only so ``cli_legacy.py``'s ``import-legacy-faiss-cache``
+        command can still locate ``metadata.npz`` on caches built before
+        this change, for migration.
+        """
+        return self.model_dir / "metadata.npz"
 
     # ------------------------------------------------------------------
     # Staleness
@@ -231,14 +237,12 @@ class FAISSCache:
 
         Checks:
 
-        1. ``{key}.faiss``, ``{key}.json``, and ``metadata.npz`` all exist.
+        1. ``{key}.faiss`` and ``{key}.json`` both exist.
         2. ``{key}.json`` is parseable with a non-negative ``row_count``.
         3. ``exported_at`` is strictly newer than ``model_record.updated_at``
            (when available).
         """
         if not self.faiss_path(metric_type, index_config).exists():
-            return False
-        if not self.metadata_path().exists():
             return False
 
         json_path = self.json_path(metric_type, index_config)
@@ -309,7 +313,6 @@ class FAISSCache:
 
         Writes (or overwrites):
 
-        * ``metadata.npz``: shared concept metadata arrays.
         * ``<index_type>_<metric_type>.faiss``: the FAISS index for this metric+index combo.
         * ``<index_type>_<metric_type>.json``: per-index staleness metadata.
 
@@ -344,12 +347,6 @@ class FAISSCache:
         )
         index = faiss.IndexIDMap(inner)
 
-        concept_ids_chunks: list[np.ndarray] = []
-        domain_ids_chunks: list[np.ndarray] = []
-        vocabulary_ids_chunks: list[np.ndarray] = []
-        is_standard_chunks: list[np.ndarray] = []
-        is_valid_chunks: list[np.ndarray] = []
-
         row_count = 0
         for batch in tqdm(
             stream_embedding_batches(backend, self._model_name, metric_type, all_ids, batch_size),
@@ -363,38 +360,11 @@ class FAISSCache:
 
             index.add_with_ids(batch_vecs, batch.concept_ids)  # type: ignore
 
-            concept_ids_chunks.append(batch.concept_ids)
-            domain_ids_chunks.append(np.asarray(batch.domain_ids, dtype=object))
-            vocabulary_ids_chunks.append(np.asarray(batch.vocabulary_ids, dtype=object))
-            is_standard_chunks.append(np.asarray(batch.is_standard, dtype=bool))
-            is_valid_chunks.append(np.asarray(batch.is_valid, dtype=bool))
             row_count += len(batch.concept_ids)
 
         faiss_path = self.faiss_path(metric_type, index_config)
         faiss.write_index(index, str(faiss_path))
         logger.info("Built FAISS index at '%s' (%d vectors).", faiss_path, row_count)
-
-        logger.info(
-            "Saving concept metadata arrays (%d rows) to '%s'.", row_count, self.metadata_path()
-        )
-        np.savez(
-            self.model_dir / "metadata",  # NumPy appends .npz
-            concept_ids=np.concatenate(concept_ids_chunks)
-            if concept_ids_chunks
-            else np.array([], dtype=np.int64),
-            domain_ids=np.concatenate(domain_ids_chunks)
-            if domain_ids_chunks
-            else np.array([], dtype=object),
-            vocabulary_ids=np.concatenate(vocabulary_ids_chunks)
-            if vocabulary_ids_chunks
-            else np.array([], dtype=object),
-            is_standard=np.concatenate(is_standard_chunks)
-            if is_standard_chunks
-            else np.array([], dtype=bool),
-            is_valid=np.concatenate(is_valid_chunks)
-            if is_valid_chunks
-            else np.array([], dtype=bool),
-        )
 
         meta = ExportMetadata(
             model_name=self._model_name,
@@ -426,11 +396,12 @@ class FAISSCache:
         index_config: IndexConfig,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
+        backend: Optional[EmbeddingBackend] = None,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         """Search a specific FAISS index for nearest concepts.
 
-        All ``EmbeddingConceptFilter`` fields are applied as pre-filters using
-        the numpy metadata arrays in ``metadata.npz``.
+        All ``EmbeddingConceptFilter`` fields are applied as true pre-filters
+        (via ``IDSelectorBatch``) using the supplied backend.
 
         Parameters
         ----------
@@ -443,7 +414,11 @@ class FAISSCache:
         index_config : IndexConfig
             Index configuration identifying which on-disk index to load.
         concept_filter : EmbeddingConceptFilter, optional
-            Applied as a pre-filter over the stored metadata arrays.
+            Applied as a pre-filter over the live backend.
+        backend : EmbeddingBackend, optional
+            Required when concept_filter is set and non-empty. Used to
+            resolve the filter to a concept-ID set via
+            :meth:`EmbeddingBackend.get_concept_ids_matching_filter`.
 
         Returns
         -------
@@ -466,9 +441,11 @@ class FAISSCache:
 
         params = None
         if concept_filter is not None and not concept_filter.is_empty():
-            positions = self._build_filter_positions(concept_filter)
-            if positions is not None:
-                sel = faiss.IDSelectorBatch(positions)  # type: ignore
+            if backend is None:
+                raise ValueError("backend is required when concept_filter is set.")
+            selector_ids = self._build_filter_selector_ids(concept_filter, backend, metric_type, index)
+            if selector_ids is not None:
+                sel = faiss.IDSelectorBatch(selector_ids)
                 params = faiss.SearchParameters()
                 params.sel = sel
 
@@ -495,46 +472,30 @@ class FAISSCache:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _build_filter_positions(
-        self, concept_filter: EmbeddingConceptFilter
+    def _build_filter_selector_ids(
+        self,
+        concept_filter: EmbeddingConceptFilter,
+        backend: EmbeddingBackend,
+        metric_type: MetricType,
+        index: "faiss.Index",
     ) -> Optional[np.ndarray]:
-        """Return int64 internal-position array for the filter, or None (no restriction).
+        """Get selector IDs for a given concept filter to supply to
+        FAISS ``SearchParameters.sel``.  Returns ``None`` if the filter matches
+        everything (no selector needed).
 
-        Positions are sequential 0-based indices into the inner FAISS index
-        (not external concept IDs), suitable for ``IDSelectorBatch``.
-        The ``metadata.npz`` arrays are parallel to FAISS internal rows:
-        position *i* in the array corresponds to position *i* in the index.
+        Notes
+        -----
+        Only works if the real index is wrapped using an ``IndexIDMap``
+        as no translation is needed between FAISS positions and concept IDs.  
         """
-        meta_path = self.metadata_path()
-        if not meta_path.exists():
-            raise FileNotFoundError(
-                f"FAISS metadata not found at '{meta_path}'. Run FAISSCache.export() first."
-            )
-        npz = np.load(meta_path, allow_pickle=True)
-        concept_ids_arr = npz["concept_ids"]
-        mask = np.ones(len(concept_ids_arr), dtype=bool)
-
-        if concept_filter.concept_ids is not None:
-            mask &= np.isin(
-                concept_ids_arr,
-                np.array(list(concept_filter.concept_ids), dtype=np.int64),
-            )
-
-        if concept_filter.domains:
-            mask &= np.isin(npz["domain_ids"], list(concept_filter.domains))
-
-        if concept_filter.vocabularies:
-            mask &= np.isin(npz["vocabulary_ids"], list(concept_filter.vocabularies))
-
-        if concept_filter.require_standard:
-            mask &= npz["is_standard"]
-
-        if concept_filter.require_active:
-            mask &= npz["is_valid"]
-
-        if mask.all():
+        matching_ids = backend.get_concept_ids_matching_filter(
+            model_name=self._model_name,
+            metric_type=metric_type,
+            concept_filter=concept_filter,
+        )
+        if len(matching_ids) >= index.ntotal:
             return None
-        return np.where(mask)[0].astype(np.int64)
+        return np.fromiter(matching_ids, dtype=np.int64, count=len(matching_ids))
 
     def _create_inner_index(
         self,
@@ -615,10 +576,10 @@ class FAISSCache:
     def _load_index(self, metric_type: MetricType, index_config: IndexConfig):
         from omop_emb.backends.index_config import HNSWIndexConfig
 
-        if self._index_cache is not None:
-            cached_metric, cached_config, cached_index = self._index_cache
-            if cached_metric == metric_type and cached_config == index_config:
-                return cached_index
+        cache_key = (metric_type, index_config)
+        cached_index = self._index_cache.get(cache_key)
+        if cached_index is not None:
+            return cached_index
 
         logger.debug(
             "Loading FAISS index for metric=%s, index=%s from disk.",
@@ -645,5 +606,5 @@ class FAISSCache:
             if isinstance(inner, faiss.IndexHNSW):
                 inner.hnsw.efSearch = index_config.ef_search
 
-        self._index_cache = (metric_type, index_config, index)
+        self._index_cache[cache_key] = index
         return index

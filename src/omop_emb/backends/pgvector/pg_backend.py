@@ -33,6 +33,8 @@ from omop_emb.backends.pgvector.pg_sql import (
     EMBEDDING_COLUMN_NAME,
     drop_pg_embedding_table,
     q_all_concept_ids,
+    q_concept_filter_metadata,
+    q_concept_ids_matching_filter,
     q_nearest_concept_ids,
     q_upsert_embeddings,
     q_create_extension_pgvector,
@@ -358,23 +360,10 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         if not concept_ids:
             return {}
         table = self._table_cache[model_record.storage_identifier]
+        concept_filter = EmbeddingConceptFilter(concept_ids=tuple(concept_ids))
         with self.emb_session_factory.begin() as session:
-            with temp_filter_table(
-                session,
-                list(concept_ids),
-                "BIGINT",
-                table_name="_tmp_cfm_cids",
-                dialect=self.emb_engine.dialect.name,
-            ) as temp_table_name:
-                rows = session.execute(
-                    select(
-                        table.concept_id,
-                        table.domain_id,
-                        table.vocabulary_id,
-                        table.is_standard,
-                        table.is_valid,
-                    ).where(text(f'concept_id IN (SELECT id FROM "{temp_table_name}")'))
-                ).all()
+            setup_concept_filter_temps(session, concept_filter, "postgresql")
+            rows = session.execute(q_concept_filter_metadata(table, concept_filter)).all()
         return {
             int(row[0]): {
                 "domain_id": row[1] or "",
@@ -384,3 +373,17 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
             }
             for row in rows
         }
+
+    def _get_concept_ids_matching_filter_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_filter: EmbeddingConceptFilter,
+    ) -> set[int]:
+        if concept_filter.is_empty():
+            return self._get_all_stored_concept_ids_impl(model_record=model_record)
+        table = self._table_cache[model_record.storage_identifier]
+        with self.emb_session_factory.begin() as session:
+            setup_concept_filter_temps(session, concept_filter, "postgresql")
+            rows = session.execute(q_concept_ids_matching_filter(table, concept_filter)).all()
+        return {int(row[0]) for row in rows}

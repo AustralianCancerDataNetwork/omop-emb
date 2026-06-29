@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timezone
 from typing import Mapping, Optional
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from omop_emb.backends.index_config import (
@@ -246,6 +246,28 @@ class RegistryManager:
             row.details = dict(metadata)
             session.commit()
             return self._row_to_record(row)
+
+    def refresh_model_updated_at_timestamp(self, *, model_name: str) -> None:
+        """Bump a registry row's ``updated_at`` to now, with no other change.
+
+        Notes
+        -----
+        Uses a Python-side timestamp rather than ``func.now()`` so the value
+        carries microsecond precision on every backend. SQLite's
+        ``CURRENT_TIMESTAMP``only has whole-second resolution, 
+        which made staleness checks racy when an upsert and its preceding 
+        FAISS export land in the same second.
+
+        Parameters
+        ----------
+        model_name : str
+        """
+        with self.emb_session_factory.begin() as session:
+            session.execute(
+                update(ModelRegistry)
+                .where(ModelRegistry.model_name == model_name)
+                .values(updated_at=datetime.now(timezone.utc))
+            )
 
     # ------------------------------------------------------------------
     # Naming helpers

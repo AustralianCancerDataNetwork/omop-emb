@@ -1,3 +1,35 @@
+## [1.1.0](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v1.0.2...v1.1.0) (2026-06-30)
+
+
+### Features
+
+* **config:** `OmopEmbConfig` now subclasses `PackageConfigBase` (oa-configurator), replacing env-var-based setup with a typed TOML-backed config; `omop-config configure omop_emb` provisions all settings interactively or via named flags ([#23](https://github.com/AustralianCancerDataNetwork/omop-emb/issues/23)) ([c591f8a](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/c591f8a))
+* **storage:** HDF5 embedding bundle (`storage/embedding_bundle.py`) replaces FAISS as the round-trip artefact; raw embeddings written via chunked streaming (no full-dataset accumulation); FAISS is now a derived, rebuildable accelerator ([#30](https://github.com/AustralianCancerDataNetwork/omop-emb/issues/30)) ([c591f8a](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/c591f8a))
+* **cli:** `export-bundle`, `import-bundle`, and `build-faiss-cache` commands added to the maintenance CLI ([c591f8a](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/c591f8a))
+* **faiss:** concept pre-filter moved from a frozen `metadata.npz` snapshot to a live backend query (`get_concept_ids_matching_filter`), with LRU caching, so filters cannot drift from current database state ([c591f8a](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/c591f8a))
+
+
+### Bug Fixes
+
+* **faiss:** `FAISSCache._load_index` re-read the index from disk on every search call; `HNSWIndexConfig.ef_search` was never applied at query time — fixed with an in-memory LRU index cache keyed on `(metric_type, index_config)` ([#24](https://github.com/AustralianCancerDataNetwork/omop-emb/issues/24)) ([eb2bb3e](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/eb2bb3e))
+* **faiss:** `IndexFlatIP` (COSINE) returned raw inner product fed into a formula expecting cosine distance; `IndexFlatL2` returned squared distance where true Euclidean was expected — both now converted before scoring (`1 - IP` for COSINE, `sqrt()` for L2) ([#27](https://github.com/AustralianCancerDataNetwork/omop-emb/issues/27)) ([eb2bb3e](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/eb2bb3e))
+* **faiss:** COSINE export silently discarded original vector magnitudes (FAISS stores L2-normalised vectors on disk); re-importing from a `.faiss` file now emits a clear data-loss warning ([#30](https://github.com/AustralianCancerDataNetwork/omop-emb/issues/30)) ([a38c601](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/a38c601))
+* **registry:** embedding upserts never bumped `model_registry.updated_at`, so `FAISSCache.is_fresh()` could report a cache fresh indefinitely after new embeddings were added — fixed via `refresh_model_updated_at_timestamp()` called after every upsert path ([eb2bb3e](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/eb2bb3e))
+* **registry:** `import_bundle()` with `force=True` replaced model content without bumping `updated_at` ([eb2bb3e](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/eb2bb3e))
+* **registry:** timestamp precision switched from DB-side `func.now()` (whole-second on SQLite) to Python-side `datetime.now(timezone.utc)` to avoid staleness races within the same second ([eb2bb3e](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/eb2bb3e))
+* **cli:** `search` command defaulted `--model` to a hardcoded string instead of resolving against `cfg.embedding_model`; omitting `--model` now correctly falls back to the configured model ([5f3cf4c](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/5f3cf4c))
+* **cli:** missing `~/.config/omop/config.toml` on a fresh install raised a bare `FileNotFoundError`; now raises an actionable message pointing at `omop-config configure omop-emb` ([5f3cf4c](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/5f3cf4c))
+* **backend:** sqlite-vec backend silently fell back to an ephemeral `:memory:` database when `sqlite_path` was not configured; now raises a `RuntimeError` with setup guidance (explicit `:memory:` still accepted when set intentionally) ([5f3cf4c](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/5f3cf4c))
+* **backend:** `EmbeddingConceptFilter.limit` was applied in the pgvector KNN path but silently ignored in the sqlite-vec path ([5f3cf4c](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/5f3cf4c))
+* **backends:** unified column definitions into a single shared spec; rebuilt sqlite-vec queries on SQLAlchemy Core objects, removing hardcoded SQL strings ([ed9d7fc](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/ed9d7fc))
+
+
+### Performance Improvements
+
+* **faiss:** FAISS index cache now uses LRU eviction (`max_cached_indices=2`) so long-lived instances cannot accumulate unbounded memory across metric/index combinations ([9713820](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/9713820))
+* **faiss:** concept filter ID sets cached per `EmbeddingConceptFilter` with LRU eviction (`max_cached_filters=4`), avoiding repeated full-table scans on repeated searches with the same filter ([5f3cf4c](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/5f3cf4c))
+
+
 ## [1.0.2](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v1.0.1...v1.0.2) (2026-06-03)
 
 

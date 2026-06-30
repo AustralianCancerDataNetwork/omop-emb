@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v1.0.2...v1.1.0) (2026-06-30)
+
+
+### Features
+
+* release 1.1.0 ([88753ba](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/88753baf7875c847f40dfb06f5338fddd1b7ca4b))
+
 ## [1.1.0](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v1.0.2...v1.1.0) (2026-06-30)
 
 

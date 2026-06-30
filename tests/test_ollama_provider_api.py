@@ -34,7 +34,9 @@ class TestOllamaProviderGetEmbeddingDim:
     def test_happy_path_returns_correct_dimension(self):
         json_resp = {"model_info": {"llama.embedding_length": 768}}
         with _patch_post(json_resp):
-            dim = OllamaProvider().get_embedding_dim("nomic-embed-text:v1.5", OLLAMA_V1_BASE)
+            dim = OllamaProvider().get_embedding_dim(
+                "nomic-embed-text:v1.5", OLLAMA_V1_BASE
+            )
         assert dim == 768
 
     def test_returns_int_not_float(self):
@@ -45,7 +47,9 @@ class TestOllamaProviderGetEmbeddingDim:
 
     def test_strips_v1_suffix_from_url_before_calling_api_show(self):
         """POST /api/show is on the Ollama base URL, not /v1."""
-        with patch("omop_emb.embeddings.embedding_providers.requests.post") as mock_post:
+        with patch(
+            "omop_emb.embeddings.embedding_providers.requests.post"
+        ) as mock_post:
             mock_post.return_value = Mock(
                 json=Mock(return_value={"model_info": {"x.embedding_length": 512}})
             )
@@ -55,7 +59,9 @@ class TestOllamaProviderGetEmbeddingDim:
         assert called_url.endswith("/api/show")
 
     def test_model_name_sent_in_request_body(self):
-        with patch("omop_emb.embeddings.embedding_providers.requests.post") as mock_post:
+        with patch(
+            "omop_emb.embeddings.embedding_providers.requests.post"
+        ) as mock_post:
             mock_post.return_value = Mock(
                 json=Mock(return_value={"model_info": {"x.embedding_length": 128}})
             )
@@ -64,13 +70,19 @@ class TestOllamaProviderGetEmbeddingDim:
 
     def test_raises_when_model_info_absent(self):
         with _patch_post({}):
-            with pytest.raises(ValueError, match="Could not determine embedding dimension"):
+            with pytest.raises(
+                ValueError, match="Could not determine embedding dimension"
+            ):
                 OllamaProvider().get_embedding_dim("model:tag", OLLAMA_V1_BASE)
 
     def test_raises_when_no_embedding_length_key(self):
-        json_resp = {"model_info": {"llama.context_length": 4096, "llama.head_count": 32}}
+        json_resp = {
+            "model_info": {"llama.context_length": 4096, "llama.head_count": 32}
+        }
         with _patch_post(json_resp):
-            with pytest.raises(ValueError, match="Could not determine embedding dimension"):
+            with pytest.raises(
+                ValueError, match="Could not determine embedding dimension"
+            ):
                 OllamaProvider().get_embedding_dim("model:tag", OLLAMA_V1_BASE)
 
     def test_raises_when_multiple_embedding_length_keys(self):
@@ -100,7 +112,9 @@ class TestOllamaProviderGetEmbeddingDim:
     def test_works_without_v1_in_base_url(self):
         """A bare Ollama URL (no /v1 suffix) should still hit /api/show correctly."""
         bare_base = URL("http://localhost:11434")
-        with patch("omop_emb.embeddings.embedding_providers.requests.post") as mock_post:
+        with patch(
+            "omop_emb.embeddings.embedding_providers.requests.post"
+        ) as mock_post:
             mock_post.return_value = Mock(
                 json=Mock(return_value={"model_info": {"llama.embedding_length": 256}})
             )

@@ -40,11 +40,12 @@ backend = PGVectorEmbeddingBackend.from_db_url(db_url="postgresql+psycopg://user
 
 ```python
 from omop_emb import EmbeddingWriterInterface, EmbeddingClient
-from omop_emb.config import MetricType
+from omop_emb.config import MetricType, ProviderType
 
 embedding_client = EmbeddingClient(
     model="nomic-embed-text:v1.5",
     api_base="http://localhost:11434/v1",
+    provider_type=ProviderType.OLLAMA,
 )
 
 writer = EmbeddingWriterInterface(
@@ -154,10 +155,12 @@ results = reader.get_nearest_concepts(
 
 ```python
 from omop_emb import EmbeddingClient
+from omop_emb.config import ProviderType
 
 embedding_client = EmbeddingClient(
     model="nomic-embed-text:v1.5",
     api_base="http://localhost:11434/v1",
+    provider_type=ProviderType.OLLAMA,
 )
 
 results = reader.get_nearest_concepts_from_query_texts(
@@ -169,9 +172,10 @@ results = reader.get_nearest_concepts_from_query_texts(
 
 ### FAISS fast path
 
-Supply `faiss_cache_dir` to route searches through a pre-exported FAISS index
-instead of the primary backend SQL path.  The cache must have been exported
-first with `omop-emb maintenance export-faiss-cache`.  Requires `omop-emb[faiss-cpu]`.
+Supply `faiss_cache_dir` to route searches through a pre-built FAISS index
+instead of the primary backend SQL path.  The cache must have been built
+first with `omop-emb maintenance build-faiss-cache` (builds the FAISS index
+directly from the backend).  Requires `omop-emb[faiss-cpu]`.
 
 ```python
 reader = EmbeddingReaderInterface(
@@ -224,23 +228,18 @@ model name at construction time and exposes `canonical_model_name` as the stable
 identifier used in the registry.
 
 ```python
-from omop_emb import EmbeddingClient, OllamaProvider
+from omop_emb import EmbeddingClient
+from omop_emb.config import ProviderType
 
-# Ollama — provider inferred from URL
+# Ollama — provider specified explicitly (works with any hostname or IP)
 client = EmbeddingClient(
     model="nomic-embed-text:v1.5",
-    api_base="http://ollama:11434/v1",
-)
-
-# Explicit provider (custom or future backends)
-client = EmbeddingClient(
-    model="nomic-embed-text:v1.5",
-    api_base="http://my-custom-host/v1",
-    provider=OllamaProvider(),
+    api_base="http://host.docker.internal:11434/v1",
+    provider_type=ProviderType.OLLAMA,
 )
 
 print(client.canonical_model_name)  # "nomic-embed-text:v1.5"
-print(client.embedding_dim)         # auto-discovered based on provider
+print(client.embedding_dim)         # auto-discovered via Ollama /api/show
 ```
 
 ---
@@ -334,4 +333,4 @@ methods are available on the writer too.
 3. **Use `embedding_client.canonical_model_name`** when constructing a matching reader — it is guaranteed to be canonical.
 4. **Always register with `FlatIndexConfig`** first. Run `rebuild_index` or `omop-emb maintenance rebuild-index` after ingestion to build HNSW.
 5. **CDM enrichment is optional** — omit `omop_cdm_engine` when `concept_name` is not needed to avoid the CDM round-trip.
-6. **FAISS is a read-acceleration sidecar** — export with `omop-emb maintenance export-faiss-cache` and supply `faiss_cache_dir` to `EmbeddingReaderInterface` for faster approximate search.
+6. **FAISS is a read-acceleration sidecar, never the source of truth** — build it directly from the backend with `omop-emb maintenance build-faiss-cache` and supply `faiss_cache_dir` to `EmbeddingReaderInterface` for faster approximate search.

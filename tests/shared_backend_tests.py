@@ -45,7 +45,9 @@ class SharedBackendTests:
             dimensions=EMBEDDING_DIM,
         )
 
-    def _upsert_all(self, backend: EmbeddingBackend, metric_type: MetricType = MetricType.L2):
+    def _upsert_all(
+        self, backend: EmbeddingBackend, metric_type: MetricType = MetricType.L2
+    ):
         self._register(backend)
         backend.upsert_embeddings(
             model_name=MODEL_NAME,
@@ -79,16 +81,26 @@ class SharedBackendTests:
             )
 
     def test_is_model_registered(self, backend: EmbeddingBackend):
-        assert not backend.is_model_registered(model_name=MODEL_NAME), "Model should not be registered before registration"
+        assert not backend.is_model_registered(model_name=MODEL_NAME), (
+            "Model should not be registered before registration"
+        )
         self._register(backend)
-        assert backend.is_model_registered(model_name=MODEL_NAME), "Model should be registered after registration"
+        assert backend.is_model_registered(model_name=MODEL_NAME), (
+            "Model should be registered after registration"
+        )
 
     def test_get_registered_model(self, backend: EmbeddingBackend):
         self._register(backend)
         record = backend.get_registered_model(model_name=MODEL_NAME)
-        assert record is not None, "get_registered_model should return a record after registration"
-        assert record.model_name == MODEL_NAME, f"Returned record should have the correct model_name. Got: {record.model_name}. Expected: {MODEL_NAME}"
-        assert record.dimensions == EMBEDDING_DIM, f"Returned record should have the correct dimensions. Got: {record.dimensions}. Expected: {EMBEDDING_DIM}"
+        assert record is not None, (
+            "get_registered_model should return a record after registration"
+        )
+        assert record.model_name == MODEL_NAME, (
+            f"Returned record should have the correct model_name. Got: {record.model_name}. Expected: {MODEL_NAME}"
+        )
+        assert record.dimensions == EMBEDDING_DIM, (
+            f"Returned record should have the correct dimensions. Got: {record.dimensions}. Expected: {EMBEDDING_DIM}"
+        )
 
     def test_get_registered_models_returns_all(self, backend: EmbeddingBackend):
         backend.register_model(
@@ -97,7 +109,9 @@ class SharedBackendTests:
             index_config=FlatIndexConfig(),
             dimensions=EMBEDDING_DIM,
         )
-        records = backend.get_registered_models(model_name=MODEL_NAME, provider_type=PROVIDER_TYPE)
+        records = backend.get_registered_models(
+            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE
+        )
         assert len(records) >= 1
 
     # ------------------------------------------------------------------
@@ -277,16 +291,53 @@ class SharedBackendTests:
             k=len(CONCEPT_RECORDS),
         )
         expected = {
-            HYPERTENSION_ID: 1.0 / (1.0 + 9.0),   # dist=9
-            DIABETES_ID: 1.0 / (1.0 + 1.0),        # dist=1
-            ASPIRIN_ID: 1.0 / (1.0 + 11.0),        # dist=11
-            NON_STANDARD_ID: 1.0 / (1.0 + 21.0),   # dist=21
+            HYPERTENSION_ID: 1.0 / (1.0 + 9.0),  # dist=9
+            DIABETES_ID: 1.0 / (1.0 + 1.0),  # dist=1
+            ASPIRIN_ID: 1.0 / (1.0 + 11.0),  # dist=11
+            NON_STANDARD_ID: 1.0 / (1.0 + 21.0),  # dist=21
         }
         for match in results[0]:
-            assert np.isclose(match.similarity, expected[match.concept_id], rtol=1e-4), (
+            assert np.isclose(
+                match.similarity, expected[match.concept_id], rtol=1e-4
+            ), (
                 f"concept_id={match.concept_id}: got {match.similarity}, "
                 f"expected {expected[match.concept_id]}"
             )
+
+    # ------------------------------------------------------------------
+    # get_concept_ids_matching_filter (FAISS pre-filter source)
+    # ------------------------------------------------------------------
+
+    def test_get_concept_ids_matching_filter_domain(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
+        matching = backend.get_concept_ids_matching_filter(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            concept_filter=EmbeddingConceptFilter(domains=("Drug",)),
+        )
+        assert matching == {ASPIRIN_ID, NON_STANDARD_ID}
+
+    def test_get_concept_ids_matching_filter_require_standard(
+        self, backend: EmbeddingBackend
+    ):
+        self._upsert_all(backend)
+        matching = backend.get_concept_ids_matching_filter(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            concept_filter=EmbeddingConceptFilter(require_standard=True),
+        )
+        assert matching == {HYPERTENSION_ID, DIABETES_ID, ASPIRIN_ID}
+
+    def test_get_concept_ids_matching_filter_empty_returns_all(
+        self, backend: EmbeddingBackend
+    ):
+        self._upsert_all(backend)
+        matching = backend.get_concept_ids_matching_filter(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            concept_filter=EmbeddingConceptFilter(),
+        )
+        assert matching == {r.concept_id for r in CONCEPT_RECORDS}
 
     # ------------------------------------------------------------------
     # Delete model

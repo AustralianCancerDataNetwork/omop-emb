@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Mapping, Optional, Sequence, Tuple, Type
+from datetime import datetime
+from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
 from sqlalchemy import Engine, select, text, create_engine
 
 try:
-    from pgvector.sqlalchemy import Vector
+    from pgvector.sqlalchemy import Vector  # noqa: F401
 except ImportError as _e:
     raise ImportError(
         "pgvector is not installed. Install it with: pip install omop-emb[pgvector]"
@@ -25,18 +26,20 @@ from omop_emb.backends.pgvector.pg_index_manager import (
     PGVectorHNSWIndexManager,
 )
 from omop_emb.backends.embedding_table import (
-    create_pg_embedding_table, 
-    load_pg_embedding_table
+    EMBEDDING_COLUMN_NAME,
+    PGEmbeddingTable,
 )
 from omop_emb.backends.pgvector.pg_sql import (
-    EMBEDDING_COLUMN_NAME,
+    create_pg_embedding_table,
     drop_pg_embedding_table,
-    get_distance,
     q_all_concept_ids,
+    q_concept_filter_metadata,
+    q_concept_ids_matching_filter,
     q_nearest_concept_ids,
     q_upsert_embeddings,
     q_create_extension_pgvector,
     table_exists,
+    pg_embedding_table_descriptor,
 )
 from omop_emb.backends.db_utils import setup_concept_filter_temps, temp_filter_table
 from omop_emb.model_registry import EmbeddingModelRecord
@@ -44,7 +47,7 @@ from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,
     get_similarity_from_distance,
-    vector_column_type_for_dimensions
+    vector_column_type_for_dimensions,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,7 +58,7 @@ _INDEX_MANAGER_FOR_CONFIG: dict[type[IndexConfig], type[PGVectorBaseIndexManager
 }
 
 
-class PGVectorEmbeddingBackend(EmbeddingBackend):
+class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     """pgvector-backed embedding backend.
 
     Both embedding tables and the model registry live in the same Postgres
@@ -118,11 +121,17 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
     def _storage_table_exists(self, model_record: EmbeddingModelRecord) -> bool:
         return table_exists(self.emb_engine, model_record.storage_identifier)
 
-    def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> type:
-        return load_pg_embedding_table(model_record=model_record)
+    def _get_storage_table_descriptor(
+        self, model_record: EmbeddingModelRecord
+    ) -> type[PGEmbeddingTable]:
+        return pg_embedding_table_descriptor(model_record=model_record)
 
-    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> type:
-        return create_pg_embedding_table(engine=self.emb_engine, model_record=model_record)
+    def _create_storage_table(
+        self, model_record: EmbeddingModelRecord
+    ) -> type[PGEmbeddingTable]:
+        return create_pg_embedding_table(
+            engine=self.emb_engine, model_record=model_record
+        )
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
         self._index_managers.pop(model_record.storage_identifier, None)
@@ -139,7 +148,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         dimensions: int,
         provider_type: ProviderType,
         index_config: Optional[IndexConfig] = None,
-        metadata=None,
+        metadata: Optional[Mapping[str, object]] = None,
+        registered_at: Optional[datetime] = None,
     ) -> EmbeddingModelRecord:
         """Register a model, validating pgvector dimensionality limits.
 
@@ -155,6 +165,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
             Defaults to ``FlatIndexConfig()`` when not provided.
         metadata : Mapping[str, object], optional
             Free-form operational metadata.
+        registered_at : datetime, optional
+            Backdate ``created_at``/``updated_at`` to this timestamp instead
+            of "now". Only applies to a brand-new registration.
 
         Returns
         -------
@@ -172,6 +185,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
             provider_type=provider_type,
             index_config=index_config,
             metadata=metadata,
+            registered_at=registered_at,
         )
 
     # ------------------------------------------------------------------
@@ -197,7 +211,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         manager.rebuild_index(metric)
         self._index_managers[model_record.storage_identifier] = manager
 
-    def get_index_manager(self, storage_identifier: str) -> Optional[PGVectorBaseIndexManager]:
+    def get_index_manager(
+        self, storage_identifier: str
+    ) -> Optional[PGVectorBaseIndexManager]:
         """Return the active index manager for a table, or ``None`` if not set.
 
         Parameters
@@ -256,11 +272,16 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory.begin() as session:
             with temp_filter_table(
-                session, list(concept_ids), "BIGINT", table_name="_tmp_emb_cids", dialect=self.emb_engine.dialect.name
+                session,
+                list(concept_ids),
+                "BIGINT",
+                table_name="_tmp_emb_cids",
+                dialect=self.emb_engine.dialect.name,
             ) as temp_table_name:
                 rows = session.execute(
-                    select(table.concept_id, table.embedding)
-                    .where(text(f'concept_id IN (SELECT id FROM "{temp_table_name}")'))
+                    select(table.concept_id, getattr(table, EMBEDDING_COLUMN_NAME)).where(
+                        text(f'concept_id IN (SELECT id FROM "{temp_table_name}")')
+                    )
                 ).all()
         result = {int(row[0]): list(row[1]) for row in rows}
         missing = set(concept_ids) - set(result.keys())
@@ -302,7 +323,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
             )
             ann_rows = session.execute(stmt).all()
 
-        results: list[list[NearestConceptMatch]] = [[] for _ in range(len(query_embeddings))]
+        results: list[list[NearestConceptMatch]] = [
+            [] for _ in range(len(query_embeddings))
+        ]
         for row in ann_rows:
             similarity = get_similarity_from_distance(float(row.distance), metric_type)
             results[row.q_id].append(
@@ -322,9 +345,13 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
     def _has_any_embeddings_impl(self, *, model_record: EmbeddingModelRecord) -> bool:
         table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory() as session:
-            return session.execute(select(table.concept_id).limit(1)).first() is not None
+            return (
+                session.execute(select(table.concept_id).limit(1)).first() is not None
+            )
 
-    def _get_all_stored_concept_ids_impl(self, *, model_record: EmbeddingModelRecord) -> set[int]:
+    def _get_all_stored_concept_ids_impl(
+        self, *, model_record: EmbeddingModelRecord
+    ) -> set[int]:
         table = self._table_cache[model_record.storage_identifier]
         with self.emb_session_factory() as session:
             return {row[0] for row in session.execute(q_all_concept_ids(table))}
@@ -338,19 +365,10 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
         if not concept_ids:
             return {}
         table = self._table_cache[model_record.storage_identifier]
+        concept_filter = EmbeddingConceptFilter(concept_ids=tuple(concept_ids))
         with self.emb_session_factory.begin() as session:
-            with temp_filter_table(
-                session, list(concept_ids), "BIGINT", table_name="_tmp_cfm_cids", dialect=self.emb_engine.dialect.name
-            ) as temp_table_name:
-                rows = session.execute(
-                    select(
-                        table.concept_id,
-                        table.domain_id,
-                        table.vocabulary_id,
-                        table.is_standard,
-                        table.is_valid,
-                    ).where(text(f'concept_id IN (SELECT id FROM "{temp_table_name}")'))
-                ).all()
+            setup_concept_filter_temps(session, concept_filter, "postgresql")
+            rows = session.execute(q_concept_filter_metadata(table, concept_filter)).all()
         return {
             int(row[0]): {
                 "domain_id": row[1] or "",
@@ -360,3 +378,17 @@ class PGVectorEmbeddingBackend(EmbeddingBackend):
             }
             for row in rows
         }
+
+    def _get_concept_ids_matching_filter_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_filter: EmbeddingConceptFilter,
+    ) -> set[int]:
+        if concept_filter.is_empty():
+            return self._get_all_stored_concept_ids_impl(model_record=model_record)
+        table = self._table_cache[model_record.storage_identifier]
+        with self.emb_session_factory.begin() as session:
+            setup_concept_filter_temps(session, concept_filter, "postgresql")
+            rows = session.execute(q_concept_ids_matching_filter(table, concept_filter)).all()
+        return {int(row[0]) for row in rows}

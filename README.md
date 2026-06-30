@@ -27,14 +27,14 @@ export OMOP_EMB_SQLITE_PATH=/data/omop_emb.db
 export OMOP_CDM_DB_URL=postgresql+psycopg://user:pass@host:5432/omop_cdm
 
 omop-emb embeddings add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
-    --model nomic-embed-text:v1.5
+    --provider ollama --model nomic-embed-text:v1.5
 ```
 
 **Search:**
 
 ```bash
 omop-emb embeddings search --api-base http://localhost:11434/v1 --api-key ollama \
-    --model nomic-embed-text:v1.5 \
+    --provider ollama --model nomic-embed-text:v1.5 \
     --query "hypertension" --query "type 2 diabetes" \
     --standard-only --domain Condition --k 5
 ```
@@ -49,7 +49,7 @@ export OMOP_EMB_DB_PASSWORD=omop_emb
 export OMOP_EMB_DB_NAME=omop_emb
 
 omop-emb embeddings add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
-    --model nomic-embed-text:v1.5
+    --provider ollama --model nomic-embed-text:v1.5
 omop-emb maintenance rebuild-index --model nomic-embed-text:v1.5 --index-type hnsw --metric-type cosine
 ```
 
@@ -87,10 +87,58 @@ Full documentation: <https://AustralianCancerDataNetwork.github.io/omop-emb>
 - [x] pgvector backend (PostgreSQL)
 - [x] HNSW index support for pgvector
 - [x] FAISS sidecar (approximate nearest-neighbour read acceleration)
-- [x] FAISS export / import CLI (`export-faiss-cache`, `import-faiss-cache`)
+- [x] Embedding bundle export / import CLI (`maintenance export`, `maintenance import`, `maintenance build-faiss-cache`)
 - [x] In-DB concept filtering (domain, vocabulary, standard status, active status)
 - [x] Transparent FAISS fast path in `EmbeddingReaderInterface`
 - [x] Extensive backend and registry testing
 - [ ] FAISS GPU support
 - [ ] [`pgvectorscale`](https://github.com/timescale/pgvectorscale) support
 - [ ] Vector quantisation for more efficient storage
+
+---
+
+## Configuration via oa-configurator
+
+The database connection can also be configured via
+[oa-configurator](https://github.com/AustralianCancerDataNetwork/oa-configurator),
+which stores settings in `~/.config/omop/config.toml` and eliminates the need
+for environment variables at runtime:
+
+```bash
+omop-config init
+omop-config configure omop_alchemy   # CDM database (required for ingestion)
+omop-config configure omop_emb       # embedding database
+```
+
+`omop-config configure omop_emb` is required for local-dev setup before running
+the pgvector-backed test suite (CI provisions this automatically). Without it,
+those tests skip with "Resource 'test_emb_db' not configured" rather than
+failing.
+
+See [oa-configurator Setup](docs/getting-started/configuration.md) for details.
+
+---
+
+## Docker Compose
+
+The included `docker-compose.yaml` provides both a CDM PostgreSQL database and a
+pgvector embedding database, plus a Python container with all optional backends
+pre-installed (`[pgvector,faiss-cpu]`). Default credentials work out of the box:
+
+```bash
+docker compose up
+```
+
+Include Ollama by adding the `standalone` profile:
+
+```bash
+docker compose --profile standalone up
+```
+
+The `python-emb` service runs `omop-config configure` at startup. To override
+credentials:
+
+```bash
+cp .env.example .env
+docker compose up
+```

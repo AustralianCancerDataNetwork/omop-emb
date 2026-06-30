@@ -7,6 +7,7 @@ The :exc:`ImportError` raised when pgvector is absent originates in
 re-wrapped here so that both direct and package-level imports surface the
 same message.
 """
+
 from omop_emb.backends.pgvector.pg_backend import PGVectorEmbeddingBackend
 from omop_emb.backends.pgvector.pg_index_manager import (
     PGVectorFlatIndexManager,

@@ -1,15 +1,90 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Engine, Integer, String
-from sqlalchemy.orm import DeclarativeBase, mapped_column
+from dataclasses import dataclass, fields, is_dataclass
 
-from omop_emb.model_registry import EmbeddingModelRecord
+from sqlalchemy import Boolean, Integer, String
+from sqlalchemy.orm import DeclarativeBase, MappedColumn, mapped_column
+from sqlalchemy.sql.type_api import TypeEngine
+
+
+@dataclass(frozen=True)
+class EmbeddingColumnSpec:
+    """One concept-metadata column shared by every embedding table backend.
+
+    Parameters
+    ----------
+    name : str
+    type_ : type[TypeEngine]
+        SQLAlchemy Core type used to build sqlite-vec's ``Table``.
+    vec0_ddl : str
+        DDL fragment after the column name in ``CREATE VIRTUAL TABLE ... USING vec0(...)``.
+    """
+
+    name: str
+    type_: type[TypeEngine]
+    vec0_ddl: str
+
+
+CONCEPT_METADATA_COLUMNS: tuple[EmbeddingColumnSpec, ...] = (
+    EmbeddingColumnSpec("concept_id", Integer, "INTEGER PRIMARY KEY"),
+    EmbeddingColumnSpec("domain_id", String, "TEXT METADATA"),
+    EmbeddingColumnSpec("vocabulary_id", String, "TEXT METADATA"),
+    EmbeddingColumnSpec("is_standard", Boolean, "BOOLEAN METADATA"),
+    EmbeddingColumnSpec("is_valid", Boolean, "BOOLEAN METADATA DEFAULT 1"),
+)
+
+EMBEDDING_COLUMN_NAME = "embedding"
+
+
+def _check_columns_match_spec(cls: type) -> type:
+    """Class decorator: assert cls's declared columns match CONCEPT_METADATA_COLUMNS.
+
+    Works for both dataclasses (checked via ``fields()``) and SQLAlchemy
+    mapped classes (checked via their ``MappedColumn`` attributes).
+    """
+    if is_dataclass(cls):
+        declared = {f.name for f in fields(cls)}
+    else:
+        declared = {name for name, value in vars(cls).items() if isinstance(value, MappedColumn)}
+    expected = {c.name for c in CONCEPT_METADATA_COLUMNS}
+    assert declared == expected, (
+        f"{cls.__name__} columns {declared} do not match CONCEPT_METADATA_COLUMNS {expected}."
+    )
+    return cls
+
+
+@_check_columns_match_spec
+@dataclass(frozen=True)
+class ConceptEmbeddingRecord:
+    """Concept metadata for a single embedding upsert row.
+
+    Populated from the OMOP CDM by the caller (interface layer) before being
+    passed to the backend.
+
+    Attributes
+    ----------
+    concept_id : int
+        OMOP concept ID.
+    domain_id : str
+        OMOP domain (e.g. ``'Condition'``, ``'Drug'``).
+    vocabulary_id : str
+        Source vocabulary (e.g. ``'SNOMED'``, ``'RxNorm'``).
+    is_standard : bool
+        ``True`` if ``standard_concept`` is ``'S'`` or ``'C'``.
+    """
+
+    concept_id: int
+    domain_id: str
+    vocabulary_id: str
+    is_standard: bool
+    is_valid: bool = True
 
 
 class EmbeddingTableBase(DeclarativeBase):
     pass
 
 
+@_check_columns_match_spec
 class ConceptEmbeddingMixin:
     """Shared columns present in every embedding table across all backends.
 
@@ -17,8 +92,8 @@ class ConceptEmbeddingMixin:
     -----
     The ``embedding`` column is added by backend-specific subclasses because
     the column type differs (pgvector ``Vector(N)`` vs sqlite-vec
-    ``LargeBinary``). It is always named ``embedding`` so shared query
-    helpers can reference it uniformly.
+    ``LargeBinary``). It is always named :data:`EMBEDDING_COLUMN_NAME` so
+    shared query helpers can reference it uniformly.
 
     Attributes
     ----------
@@ -39,68 +114,15 @@ class ConceptEmbeddingMixin:
     is_valid = mapped_column(Boolean, nullable=False, server_default="true")
 
 
-def _build_pg_embedding_cls(model_record: EmbeddingModelRecord) -> type:
-    """Build the SQLAlchemy ORM class for a pgvector embedding table."""
-    from omop_emb.utils.embedding_utils import VectorColumnType, vector_column_type_for_dimensions
-    from pgvector.sqlalchemy import VECTOR, HALFVEC  # optional dependency
+class PGEmbeddingTable(ConceptEmbeddingMixin, EmbeddingTableBase):
+    """Abstract base for pgvector embedding tables.
 
-    tablename = model_record.storage_identifier
-    dimensions = model_record.dimensions
-    col_type = vector_column_type_for_dimensions(dimensions)
-    emb_col = mapped_column(
-        HALFVEC(dimensions) if col_type == VectorColumnType.HALFVEC else VECTOR(dimensions),
-        nullable=False,
-        index=False,
-    )
-    return type(
-        f"PGEmbedding_{tablename}",
-        (ConceptEmbeddingMixin, EmbeddingTableBase),
-        {
-            "__tablename__": tablename,
-            "__table_args__": {"extend_existing": True},
-            "__module__": __name__,
-            "embedding": emb_col,
-        },
-    )
-
-
-def load_pg_embedding_table(model_record: EmbeddingModelRecord) -> type:
-    """Return an ORM class for an existing pgvector embedding table without DDL.
-
-    Parameters
-    ----------
-    model_record : EmbeddingModelRecord
-
-    Returns
-    -------
-    type
-        SQLAlchemy ORM class ready for queries. No ``CREATE TABLE`` is issued.
+    Concrete per-model subclasses come from
+    :func:`~omop_emb.backends.pgvector.pg_sql.pg_embedding_table_descriptor`,
+    which adds the ``embedding`` column (type depends on dimensionality, so
+    it can't be declared statically here -- access it via
+    ``getattr(table, EMBEDDING_COLUMN_NAME)``).
     """
-    return _build_pg_embedding_cls(model_record)
 
-
-def create_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) -> type:
-    """Create a pgvector embedding table and return its ORM class.
-
-    Parameters
-    ----------
-    engine : Engine
-        SQLAlchemy engine for the pgvector database.
-    model_record : EmbeddingModelRecord
-
-    Returns
-    -------
-    type
-        SQLAlchemy ORM class mapped to the newly created table.
-
-    Notes
-    -----
-    Uses ``halfvec(N)`` for dimensions greater than 2 000 and ``vector(N)``
-    otherwise. Caching is handled by ``_ensure_storage_table`` in the backend
-    base class; this function always issues DDL.
-    """
-    table_cls = _build_pg_embedding_cls(model_record)
-    EmbeddingTableBase.metadata.create_all(engine, tables=[table_cls.__table__])  # type: ignore[arg-type]
-    return table_cls
-
+    __abstract__ = True
 

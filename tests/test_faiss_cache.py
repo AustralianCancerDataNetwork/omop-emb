@@ -1,0 +1,584 @@
+"""Integration tests for FAISSCache — distance conversion and caching correctness.
+
+All tests are self-contained: they build a temporary FAISS index from an
+in-memory SQLiteVec backend and assert expected similarity scores.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+import faiss
+from omop_emb.backends.base_backend import ConceptEmbeddingRecord
+from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
+from omop_emb.backends.sqlitevec import (
+    SQLiteVecEmbeddingBackend,
+    create_sqlitevec_engine,
+)
+from omop_emb.config import MetricType, ProviderType
+from omop_emb.storage import embedding_bundle
+from omop_emb.storage.faiss.faiss_cache import FAISSCache
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+
+pytest.importorskip("faiss", reason="faiss-cpu not installed")
+
+# ---------------------------------------------------------------------------
+# Shared test data
+# ---------------------------------------------------------------------------
+
+_MODEL = "test-faiss-model:v1"
+_PROVIDER = ProviderType.OLLAMA
+
+# 2-D unit vectors — exact cosine inner products without floating-point error.
+#   ID 1: [1, 0]   aligned with query → IP = 1  → cosine_dist = 0  → sim = 1.0
+#   ID 2: [0, 1]   orthogonal         → IP = 0  → cosine_dist = 1  → sim = 0.5
+#   ID 3: [-1, 0]  opposite           → IP = -1 → cosine_dist = 2  → sim = 0.0
+_COSINE_DIM = 2
+_COSINE_IDS = [1, 2, 3]
+_COSINE_VECS = np.array([[1, 0], [0, 1], [-1, 0]], dtype=np.float32)
+_COSINE_QUERY = np.array([[1, 0]], dtype=np.float32)
+_COSINE_EXPECTED = {1: 1.0, 2: 0.5, 3: 0.0}
+
+_COSINE_RECORDS = [
+    ConceptEmbeddingRecord(
+        concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True
+    )
+    for i in _COSINE_IDS
+]
+
+# 2-D L2 vectors — true distances are 0, 1, 2, 4 from the origin query.
+#   ID 1: [0, 0]  d=0  → sim = 1/(1+0) = 1.0
+#   ID 2: [1, 0]  d=1  → sim = 1/(1+1) = 0.5
+#   ID 3: [2, 0]  d=2  → sim = 1/(1+2) ≈ 0.333
+#   ID 4: [4, 0]  d=4  → sim = 1/(1+4) = 0.2
+_L2_DIM = 2
+_L2_IDS = [1, 2, 3, 4]
+_L2_VECS = np.array([[0, 0], [1, 0], [2, 0], [4, 0]], dtype=np.float32)
+_L2_QUERY = np.array([[0, 0]], dtype=np.float32)
+_L2_EXPECTED = {1: 1.0, 2: 0.5, 3: 1 / 3, 4: 0.2}
+
+_L2_RECORDS = [
+    ConceptEmbeddingRecord(
+        concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True
+    )
+    for i in _L2_IDS
+]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_svec_backend(dim: int) -> SQLiteVecEmbeddingBackend:
+    engine = create_sqlitevec_engine(":memory:")
+    return SQLiteVecEmbeddingBackend(emb_engine=engine)
+
+
+def _populate_backend(
+    backend: SQLiteVecEmbeddingBackend,
+    *,
+    dim: int,
+    records: list[ConceptEmbeddingRecord],
+    vecs: np.ndarray,
+    metric_type: MetricType,
+) -> None:
+    backend.register_model(
+        model_name=_MODEL,
+        provider_type=_PROVIDER,
+        index_config=FlatIndexConfig(),
+        dimensions=dim,
+    )
+    backend.upsert_embeddings(
+        model_name=_MODEL,
+        metric_type=metric_type,
+        records=records,
+        embeddings=vecs,
+    )
+
+
+def _build_faiss(
+    tmp_path,
+    backend: SQLiteVecEmbeddingBackend,
+    metric_type: MetricType,
+    index_config=None,
+) -> FAISSCache:
+    if index_config is None:
+        index_config = FlatIndexConfig()
+    cache = FAISSCache(model_name=_MODEL, cache_dir=tmp_path / "faiss_cache")
+    cache.build_from_backend(backend, metric_type=metric_type, index_config=index_config)
+    return cache
+
+
+# ---------------------------------------------------------------------------
+# COSINE metric correctness
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestCosineCorrectness:
+    """FAISS COSINE path: inner product → cosine distance → similarity."""
+
+    @pytest.fixture
+    def faiss_cosine(self, tmp_path) -> FAISSCache:
+        backend = _make_svec_backend(_COSINE_DIM)
+        _populate_backend(
+            backend,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.COSINE,
+        )
+        return _build_faiss(tmp_path, backend, MetricType.COSINE)
+
+    def test_identical_vectors_score_one(self, faiss_cosine: FAISSCache):
+        results = faiss_cosine.search(
+            _COSINE_QUERY,
+            k=3,
+            metric_type=MetricType.COSINE,
+            index_config=FlatIndexConfig(),
+        )
+        by_id = {r.concept_id: r.similarity for r in results[0]}
+        assert by_id[1] == pytest.approx(1.0, abs=1e-5)
+
+    def test_orthogonal_vectors_score_half(self, faiss_cosine: FAISSCache):
+        results = faiss_cosine.search(
+            _COSINE_QUERY,
+            k=3,
+            metric_type=MetricType.COSINE,
+            index_config=FlatIndexConfig(),
+        )
+        by_id = {r.concept_id: r.similarity for r in results[0]}
+        assert by_id[2] == pytest.approx(0.5, abs=1e-5)
+
+    def test_opposite_vectors_score_zero(self, faiss_cosine: FAISSCache):
+        results = faiss_cosine.search(
+            _COSINE_QUERY,
+            k=3,
+            metric_type=MetricType.COSINE,
+            index_config=FlatIndexConfig(),
+        )
+        by_id = {r.concept_id: r.similarity for r in results[0]}
+        assert by_id[3] == pytest.approx(0.0, abs=1e-5)
+
+    def test_ranking_order(self, faiss_cosine: FAISSCache):
+        """Most-similar concept returned first."""
+        results = faiss_cosine.search(
+            _COSINE_QUERY,
+            k=3,
+            metric_type=MetricType.COSINE,
+            index_config=FlatIndexConfig(),
+        )
+        ids_in_order = [r.concept_id for r in results[0]]
+        assert ids_in_order == [1, 2, 3]
+
+
+# ---------------------------------------------------------------------------
+# L2 metric correctness
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestL2Correctness:
+    """FAISS L2 path: squared distance → sqrt → true L2 → similarity."""
+
+    @pytest.fixture
+    def faiss_l2(self, tmp_path) -> FAISSCache:
+        backend = _make_svec_backend(_L2_DIM)
+        _populate_backend(
+            backend,
+            dim=_L2_DIM,
+            records=_L2_RECORDS,
+            vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
+        return _build_faiss(tmp_path, backend, MetricType.L2)
+
+    @pytest.mark.parametrize("concept_id,expected_sim", list(_L2_EXPECTED.items()))
+    def test_l2_similarity_values(
+        self, faiss_l2: FAISSCache, concept_id: int, expected_sim: float
+    ):
+        results = faiss_l2.search(
+            _L2_QUERY, k=4, metric_type=MetricType.L2, index_config=FlatIndexConfig()
+        )
+        by_id = {r.concept_id: r.similarity for r in results[0]}
+        assert by_id[concept_id] == pytest.approx(expected_sim, abs=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Cross-backend parity: FAISS vs SQLiteVec
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestCrossBackendParity:
+    """FAISS and SQLiteVec must return the same similarity scores."""
+
+    def _svec_search(
+        self,
+        backend: SQLiteVecEmbeddingBackend,
+        query: np.ndarray,
+        k: int,
+        metric_type: MetricType,
+    ) -> dict[int, float]:
+        results = backend.get_nearest_concepts(
+            model_name=_MODEL,
+            query_embeddings=query,
+            k=k,
+            metric_type=metric_type,
+        )
+        return {r.concept_id: r.similarity for r in results[0]}
+
+    def test_cosine_parity(self, tmp_path):
+        backend = _make_svec_backend(_COSINE_DIM)
+        _populate_backend(
+            backend,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.COSINE,
+        )
+        cache = _build_faiss(tmp_path, backend, MetricType.COSINE)
+
+        svec = self._svec_search(
+            backend, _COSINE_QUERY, k=3, metric_type=MetricType.COSINE
+        )
+        faiss_results = cache.search(
+            _COSINE_QUERY,
+            k=3,
+            metric_type=MetricType.COSINE,
+            index_config=FlatIndexConfig(),
+        )
+        faiss_sims = {r.concept_id: r.similarity for r in faiss_results[0]}
+
+        for cid in _COSINE_IDS:
+            assert faiss_sims[cid] == pytest.approx(svec[cid], abs=1e-4), (
+                f"Concept {cid}: FAISS={faiss_sims[cid]:.6f} SQLiteVec={svec[cid]:.6f}"
+            )
+
+    def test_l2_parity(self, tmp_path):
+        backend = _make_svec_backend(_L2_DIM)
+        _populate_backend(
+            backend,
+            dim=_L2_DIM,
+            records=_L2_RECORDS,
+            vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
+        cache = _build_faiss(tmp_path, backend, MetricType.L2)
+
+        svec = self._svec_search(backend, _L2_QUERY, k=4, metric_type=MetricType.L2)
+        faiss_results = cache.search(
+            _L2_QUERY, k=4, metric_type=MetricType.L2, index_config=FlatIndexConfig()
+        )
+        faiss_sims = {r.concept_id: r.similarity for r in faiss_results[0]}
+
+        for cid in _L2_IDS:
+            assert faiss_sims[cid] == pytest.approx(svec[cid], abs=1e-4), (
+                f"Concept {cid}: FAISS={faiss_sims[cid]:.6f} SQLiteVec={svec[cid]:.6f}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Cache identity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestIndexCache:
+    """Dict-keyed cache: each (metric_type, index_config) gets its own slot."""
+
+    def test_cache_hit_returns_same_object(self, tmp_path):
+        backend = _make_svec_backend(_L2_DIM)
+        _populate_backend(
+            backend,
+            dim=_L2_DIM,
+            records=_L2_RECORDS,
+            vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
+        cache = _build_faiss(tmp_path, backend, MetricType.L2)
+
+        idx_a = cache._load_index(MetricType.L2, FlatIndexConfig())
+        idx_b = cache._load_index(MetricType.L2, FlatIndexConfig())
+        assert idx_a is idx_b
+
+    def test_alternating_metrics_both_stay_cached(self, tmp_path):
+        """Loading a second metric must not evict the first -- both should be
+        cache hits on subsequent loads, since each (metric, index_config) key
+        gets its own slot rather than sharing one single-entry cache."""
+        backend = _make_svec_backend(_COSINE_DIM)
+        _populate_backend(
+            backend,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.L2,
+        )
+        _populate_backend_metric(
+            backend,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.COSINE,
+        )
+
+        # The same raw vectors back both metrics -- build both FAISS indices
+        # straight from the backend (metric only matters to FAISS).
+        cache = FAISSCache(model_name=_MODEL, cache_dir=tmp_path / "faiss_cache")
+        cache.build_from_backend(
+            backend, metric_type=MetricType.L2, index_config=FlatIndexConfig()
+        )
+        cache.build_from_backend(
+            backend, metric_type=MetricType.COSINE, index_config=FlatIndexConfig()
+        )
+
+        idx_l2 = cache._load_index(MetricType.L2, FlatIndexConfig())
+        idx_cosine = cache._load_index(MetricType.COSINE, FlatIndexConfig())
+        idx_l2_reload = cache._load_index(MetricType.L2, FlatIndexConfig())
+        idx_cosine_reload = cache._load_index(MetricType.COSINE, FlatIndexConfig())
+
+        assert idx_l2 is not idx_cosine
+        # Both metrics are still cache hits after alternating between them --
+        # neither evicted the other.
+        assert idx_l2_reload is idx_l2
+        assert idx_cosine_reload is idx_cosine
+
+
+# ---------------------------------------------------------------------------
+# HNSW efSearch applied at load time
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestHNSWEfSearch:
+    """efSearch from HNSWIndexConfig is applied to the loaded index."""
+
+    def test_ef_search_applied(self, tmp_path):
+        backend = _make_svec_backend(_COSINE_DIM)
+        _populate_backend(
+            backend,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.COSINE,
+        )
+
+        index_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=32)
+        cache = _build_faiss(
+            tmp_path, backend, MetricType.COSINE, index_config=index_config
+        )
+
+        index = cache._load_index(MetricType.COSINE, index_config)
+        # IndexIDMap wraps the HNSW index; downcast to expose .hnsw
+        assert isinstance(index, faiss.IndexIDMap), "Expected IndexIDMap wrapper"
+        inner = faiss.downcast_index(index.index)
+        assert isinstance(inner, faiss.IndexHNSWFlat), "Expected IndexHNSWFlat inner index"
+        assert hasattr(inner, "hnsw"), "Expected an HNSW sub-index"
+        assert inner.hnsw.efSearch == 32
+
+    def test_ef_search_default_overridden(self, tmp_path):
+        """Index was built (and serialised) with FAISS default efSearch=16;
+        loading with ef_search=64 applies the new value."""
+        backend = _make_svec_backend(_COSINE_DIM)
+        _populate_backend(
+            backend,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.COSINE,
+        )
+
+        build_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=16)
+        cache = _build_faiss(
+            tmp_path, backend, MetricType.COSINE, index_config=build_config
+        )
+
+        load_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=64)
+        index = cache._load_index(MetricType.COSINE, load_config)
+        assert isinstance(index, faiss.IndexIDMap), "Expected IndexIDMap wrapper"
+        inner = faiss.downcast_index(index.index)
+        assert isinstance(inner, faiss.IndexHNSWFlat), "Expected IndexHNSWFlat inner index"
+        assert inner.hnsw.efSearch == 64
+
+
+@pytest.mark.unit
+class TestCrossMachineCacheReuse:
+    """A FAISS cache built on one backend, shipped alongside its export
+    bundle, must validate as fresh once the bundle is imported into a
+    different, freshly-registered backend (the motivating scenario for
+    backdating the registration timestamp in import_bundle())."""
+
+    def test_shipped_cache_is_fresh_after_import(self, tmp_path):
+        source = _make_svec_backend(_COSINE_DIM)
+        _populate_backend(
+            source,
+            dim=_COSINE_DIM,
+            records=_COSINE_RECORDS,
+            vecs=_COSINE_VECS,
+            metric_type=MetricType.COSINE,
+        )
+
+        _, bundle_path = embedding_bundle.export_bundle(
+            backend=source, model_name=_MODEL, output_dir=tmp_path
+        )
+
+        index_config = FlatIndexConfig()
+        cache = _build_faiss(tmp_path, source, MetricType.COSINE, index_config=index_config)
+
+        target = _make_svec_backend(_COSINE_DIM)
+        embedding_bundle.import_bundle(backend=target, h5_path=bundle_path)
+
+        target_record = target.get_registered_model(model_name=_MODEL)
+        assert target_record is not None
+        assert cache.is_fresh(target_record, MetricType.COSINE, index_config)
+
+
+# ---------------------------------------------------------------------------
+# Pre-filtering correctness (live backend query, no metadata.npz)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestConceptFilterPrefiltering:
+    """concept_filter must restrict the FAISS traversal itself (pre-filter),
+    not just narrow an unfiltered top-k after the fact (post-filter)."""
+
+    def test_selective_filter_returns_full_top_k(self, tmp_path):
+        """A filter matching only 1 of 5 vectors must still return that 1
+        match at k=1, even though it isn't the nearest neighbour overall.
+
+        A post-filter (rank top-k first, then drop non-matching) would
+        return zero results here, since the single matching vector is the
+        single *worst* match for this query.
+        """
+        backend = _make_svec_backend(2)
+        records = [
+            ConceptEmbeddingRecord(
+                concept_id=i, domain_id="Drug" if i == 5 else "Condition",
+                vocabulary_id="Test", is_standard=True,
+            )
+            for i in range(1, 6)
+        ]
+        # Query is [0, 0]; concept 5 ("Drug") is the farthest away.
+        vecs = np.array([[1, 0], [2, 0], [3, 0], [4, 0], [100, 0]], dtype=np.float32)
+        backend.register_model(
+            model_name=_MODEL, provider_type=_PROVIDER,
+            index_config=FlatIndexConfig(), dimensions=2,
+        )
+        backend.upsert_embeddings(
+            model_name=_MODEL, metric_type=MetricType.L2, records=records, embeddings=vecs,
+        )
+        cache = _build_faiss(tmp_path, backend, MetricType.L2)
+
+        query = np.array([[0, 0]], dtype=np.float32)
+        results = cache.search(
+            query,
+            k=1,
+            metric_type=MetricType.L2,
+            index_config=FlatIndexConfig(),
+            concept_filter=EmbeddingConceptFilter(domains=("Drug",)),
+            backend=backend,
+        )
+        returned_ids = {r.concept_id for r in results[0]}
+        assert returned_ids == {5}
+
+    def test_search_with_filter_requires_backend(self, tmp_path):
+        backend = _make_svec_backend(_L2_DIM)
+        _populate_backend(
+            backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
+        cache = _build_faiss(tmp_path, backend, MetricType.L2)
+
+        with pytest.raises(ValueError):
+            cache.search(
+                _L2_QUERY,
+                k=4,
+                metric_type=MetricType.L2,
+                index_config=FlatIndexConfig(),
+                concept_filter=EmbeddingConceptFilter(concept_ids=(1,)),
+            )
+
+
+# ---------------------------------------------------------------------------
+# metadata.npz removal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestNoMetadataNpz:
+    """build_from_backend() must no longer write a metadata.npz file."""
+
+    def test_build_does_not_write_metadata_npz(self, tmp_path):
+        backend = _make_svec_backend(_L2_DIM)
+        _populate_backend(
+            backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
+        cache = _build_faiss(tmp_path, backend, MetricType.L2)
+        assert not cache.metadata_path().exists()
+        assert list(cache.model_dir.glob("*.npz")) == []
+
+
+# ---------------------------------------------------------------------------
+# Staleness after upsert
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestStalenessAfterUpsert:
+    """A cache built before new embeddings are upserted must go stale."""
+
+    def test_is_fresh_false_after_later_upsert(self, tmp_path):
+        backend = _make_svec_backend(_L2_DIM)
+        _populate_backend(
+            backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
+        index_config = FlatIndexConfig()
+        cache = _build_faiss(tmp_path, backend, MetricType.L2, index_config=index_config)
+
+        record = backend.get_registered_model(model_name=_MODEL)
+        if record is None:
+            pytest.fail("Model not found after registration")
+        assert cache.is_fresh(record, MetricType.L2, index_config)
+
+        backend.upsert_embeddings(
+            model_name=_MODEL,
+            metric_type=MetricType.L2,
+            records=[
+                ConceptEmbeddingRecord(
+                    concept_id=99, domain_id="Test", vocabulary_id="Test", is_standard=True
+                )
+            ],
+            embeddings=np.array([[5, 0]], dtype=np.float32),
+        )
+        backend.refresh_model_updated_at_timestamp(model_name=_MODEL)
+        updated_record = backend.get_registered_model(model_name=_MODEL)
+        if updated_record is None:
+            pytest.fail("Model disappeared after upsert")
+        assert not cache.is_fresh(updated_record, MetricType.L2, index_config)
+
+
+# ---------------------------------------------------------------------------
+# Internal helper (not a test class)
+# ---------------------------------------------------------------------------
+
+
+def _populate_backend_metric(
+    backend: SQLiteVecEmbeddingBackend,
+    *,
+    dim: int,
+    records: list[ConceptEmbeddingRecord],
+    vecs: np.ndarray,
+    metric_type: MetricType,
+) -> None:
+    """Upsert embeddings for a model already registered in *backend*."""
+    backend.upsert_embeddings(
+        model_name=_MODEL,
+        metric_type=metric_type,
+        records=records,
+        embeddings=vecs,
+    )

@@ -1,32 +1,50 @@
 services:
+  omop-cdm-db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${OMOP_CDM_DB_USER:-omop}
+      POSTGRES_PASSWORD: ${OMOP_CDM_DB_PASSWORD:-omop}
+      POSTGRES_DB: ${OMOP_CDM_DB_NAME:-omop_cdm}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - cdm_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - omop-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${OMOP_CDM_DB_USER:-omop}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   omop-emb-db:
     image: pgvector/pgvector:pg18
     restart: always
     environment:
-      - POSTGRES_USER=${OMOP_EMB_DB_USER:-omop_emb}
-      - POSTGRES_PASSWORD=${OMOP_EMB_DB_PASSWORD:-omop_emb}
-      - POSTGRES_DB=${OMOP_EMB_DB_NAME:-omop_emb}
+      POSTGRES_USER: ${OMOP_EMB_DB_USER:-omop}
+      POSTGRES_PASSWORD: ${OMOP_EMB_DB_PASSWORD:-omop}
+      POSTGRES_DB: ${OMOP_EMB_DB_NAME:-omop_emb}
     ports:
       - "5433:5432"
     volumes:
-      - omop_emb_data:/var/lib/postgresql
+      - emb_data:/var/lib/postgresql
     command: >
       postgres
         -c shared_preload_libraries=vector
         -c maintenance_work_mem=512MB
         -c max_parallel_maintenance_workers=4
-        -c max_parallel_workers=8
-        -c checkpoint_completion_target=0.9
     networks:
       - omop-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omop_emb} -d ${POSTGRES_DB:-omop_emb}"]
+      test: ["CMD-SHELL", "pg_isready -U ${OMOP_EMB_DB_USER:-omop}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   ollama:
-    image: ollama/ollama:0.14.2
+    image: ollama/ollama:0.30.4
     profiles: ["standalone"]
     ports:
       - "11434:11434"
@@ -41,10 +59,46 @@ services:
       - omop-net
     stop_grace_period: 1m
 
+  python-spires:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      omop-cdm-db:
+        condition: service_healthy
+      omop-emb-db:
+        condition: service_healthy
+    volumes:
+      - ${HOME}/.config/omop:/root/.config/omop
+    networks:
+      - omop-net
+    command: >
+      bash -c "
+        omop-config configure omop_alchemy
+          --database cdm --dialect postgresql+psycopg
+          --host omop-cdm-db --port 5432
+          --user ${OMOP_CDM_DB_USER:-omop}
+          --password ${OMOP_CDM_DB_PASSWORD:-omop}
+          --database-name ${OMOP_CDM_DB_NAME:-omop_cdm}
+          --cdm-schema omop &&
+        omop-config configure omop_emb
+          --database emb --dialect postgresql+psycopg
+          --host omop-emb-db --port 5432
+          --user ${OMOP_EMB_DB_USER:-omop}
+          --password ${OMOP_EMB_DB_PASSWORD:-omop}
+          --database-name ${OMOP_EMB_DB_NAME:-omop_emb}
+          --api-base ${API_BASE:-http://ollama:11434/v1}
+          --provider-type ollama
+          --api-key ollama
+          --embedding-model ${OMOP_EMB_MODEL:-qwen3-embedding:0.6b} &&
+        omop-config configure orm_loader &&
+        sleep infinity
+      "
+
 networks:
   omop-net:
     name: omop-net
 
 volumes:
-  omop_emb_data:
+  cdm_data:
+  emb_data:
   ollama_data:

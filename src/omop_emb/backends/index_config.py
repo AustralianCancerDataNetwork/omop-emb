@@ -4,7 +4,7 @@ import inspect
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, fields, is_dataclass
 from enum import Enum
-from typing import Any, Callable, Mapping, Optional, Self, cast, get_type_hints
+from typing import Any, Callable, Optional, Self, cast, get_type_hints
 
 from omop_emb.config import IndexType, MetricType, parse_index_type
 
@@ -17,6 +17,7 @@ RESERVED_METADATA_KEYS: frozenset[str] = frozenset({})
 # ---------------------------------------------------------------------------
 # Abstract base
 # ---------------------------------------------------------------------------
+
 
 @dataclass(kw_only=True, frozen=True)
 class IndexConfig(ABC):
@@ -73,8 +74,9 @@ class IndexConfig(ABC):
         Parameters
         ----------
         **kwargs : Any
-            Keyword arguments matching the dataclass fields. Unknown keys are
-            discarded.
+            Keyword arguments matching the dataclass fields. Unknown keys and
+            explicit ``None`` values are discarded, so unset fields keep the
+            dataclass's own default instead of being overridden with ``None``.
 
         Returns
         -------
@@ -95,7 +97,9 @@ class IndexConfig(ABC):
             )
         known = {f.name for f in fields(cls)}
         factory = cast(Callable[..., Self], cls)
-        return factory(**{k: v for k, v in kwargs.items() if k in known})
+        return factory(
+            **{k: v for k, v in kwargs.items() if k in known and v is not None}
+        )
 
     @classmethod
     def from_dict(cls, config_dict: dict[str, Any]) -> Self:
@@ -142,7 +146,11 @@ class IndexConfig(ABC):
                 )
             value = config_dict[field.name]
             field_type = type_hints.get(field.name)
-            if value is not None and isinstance(field_type, type) and issubclass(field_type, Enum):
+            if (
+                value is not None
+                and isinstance(field_type, type)
+                and issubclass(field_type, Enum)
+            ):
                 try:
                     value = field_type(value)
                 except ValueError:
@@ -157,6 +165,7 @@ class IndexConfig(ABC):
 # ---------------------------------------------------------------------------
 # Concrete configs
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True, kw_only=True)
 class FlatIndexConfig(IndexConfig):
@@ -224,6 +233,7 @@ class HNSWIndexConfig(IndexConfig):
 # Factory helpers
 # ---------------------------------------------------------------------------
 
+
 def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexConfig:
     """Build an ``IndexConfig`` for a given index type from raw kwargs.
 
@@ -253,7 +263,9 @@ def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexC
     raise ValueError(f"No IndexConfig defined for index type {index_type!r}.")
 
 
-def index_config_from_orm_row(index_type: IndexType, config_dict: Optional[dict[str, Any]]) -> IndexConfig:
+def index_config_from_orm_row(
+    index_type: IndexType, config_dict: Optional[dict[str, Any]]
+) -> IndexConfig:
     """Reconstruct an ``IndexConfig`` from ORM column values.
 
     Parameters

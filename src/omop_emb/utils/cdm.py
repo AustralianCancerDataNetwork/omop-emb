@@ -1,4 +1,5 @@
 """OMOP CDM utilities. Since embeddings and OMOP CDM are separate, we have this helper utility in case we need to query the OMOP CDM."""
+
 from __future__ import annotations
 
 import logging
@@ -13,6 +14,7 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
+
 
 @contextmanager
 def cdm_session(cdm_engine: Engine) -> Generator[Session, None, None]:
@@ -34,7 +36,9 @@ def check_concept_cdm(cdm_engine: Engine) -> None:
     except DBAPIError as e:
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "no such table" in error_msg:
-            logger.error("Database schema is missing! Did you forget to run the ingestion CLI?")
+            logger.error(
+                "Database schema is missing! Did you forget to run the ingestion CLI?"
+            )
             raise RuntimeError("Database not initialized.") from e
         raise
 
@@ -112,32 +116,3 @@ def count_missing_concepts(
             if row.concept_id not in embedded_ids:
                 count += 1
     return count
-
-
-def fetch_cdm_concepts_for_ingestion(
-    concept_ids: set[int],
-    cdm_engine: Engine,
-    batch_size: int = 50_000,
-) -> dict[int, Row]:
-    """Return CDM rows needed to build ``ConceptEmbeddingRecord`` filter columns.
-
-    Sub-batches to avoid bind-parameter limits on large concept sets.
-    Fetches ``domain_id``, ``vocabulary_id``, ``standard_concept``, and
-    ``invalid_reason`` for each concept_id.
-    """
-    if not concept_ids:
-        return {}
-    id_list = list(concept_ids)
-    result: dict[int, Row] = {}
-    for start in range(0, len(id_list), batch_size):
-        chunk = id_list[start : start + batch_size]
-        query = select(
-            Concept.concept_id,
-            Concept.domain_id,
-            Concept.vocabulary_id,
-            Concept.standard_concept,
-            Concept.invalid_reason,
-        ).where(Concept.concept_id.in_(chunk))
-        with cdm_session(cdm_engine) as session:
-            result.update({row.concept_id: row for row in session.execute(query)})
-    return result

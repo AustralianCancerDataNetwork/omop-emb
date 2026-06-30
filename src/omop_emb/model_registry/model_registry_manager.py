@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Mapping, Optional
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from omop_emb.backends.index_config import (
     RESERVED_METADATA_KEYS,
-    IndexConfig, 
-    index_config_from_orm_row
+    IndexConfig,
+    index_config_from_orm_row,
 )
 from omop_emb.config import ProviderType
-from omop_emb.model_registry.model_registry_orm import ModelRegistry, ensure_registry_schema
+from omop_emb.model_registry.model_registry_orm import (
+    ModelRegistry,
+    ensure_registry_schema,
+)
 from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
 from omop_emb.utils.errors import ModelRegistrationConflictError
 
@@ -45,7 +49,7 @@ class RegistryManager:
     def embedding_engine(self) -> Engine:
         """SQLAlchemy engine connected to the embedding store."""
         return self._embedding_engine
-    
+
     @property
     def emb_session_factory(self) -> sessionmaker:
         """Session factory bound to ``embedding_engine``."""
@@ -94,6 +98,7 @@ class RegistryManager:
         dimensions: int,
         provider_type: ProviderType,
         metadata: Optional[Mapping[str, object]] = None,
+        registered_at: Optional[datetime] = None,
     ) -> EmbeddingModelRecord:
         """Register a model or return the existing record if already registered.
 
@@ -109,6 +114,12 @@ class RegistryManager:
             Provider that serves the model.
         metadata : Mapping[str, object], optional
             Free-form operational metadata.
+        registered_at : datetime, optional
+            Backdate ``created_at``/``updated_at`` to this timestamp instead
+            of "now" (e.g. to match the source data's true snapshot time
+            when importing an export bundle on a different machine). Only
+            applies to a brand-new registration; ignored when the model is
+            already registered.
 
         Returns
         -------
@@ -137,7 +148,7 @@ class RegistryManager:
                     raise ModelRegistrationConflictError(
                         f"Model '{model_name}' is already registered with different "
                         f"metadata. Reuse the existing model name or choose a new one.",
-                        conflict_field="metadata"
+                        conflict_field="metadata",
                     )
                 return self._row_to_record(existing)
 
@@ -149,6 +160,9 @@ class RegistryManager:
             details=dict(metadata) if metadata else {},
             index_config=index_config,
         )
+        if registered_at is not None:
+            new_row.created_at = registered_at
+            new_row.updated_at = registered_at
         with self.emb_session_factory(expire_on_commit=False) as session:
             session.add(new_row)
             session.commit()
@@ -233,6 +247,28 @@ class RegistryManager:
             session.commit()
             return self._row_to_record(row)
 
+    def refresh_model_updated_at_timestamp(self, *, model_name: str) -> None:
+        """Bump a registry row's ``updated_at`` to now, with no other change.
+
+        Notes
+        -----
+        Uses a Python-side timestamp rather than ``func.now()`` so the value
+        carries microsecond precision on every backend. SQLite's
+        ``CURRENT_TIMESTAMP``only has whole-second resolution, 
+        which made staleness checks racy when an upsert and its preceding 
+        FAISS export land in the same second.
+
+        Parameters
+        ----------
+        model_name : str
+        """
+        with self.emb_session_factory.begin() as session:
+            session.execute(
+                update(ModelRegistry)
+                .where(ModelRegistry.model_name == model_name)
+                .values(updated_at=datetime.now(timezone.utc))
+            )
+
     # ------------------------------------------------------------------
     # Naming helpers
     # ------------------------------------------------------------------
@@ -259,10 +295,7 @@ class RegistryManager:
         return re.sub(r"_+", "_", sanitized).strip("_")
 
     @staticmethod
-    def storage_name(
-        safe_model_name: str,
-        embedding_table_prefix: str = "emb"
-    ) -> str:
+    def storage_name(safe_model_name: str, embedding_table_prefix: str = "emb") -> str:
         """Return the physical table name for a model.
 
         Parameters
@@ -299,14 +332,30 @@ class RegistryManager:
             dimensions=row.dimensions,
             storage_identifier=row.storage_identifier,
             metadata=dict(row.details or {}),
-            created_at=row.created_at,
-            updated_at=row.updated_at,
+            created_at=_as_utc(row.created_at),
+            updated_at=_as_utc(row.updated_at),
         )
 
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """Attach UTC tzinfo to a naive datetime, leaving aware ones untouched.
+
+    sqlite has no native timezone-aware storage, so SQLAlchemy round-trips
+    ``DateTime(timezone=True)`` columns as naive on that backend (pgvector
+    preserves tzinfo). Every timestamp this registry writes is UTC, so a
+    naive value read back is always UTC too -- normalize here, once, so
+    every caller can assume tz-aware and compare against other UTC-aware
+    datetimes (e.g. a bundle's ``exported_at``) without crashing.
+    """
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
 
 def _validate_metadata_keys(metadata: Optional[Mapping[str, object]]) -> None:
     """Raise ``ValueError`` if ``metadata`` contains a reserved key.

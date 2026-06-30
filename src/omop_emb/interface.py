@@ -13,31 +13,43 @@ Design
   (``embed_and_upsert_concepts``) because concept metadata must be fetched
   from the CDM to populate the embedding table filter columns.
 """
+
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import replace as dc_replace
-from typing import TYPE_CHECKING, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import numpy as np
 from numpy import ndarray
 from sqlalchemy import Engine, Row
 
-from omop_emb.utils.cdm import count_missing_concepts, fetch_cdm_concepts_for_filter, iter_cdm_concepts_for_filter
+from omop_emb.utils.cdm import (
+    count_missing_concepts,
+    fetch_cdm_concepts_for_filter,
+    iter_cdm_concepts_for_filter,
+)
 from omop_emb.embeddings import (
     EmbeddingClient,
     EmbeddingRole,
     get_provider_from_provider_type,
 )
-from omop_emb.embeddings.embedding_providers import get_provider_for_api_base
 from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
     EmbeddingBackend,
     EmbeddingModelRecord,
 )
 from omop_emb.backends.index_config import IndexConfig
-from omop_emb.config import BackendType, ENV_OMOP_EMB_FAISS_CACHE_DIR, MetricType, ProviderType
+from omop_emb.config import BackendType, MetricType, ProviderType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
 
 if TYPE_CHECKING:
@@ -49,6 +61,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Standalone utility
 # ---------------------------------------------------------------------------
+
 
 def list_registered_models(
     backend: EmbeddingBackend,
@@ -80,6 +93,7 @@ def list_registered_models(
 # Reader interface
 # ---------------------------------------------------------------------------
 
+
 class EmbeddingReaderInterface:
     """Backend-neutral read interface for embedding search and retrieval.
 
@@ -98,11 +112,12 @@ class EmbeddingReaderInterface:
     canonical_model_name : str, optional
     provider_name_or_type : str | ProviderType, optional
         Embedding provider.
-    api_base / api_key : str, optional
-        Used for automatic provider detection when *provider_name_or_type*
-        is not given.
     k : int
         Default number of nearest neighbors to return.
+    faiss_cache_dir : str, optional
+        Optional directory for FAISS index caching.  If provided, the interface
+        will attempt to use FAISS for faster KNN search.  Only supported
+        if the 'faiss' package is installed.  
     """
 
     def __init__(
@@ -113,8 +128,6 @@ class EmbeddingReaderInterface:
         *,
         omop_cdm_engine: Optional[Engine] = None,
         provider_name_or_type: Optional[Union[str, ProviderType]] = None,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
         faiss_cache_dir: Optional[str] = None,
     ):
@@ -124,13 +137,11 @@ class EmbeddingReaderInterface:
         elif isinstance(provider_name_or_type, ProviderType):
             provider_type = provider_name_or_type
         elif provider_name_or_type is None:
-            if api_base is None or api_key is None:
-                raise ValueError(
-                    "Either 'provider_name_or_type' or both 'api_base' and 'api_key' must be provided."
-                )
-            provider_type = get_provider_for_api_base(api_base, api_key).provider_type
+            provider_type = ProviderType.OLLAMA
         else:
-            raise ValueError(f"Invalid provider_name_or_type: {type(provider_name_or_type).__name__}.")
+            raise ValueError(
+                f"Invalid provider_name_or_type: {type(provider_name_or_type).__name__}."
+            )
 
         provider = get_provider_from_provider_type(provider_type)
         canonical_model_name = provider.canonical_model_name(model)
@@ -138,27 +149,28 @@ class EmbeddingReaderInterface:
         self._backend = backend
 
         if not isinstance(metric_type, MetricType):
-            raise ValueError(f"metric_type must be an instance of MetricType Enum, got {type(metric_type).__name__}")
+            raise ValueError(
+                f"metric_type must be an instance of MetricType Enum, got {type(metric_type).__name__}"
+            )
         self._metric_type = metric_type
         self._provider_type = provider_type
         self._canonical_model_name = canonical_model_name
         self._k = k
         self._cdm_engine = omop_cdm_engine
 
-        # FAISS fast path activated at construction, not mid-search
-        _faiss_dir = faiss_cache_dir or os.getenv(ENV_OMOP_EMB_FAISS_CACHE_DIR)
         self._faiss_cache: Optional["FAISSCache"] = None
-        if _faiss_dir is not None:
+        if faiss_cache_dir is not None:
             try:
                 from omop_emb.storage.faiss import FAISSCache as _FAISSCache
+
                 self._faiss_cache = _FAISSCache(
                     model_name=canonical_model_name,
-                    cache_dir=_faiss_dir,
+                    cache_dir=faiss_cache_dir,
                 )
             except ImportError as exc:
                 raise ImportError(
                     "faiss_cache_dir was provided but the 'faiss' package is not installed. "
-                    "Install it with: pip install omop-emb[faiss]"
+                    "Install it with: pip install omop-emb[faiss-cpu]"
                 ) from exc
 
     # ------------------------------------------------------------------
@@ -190,7 +202,9 @@ class EmbeddingReaderInterface:
     # ------------------------------------------------------------------
 
     def get_model_table_name(self) -> Optional[str]:
-        record = self._backend.get_registered_model(model_name=self.canonical_model_name)
+        record = self._backend.get_registered_model(
+            model_name=self.canonical_model_name
+        )
         return record.storage_identifier if record is not None else None
 
     def is_model_registered(self) -> bool:
@@ -245,8 +259,12 @@ class EmbeddingReaderInterface:
                     "Pass FlatIndexConfig() for exact search or HNSWIndexConfig(metric_type=...) "
                     "for approximate search."
                 )
-            record = self._backend.get_registered_model(model_name=self.canonical_model_name)
-            if record is not None and self._faiss_cache.is_fresh(record, self._metric_type, faiss_index_config):
+            record = self._backend.get_registered_model(
+                model_name=self.canonical_model_name
+            )
+            if record is not None and self._faiss_cache.is_fresh(
+                record, self._metric_type, faiss_index_config
+            ):
                 logger.info(
                     "Using FAISS cache for search (model='%s', cache='%s').",
                     self.canonical_model_name,
@@ -258,6 +276,7 @@ class EmbeddingReaderInterface:
                     self._metric_type,
                     faiss_index_config,
                     concept_filter=concept_filter,
+                    backend=self._backend,
                 )
                 return self._enrich(raw)
 
@@ -329,7 +348,9 @@ class EmbeddingReaderInterface:
             model_name=self.canonical_model_name,
             metric_type=self._metric_type,
         )
-        return {cid: row for cid, row in all_concepts.items() if cid not in embedded_ids}
+        return {
+            cid: row for cid, row in all_concepts.items() if cid not in embedded_ids
+        }
 
     def count_concepts_without_embedding(
         self,
@@ -399,11 +420,18 @@ class EmbeddingReaderInterface:
 
         unique_ids = {r.concept_id for results in raw for r in results}
         concept_filter = EmbeddingConceptFilter(concept_ids=tuple(unique_ids))
-        rows = fetch_cdm_concepts_for_filter(concept_filter=concept_filter, cdm_engine=self._cdm_engine)
+        rows = fetch_cdm_concepts_for_filter(
+            concept_filter=concept_filter, cdm_engine=self._cdm_engine
+        )
 
         return tuple(
             tuple(
-                dc_replace(r, concept_name=rows[r.concept_id].concept_name if r.concept_id in rows else None)
+                dc_replace(
+                    r,
+                    concept_name=rows[r.concept_id].concept_name
+                    if r.concept_id in rows
+                    else None,
+                )
                 for r in query_results
             )
             for query_results in raw
@@ -413,6 +441,7 @@ class EmbeddingReaderInterface:
 # ---------------------------------------------------------------------------
 # Writer interface
 # ---------------------------------------------------------------------------
+
 
 class EmbeddingWriterInterface(EmbeddingReaderInterface):
     """Reader interface extended with embedding generation and write operations.
@@ -447,7 +476,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             model=embedding_client.canonical_model_name,
             provider_name_or_type=embedding_client.provider.provider_type,
         )
-
 
     @property
     def embedding_dim(self) -> int:
@@ -539,6 +567,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             records=records,
             embeddings=embeddings,
         )
+        self._backend.refresh_model_updated_at_timestamp(model_name=self.canonical_model_name)
 
     def bulk_upsert_concept_embeddings(
         self,
@@ -552,6 +581,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             batches=batches,
             total_n_batches=total_n_batches,
         )
+        self._backend.refresh_model_updated_at_timestamp(model_name=self.canonical_model_name)
 
     def embed_and_upsert_concepts(
         self,
@@ -586,15 +616,23 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             ConceptEmbeddingRecord(
                 concept_id=cid,
                 domain_id=concept_meta[cid].domain_id if cid in concept_meta else "",
-                vocabulary_id=concept_meta[cid].vocabulary_id if cid in concept_meta else "",
-                is_standard=concept_meta[cid].standard_concept in ("S", "C") if cid in concept_meta else False,
-                is_valid=concept_meta[cid].invalid_reason not in ("D", "U") if cid in concept_meta else True,
+                vocabulary_id=concept_meta[cid].vocabulary_id
+                if cid in concept_meta
+                else "",
+                is_standard=concept_meta[cid].standard_concept in ("S", "C")
+                if cid in concept_meta
+                else False,
+                is_valid=concept_meta[cid].invalid_reason not in ("D", "U")
+                if cid in concept_meta
+                else True,
             )
             for cid in concept_ids
         ]
 
         # Check registered dimensions
-        record = self._backend.get_registered_model(model_name=self.canonical_model_name)
+        record = self._backend.get_registered_model(
+            model_name=self.canonical_model_name
+        )
         if record is not None and record.dimensions != self.embedding_dim:
             raise ValueError(
                 f"Embedding dimension mismatch: client produces {self.embedding_dim}d "

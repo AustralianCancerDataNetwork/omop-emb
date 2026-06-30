@@ -1,11 +1,10 @@
 """Validation tests for EmbeddingInterface input contracts and naming guarantees."""
 
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 
-import numpy as np
 import pytest
 
-from omop_emb.config import IndexType, MetricType, ProviderType
+from omop_emb.config import MetricType, ProviderType
 from omop_emb.embeddings import OllamaProvider
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.model_registry.model_registry_manager import RegistryManager
@@ -42,11 +41,13 @@ class TestCanonicalModelName:
             embedding_client=_make_mock_client("pseudo-model:v1"),
         )
 
-        backend.register_model = Mock(return_value=Mock(
-            model_name="pseudo-model:v1",
-            provider_type=ProviderType.OLLAMA,
-            storage_identifier="pgvector_pseudo_model_v1",
-        ))
+        backend.register_model = Mock(
+            return_value=Mock(
+                model_name="pseudo-model:v1",
+                provider_type=ProviderType.OLLAMA,
+                storage_identifier="pgvector_pseudo_model_v1",
+            )
+        )
 
         interface.register_model(index_config=FlatIndexConfig())
 
@@ -61,7 +62,10 @@ class TestCanonicalModelName:
 
     def test_explicit_tag_is_not_modified(self):
         provider = OllamaProvider()
-        assert provider.canonical_model_name("nomic-embed-text:v1.5") == "nomic-embed-text:v1.5"
+        assert (
+            provider.canonical_model_name("nomic-embed-text:v1.5")
+            == "nomic-embed-text:v1.5"
+        )
 
     def test_storage_name_reflects_tag(self):
         safe = RegistryManager.safe_model_name("pseudo-model:v1")

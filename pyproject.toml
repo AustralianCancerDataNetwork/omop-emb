@@ -33,15 +33,16 @@ classifiers = [
 
 dependencies = [
     "numpy>=1.26",
-    "omop-alchemy>=0.6.3",
-    "sqlalchemy>=2.0.45",
+    "omop-alchemy==0.8.0",
+    "oa-configurator==0.1.2",
     "typing-extensions>=4.15.0",
     "sqlite-vec>=0.1.9",
     "openai",
     "requests",
     "urllib3>=2.7.0", # CVE-2026-44432, CVE-2026-44431
     "typer",
-    "tqdm"
+    "tqdm",
+    "h5py>=3.0"  # used for export and import
 ]
 
 [project.optional-dependencies]
@@ -54,14 +55,14 @@ faiss-cpu = [
 ]
 [dependency-groups]
 dev = [
-    "omop-emb[faiss-cpu,pgvector]", 
+    "oa-configurator[postgres]>=0.1.1",
+    "omop-emb[faiss-cpu,pgvector]",
     "mypy>=1.19.1",
     "pytest>=9.0.3",  # CVE-2025-71176
     "pytest-cov>=7.0.0",
     "rich>=14.2.0",
     "pygments>=2.20.0",  # CVE-2026-4539
     "ruff>=0.14.10",
-    "h5py",
     "mkdocs<2.0",
     "mkdocs-material",
     "mkdocstrings[python]",
@@ -79,6 +80,9 @@ packages = ["src/omop_emb"]
 
 [project.scripts]
 omop-emb = "omop_emb.cli.cli_app:app"
+
+[project.entry-points."omop.config"]
+omop_emb = "omop_emb.config:OmopEmbConfig"
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py"]

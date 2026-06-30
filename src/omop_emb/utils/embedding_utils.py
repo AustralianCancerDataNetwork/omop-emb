@@ -2,18 +2,18 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Optional, overload
 import logging
-logger = logging.getLogger(__name__)
 
 from sqlalchemy import Select, func
 from sqlalchemy.sql.elements import ColumnElement
-from omop_alchemy.cdm.model.vocabulary import Concept
 
 from omop_emb.config import (
     MetricType,
     PGVECTOR_HALFVEC_MAX_DIMENSIONS,
     PGVECTOR_VECTOR_MAX_DIMENSIONS,
-    VectorColumnType
+    VectorColumnType,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ class EmbeddingConceptFilter:
         When ``True``, only standard concepts (``standard_concept`` in
         ``('S', 'C')``) are returned. Default ``False``.
     require_active : bool
-        When ``True``, only active concepts (``invalid_reason`` not in 
+        When ``True``, only active concepts (``invalid_reason`` not in
         ``('D', 'U')``) are returned. Default ``False``.
     limit : int, optional
         Maximum number of nearest neighbours to return. If not set, the
@@ -108,12 +108,12 @@ class EmbeddingConceptFilter:
     def is_empty(self) -> bool:
         """Return ``True`` if no constraints are set."""
         return (
-            self.concept_ids is None and
-            self.domains is None and
-            self.vocabularies is None and
-            not self.require_standard and
-            not self.require_active and
-            self.limit is None
+            self.concept_ids is None
+            and self.domains is None
+            and self.vocabularies is None
+            and not self.require_standard
+            and not self.require_active
+            and self.limit is None
         )
 
 
@@ -152,37 +152,12 @@ class NearestConceptMatch:
         return asdict(self)
 
 
-@dataclass(frozen=True)
-class ConceptEmbeddingRecord:
-    """Concept metadata for a single embedding upsert row.
-
-    Populated from the OMOP CDM by the caller (interface layer) before being
-    passed to the backend.
-
-    Attributes
-    ----------
-    concept_id : int
-        OMOP concept ID.
-    domain_id : str
-        OMOP domain (e.g. ``'Condition'``, ``'Drug'``).
-    vocabulary_id : str
-        Source vocabulary (e.g. ``'SNOMED'``, ``'RxNorm'``).
-    is_standard : bool
-        ``True`` if ``standard_concept`` is ``'S'`` or ``'C'``.
-    """
-
-    concept_id: int
-    domain_id: str
-    vocabulary_id: str
-    is_standard: bool
-    is_valid: bool = True
-
-
 @overload
 def get_similarity_from_distance(
     distance_col: float,
     metric: MetricType,
 ) -> float: ...
+
 
 @overload
 def get_similarity_from_distance(
@@ -241,6 +216,7 @@ def get_similarity_from_distance(
         return func.least(func.greatest(similarity, 0.0), 1.0)
     else:
         return min(1.0, max(0.0, similarity))
+
 
 def vector_column_type_for_dimensions(dimensions: int) -> VectorColumnType:
     """Return the appropriate PostgreSQL column type for a given dimensionality.

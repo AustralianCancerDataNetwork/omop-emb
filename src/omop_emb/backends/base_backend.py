@@ -3,10 +3,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from functools import wraps
 import logging
-from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Tuple, Union
-import os
+from datetime import datetime
+from typing import Any, Callable, Generic, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 from numpy import ndarray
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine
 from sqlalchemy.orm import sessionmaker
 
 from omop_emb.config import (
@@ -17,23 +17,27 @@ from omop_emb.config import (
     get_supported_index_types_for_backend,
     is_supported_index_metric_combination_for_backend,
     is_index_type_supported_for_backend,
-    build_engine_string,
-    ENV_OMOP_EMB_BACKEND
+    OmopEmbConfig,
+    resolve_omop_emb_engine,
 )
+
+from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig
 from omop_emb.model_registry import EmbeddingModelRecord, RegistryManager
 from omop_emb.utils.embedding_utils import (
-    ConceptEmbeddingRecord,
     EmbeddingConceptFilter,
     NearestConceptMatch,
 )
 
 logger = logging.getLogger(__name__)
 
+TEmbeddingTable = TypeVar("TEmbeddingTable")
+
 
 # ---------------------------------------------------------------------------
 # Decorator
 # ---------------------------------------------------------------------------
+
 
 def require_registered_model(func: Callable) -> Callable:
     """Resolve and validate a registry record before the wrapped method runs.
@@ -68,6 +72,7 @@ def require_registered_model(func: Callable) -> Callable:
         incompatible with the registered index, or the metric is not
         supported by the backend.
     """
+
     @wraps(func)
     def wrapper(
         self: "EmbeddingBackend",
@@ -131,7 +136,8 @@ def require_registered_model(func: Callable) -> Callable:
 # Abstract backend
 # ---------------------------------------------------------------------------
 
-class EmbeddingBackend(ABC):
+
+class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     """Abstract base class for embedding storage and retrieval backends.
 
     Parameters
@@ -154,8 +160,8 @@ class EmbeddingBackend(ABC):
 
     Notes
     -----
-    The SQLAlchemy engine is obtained from the RegistryManager to prevent 
-    duplication in code but also to have a single source of truth for the database connection.  
+    The SQLAlchemy engine is obtained from the RegistryManager to prevent
+    duplication in code but also to have a single source of truth for the database connection.
     """
 
     DEFAULT_K_NEAREST = 10
@@ -163,7 +169,7 @@ class EmbeddingBackend(ABC):
     def __init__(self, emb_engine: Engine) -> None:
         super().__init__()
         self._registry = RegistryManager(emb_engine)
-        self._table_cache: dict[str, Any] = {}
+        self._table_cache: dict[str, TEmbeddingTable] = {}
         self._initialise_store()
 
     # ------------------------------------------------------------------
@@ -197,7 +203,9 @@ class EmbeddingBackend(ABC):
         self.pre_initialise_store()
         for record in self._registry.get_registered_models():
             if record.storage_identifier not in self._table_cache:
-                self._table_cache[record.storage_identifier] = self._load_storage_table(record)
+                self._table_cache[record.storage_identifier] = self._load_storage_table(
+                    record
+                )
 
     def pre_initialise_store(self) -> None:
         """Hook for backend-specific setup before the registry is queried.
@@ -206,7 +214,7 @@ class EmbeddingBackend(ABC):
         created. The default implementation is a no-op.
         """
 
-    def _ensure_storage_table(self, model_record: EmbeddingModelRecord) -> Any:
+    def _ensure_storage_table(self, model_record: EmbeddingModelRecord) -> TEmbeddingTable:
         if model_record.storage_identifier not in self._table_cache:
             table = self._create_storage_table(model_record)
             self._table_cache[model_record.storage_identifier] = table
@@ -224,6 +232,7 @@ class EmbeddingBackend(ABC):
         provider_type: ProviderType,
         index_config: Optional[IndexConfig] = None,
         metadata: Optional[Mapping[str, object]] = None,
+        registered_at: Optional[datetime] = None,
     ) -> EmbeddingModelRecord:
         """Register a model and create its physical storage table.
 
@@ -241,6 +250,9 @@ class EmbeddingBackend(ABC):
         metadata : Mapping[str, object], optional
             Free-form operational metadata. Must not contain reserved keys
             (see ``RESERVED_METADATA_KEYS`` in ``index_config.py``).
+        registered_at : datetime, optional
+            Backdate ``created_at``/``updated_at`` to this timestamp instead
+            of "now". Only applies to a brand-new registration.
 
         Returns
         -------
@@ -259,7 +271,7 @@ class EmbeddingBackend(ABC):
             index_config = FlatIndexConfig()
 
         if index_config != FlatIndexConfig():
-            # non-flat index is super expensive to continuously ingest so we don't 
+            # non-flat index is super expensive to continuously ingest so we don't
             # allow it at the moment
             raise ValueError(
                 "Only FLAT index is allowed at registration as it is expensive to continously inject it.\n"
@@ -273,10 +285,11 @@ class EmbeddingBackend(ABC):
             dimensions=dimensions,
             index_config=index_config,
             metadata=metadata,
+            registered_at=registered_at,
         )
         self._ensure_storage_table(record)
         # Disable for now as we prevent non-FLAT index registration
-        #self._rebuild_index_impl(model_record=record, index_config=index_config)
+        # self._rebuild_index_impl(model_record=record, index_config=index_config)
         logger.info(
             f"Registered model '{model_name}' (provider='{provider_type.value}') in backend '{self.backend_type.value}'."
         )
@@ -322,7 +335,7 @@ class EmbeddingBackend(ABC):
         logger.info(
             f"Deleted model '{model_name}' from backend '{self.backend_type.value}' and dropped storage table."
         )
-    
+
     def rebuild_index(
         self,
         *,
@@ -388,7 +401,7 @@ class EmbeddingBackend(ABC):
     def _rebuild_index_impl(
         self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig
     ) -> None: ...
-    
+
     # ------------------------------------------------------------------
     # Registry queries
     # ------------------------------------------------------------------
@@ -411,7 +424,7 @@ class EmbeddingBackend(ABC):
         """
         registered_models = self.get_registered_models(model_name=model_name)
         return registered_models[0] if registered_models else None
-    
+
     def get_registered_models(
         self,
         *,
@@ -486,11 +499,22 @@ class EmbeddingBackend(ABC):
         updated = {**record.metadata, key: value}
         self._registry.update_metadata(model_name=model_name, metadata=updated)
 
+    def refresh_model_updated_at_timestamp(self, *, model_name: str) -> None:
+        """Bump a registry row's ``updated_at`` to now.
+        Required for faiss-cache freshness validation after live upserts.
+        No-op if the model is not registered.
+
+        Parameters
+        ----------
+        model_name : str
+        """
+        self._registry.refresh_model_updated_at_timestamp(model_name=model_name)
+
     # ------------------------------------------------------------------
     # Storage table management (backend-specific)
     # ------------------------------------------------------------------
 
-    def _load_storage_table(self, model_record: EmbeddingModelRecord) -> Any:
+    def _load_storage_table(self, model_record: EmbeddingModelRecord) -> TEmbeddingTable:
         """Return the table descriptor for a registered model, recovering if missing
         by recreating the table as needed."""
         if not self._storage_table_exists(model_record):
@@ -503,32 +527,29 @@ class EmbeddingBackend(ABC):
 
     @abstractmethod
     def _storage_table_exists(self, model_record: EmbeddingModelRecord) -> bool:
-        """Return ``True`` if the physical embedding table exists in the database.
-        """
+        """Return ``True`` if the physical embedding table exists in the database."""
         ...
 
     @abstractmethod
-    def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> Any:
+    def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> TEmbeddingTable:
         """Build the in-process descriptor for a table known to already exist.
         Must not issue any DDL.
 
         Returns
         -------
         descriptor
-            Opaque object used by the backend to identify the table in subsequent operations.
-            Differs between backends, e.g. SQLAlchemy ORM class for pgvector, table name string for sqlite-vec.
+            EmbeddingTable describing the physical table. Type depends on the backend.
         """
         ...
 
     @abstractmethod
-    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> Any:
+    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> TEmbeddingTable:
         """Create the physical table in the database and return its descriptor.
 
         Returns
         -------
         descriptor
-            Opaque object used by the backend to identify the table in subsequent operations.
-            Differs between backends, e.g. SQLAlchemy ORM class for pgvector, table name string for sqlite-vec.
+            EmbeddingTable describing the newly created table. Type depends on the backend.
         """
         ...
 
@@ -603,7 +624,11 @@ class EmbeddingBackend(ABC):
         """
         import tqdm
 
-        pbar = tqdm.tqdm(batches, desc=f"Upserting embeddings into {model_name} ({metric_type.value})", total=total_n_batches)
+        pbar = tqdm.tqdm(
+            batches,
+            desc=f"Upserting embeddings into {model_name} ({metric_type.value})",
+            total=total_n_batches,
+        )
         for records, embeddings in pbar:
             self.upsert_embeddings(
                 model_name=model_name,
@@ -742,7 +767,9 @@ class EmbeddingBackend(ABC):
         return self._has_any_embeddings_impl(model_record=_model_record)
 
     @abstractmethod
-    def _has_any_embeddings_impl(self, *, model_record: EmbeddingModelRecord) -> bool: ...
+    def _has_any_embeddings_impl(
+        self, *, model_record: EmbeddingModelRecord
+    ) -> bool: ...
 
     @require_registered_model
     def get_all_stored_concept_ids(
@@ -768,7 +795,9 @@ class EmbeddingBackend(ABC):
         return self._get_all_stored_concept_ids_impl(model_record=_model_record)
 
     @abstractmethod
-    def _get_all_stored_concept_ids_impl(self, *, model_record: EmbeddingModelRecord) -> set[int]: ...
+    def _get_all_stored_concept_ids_impl(
+        self, *, model_record: EmbeddingModelRecord
+    ) -> set[int]: ...
 
     @require_registered_model
     def get_concept_filter_metadata(
@@ -809,6 +838,46 @@ class EmbeddingBackend(ABC):
         concept_ids: Sequence[int],
     ) -> Mapping[int, Mapping[str, object]]: ...
 
+    @require_registered_model
+    def get_concept_ids_matching_filter(
+        self,
+        *,
+        model_name: str,
+        metric_type: MetricType,
+        concept_filter: EmbeddingConceptFilter,
+        _model_record: EmbeddingModelRecord,
+    ) -> set[int]:
+        """Return every concept ID (for this model) currently satisfying `concept_filter`.
+        Used to build an exact pre-filter for FAISS searches
+        (see :class:`~omop_emb.storage.faiss.faiss_cache.FAISSCache`).
+
+        Parameters
+        ----------
+        model_name : str
+            Canonical model name including tag.
+        metric_type : MetricType
+            Validated against the registry.
+        concept_filter : EmbeddingConceptFilter
+            Filter constraints to evaluate.
+
+        Returns
+        -------
+        set[int]
+            Concept IDs satisfying every constraint in *concept_filter*.
+        """
+        return self._get_concept_ids_matching_filter_impl(
+            model_record=_model_record,
+            concept_filter=concept_filter,
+        )
+
+    @abstractmethod
+    def _get_concept_ids_matching_filter_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_filter: EmbeddingConceptFilter,
+    ) -> set[int]: ...
+
     def get_embedding_count(
         self,
         *,
@@ -827,10 +896,12 @@ class EmbeddingBackend(ABC):
         -------
         int
         """
-        return len(self.get_all_stored_concept_ids(
-            model_name=model_name,
-            metric_type=metric_type,
-        ))
+        return len(
+            self.get_all_stored_concept_ids(
+                model_name=model_name,
+                metric_type=metric_type,
+            )
+        )
 
     # ------------------------------------------------------------------
     # Validation helpers
@@ -892,37 +963,48 @@ class EmbeddingBackend(ABC):
             )
 
 
-def resolve_backend(backend_type: Optional[Union[str, BackendType]]= None) -> EmbeddingBackend:
-    """Return the configured embedding backend.
+def resolve_backend(
+    backend_type: Optional[Union[str, BackendType]] = None,
+) -> EmbeddingBackend:
+    """Return the configured embedding backend via oa-configurator.
 
-    Reads ``OMOP_EMB_BACKEND`` (default: ``sqlitevec``) to select the backend.
-    Connection details are resolved via ``build_engine_string``:
+    When backend_type is omitted, reads from the active oa-configurator config.
+    Connection details are resolved via the oa-configurator Resolver:
 
-    - ``sqlitevec``: requires ``OMOP_EMB_SQLITE_PATH`` (or ``OMOP_EMB_DB_URL``).
-    - ``pgvector``: requires ``OMOP_EMB_DB_USER``, ``OMOP_EMB_DB_PASSWORD``,
-      ``OMOP_EMB_DB_HOST``, ``OMOP_EMB_DB_NAME`` (and optionally
-      ``OMOP_EMB_DB_PORT``, ``OMOP_EMB_DB_DRIVER``), or ``OMOP_EMB_DB_URL``.
+    - ``sqlitevec``: uses sqlite_path from config (required; must be set explicitly).
+    - ``pgvector``: uses the ``emb_db`` resource from oa-configurator.
     """
-    backend_str = backend_type or os.getenv(ENV_OMOP_EMB_BACKEND, BackendType.SQLITEVEC.value).lower()
+    cfg = OmopEmbConfig.get_config()
+    if backend_type is None:
+        backend_str = cfg.backend
+    else:
+        backend_str = (
+            backend_type if isinstance(backend_type, str) else backend_type.value
+        )
 
     try:
-        backend_type = BackendType(backend_str)
+        resolved_backend = BackendType(backend_str.lower())
     except ValueError:
         raise RuntimeError(
-            f"Unknown backend {backend_str!r} in {ENV_OMOP_EMB_BACKEND}. "
+            f"Unknown backend {backend_str!r}. "
             f"Supported: {[b.value for b in BackendType]}."
         )
 
-    url = build_engine_string(backend_type)
-
-    if backend_type == BackendType.SQLITEVEC:
+    if resolved_backend == BackendType.SQLITEVEC:
         from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
-        assert url.database is not None  # guaranteed by build_engine_string
-        logger.info(f"Using SQLiteVec backend with database file: {url.database}")
-        return SQLiteVecEmbeddingBackend.from_path(url.database)
 
-    if backend_type == BackendType.PGVECTOR:
-        engine = create_engine(url, future=True, echo=False)
+        if not cfg.sqlite_path:
+            raise RuntimeError(
+                "sqlitevec backend requires 'sqlite_path' to be configured. "
+                "Set it via `omop-config configure omop-emb`. "
+                "To use an ephemeral in-memory store intentionally, set sqlite_path = ':memory:'."
+            )
+        path = cfg.sqlite_path
+        logger.info(f"Using SQLiteVec backend with database file: {path}")
+        return SQLiteVecEmbeddingBackend.from_path(path)
+
+    if resolved_backend == BackendType.PGVECTOR:
+        engine = resolve_omop_emb_engine()
         if engine.dialect.name != "postgresql":
             raise RuntimeError(
                 "The resolved URL must point to a PostgreSQL database "
@@ -935,7 +1017,7 @@ def resolve_backend(backend_type: Optional[Union[str, BackendType]]= None) -> Em
                 "pgvector backend is not installed. "
                 "Install it with: pip install omop-emb[pgvector]"
             ) from exc
-        logger.info(f"Using pgvector backend with database URL: {url}")
+        logger.info(f"Using pgvector backend with engine: {engine.url}")
         return PGVectorEmbeddingBackend(emb_engine=engine)
 
-    raise RuntimeError(f"Implementation for {backend_type.value} is not available.")
+    raise RuntimeError(f"Implementation for {resolved_backend.value} is not available.")

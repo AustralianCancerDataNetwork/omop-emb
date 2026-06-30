@@ -7,9 +7,8 @@ An EmbeddingProvider encapsulates the two things that vary across embedding back
 - **Embedding dimension retrieval**: Ollama exposes a ``/api/show`` endpoint;
   OpenAI-compatible APIs do not have an equivalent.
 
-The provider is inferred automatically from the ``api_base`` URL via
-:func:`get_provider_for_api_base`, but can also be supplied explicitly to
-:class:`~omop_emb.embedding_client.EmbeddingClient` for custom or future backends.
+Pass the provider type explicitly via :data:`~omop_emb.config.ProviderType` to
+:class:`~omop_emb.embedding_client.EmbeddingClient` to select the correct backend.
 """
 
 from __future__ import annotations
@@ -33,6 +32,7 @@ class EmbeddingProvider(ABC):
     OpenAI-compatible ``/v1/embeddings`` endpoint, similarity helpers, etc.)
     is shared and lives in ``EmbeddingClient`` directly.
     """
+
     @property
     @abstractmethod
     def provider_type(self) -> ProviderType:
@@ -60,7 +60,9 @@ class EmbeddingProvider(ABC):
             ``'text-embedding-3-small'``.
         """
         canonical_model_name = self._canonical_model_name_impl(name)
-        logger.info(f"Set canonical model name for provider {self.provider_type.value!r}: {canonical_model_name!r}")
+        logger.info(
+            f"Set canonical model name for provider {self.provider_type.value!r}: {canonical_model_name!r}"
+        )
         return canonical_model_name
 
     @abstractmethod
@@ -70,7 +72,7 @@ class EmbeddingProvider(ABC):
 
     def get_embedding_dim(self, model: str, api_base: URL) -> Optional[int]:
         """Return the embedding dimension for *model* served at *api_base*.
-        Child classes should overwrite this method if the provider has a way to query 
+        Child classes should overwrite this method if the provider has a way to query
         the embedding dimension via the API.
 
         Parameters
@@ -177,53 +179,6 @@ class OllamaProvider(EmbeddingProvider):
             f"Could not determine embedding dimension from Ollama response for "
             f"model '{model}'. Response: {response}"
         )
-
-
-def get_provider_for_api_base(
-    api_base: str,
-    api_key: str = "ollama",
-) -> EmbeddingProvider:
-    """Infer the appropriate :class:`EmbeddingProvider` from *api_base*.
-
-    Detection rules (evaluated in order):
-
-    1. ``'ollama'`` appears anywhere in *api_base* → :class:`OllamaProvider`
-    2. *api_base* is a localhost/loopback URL **and** *api_key* is ``'ollama'``
-       → :class:`OllamaProvider`
-    3. All other URLs → :exc:`ValueError`
-
-    Pass a provider instance explicitly to
-    :class:`~omop_emb.embedding_client.EmbeddingClient` to override this inference
-    for custom or future backends.
-
-    Parameters
-    ----------
-    api_base : str
-        Base URL of the API endpoint.
-    api_key : str, optional
-        API key, used as a secondary Ollama signal when the URL alone is
-        ambiguous (e.g. a plain ``localhost`` URL).  Default is ``'ollama'``.
-
-    Returns
-    -------
-    EmbeddingProvider
-        A provider instance appropriate for *api_base*.
-
-    Raises
-    ------
-    ValueError
-        If the endpoint cannot be identified as an Ollama instance.
-    """
-    is_local = "localhost" in api_base or "127.0.0.1" in api_base
-    is_ollama = "ollama" in api_base or (is_local and api_key == "ollama")
-
-    if is_ollama:
-        return OllamaProvider()
-    raise ValueError(
-        f"Cannot infer provider from api_base={api_base!r}. "
-        "Only Ollama endpoints are supported. Pass an explicit provider "
-        "instance to EmbeddingClient to override."
-    )
 
 
 def get_provider_from_provider_type(provider_type: ProviderType) -> EmbeddingProvider:

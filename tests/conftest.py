@@ -2,22 +2,19 @@
 
 from __future__ import annotations
 
-import os
-import time
-from pathlib import Path
-from typing import Generator
-
-from dotenv import load_dotenv
+from typing import Iterator
 
 import numpy as np
 import pytest
 import sqlalchemy as sa
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
-from omop_emb.config import ProviderType
+from omop_emb.backends.sqlitevec import (
+    SQLiteVecEmbeddingBackend,
+    create_sqlitevec_engine,
+)
+from omop_emb.config import OmopEmbConfig, ProviderType
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 # ---------------------------------------------------------------------------
 # Test data constants
@@ -30,10 +27,18 @@ EMBEDDING_DIM = 1
 # Fixed 1-D embeddings: Hypertension=-10, Diabetes=0, Aspirin=+10
 # This makes L2 and cosine tests fully deterministic.
 CONCEPT_RECORDS: tuple[ConceptEmbeddingRecord, ...] = (
-    ConceptEmbeddingRecord(concept_id=1, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True),
-    ConceptEmbeddingRecord(concept_id=2, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True),
-    ConceptEmbeddingRecord(concept_id=3, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True),
-    ConceptEmbeddingRecord(concept_id=4, domain_id="Drug", vocabulary_id="RxNorm", is_standard=False),
+    ConceptEmbeddingRecord(
+        concept_id=1, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True
+    ),
+    ConceptEmbeddingRecord(
+        concept_id=2, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True
+    ),
+    ConceptEmbeddingRecord(
+        concept_id=3, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True
+    ),
+    ConceptEmbeddingRecord(
+        concept_id=4, domain_id="Drug", vocabulary_id="RxNorm", is_standard=False
+    ),
 )
 
 CONCEPT_EMBEDDINGS = np.array([[-10.0], [0.0], [10.0], [20.0]], dtype=np.float32)
@@ -53,74 +58,15 @@ QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
 # ---------------------------------------------------------------------------
 # PostgreSQL config (integration tests only)
 #
-# Reads OMOP_EMB_DB_* from your .env (same user as production, separate DB).
-# The omop_emb user must have CREATEDB privilege; grant it once with:
-#   ALTER USER omop_emb CREATEDB;
+# Resolved via OA_Configurator resource 'test_emb_db' in ~/.config/omop/config.toml.
+# Run: omop-config configure omop_emb (answer Y when asked to configure test database).
 # ---------------------------------------------------------------------------
-
-_DB_HOST = os.getenv("OMOP_EMB_DB_HOST")
-_DB_PORT = os.getenv("OMOP_EMB_DB_PORT")
-_DB_NAME = "test_omop_emb"
-_DB_USER = os.getenv("OMOP_EMB_DB_USER", "omop_emb")
-_DB_PASS = os.getenv("OMOP_EMB_DB_PASSWORD", "omop_emb")
-_DB_DRIVER = "postgresql+psycopg"
-
-_pg_available = _DB_HOST is not None and (_DB_PORT is not None and _DB_PORT.isdigit())
-
-
-def _test_db_url() -> sa.URL:
-    return sa.URL.create(
-        drivername=_DB_DRIVER,
-        username=_DB_USER,
-        password=_DB_PASS,
-        host=_DB_HOST,
-        port=int(_DB_PORT),  # type: ignore[arg-type]
-        database=_DB_NAME,
-    )
-
-
-def _maintenance_db_url() -> sa.URL:
-    """Connect to the maintenance DB as the app user to issue CREATE/DROP DATABASE."""
-    return sa.URL.create(
-        drivername=_DB_DRIVER,
-        username=_DB_USER,
-        password=_DB_PASS,
-        host=_DB_HOST,
-        port=int(_DB_PORT),  # type: ignore[arg-type]
-        database="postgres",
-    )
-
-
-def _create_test_db() -> sa.URL:
-    engine = sa.create_engine(_maintenance_db_url(), future=True)
-    try:
-        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{_DB_NAME}"'))
-            conn.execute(sa.text(f'CREATE DATABASE "{_DB_NAME}" OWNER {_DB_USER}'))
-    finally:
-        engine.dispose()
-    return _test_db_url()
-
-
-def _drop_test_db() -> None:
-    engine = sa.create_engine(_maintenance_db_url(), future=True)
-    try:
-        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            conn.execute(
-                sa.text(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                    "WHERE datname = :db AND pid <> pg_backend_pid()"
-                ),
-                {"db": _DB_NAME},
-            )
-            conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{_DB_NAME}"'))
-    finally:
-        engine.dispose()
 
 
 # ---------------------------------------------------------------------------
 # Fixtures — SQLiteVec (in-memory, function-scoped)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def svec_engine():
@@ -140,31 +86,30 @@ def svec_backend(svec_engine) -> SQLiteVecEmbeddingBackend:
 # Fixtures — pgvector (session-scoped engine, function-scoped backend)
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="session")
-def pg_engine() -> Generator[sa.Engine, None, None]:
-    """Session-scoped PostgreSQL engine.  Skipped when TEST_DB_HOST is unset."""
-    if not _pg_available:
-        pytest.skip("PostgreSQL not configured (set TEST_DB_HOST and TEST_DB_PORT)")
 
-    url = _create_test_db()
-    max_retries = 20
-    for attempt in range(max_retries):
-        try:
-            engine = sa.create_engine(url, echo=False, future=True)
-            with engine.connect() as conn:
-                conn.execute(sa.text("SELECT 1"))
-            yield engine
-            engine.dispose()
-            _drop_test_db()
-            return
-        except Exception as exc:
-            if attempt < max_retries - 1:
-                time.sleep(1)
-            else:
-                _drop_test_db()
-                raise RuntimeError(
-                    f"PostgreSQL never became available after {max_retries} attempts: {exc}"
-                )
+@pytest.fixture(scope="session")
+def pg_engine() -> Iterator[sa.Engine]:
+    """Session-scoped PostgreSQL engine. Skipped when test_emb_db is not configured."""
+    from oa_configurator.pytest_plugin import (
+        create_fresh_test_db,
+        drop_test_db,
+        ensure_test_user_exists,
+        require_pg_extension,
+        resolve_test_resource,
+    )
+
+    raw_url = resolve_test_resource(OmopEmbConfig.TEST_DB)
+    ensure_test_user_exists(raw_url)
+    url = create_fresh_test_db(raw_url, extensions=["vector"])
+    require_pg_extension(url, "vector")  # defensive: verify installation succeeded
+    engine = sa.create_engine(url, echo=False, future=True)
+    try:
+        with engine.connect() as conn:
+            conn.execute(sa.text("SELECT 1"))
+        yield engine
+    finally:
+        engine.dispose()
+        drop_test_db(raw_url)
 
 
 @pytest.fixture
@@ -183,7 +128,7 @@ def pg_backend(pg_engine: sa.Engine):
             backend.delete_model(model_name=record.model_name)
         except Exception:
             pass
-    
+
     # Remove the tables from the ORM cache
     EmbeddingTableBase.metadata.clear()
     EmbeddingTableBase.registry._class_registry.clear()

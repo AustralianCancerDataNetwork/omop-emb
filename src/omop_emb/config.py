@@ -1,37 +1,15 @@
-import os
+"""Configuration for omop-emb via oa-configurator."""
+
+from __future__ import annotations
+
 from enum import StrEnum
-from typing import Dict, Tuple, TYPE_CHECKING
-if TYPE_CHECKING:
-    from sqlalchemy import URL
+from typing import ClassVar, Dict, Tuple
 
-ENV_DOCUMENT_EMBEDDING_PREFIX = "OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX"
-ENV_QUERY_EMBEDDING_PREFIX = "OMOP_EMB_QUERY_EMBEDDING_PREFIX"
-ENV_EMBEDDING_DIM = "OMOP_EMB_EMBEDDING_DIM"
+from pydantic import Field
+from sqlalchemy import Engine
+from oa_configurator import DatabaseConfig, PackageConfigBase, ResourceSpec
 
-ENV_OMOP_EMB_BACKEND = "OMOP_EMB_BACKEND"
-ENV_OMOP_EMBEDDING_MODEL = "OMOP_EMBEDDING_MODEL"
-
-# Database connection 
-# Individual components (used to compose URL at runtime)
-ENV_OMOP_EMB_DB_USER = "OMOP_EMB_DB_USER"
-ENV_OMOP_EMB_DB_PASSWORD = "OMOP_EMB_DB_PASSWORD"
-ENV_OMOP_EMB_DB_HOST = "OMOP_EMB_DB_HOST"
-ENV_OMOP_EMB_DB_PORT = "OMOP_EMB_DB_PORT"
-ENV_OMOP_EMB_DB_NAME = "OMOP_EMB_DB_NAME"
-# Override the SQLAlchemy driver string (e.g. "postgresql+psycopg2")
-ENV_OMOP_EMB_DB_DRIVER = "OMOP_EMB_DB_DRIVER"
-# Optional full connection string.
-ENV_OMOP_EMB_DB_URL = "OMOP_EMB_DB_URL"
-
-# sqlite-vec backend (default)
-ENV_OMOP_EMB_SQLITE_PATH = "OMOP_EMB_SQLITE_PATH"
-
-# OMOP CDM (always required for concept ingestion in CLI)
-# NOTE: Should be the same str value as in omop-graph `omop_graph.config.ENV_OMOP_CDM_DB_URL`
-ENV_OMOP_CDM_DATABASE_URL = "OMOP_CDM_DB_URL"
-
-# Optional FAISS sidecar cache directory (auto-activates FAISS in EmbeddingReaderInterface)
-ENV_OMOP_EMB_FAISS_CACHE_DIR = "OMOP_EMB_FAISS_CACHE_DIR"
+from omop_alchemy.config import OmopAlchemyConfig
 
 
 class ProviderType(StrEnum):
@@ -44,6 +22,100 @@ class ProviderType(StrEnum):
     """
 
     OLLAMA = "ollama"
+
+
+class OmopEmbConfig(PackageConfigBase):
+    """oa-configurator config class for omop-emb.
+
+    omop-emb owns the embedding database and requires the CDM database
+    configured by omop-alchemy.
+    """
+
+    EMB_DB: ClassVar[ResourceSpec] = ResourceSpec(
+        semantic_name="emb_db",
+        display_name="Embedding Database",
+        description="pgvector database for storing OMOP concept embeddings.",
+        connection_name_hint="emb",
+        cdm_schema_default="public",
+        is_cdm_database=False,
+    )
+    TEST_DB: ClassVar[ResourceSpec] = ResourceSpec(
+        semantic_name="test_emb_db",
+        display_name="Test Embedding Database",
+        description=(
+            "Dedicated PostgreSQL/pgvector database for running omop-emb integration tests."
+        ),
+        connection_name_hint="pg_test_emb",
+        is_cdm_database=False,
+        cdm_schema_default="public",
+        connection_defaults=DatabaseConfig(
+            dialect="postgresql+psycopg",
+            host="localhost",
+            port=55432,
+            user="test",
+            password="test",
+            database_name="test_omop_emb",
+        ),
+    )
+
+    tool_name: ClassVar[str] = "omop_emb"
+    extra_logging_namespaces: ClassVar[tuple[str, ...]] = ("orm_loader", "omop_alchemy")
+    required_resources: ClassVar[tuple[str, ...]] = (
+        OmopAlchemyConfig.CDM_DB.semantic_name,
+    )
+    owned_resources: ClassVar[tuple[ResourceSpec, ...]] = (EMB_DB,)
+    test_resources: ClassVar[tuple[ResourceSpec, ...]] = (TEST_DB,)
+
+    backend: str = Field(
+        default="pgvector",
+        description="Embedding storage backend: 'pgvector' or 'sqlitevec'.",
+    )
+    sqlite_path: str | None = Field(
+        default=None,
+        description="Path to the SQLite database file (sqlitevec backend only).",
+    )
+    document_embedding_prefix: str = Field(
+        default="",
+        description="Text prefix prepended to documents before embedding.",
+    )
+    query_embedding_prefix: str = Field(
+        default="",
+        description="Text prefix prepended to queries before embedding.",
+    )
+    faiss_cache_dir: str | None = Field(
+        default=None,
+        description="Default directory for FAISS index files.",
+    )
+    embedding_dim: int | None = Field(
+        default=None,
+        description="Embedding dimensionality hint (rarely needed; usually auto-discovered from the model API).",
+    )
+    api_base: str = Field(
+        default="http://ollama:11434/v1",
+        description="Base URL for the embedding API (OpenAI-compatible).",
+    )
+    api_key: str = Field(
+        default="ollama",
+        description="API key for the model provider ('ollama' for local Ollama).",
+    )
+    provider_type: ProviderType = Field(
+        default=ProviderType.OLLAMA,
+        description="Embedding provider type (e.g. 'ollama').",
+    )
+    embedding_model: str = Field(
+        default="qwen3-embedding:0.6b",
+        description="Model name for generating concept embeddings.",
+    )
+
+
+def resolve_omop_cdm_engine() -> Engine:
+    """Resolve CDM engine via oa-configurator, used read-only."""
+    return OmopEmbConfig.get_engine(OmopAlchemyConfig.CDM_DB.semantic_name)
+
+
+def resolve_omop_emb_engine() -> Engine:
+    """Resolve embedding database engine via oa-configurator."""
+    return OmopEmbConfig.get_engine(OmopEmbConfig.EMB_DB.semantic_name)
 
 
 class BackendType(StrEnum):
@@ -216,7 +288,9 @@ def parse_metric_type(value: str | MetricType) -> MetricType:
 
 
 # Supported index + metric combinations per backend.
-SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[BackendType, Dict[IndexType, Tuple[MetricType, ...]]] = {
+SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[
+    BackendType, Dict[IndexType, Tuple[MetricType, ...]]
+] = {
     # https://alexgarcia.xyz/sqlite-vec/features/vec0.html
     BackendType.SQLITEVEC: {
         IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1),
@@ -263,7 +337,9 @@ def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) 
     return index in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
 
 
-def get_supported_index_types_for_backend(backend: BackendType) -> Tuple[IndexType, ...]:
+def get_supported_index_types_for_backend(
+    backend: BackendType,
+) -> Tuple[IndexType, ...]:
     """Return all index types supported by a backend.
 
     Parameters
@@ -292,100 +368,3 @@ def get_supported_metrics_for_backend(backend: BackendType) -> Tuple[MetricType,
     for metrics in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {}).values():
         seen.update(metrics)
     return tuple(seen)
-
-
-def build_engine_string(backend: "BackendType") -> "URL":
-    """Compose a SQLAlchemy ``URL`` for the given backend at runtime.
-
-    Parameters
-    ----------
-    backend : BackendType
-        The storage backend that determines which driver and which environment
-        variables are required.
-
-    Returns
-    -------
-    sqlalchemy.URL
-
-    Notes
-    -----
-    If ``ENV_OMOP_EMB_DB_URL`` is set it is used as-is for any backend, allowing
-    callers to supply a fully-qualified connection string without setting the
-    individual component variables.
-    Otherwise, the following environment variables are read based on the selected backend:
-    - SQLITEVEC: 
-        - ``ENV_OMOP_EMB_SQLITE_PATH`` (required): the file path to the sqlite database. Use the special value ``:memory:`` for a transient in-memory database (useful in tests).
-
-    - PGVECTOR: 
-        - ``ENV_OMOP_EMB_DB_DRIVER`` (default: 'postgresql+psycopg'): the SQLAlchemy driver name (e.g. 'postgresql', 'mysql', 'sqlite').
-        - ``ENV_OMOP_EMB_DB_USER`` (required): the username for database authentication.
-        - ``ENV_OMOP_EMB_DB_PASSWORD`` (required): the password for database authentication.
-        - ``ENV_OMOP_EMB_DB_HOST`` (required): the hostname or IP address of the database server.
-        - ``ENV_OMOP_EMB_DB_NAME`` (required): the name of the database to connect to.
-        - ``ENV_OMOP_EMB_DB_PORT`` (optional, default 5432): the port number on which the database server is listening.
-
-    Raises
-    ------
-    RuntimeError
-        If a required environment variable is missing.
-    ValueError
-        If ``backend`` does not support URL composition from environment
-        variables (e.g. ``FAISS``).
-    """
-    from sqlalchemy import URL
-    from sqlalchemy.engine import make_url
-
-    optional_url = os.getenv(ENV_OMOP_EMB_DB_URL)
-    if optional_url:
-        return make_url(optional_url)
-
-    if backend == BackendType.SQLITEVEC:
-        path = _get_required_env_variable(ENV_OMOP_EMB_SQLITE_PATH)
-        return URL.create(drivername="sqlite", database=path)
-
-    if backend == BackendType.PGVECTOR:
-        driver = os.getenv(ENV_OMOP_EMB_DB_DRIVER, "postgresql+psycopg")
-        user = _get_required_env_variable(ENV_OMOP_EMB_DB_USER)
-        password = _get_required_env_variable(ENV_OMOP_EMB_DB_PASSWORD)
-        host = _get_required_env_variable(ENV_OMOP_EMB_DB_HOST)
-        database = _get_required_env_variable(ENV_OMOP_EMB_DB_NAME)
-        port_str = os.getenv(ENV_OMOP_EMB_DB_PORT, "5432")
-        port = int(port_str) if port_str else None
-        return URL.create(
-            drivername=driver,
-            username=user,
-            password=password,
-            host=host,
-            port=port,
-            database=database,
-        )
-
-    raise ValueError(
-        f"Cannot compose an engine URL for backend {backend!r} from environment variables. "
-        f"Set `{ENV_OMOP_EMB_DB_URL!r}` to supply a full connection string. "
-        f"FAISS is not a backend. Use `{ENV_OMOP_EMB_FAISS_CACHE_DIR!r}` and EmbeddingReaderInterface(faiss_cache_dir=...) instead."
-    )
-
-
-def _get_required_env_variable(name: str) -> str:
-    """Get the value of a required environment variable.
-
-    Parameters
-    ----------
-    name : str
-        Environment variable name.
-
-    Returns
-    -------
-    str
-        Environment variable value.
-
-    Raises
-    ------
-    RuntimeError
-        If the environment variable is not set.
-    """
-    value = os.getenv(name)
-    if value is None:
-        raise RuntimeError(f"Required environment variable {name!r} is not set.")
-    return value

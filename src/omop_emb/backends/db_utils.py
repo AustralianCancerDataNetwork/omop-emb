@@ -1,9 +1,11 @@
 """Backend-agnostic database utilities shared across storage backends."""
-from contextlib import contextmanager
-from typing import Iterator, Sequence
 
-from sqlalchemy import text
+from contextlib import contextmanager
+from typing import Any, Iterator, Sequence
+
+from sqlalchemy import Column, Integer, MetaData, Select, String, Table, select, text
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.base import ColumnCollection
 
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
@@ -12,6 +14,44 @@ from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 KNN_CIDS_TABLE = "_knn_cids"
 KNN_DOMS_TABLE = "_knn_doms"
 KNN_VOCS_TABLE = "_knn_vocs"
+
+_TEMP_FILTER_METADATA = MetaData()
+KNN_CIDS_CORE_TABLE = Table(KNN_CIDS_TABLE, _TEMP_FILTER_METADATA, Column("id", Integer))
+KNN_DOMS_CORE_TABLE = Table(KNN_DOMS_TABLE, _TEMP_FILTER_METADATA, Column("id", String))
+KNN_VOCS_CORE_TABLE = Table(KNN_VOCS_TABLE, _TEMP_FILTER_METADATA, Column("id", String))
+
+
+def apply_concept_filter_where(
+    stmt: Select,
+    columns: ColumnCollection[str, Column[Any]],
+    concept_filter: EmbeddingConceptFilter,
+) -> Select:
+    """Apply concept_filter's WHERE-clause constraints to stmt.
+
+    Parameters
+    ----------
+    stmt : Select
+    columns : ColumnCollection[str, Column[Any]]
+        ``embedding_table.c`` (Core) or ``sa.inspect(embedding_table).columns``
+        (ORM). Both expose the TEmbeddingTable columns as real ``Column`` objects.
+    concept_filter : EmbeddingConceptFilter
+
+    Notes
+    -----
+    Assumes :func:`setup_concept_filter_temps` has already populated the
+    referenced temp tables in the same transaction.
+    """
+    if concept_filter.concept_ids is not None:
+        stmt = stmt.where(columns.concept_id.in_(select(KNN_CIDS_CORE_TABLE.c.id)))
+    if concept_filter.domains is not None:
+        stmt = stmt.where(columns.domain_id.in_(select(KNN_DOMS_CORE_TABLE.c.id)))
+    if concept_filter.vocabularies is not None:
+        stmt = stmt.where(columns.vocabulary_id.in_(select(KNN_VOCS_CORE_TABLE.c.id)))
+    if concept_filter.require_standard:
+        stmt = stmt.where(columns.is_standard == True)  # noqa: E712
+    if concept_filter.require_active:
+        stmt = stmt.where(columns.is_valid == True)  # noqa: E712
+    return stmt
 
 
 @contextmanager
@@ -61,13 +101,15 @@ def temp_filter_table(
     when the connection is returned to the pool.
     """
     if dialect == "postgresql":
-        session.execute(text(
-            f'CREATE TEMPORARY TABLE "{table_name}" (id {col_type}) ON COMMIT DROP'
-        ))
+        session.execute(
+            text(
+                f'CREATE TEMPORARY TABLE "{table_name}" (id {col_type}) ON COMMIT DROP'
+            )
+        )
     elif dialect == "sqlite":
-        session.execute(text(
-            f'CREATE TEMPORARY TABLE IF NOT EXISTS "{table_name}" (id {col_type})'
-        ))
+        session.execute(
+            text(f'CREATE TEMPORARY TABLE IF NOT EXISTS "{table_name}" (id {col_type})')
+        )
         session.execute(text(f'DELETE FROM "{table_name}"'))
     else:
         raise ValueError(f"Unsupported dialect: {dialect}")
@@ -110,18 +152,30 @@ def setup_concept_filter_temps(
     """
     if concept_filter.concept_ids is not None:
         with temp_filter_table(
-            session, list(concept_filter.concept_ids), "INTEGER", KNN_CIDS_TABLE, dialect=dialect
+            session,
+            list(concept_filter.concept_ids),
+            "INTEGER",
+            KNN_CIDS_TABLE,
+            dialect=dialect,
         ):
             pass
 
     if concept_filter.domains is not None:
         with temp_filter_table(
-            session, list(concept_filter.domains), "TEXT", KNN_DOMS_TABLE, dialect=dialect
+            session,
+            list(concept_filter.domains),
+            "TEXT",
+            KNN_DOMS_TABLE,
+            dialect=dialect,
         ):
             pass
 
     if concept_filter.vocabularies is not None:
         with temp_filter_table(
-            session, list(concept_filter.vocabularies), "TEXT", KNN_VOCS_TABLE, dialect=dialect
+            session,
+            list(concept_filter.vocabularies),
+            "TEXT",
+            KNN_VOCS_TABLE,
+            dialect=dialect,
         ):
             pass

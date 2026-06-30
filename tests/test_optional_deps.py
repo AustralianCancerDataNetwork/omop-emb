@@ -9,6 +9,7 @@ Each "importable without X" test exercises the lazy-load shield.
 Each "missing install hint" test exercises that the error is still surfaced
 at point of use rather than being silently swallowed.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -22,6 +23,7 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _evict_pgvector_modules() -> dict:
     """Remove pgvector and related modules from sys.modules.
 
@@ -29,7 +31,8 @@ def _evict_pgvector_modules() -> dict:
     and attribute-access tests get a fresh module.
     """
     keys = [
-        k for k in sys.modules
+        k
+        for k in sys.modules
         if k.startswith("pgvector")
         or "backends.pgvector" in k
         or k == "omop_emb.backends"
@@ -43,16 +46,14 @@ def _evict_faiss_modules() -> dict:
     Also evicts omop_emb.storage.faiss so the __getattr__ lazy cache is
     cleared and attribute-access tests get a fresh module.
     """
-    keys = [
-        k for k in sys.modules
-        if k.startswith("faiss") or "storage.faiss" in k
-    ]
+    keys = [k for k in sys.modules if k.startswith("faiss") or "storage.faiss" in k]
     return {k: sys.modules.pop(k) for k in keys}
 
 
 # ---------------------------------------------------------------------------
 # pgvector — direct module imports still raise immediately
 # ---------------------------------------------------------------------------
+
 
 def test_pg_backend_missing_pgvector_install_hint():
     """Directly importing pg_backend without pgvector raises with the install hint."""
@@ -79,6 +80,7 @@ def test_pgvector_subpackage_missing_pgvector_install_hint():
 # ---------------------------------------------------------------------------
 # pgvector — lazy-shielded imports do NOT raise at package level
 # ---------------------------------------------------------------------------
+
 
 def test_omop_emb_importable_without_pgvector():
     """Top-level import of omop_emb succeeds even when pgvector is not installed."""
@@ -112,6 +114,7 @@ def test_backends_pgvector_attr_missing_install_hint():
 # FAISS — direct module import still raises immediately
 # ---------------------------------------------------------------------------
 
+
 def test_faiss_cache_module_missing_install_hint():
     """Directly importing faiss_cache without faiss raises with the install hint."""
     saved = _evict_faiss_modules()
@@ -126,6 +129,7 @@ def test_faiss_cache_module_missing_install_hint():
 # ---------------------------------------------------------------------------
 # FAISS — lazy-shielded imports do NOT raise at package level
 # ---------------------------------------------------------------------------
+
 
 def test_faiss_storage_importable_without_faiss():
     """omop_emb.storage.faiss is importable even when faiss is not installed."""

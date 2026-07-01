@@ -3,7 +3,7 @@
 from contextlib import contextmanager
 from typing import Any, Iterator, Sequence
 
-from sqlalchemy import Column, Integer, MetaData, Select, String, Table, select, text
+from sqlalchemy import Column, Select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.base import ColumnCollection
 
@@ -14,11 +14,6 @@ from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 KNN_CIDS_TABLE = "_knn_cids"
 KNN_DOMS_TABLE = "_knn_doms"
 KNN_VOCS_TABLE = "_knn_vocs"
-
-_TEMP_FILTER_METADATA = MetaData()
-KNN_CIDS_CORE_TABLE = Table(KNN_CIDS_TABLE, _TEMP_FILTER_METADATA, Column("id", Integer))
-KNN_DOMS_CORE_TABLE = Table(KNN_DOMS_TABLE, _TEMP_FILTER_METADATA, Column("id", String))
-KNN_VOCS_CORE_TABLE = Table(KNN_VOCS_TABLE, _TEMP_FILTER_METADATA, Column("id", String))
 
 
 def apply_concept_filter_where(
@@ -40,13 +35,18 @@ def apply_concept_filter_where(
     -----
     Assumes :func:`setup_concept_filter_temps` has already populated the
     referenced temp tables in the same transaction.
+
+    Temp-table subqueries use ``text()`` rather than SQLAlchemy ``Table``
+    objects. :func:`temp_filter_table` always places temp tables in
+    ``pg_temp``. Raw ``text()`` bypasses any `schema_translate_map` on the engine
+    and lets PostgreSQL resolve the name through ``pg_temp`` as normal.
     """
     if concept_filter.concept_ids is not None:
-        stmt = stmt.where(columns.concept_id.in_(select(KNN_CIDS_CORE_TABLE.c.id)))
+        stmt = stmt.where(text(f'concept_id IN (SELECT id FROM "{KNN_CIDS_TABLE}")'))
     if concept_filter.domains is not None:
-        stmt = stmt.where(columns.domain_id.in_(select(KNN_DOMS_CORE_TABLE.c.id)))
+        stmt = stmt.where(text(f'domain_id IN (SELECT id FROM "{KNN_DOMS_TABLE}")'))
     if concept_filter.vocabularies is not None:
-        stmt = stmt.where(columns.vocabulary_id.in_(select(KNN_VOCS_CORE_TABLE.c.id)))
+        stmt = stmt.where(text(f'vocabulary_id IN (SELECT id FROM "{KNN_VOCS_TABLE}")'))
     if concept_filter.require_standard:
         stmt = stmt.where(columns.is_standard == True)  # noqa: E712
     if concept_filter.require_active:

@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v1.1.0...v1.1.1) (2026-07-02)
+
+
+### Bug Fixes
+
+* Temp table hotfix for schema ([ba5a055](https://github.com/AustralianCancerDataNetwork/omop-emb/commit/ba5a055f134c70c29ff0a39f6691fcede0b04b23))
+
 # [1.1.0](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v1.0.2...v1.1.0) (2026-06-30)
 
 

@@ -7,7 +7,7 @@ from typing import ClassVar, Dict, Tuple
 
 from pydantic import Field
 from sqlalchemy import Engine
-from oa_configurator import DatabaseConfig, PackageConfigBase, ResourceSpec
+from oa_configurator import DatabaseConfig, PackageConfigBase, ResourceKind, ResourceSpec
 
 from omop_alchemy.config import OmopAlchemyConfig
 
@@ -36,8 +36,7 @@ class OmopEmbConfig(PackageConfigBase):
         display_name="Embedding Database",
         description="pgvector database for storing OMOP concept embeddings.",
         connection_name_hint="emb",
-        cdm_schema_default="public",
-        is_cdm_database=False,
+        resource_kind=ResourceKind.embedding,
     )
     TEST_DB: ClassVar[ResourceSpec] = ResourceSpec(
         semantic_name="test_emb_db",
@@ -46,8 +45,7 @@ class OmopEmbConfig(PackageConfigBase):
             "Dedicated PostgreSQL/pgvector database for running omop-emb integration tests."
         ),
         connection_name_hint="pg_test_emb",
-        is_cdm_database=False,
-        cdm_schema_default="public",
+        resource_kind=ResourceKind.embedding,
         connection_defaults=DatabaseConfig(
             dialect="postgresql+psycopg",
             host="localhost",

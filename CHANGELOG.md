@@ -1,3 +1,6 @@
+> [!NOTE]
+> This file is no longer maintained. Release history from this point forward is in [GitHub Releases](https://github.com/AustralianCancerDataNetwork/omop-emb/releases).
+
 ## [1.1.1](https://github.com/AustralianCancerDataNetwork/omop-emb/compare/v1.1.0...v1.1.1) (2026-07-02)
 
 

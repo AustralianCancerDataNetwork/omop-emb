@@ -181,8 +181,42 @@ class OllamaProvider(EmbeddingProvider):
         )
 
 
+class OpenAIProvider(EmbeddingProvider):
+    """Provider for OpenAI-hosted models (or any OpenAI-compatible API).
+
+    Model names require no tag normalisation, unlike Ollama's ``name:tag``
+    requirement. Embedding dimensions have no discovery endpoint equivalent to
+    Ollama's ``POST /api/show``, so :meth:`get_embedding_dim` uses the base
+    class's default (``None``) — :attr:`EmbeddingClient.embedding_dim` already
+    falls back to a live probe (embedding a test string and reading the
+    resulting shape) whenever a provider cannot discover the dimension via
+    its API.
+    """
+
+    @property
+    def provider_type(self) -> ProviderType:
+        return ProviderType.OPENAI
+
+    def _canonical_model_name_impl(self, name: str) -> str:
+        """Return *name* unchanged (no tag normalisation required).
+
+        Parameters
+        ----------
+        name : str
+            Model name, e.g. ``'text-embedding-3-large'``.
+
+        Returns
+        -------
+        str
+            The same model name, stripped of surrounding whitespace.
+        """
+        return name.strip()
+
+
 def get_provider_from_provider_type(provider_type: ProviderType) -> EmbeddingProvider:
     """Map a ProviderType enum to an EmbeddingProvider instance."""
     if provider_type == ProviderType.OLLAMA:
         return OllamaProvider()
+    if provider_type == ProviderType.OPENAI:
+        return OpenAIProvider()
     raise ValueError(f"Unsupported provider type: {provider_type}")

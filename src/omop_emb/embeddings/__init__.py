@@ -7,6 +7,7 @@ from .embedding_providers import (
     EmbeddingProvider,
     get_provider_from_provider_type,
     OllamaProvider,
+    OpenAIProvider,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "EmbeddingProvider",
     "get_provider_from_provider_type",
     "OllamaProvider",
+    "OpenAIProvider",
 ]

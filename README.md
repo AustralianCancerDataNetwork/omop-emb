@@ -39,6 +39,30 @@ omop-emb embeddings search --api-base http://localhost:11434/v1 --api-key ollama
     --standard-only --domain Condition --k 5
 ```
 
+**Ingest concepts (OpenAI-hosted model):**
+
+Configure everything once via oa-configurator (see
+[Configuration via oa-configurator](#configuration-via-oa-configurator) below)
+rather than exporting connection details and passing an API key on the command
+line:
+
+```bash
+omop-config configure omop_alchemy
+# CDM database connection
+
+omop-config configure omop_emb
+# backend: sqlitevec
+# sqlite_path: /data/omop_emb.db
+# provider_type: openai
+# api_base: https://api.openai.com/v1
+# api_key: <your OpenAI API key>
+# embedding_model: text-embedding-3-large
+```
+
+```bash
+omop-emb embeddings add-embeddings   # backend/CDM/provider/model/api_base/api_key all resolved from config
+```
+
 **pgvector with HNSW index:**
 
 ```bash

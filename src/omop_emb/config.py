@@ -19,9 +19,13 @@ class ProviderType(StrEnum):
     -------
     OLLAMA
         Self-hosted models served via the Ollama runtime.
+    OPENAI
+        OpenAI-hosted models (or any OpenAI-compatible API), authenticated via
+        an API key rather than a local, unauthenticated endpoint.
     """
 
     OLLAMA = "ollama"
+    OPENAI = "openai"
 
 
 class OmopEmbConfig(PackageConfigBase):

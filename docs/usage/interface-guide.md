@@ -220,12 +220,12 @@ primary backend — no CDM round-trip at query time.
 
 ## EmbeddingClient and providers
 
-!!! note
-    Currently, only `OllamaProvider` is supported.
-
 `EmbeddingClient` wraps any OpenAI-compatible endpoint. It canonicalises the
 model name at construction time and exposes `canonical_model_name` as the stable
-identifier used in the registry.
+identifier used in the registry. Two providers are supported: `OllamaProvider`
+for self-hosted models served via Ollama, and `OpenAIProvider` for OpenAI-hosted
+models (or any OpenAI-compatible API reachable with an API key, without an
+Ollama compatibility layer in front of it).
 
 ```python
 from omop_emb import EmbeddingClient
@@ -242,6 +242,19 @@ print(client.canonical_model_name)  # "nomic-embed-text:v1.5"
 print(client.embedding_dim)         # auto-discovered via Ollama /api/show
 ```
 
+```python
+# OpenAI — hosted model, authenticated via API key
+client = EmbeddingClient(
+    model="text-embedding-3-large",
+    api_base="https://api.openai.com/v1",
+    api_key="sk-...",
+    provider_type=ProviderType.OPENAI,
+)
+
+print(client.canonical_model_name)  # "text-embedding-3-large"
+print(client.embedding_dim)         # discovered via a live probe call (no discovery endpoint)
+```
+
 ---
 
 ## Model name validation
@@ -254,6 +267,11 @@ print(client.embedding_dim)         # auto-discovered via Ollama /api/show
 - ✅ `llama3:8b`
 - Any name with an explicit, immutable tag
 
+**OpenAI:**
+
+- ✅ `text-embedding-3-large`
+- Any name — no tag normalisation is required or applied
+
 ### Invalid names (raise `ValueError`)
 
 **Ollama:**
@@ -265,7 +283,9 @@ print(client.embedding_dim)         # auto-discovered via Ollama /api/show
     **Why the strictness?** In long-term healthcare data storage, `:latest` is a
     moving target. Running `ollama pull llama3` silently changes which model
     version `:latest` points to, breaking consistency between stored embeddings
-    and new query embeddings.
+    and new query embeddings. OpenAI-hosted model identifiers do not have this
+    problem: a given name (e.g. `text-embedding-3-large`) refers to a fixed
+    model version, so no equivalent tag requirement applies.
 
 ---
 

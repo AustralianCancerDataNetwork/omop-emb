@@ -5,6 +5,7 @@ import pytest
 from omop_emb.config import ProviderType
 from omop_emb.embeddings import (
     OllamaProvider,
+    OpenAIProvider,
     get_provider_from_provider_type,
 )
 
@@ -50,6 +51,43 @@ class TestOllamaProviderCanonicalModelName:
         assert OllamaProvider().canonical_model_name("  llama3:8b  ") == "llama3:8b"
 
 
+class TestOpenAIProviderCanonicalModelName:
+    """OpenAIProvider.canonical_model_name applies no tag normalisation."""
+
+    def test_returns_name_unchanged(self):
+        assert (
+            OpenAIProvider().canonical_model_name("text-embedding-3-large")
+            == "text-embedding-3-large"
+        )
+
+    def test_strips_whitespace(self):
+        assert (
+            OpenAIProvider().canonical_model_name("  text-embedding-3-large  ")
+            == "text-embedding-3-large"
+        )
+
+    def test_idempotent(self):
+        provider = OpenAIProvider()
+        canonical = provider.canonical_model_name("text-embedding-3-large")
+        assert provider.canonical_model_name(canonical) == canonical
+
+    def test_untagged_name_is_not_rejected(self):
+        """Unlike Ollama, a bare name with no ':tag' is perfectly valid."""
+        assert OpenAIProvider().canonical_model_name("text-embedding-3-large")
+
+
+@pytest.mark.unit
+class TestOpenAIProviderGetEmbeddingDim:
+    def test_returns_none(self):
+        """No discovery endpoint exists; EmbeddingClient falls back to a live probe."""
+        assert (
+            OpenAIProvider().get_embedding_dim(
+                "text-embedding-3-large", "https://api.openai.com/v1"
+            )
+            is None
+        )
+
+
 @pytest.mark.unit
 class TestGetProviderFromProviderType:
     def test_ollama_type_returns_ollama_provider(self):
@@ -60,6 +98,16 @@ class TestGetProviderFromProviderType:
         assert (
             get_provider_from_provider_type(ProviderType.OLLAMA).provider_type
             == ProviderType.OLLAMA
+        )
+
+    def test_openai_type_returns_openai_provider(self):
+        provider = get_provider_from_provider_type(ProviderType.OPENAI)
+        assert isinstance(provider, OpenAIProvider)
+
+    def test_openai_result_has_correct_provider_type(self):
+        assert (
+            get_provider_from_provider_type(ProviderType.OPENAI).provider_type
+            == ProviderType.OPENAI
         )
 
     def test_each_call_returns_a_fresh_instance(self):

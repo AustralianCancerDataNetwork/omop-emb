@@ -133,6 +133,14 @@ class SharedBackendTests:
         )
         assert count == len(CONCEPT_RECORDS)
 
+    def test_get_embedding_count_by_vocabulary(self, backend: EmbeddingBackend):
+        self._upsert_all(backend)
+        counts = backend.get_embedding_count_by_vocabulary(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+        )
+        assert counts == {"SNOMED": 2, "RxNorm": 2}
+
     def test_upsert_is_idempotent(self, backend: EmbeddingBackend):
         self._upsert_all(backend)
         backend.upsert_embeddings(

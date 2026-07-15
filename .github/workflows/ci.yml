@@ -14,6 +14,14 @@ jobs:
       postgres-password: test
       postgres-db: postgres
       setup-commands: |
+        uv run omop-config configure omop_alchemy \
+          --dialect postgresql+psycopg \
+          --host localhost \
+          --port 5432 \
+          --user test \
+          --password test \
+          --database-name postgres \
+          --cdm-schema public
         uv run omop-config configure omop_emb \
           --test-dialect postgresql+psycopg \
           --test-database pg_test_emb \

@@ -227,7 +227,7 @@ class EmbeddingClient:
                     f"({len(chunk)} text(s) in this batch, longest {longest} chars). "
                     f"Possible causes include exceeding the model's maximum input/context "
                     f"length, but could equally be auth, rate-limit, or connectivity issues "
-                    f"— see the original error for the actual cause: {exc}"
+                    f"Original Error: {exc}"
                 ) from exc
             buffer.extend(emb.embedding for emb in response.data)
 

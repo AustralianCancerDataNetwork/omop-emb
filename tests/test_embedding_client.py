@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, Mock, patch
 
+import httpx
 import numpy as np
 import pytest
+from openai import APIError
 
 from omop_emb.config import OmopEmbConfig, ProviderType
 from omop_emb.embeddings import EmbeddingClient, EmbeddingRole, OllamaProvider
@@ -164,6 +166,22 @@ class TestEmbeddingDim:
         _ = client.embedding_dim
         provider.get_embedding_dim.assert_called_once()
 
+    def test_live_probe_api_error_wrapped_as_embedding_client_error(self, mock_openai):
+        """When the provider can't discover the dim, the live-probe call is used —
+        a raw provider APIError there must not leak past the client unwrapped."""
+        _, oi = mock_openai
+        provider = self._mock_provider(dim=0)
+        provider.get_embedding_dim.return_value = None
+        oi.embeddings.create.side_effect = APIError(
+            "boom", httpx.Request("POST", "http://test/v1/embeddings"), body=None
+        )
+        client = EmbeddingClient(
+            model=OLLAMA_MODEL, api_base=OLLAMA_BASE, provider=provider
+        )
+
+        with pytest.raises(EmbeddingClientError, match="dimension probe failed"):
+            _ = client.embedding_dim
+
 
 # ---------------------------------------------------------------------------
 # embeddings(): batching, shapes, input coercions
@@ -225,6 +243,31 @@ class TestEmbeddings:
         result = c.embeddings(["a", "b", "c"], embedding_role=EmbeddingRole.DOCUMENT)
         assert oi.embeddings.create.call_count == 2
         assert result.shape == (3, 2)
+
+    def test_api_error_wrapped_as_embedding_client_error(self, client):
+        """A raw provider APIError must not leak past the client unwrapped."""
+        c, oi = client
+        original = APIError(
+            "maximum context length exceeded",
+            httpx.Request("POST", "http://test/v1/embeddings"),
+            body=None,
+        )
+        oi.embeddings.create.side_effect = original
+
+        with pytest.raises(EmbeddingClientError) as exc_info:
+            c.embeddings("some very long text", embedding_role=EmbeddingRole.DOCUMENT)
+
+        assert exc_info.value.__cause__ is original
+
+    def test_api_error_message_is_generic_not_a_diagnosis(self, client):
+        """The wrapped message must not assert a specific cause it can't confirm."""
+        c, oi = client
+        oi.embeddings.create.side_effect = APIError(
+            "boom", httpx.Request("POST", "http://test/v1/embeddings"), body=None
+        )
+
+        with pytest.raises(EmbeddingClientError, match="Possible causes include"):
+            c.embeddings("text", embedding_role=EmbeddingRole.DOCUMENT)
 
     def test_texts_exactly_filling_batch_produce_one_api_call(self, mock_openai):
         _, oi = mock_openai

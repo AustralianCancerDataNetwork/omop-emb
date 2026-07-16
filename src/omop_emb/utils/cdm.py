@@ -11,7 +11,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from omop_alchemy.cdm.model.vocabulary import Concept
-from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from omop_emb.utils.embedding_utils import CDMConceptFilter
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ def check_concept_cdm(cdm_engine: Engine) -> None:
 
 
 def fetch_cdm_concepts_for_filter(
-    concept_filter: Optional[EmbeddingConceptFilter],
+    concept_filter: Optional[CDMConceptFilter],
     cdm_engine: Engine,
 ) -> dict[int, Row]:
     """Return CDM rows matching *concept_filter*, keyed by concept_id.
@@ -68,7 +68,7 @@ def fetch_cdm_concepts_for_filter(
 
 
 def iter_cdm_concepts_for_filter(
-    concept_filter: Optional[EmbeddingConceptFilter],
+    concept_filter: Optional[CDMConceptFilter],
     cdm_engine: Engine,
     chunk_size: int = 5_000,
 ) -> Iterator[Row]:
@@ -95,7 +95,7 @@ def iter_cdm_concepts_for_filter(
 
 
 def count_missing_concepts(
-    concept_filter: Optional[EmbeddingConceptFilter],
+    concept_filter: Optional[CDMConceptFilter],
     cdm_engine: Engine,
     embedded_ids: set[int],
     chunk_size: int = 10_000,

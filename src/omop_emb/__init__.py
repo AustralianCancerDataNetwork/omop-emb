@@ -28,6 +28,7 @@ from omop_emb.model_registry import (
     RegistryManager,
 )
 from omop_emb.utils.embedding_utils import (
+    CDMConceptFilter,
     EmbeddingConceptFilter,
     NearestConceptMatch,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "EmbeddingModelRecord",
     "RegistryManager",
     "EmbeddingConceptFilter",
+    "CDMConceptFilter",
     "NearestConceptMatch",
     "ConceptEmbeddingRecord",
     "EmbeddingBackend",

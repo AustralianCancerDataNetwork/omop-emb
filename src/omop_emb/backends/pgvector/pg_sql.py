@@ -224,8 +224,6 @@ def q_nearest_concept_ids(
         inner_stmt = apply_concept_filter_where(
             inner_stmt, sa_inspect(embedding_table).columns, concept_filter
         )
-        if concept_filter.limit is not None:
-            inner_stmt = inner_stmt.limit(concept_filter.limit)
 
     lateral_subq = inner_stmt.lateral("top_k")
 

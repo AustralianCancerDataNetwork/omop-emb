@@ -50,7 +50,11 @@ from omop_emb.backends.base_backend import (
 )
 from omop_emb.backends.index_config import IndexConfig
 from omop_emb.config import BackendType, MetricType, ProviderType
-from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
+from omop_emb.utils.embedding_utils import (
+    CDMConceptFilter,
+    EmbeddingConceptFilter,
+    NearestConceptMatch,
+)
 
 if TYPE_CHECKING:
     from omop_emb.storage.faiss import FAISSCache
@@ -240,6 +244,10 @@ class EmbeddingReaderInterface:
     # Search
     # ------------------------------------------------------------------
 
+    def _resolve_effective_k(self, k: Optional[int]) -> int:
+        """Resolve the number of nearest neighbours to request."""
+        return k or self._k
+
     def get_nearest_concepts(
         self,
         query_embedding: np.ndarray,
@@ -267,7 +275,7 @@ class EmbeddingReaderInterface:
             exist at all). Enrichment fields of each NearestConceptMatch are 
             ``None`` if no CDM engine was provided to the interface.
         """
-        effective_k = k or (concept_filter.limit if concept_filter else None) or self._k
+        effective_k = self._resolve_effective_k(k)
 
         if self._faiss_cache is not None:
             if faiss_index_config is None:
@@ -358,7 +366,7 @@ class EmbeddingReaderInterface:
             raise ValueError(f"No stored embedding for concept_ids: {missing}")
 
         vectors = np.asarray([stored[cid] for cid in ids], dtype=np.float64)
-        effective_k = k or (concept_filter.limit if concept_filter else None) or self._k
+        effective_k = self._resolve_effective_k(k)
 
         raw = self.get_nearest_concepts(
             vectors,
@@ -467,7 +475,7 @@ class EmbeddingReaderInterface:
         self,
         omop_cdm_engine: Engine,
         *,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        concept_filter: Optional[CDMConceptFilter] = None,
     ) -> Mapping[int, Row]:
         """Return CDM rows for concepts lacking embeddings, keyed by concept_id.
 
@@ -491,7 +499,7 @@ class EmbeddingReaderInterface:
         self,
         omop_cdm_engine: Engine,
         *,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        concept_filter: Optional[CDMConceptFilter] = None,
     ) -> int:
         """Return how many CDM concepts match *concept_filter* but lack an embedding."""
         embedded_ids = self._backend.get_all_stored_concept_ids(
@@ -505,7 +513,7 @@ class EmbeddingReaderInterface:
         omop_cdm_engine: Engine,
         *,
         batch_size: int,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        concept_filter: Optional[CDMConceptFilter] = None,
         limit: Optional[int] = None,
     ) -> Iterable[Mapping[int, Row]]:
         """Yield ``{concept_id: Row}`` batches for concepts lacking embeddings.
@@ -554,7 +562,7 @@ class EmbeddingReaderInterface:
             return raw
 
         unique_ids = {r.concept_id for results in raw for r in results}
-        concept_filter = EmbeddingConceptFilter(concept_ids=tuple(unique_ids))
+        concept_filter = CDMConceptFilter(concept_ids=tuple(unique_ids))
         rows = fetch_cdm_concepts_for_filter(
             concept_filter=concept_filter, cdm_engine=self._cdm_engine
         )

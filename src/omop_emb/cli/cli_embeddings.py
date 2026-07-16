@@ -20,7 +20,11 @@ from omop_emb.config import (
 )
 from omop_emb.embeddings import EmbeddingClient
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
-from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
+from omop_emb.utils.embedding_utils import (
+    CDMConceptFilter,
+    EmbeddingConceptFilter,
+    NearestConceptMatch,
+)
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(
@@ -196,7 +200,7 @@ def add_embeddings(
         embedding_writer.register_model()
 
         # Filter concepts
-        concept_filter = EmbeddingConceptFilter(
+        concept_filter = CDMConceptFilter(
             require_standard=standard_only,
             domains=tuple(domains) if domains else None,
             vocabularies=tuple(vocabularies) if vocabularies else None,
@@ -650,7 +654,6 @@ def search(
         require_standard=standard_only,
         domains=tuple(domains) if domains else None,
         vocabularies=tuple(vocabularies) if vocabularies else None,
-        limit=k,
     )
 
     for batch_id, batched_queries in enumerate(

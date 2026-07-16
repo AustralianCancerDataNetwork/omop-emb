@@ -20,8 +20,12 @@ logger = logging.getLogger(__name__)
 class EmbeddingConceptFilter:
     """Search constraints applied during KNN retrieval.
 
-    All fields are optional. Unset fields impose no constraint. ``limit``
-    maps directly to the ``k`` nearest neighbours returned.
+    All fields are optional. Unset fields impose no constraint. This filter
+    controls only *which* concepts are eligible candidates; it never controls
+    *how many* results come back. Pass ``k`` to
+    :meth:`EmbeddingReaderInterface.get_nearest_concepts` (or similar) for that.
+    For CDM-only queries (e.g. ``get_concepts_without_embedding``), use
+    :class:`CDMConceptFilter` instead.
 
     Notes
     -----
@@ -42,9 +46,51 @@ class EmbeddingConceptFilter:
     require_active : bool
         When ``True``, only active concepts (``invalid_reason`` not in
         ``('D', 'U')``) are returned. Default ``False``.
+    """
+
+    concept_ids: Optional[tuple[int, ...]] = None
+    domains: Optional[tuple[str, ...]] = None
+    vocabularies: Optional[tuple[str, ...]] = None
+    require_standard: bool = False
+    require_active: bool = False
+
+    def is_empty(self) -> bool:
+        """Return ``True`` if no constraints are set."""
+        return (
+            self.concept_ids is None
+            and self.domains is None
+            and self.vocabularies is None
+            and not self.require_standard
+            and not self.require_active
+        )
+
+
+@dataclass(frozen=True)
+class CDMConceptFilter:
+    """Search constraints applied to plain CDM ``concept``-table queries.
+
+    All fields are optional. Unset fields impose no constraint. Distinct from
+    :class:`EmbeddingConceptFilter`: this filter is for CDM-only queries (e.g.
+    ``get_concepts_without_embedding``, ``count_concepts_without_embedding``),
+    not KNN search, and ``limit`` caps the number of CDM rows returned.
+
+    Attributes
+    ----------
+    concept_ids : tuple[int, ...], optional
+        Restrict results to this set of concept IDs.
+    domains : tuple[str, ...], optional
+        Restrict results to concepts in these OMOP domains.
+    vocabularies : tuple[str, ...], optional
+        Restrict results to concepts from these vocabularies.
+    require_standard : bool
+        When ``True``, only standard concepts (``standard_concept`` in
+        ``('S', 'C')``) are returned. Default ``False``.
+    require_active : bool
+        When ``True``, only active concepts (``invalid_reason`` not in
+        ``('D', 'U')``) are returned. Default ``False``.
     limit : int, optional
-        Maximum number of nearest neighbours to return. If not set, the
-        backend default is used.
+        Maximum number of CDM rows to return. If not set, all matching rows
+        are returned.
     """
 
     concept_ids: Optional[tuple[int, ...]] = None
@@ -57,7 +103,7 @@ class EmbeddingConceptFilter:
     def __post_init__(self) -> None:
         if self.limit is not None and self.limit <= 0:
             raise ValueError(
-                f"EmbeddingConceptFilter.limit must be a positive integer, got {self.limit}."
+                f"CDMConceptFilter.limit must be a positive integer, got {self.limit}."
             )
 
     def apply(self, query: Select, table: type) -> Select:

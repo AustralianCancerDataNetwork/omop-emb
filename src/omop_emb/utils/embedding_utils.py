@@ -74,6 +74,14 @@ class CDMConceptFilter:
     ``get_concepts_without_embedding``, ``count_concepts_without_embedding``),
     not KNN search, and ``limit`` caps the number of CDM rows returned.
 
+    Notes
+    -----
+    Mirrors omop_graph.graph.constraints.SearchConstraintConcept as we cannot 
+    import omop-graph into omop_emb. This issues is being noted here:
+    https://github.com/AustralianCancerDataNetwork/OMOP_Alchemy/issues/11
+    Once that is solved, this can be removed again and imported from omop_alchemy
+    
+
     Attributes
     ----------
     concept_ids : tuple[int, ...], optional

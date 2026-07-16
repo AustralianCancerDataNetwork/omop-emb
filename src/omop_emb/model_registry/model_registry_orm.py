@@ -168,4 +168,4 @@ def ensure_registry_schema(engine: Engine) -> None:
     engine : Engine
         SQLAlchemy engine connected to the registry database.
     """
-    ModelRegistryBase.metadata.create_all(engine, tables=[ModelRegistry.__table__])  # type: ignore[arg-type]
+    ModelRegistryBase.metadata.create_all(engine, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]

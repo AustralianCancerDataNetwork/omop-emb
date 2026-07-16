@@ -234,10 +234,10 @@ class EmbeddingClient:
     ) -> np.ndarray:
         """Cosine-similarity matrix between two sets of terms or embeddings."""
         if isinstance(terms, (str, list)):
-            terms = self.embeddings(terms, embedding_role=terms_role, **kwargs)
+            terms = self.embeddings(terms, embedding_role=terms_role, **kwargs)  # ty: ignore[invalid-argument-type]
         if isinstance(terms_to_match, (str, list)):
             terms_to_match = self.embeddings(
-                terms_to_match, embedding_role=terms_to_match_role, **kwargs
+                terms_to_match, embedding_role=terms_to_match_role, **kwargs  # ty: ignore[invalid-argument-type]
             )
         return self.cosine_similarity(terms, terms_to_match)
 

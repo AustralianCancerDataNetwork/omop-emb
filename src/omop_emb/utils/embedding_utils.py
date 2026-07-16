@@ -81,25 +81,25 @@ class EmbeddingConceptFilter:
             Query with all active constraints and ``limit`` applied.
         """
         if self.concept_ids is not None:
-            query = query.where(table.concept_id.in_(self.concept_ids))
+            query = query.where(table.concept_id.in_(self.concept_ids))  # ty: ignore[unresolved-attribute]
 
         if self.domains is not None:
-            query = query.where(table.domain_id.in_(self.domains))
+            query = query.where(table.domain_id.in_(self.domains))  # ty: ignore[unresolved-attribute]
 
         if self.vocabularies is not None:
-            query = query.where(table.vocabulary_id.in_(self.vocabularies))
+            query = query.where(table.vocabulary_id.in_(self.vocabularies))  # ty: ignore[unresolved-attribute]
 
         if self.require_standard:
             if hasattr(table, "is_standard"):
-                query = query.where(table.is_standard == True)  # noqa: E712
+                query = query.where(table.is_standard == True)  # noqa: E712  # ty: ignore[invalid-argument-type]
             else:
-                query = query.where(table.standard_concept.in_(["S", "C"]))
+                query = query.where(table.standard_concept.in_(["S", "C"]))  # ty: ignore[unresolved-attribute]
 
         if self.require_active:
             if hasattr(table, "is_valid"):
-                query = query.where(table.is_valid == True)  # noqa: E712
+                query = query.where(table.is_valid == True)  # noqa: E712  # ty: ignore[invalid-argument-type]
             else:
-                query = query.where(table.invalid_reason.not_in(["D", "U"]))
+                query = query.where(table.invalid_reason.not_in(["D", "U"]))  # ty: ignore[unresolved-attribute]
 
         if self.limit is not None:
             query = query.limit(self.limit)

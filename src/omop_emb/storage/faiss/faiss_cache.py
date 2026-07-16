@@ -367,7 +367,7 @@ class FAISSCache:
                 batch_vecs = batch_vecs.copy()
                 faiss.normalize_L2(batch_vecs)
 
-            index.add_with_ids(batch_vecs, batch.concept_ids)  # type: ignore
+            index.add_with_ids(batch_vecs, batch.concept_ids)
 
             row_count += len(batch.concept_ids)
 
@@ -454,11 +454,11 @@ class FAISSCache:
                 raise ValueError("backend is required when concept_filter is set.")
             selector_ids = self._build_filter_selector_ids(concept_filter, backend, metric_type, index)
             if selector_ids is not None:
-                sel = faiss.IDSelectorBatch(selector_ids)  # type: ignore[reportCallIssue]
+                sel = faiss.IDSelectorBatch(selector_ids)
                 params = faiss.SearchParameters()
                 params.sel = sel
 
-        distances, ids_matrix = index.search(query, k, params=params)  # type: ignore
+        distances, ids_matrix = index.search(query, k, params=params)
 
         results: list[tuple[NearestConceptMatch, ...]] = []
         for dist_row, id_row in zip(distances, ids_matrix):
@@ -556,7 +556,7 @@ class FAISSCache:
             idx = faiss.IndexIVFFlat(
                 quantizer, dimensions, index_config.n_lists, faiss_metric
             )
-            idx.train(train_vecs)  # type: ignore
+            idx.train(train_vecs)
             idx.nprobe = index_config.n_probe
             return idx
 
@@ -573,7 +573,7 @@ class FAISSCache:
                 index_config.n_subquantizers,
                 index_config.n_bits,
             )
-            idx.train(train_vecs)  # type: ignore
+            idx.train(train_vecs)
             idx.nprobe = index_config.n_probe
             return idx
 

@@ -435,8 +435,9 @@ class EmbeddingReaderInterface:
         Raises
         ------
         ValueError
-            If *concept_ids* is empty, *weights* has a mismatched length, or
-            any *concept_ids* entry has no stored embedding.
+            If *concept_ids* is empty, *weights* has a mismatched length,
+            *weights* sums to zero, or any *concept_ids* entry has no stored
+            embedding.
         """
         if not concept_ids:
             raise ValueError("concept_ids must be non-empty.")
@@ -445,6 +446,8 @@ class EmbeddingReaderInterface:
                 f"weights must have the same length as concept_ids "
                 f"({len(weights)} != {len(concept_ids)})."
             )
+        if weights is not None and sum(weights) == 0:
+            raise ValueError("weights sum to zero; cannot compute a weighted average.")
 
         vectors_by_id = self.get_embeddings_by_concept_ids(concept_ids)
         missing = [cid for cid in concept_ids if cid not in vectors_by_id]

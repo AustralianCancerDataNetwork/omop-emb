@@ -58,7 +58,14 @@ class EmbeddingProvider(ABC):
         str
             Canonical model name, e.g. ``'llama3:8b'`` or
             ``'text-embedding-3-small'``.
+
+        Raises
+        ------
+        ValueError
+            If *name* is empty or whitespace-only.
         """
+        if not name.strip():
+            raise ValueError("model name must not be empty.")
         canonical_model_name = self._canonical_model_name_impl(name)
         logger.info(
             f"Set canonical model name for provider {self.provider_type.value!r}: {canonical_model_name!r}"
@@ -67,7 +74,12 @@ class EmbeddingProvider(ABC):
 
     @abstractmethod
     def _canonical_model_name_impl(self, name: str) -> str:
-        """Provider-specific implementation of canonical model name resolution."""
+        """Provider-specific implementation of canonical model name resolution.
+
+        *name* is guaranteed non-empty and non-whitespace-only by the caller
+        (:meth:`canonical_model_name`) — implementations do not need to
+        re-check for that.
+        """
         ...
 
     def get_embedding_dim(self, model: str, api_base: URL) -> Optional[int]:

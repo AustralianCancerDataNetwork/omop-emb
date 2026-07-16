@@ -15,6 +15,7 @@ from omop_emb.config import (
     MetricType,
     OmopEmbConfig,
     ProviderType,
+    provider_type_examples,
     resolve_omop_cdm_engine,
 )
 from omop_emb.embeddings import EmbeddingClient
@@ -104,7 +105,7 @@ def add_embeddings(
         Optional[ProviderType],
         typer.Option(
             "--provider",
-            help="Embedding provider type (e.g. 'ollama'). Defaults to the value configured via omop-config.",
+            help=f"Embedding provider type (e.g. {provider_type_examples()}). Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
     ] = None,
@@ -260,7 +261,7 @@ def create_index(
         Optional[ProviderType],
         typer.Option(
             "--provider",
-            help="Embedding provider type (e.g. 'ollama'). Defaults to the value configured via omop-config.",
+            help=f"Embedding provider type (e.g. {provider_type_examples()}). Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
     ] = None,
@@ -376,7 +377,7 @@ def add_embeddings_with_index(
         Optional[ProviderType],
         typer.Option(
             "--provider",
-            help="Embedding provider type (e.g. 'ollama'). Defaults to the value configured via omop-config.",
+            help=f"Embedding provider type (e.g. {provider_type_examples()}). Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
     ] = None,
@@ -524,7 +525,7 @@ def search(
         Optional[ProviderType],
         typer.Option(
             "--provider",
-            help="Embedding provider type (e.g. 'ollama'). Defaults to the value configured via omop-config.",
+            help=f"Embedding provider type (e.g. {provider_type_examples()}). Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
     ] = None,

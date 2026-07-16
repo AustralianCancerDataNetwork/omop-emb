@@ -50,6 +50,14 @@ class TestOllamaProviderCanonicalModelName:
     def test_strips_whitespace_with_explicit_tag(self):
         assert OllamaProvider().canonical_model_name("  llama3:8b  ") == "llama3:8b"
 
+    def test_raises_for_empty_name(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            OllamaProvider().canonical_model_name("")
+
+    def test_raises_for_whitespace_only_name(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            OllamaProvider().canonical_model_name("   ")
+
 
 class TestOpenAIProviderCanonicalModelName:
     """OpenAIProvider.canonical_model_name applies no tag normalisation."""
@@ -74,6 +82,14 @@ class TestOpenAIProviderCanonicalModelName:
     def test_untagged_name_is_not_rejected(self):
         """Unlike Ollama, a bare name with no ':tag' is perfectly valid."""
         assert OpenAIProvider().canonical_model_name("text-embedding-3-large")
+
+    def test_raises_for_empty_name(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            OpenAIProvider().canonical_model_name("")
+
+    def test_raises_for_whitespace_only_name(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            OpenAIProvider().canonical_model_name("   ")
 
 
 @pytest.mark.unit

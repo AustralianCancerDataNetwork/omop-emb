@@ -28,6 +28,18 @@ class ProviderType(StrEnum):
     OPENAI = "openai"
 
 
+def provider_type_examples() -> str:
+    """Return a human-readable list of ProviderType values for help text.
+
+    e.g. ``"'ollama' or 'openai'"`` for two values, or
+    ``"'ollama', 'openai', or 'anthropic'"`` once a third is added.
+    """
+    values = [f"'{p.value}'" for p in ProviderType]
+    if len(values) <= 2:
+        return " or ".join(values)
+    return f"{', '.join(values[:-1])}, or {values[-1]}"
+
+
 class OmopEmbConfig(PackageConfigBase):
     """oa-configurator config class for omop-emb.
 
@@ -104,7 +116,7 @@ class OmopEmbConfig(PackageConfigBase):
     )
     provider_type: ProviderType = Field(
         default=ProviderType.OLLAMA,
-        description="Embedding provider type (e.g. 'ollama').",
+        description=f"Embedding provider type (e.g. {provider_type_examples()}).",
     )
     embedding_model: str = Field(
         default="qwen3-embedding:0.6b",

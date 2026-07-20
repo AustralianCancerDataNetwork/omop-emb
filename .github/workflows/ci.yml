@@ -1,0 +1,33 @@
+name: CI
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+jobs:
+  label-gate:
+    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/label-gate.yml@main
+  build-test:
+    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-postgres.yml@main
+    with:
+      postgres-image: pgvector/pgvector:pg16
+      postgres-user: test
+      postgres-password: test
+      postgres-db: postgres
+      setup-commands: |
+        uv run omop-config configure omop_alchemy \
+          --dialect postgresql+psycopg \
+          --host localhost \
+          --port 5432 \
+          --user test \
+          --password test \
+          --database-name postgres \
+          --cdm-schema public
+        uv run omop-config configure omop_emb \
+          --test-dialect postgresql+psycopg \
+          --test-database pg_test_emb \
+          --test-host localhost \
+          --test-port 5432 \
+          --test-cdm-schema public \
+          --test-user test \
+          --test-password test \
+          --test-database-name test_omop_emb

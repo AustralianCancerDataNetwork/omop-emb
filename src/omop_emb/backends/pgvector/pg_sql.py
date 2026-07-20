@@ -57,7 +57,7 @@ def create_pg_embedding_table(
     base class; this function always issues DDL.
     """
     table_cls = pg_embedding_table_descriptor(model_record)
-    EmbeddingTableBase.metadata.create_all(engine, tables=[table_cls.__table__])  # type: ignore[arg-type]
+    EmbeddingTableBase.metadata.create_all(engine, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
     return table_cls
 
 

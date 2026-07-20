@@ -367,7 +367,7 @@ class FAISSCache:
                 batch_vecs = batch_vecs.copy()
                 faiss.normalize_L2(batch_vecs)
 
-            index.add_with_ids(batch_vecs, batch.concept_ids)
+            index.add_with_ids(batch_vecs, batch.concept_ids)  # ty: ignore[missing-argument]
 
             row_count += len(batch.concept_ids)
 
@@ -454,7 +454,7 @@ class FAISSCache:
                 raise ValueError("backend is required when concept_filter is set.")
             selector_ids = self._build_filter_selector_ids(concept_filter, backend, metric_type, index)
             if selector_ids is not None:
-                sel = faiss.IDSelectorBatch(selector_ids)
+                sel = faiss.IDSelectorBatch(selector_ids)  # ty: ignore[missing-argument]
                 params = faiss.SearchParameters()
                 params.sel = sel
 
@@ -556,7 +556,7 @@ class FAISSCache:
             idx = faiss.IndexIVFFlat(
                 quantizer, dimensions, index_config.n_lists, faiss_metric
             )
-            idx.train(train_vecs)
+            idx.train(train_vecs)  # ty: ignore[missing-argument]
             idx.nprobe = index_config.n_probe
             return idx
 
@@ -573,7 +573,7 @@ class FAISSCache:
                 index_config.n_subquantizers,
                 index_config.n_bits,
             )
-            idx.train(train_vecs)
+            idx.train(train_vecs)  # ty: ignore[missing-argument]
             idx.nprobe = index_config.n_probe
             return idx
 

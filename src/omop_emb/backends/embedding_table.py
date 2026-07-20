@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, fields, is_dataclass
 from typing import TypeVar
 
-_T = TypeVar("_T", bound=type)
-
 from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import DeclarativeBase, MappedColumn, mapped_column
 from sqlalchemy.sql.type_api import TypeEngine
+
+_T = TypeVar("_T", bound=type)
 
 
 @dataclass(frozen=True)

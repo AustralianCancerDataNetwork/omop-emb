@@ -32,6 +32,7 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     dml_upsert_rows,
     query_all_concept_ids,
     query_concept_ids_matching_filter,
+    query_embedding_count_by_vocabulary,
     query_embeddings_by_ids,
     query_filter_metadata_by_ids,
     query_has_any,
@@ -286,3 +287,10 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 table=table,
                 concept_filter=concept_filter,
             )
+
+    def _get_embedding_count_by_vocabulary_impl(
+        self, *, model_record: EmbeddingModelRecord
+    ) -> Mapping[str, int]:
+        table = self._table_cache[model_record.storage_identifier]
+        with self.emb_session_factory() as session:
+            return query_embedding_count_by_vocabulary(session=session, table=table)

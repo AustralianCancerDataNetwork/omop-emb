@@ -15,7 +15,7 @@ import logging
 from typing import List, Optional, Sequence, Union
 
 from numpy import ndarray
-from sqlalchemy import Engine, Integer, Select, inspect as sa_inspect, literal, select, text, TextClause
+from sqlalchemy import Engine, Integer, Select, func, inspect as sa_inspect, literal, select, text, TextClause
 from sqlalchemy.sql import cast, column, values
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.orm import mapped_column
@@ -139,6 +139,23 @@ def q_all_concept_ids(embedding_table: type[PGEmbeddingTable]) -> Select:
     Select
     """
     return select(embedding_table.concept_id)
+
+
+def q_embedding_count_by_vocabulary(embedding_table: type[PGEmbeddingTable]) -> Select:
+    """Build a SELECT for stored embedding counts grouped by vocabulary_id.
+
+    Parameters
+    ----------
+    embedding_table : type[PGEmbeddingTable]
+
+    Returns
+    -------
+    Select
+        Columns: ``vocabulary_id`` (str), ``count`` (int).
+    """
+    return select(
+        embedding_table.vocabulary_id, func.count(embedding_table.concept_id)
+    ).group_by(embedding_table.vocabulary_id)
 
 
 def q_create_extension_pgvector() -> TextClause:

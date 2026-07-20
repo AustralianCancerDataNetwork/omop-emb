@@ -903,6 +903,35 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             )
         )
 
+    @require_registered_model
+    def get_embedding_count_by_vocabulary(
+        self,
+        *,
+        model_name: str,
+        metric_type: MetricType,
+        _model_record: EmbeddingModelRecord,
+    ) -> Mapping[str, int]:
+        """Return the number of stored embeddings, grouped by vocabulary_id.
+
+        Parameters
+        ----------
+        model_name : str
+            Canonical model name including tag.
+        metric_type : MetricType
+
+        Returns
+        -------
+        Mapping[str, int]
+            ``vocabulary_id`` to embedding count, for every vocabulary with at
+            least one stored embedding.
+        """
+        return self._get_embedding_count_by_vocabulary_impl(model_record=_model_record)
+
+    @abstractmethod
+    def _get_embedding_count_by_vocabulary_impl(
+        self, *, model_record: EmbeddingModelRecord
+    ) -> Mapping[str, int]: ...
+
     # ------------------------------------------------------------------
     # Validation helpers
     # ------------------------------------------------------------------

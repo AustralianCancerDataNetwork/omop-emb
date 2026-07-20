@@ -293,6 +293,28 @@ def query_all_concept_ids(session: Session, table: Table) -> set[int]:
     return {int(row[0]) for row in rows}
 
 
+def query_embedding_count_by_vocabulary(session: Session, table: Table) -> dict[str, int]:
+    """Return stored embedding counts grouped by vocabulary_id.
+
+    Parameters
+    ----------
+    session : Session
+    table : Table
+
+    Returns
+    -------
+    dict[str, int]
+        ``vocabulary_id`` to embedding count, for every vocabulary with at
+        least one stored embedding.
+    """
+    stmt = (
+        select(table.c.vocabulary_id, func.count(table.c.concept_id))
+        .group_by(table.c.vocabulary_id)
+    )
+    rows = session.execute(stmt).all()
+    return {row[0]: int(row[1]) for row in rows}
+
+
 def query_embeddings_by_ids(
     session: Session,
     table: Table,

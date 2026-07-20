@@ -222,6 +222,20 @@ class EmbeddingReaderInterface:
             metric_type=self._metric_type,
         )
 
+    def get_embedding_count_by_vocabulary(self) -> Mapping[str, int]:
+        """Return stored embedding counts grouped by vocabulary_id.
+
+        Returns
+        -------
+        Mapping[str, int]
+            ``vocabulary_id`` to embedding count, for every vocabulary with at
+            least one stored embedding.
+        """
+        return self._backend.get_embedding_count_by_vocabulary(
+            model_name=self.canonical_model_name,
+            metric_type=self._metric_type,
+        )
+
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
@@ -322,6 +336,29 @@ class EmbeddingReaderInterface:
             model_name=self.canonical_model_name,
             metric_type=self._metric_type,
             concept_ids=concept_ids,
+        )
+
+    def get_indexed_concept_ids(
+        self,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+    ) -> set[int]:
+        """Return every stored concept_id matching *concept_filter*.
+
+        Parameters
+        ----------
+        concept_filter : EmbeddingConceptFilter, optional
+            Filter constraints to evaluate (domain, vocabulary, standard,
+            concept ID allowlist). When omitted, every stored concept_id is
+            returned.
+
+        Returns
+        -------
+        set[int]
+        """
+        return self._backend.get_concept_ids_matching_filter(
+            model_name=self.canonical_model_name,
+            metric_type=self._metric_type,
+            concept_filter=concept_filter or EmbeddingConceptFilter(),
         )
 
     # ------------------------------------------------------------------

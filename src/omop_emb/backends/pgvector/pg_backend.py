@@ -35,6 +35,7 @@ from omop_emb.backends.pgvector.pg_sql import (
     q_all_concept_ids,
     q_concept_filter_metadata,
     q_concept_ids_matching_filter,
+    q_embedding_count_by_vocabulary,
     q_nearest_concept_ids,
     q_upsert_embeddings,
     q_create_extension_pgvector,
@@ -392,3 +393,11 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             setup_concept_filter_temps(session, concept_filter, "postgresql")
             rows = session.execute(q_concept_ids_matching_filter(table, concept_filter)).all()
         return {int(row[0]) for row in rows}
+
+    def _get_embedding_count_by_vocabulary_impl(
+        self, *, model_record: EmbeddingModelRecord
+    ) -> Mapping[str, int]:
+        table = self._table_cache[model_record.storage_identifier]
+        with self.emb_session_factory() as session:
+            rows = session.execute(q_embedding_count_by_vocabulary(table)).all()
+        return {row[0]: int(row[1]) for row in rows}

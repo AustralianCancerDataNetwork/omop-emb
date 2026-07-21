@@ -21,7 +21,6 @@ from omop_emb.config import (
 from omop_emb.embeddings import EmbeddingClient
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
 from omop_emb.utils.embedding_utils import (
-    CDMConceptFilter,
     EmbeddingConceptFilter,
     NearestConceptMatch,
 )
@@ -200,7 +199,7 @@ def add_embeddings(
         embedding_writer.register_model()
 
         # Filter concepts
-        concept_filter = CDMConceptFilter(
+        concept_filter = EmbeddingConceptFilter(
             require_standard=standard_only,
             domains=tuple(domains) if domains else None,
             vocabularies=tuple(vocabularies) if vocabularies else None,

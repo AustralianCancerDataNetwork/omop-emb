@@ -1,5 +1,6 @@
 """Tests for EmbeddingReaderInterface.get_joint_embedding / get_similar_concepts."""
 
+import warnings
 from unittest.mock import Mock
 
 import numpy as np
@@ -7,7 +8,7 @@ import pytest
 
 from omop_emb.config import MetricType
 from omop_emb.interface import EmbeddingReaderInterface
-from omop_emb.utils.embedding_utils import NearestConceptMatch
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
 
 
 def _make_backend() -> Mock:
@@ -160,3 +161,82 @@ class TestGetSimilarConcepts:
 
         with pytest.raises(ValueError, match="No stored embedding"):
             interface.get_similar_concepts((1, 2), k=1)
+
+
+@pytest.mark.unit
+class TestResolveEffectiveKDeprecation:
+    """concept_filter.limit is deprecated for KNN result-count control, but
+    still honored as a fallback (with a DeprecationWarning) until 2.0, and
+    validated for consistency against an explicit k."""
+
+    def _matches(self, backend: Mock, n: int) -> None:
+        backend.get_nearest_concepts.return_value = (
+            tuple(NearestConceptMatch(concept_id=i, similarity=1.0) for i in range(n)),
+        )
+
+    def test_k_alone_no_warning(self):
+        backend = _make_backend()
+        self._matches(backend, 3)
+        interface = _make_interface(backend, MetricType.COSINE)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            interface.get_nearest_concepts(np.zeros((1, 2)), k=3)
+
+        assert backend.get_nearest_concepts.call_args.kwargs["k"] == 3
+
+    def test_filter_limit_alone_warns_and_is_honored(self):
+        backend = _make_backend()
+        self._matches(backend, 5)
+        interface = _make_interface(backend, MetricType.COSINE)
+
+        with pytest.warns(DeprecationWarning, match="deprecated for KNN search"):
+            interface.get_nearest_concepts(
+                np.zeros((1, 2)), concept_filter=EmbeddingConceptFilter(limit=5)
+            )
+
+        assert backend.get_nearest_concepts.call_args.kwargs["k"] == 5
+
+    def test_matching_k_and_filter_limit_warns_but_does_not_raise(self):
+        backend = _make_backend()
+        self._matches(backend, 4)
+        interface = _make_interface(backend, MetricType.COSINE)
+
+        with pytest.warns(DeprecationWarning):
+            interface.get_nearest_concepts(
+                np.zeros((1, 2)), k=4, concept_filter=EmbeddingConceptFilter(limit=4)
+            )
+
+        assert backend.get_nearest_concepts.call_args.kwargs["k"] == 4
+
+    def test_conflicting_k_and_filter_limit_raises(self):
+        backend = _make_backend()
+        interface = _make_interface(backend, MetricType.COSINE)
+
+        with pytest.raises(ValueError, match="disagree"):
+            interface.get_nearest_concepts(
+                np.zeros((1, 2)), k=5, concept_filter=EmbeddingConceptFilter(limit=3)
+            )
+
+    def test_get_similar_concepts_inner_call_does_not_spuriously_conflict(self):
+        """effective_k + 1 (the over-fetch for self-match exclusion) must not be
+        flagged as conflicting with the same concept_filter.limit it was derived
+        from."""
+        backend = _make_backend()
+        backend.get_embeddings_by_concept_ids.return_value = {1: [1.0, 0.0]}
+        backend.get_nearest_concepts.return_value = (
+            (
+                NearestConceptMatch(concept_id=1, similarity=1.0),
+                NearestConceptMatch(concept_id=2, similarity=0.9),
+                NearestConceptMatch(concept_id=3, similarity=0.8),
+            ),
+        )
+        interface = _make_interface(backend, MetricType.COSINE)
+
+        with pytest.warns(DeprecationWarning):
+            result = interface.get_similar_concepts(
+                1, concept_filter=EmbeddingConceptFilter(limit=2)
+            )
+
+        assert [m.concept_id for m in result[0]] == [2, 3]
+        assert backend.get_nearest_concepts.call_args.kwargs["k"] == 3

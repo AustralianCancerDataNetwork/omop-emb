@@ -17,6 +17,7 @@ Design
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import replace as dc_replace
 from typing import (
     TYPE_CHECKING,
@@ -51,7 +52,6 @@ from omop_emb.backends.base_backend import (
 from omop_emb.backends.index_config import IndexConfig
 from omop_emb.config import BackendType, MetricType, ProviderType
 from omop_emb.utils.embedding_utils import (
-    CDMConceptFilter,
     EmbeddingConceptFilter,
     NearestConceptMatch,
 )
@@ -244,9 +244,34 @@ class EmbeddingReaderInterface:
     # Search
     # ------------------------------------------------------------------
 
-    def _resolve_effective_k(self, k: Optional[int]) -> int:
-        """Resolve the number of nearest neighbours to request."""
-        return k or self._k
+    def _resolve_effective_k(
+        self, k: Optional[int], concept_filter: Optional[EmbeddingConceptFilter]
+    ) -> int:
+        """Resolve the number of nearest neighbours to request.
+
+        ``concept_filter.limit`` is deprecated as a KNN result-count control
+        (see :class:`EmbeddingConceptFilter`'s docstring) — this is a
+        transitional shim, not the long-term contract. It's still honored as
+        a fallback when *k* isn't given, and validated for consistency when
+        both are given, until removal in 2.0.
+        """
+        filter_limit = concept_filter.limit if concept_filter is not None else None
+        if filter_limit is not None:
+            warnings.warn(
+                "EmbeddingConceptFilter.limit is deprecated for KNN search and will be "
+                "removed in 2.0. Pass k explicitly instead. It is still honored as a "
+                "fallback when k is not given, and validated for consistency when both "
+                "are given, until then.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if k is not None and k != filter_limit:
+                raise ValueError(
+                    f"k={k} and concept_filter.limit={filter_limit} were both given and "
+                    f"disagree. concept_filter.limit for KNN search is deprecated. Pass "
+                    f"k alone."
+                )
+        return k or filter_limit or self._k
 
     def get_nearest_concepts(
         self,
@@ -275,7 +300,7 @@ class EmbeddingReaderInterface:
             exist at all). Enrichment fields of each NearestConceptMatch are 
             ``None`` if no CDM engine was provided to the interface.
         """
-        effective_k = self._resolve_effective_k(k)
+        effective_k = self._resolve_effective_k(k, concept_filter)
 
         if self._faiss_cache is not None:
             if faiss_index_config is None:
@@ -366,11 +391,15 @@ class EmbeddingReaderInterface:
             raise ValueError(f"No stored embedding for concept_ids: {missing}")
 
         vectors = np.asarray([stored[cid] for cid in ids], dtype=np.float64)
-        effective_k = self._resolve_effective_k(k)
+        effective_k = self._resolve_effective_k(k, concept_filter)
 
+        # Prevent ValueError due to mismatch being raised due to effective_k + 1 below
+        inner_filter = (
+            dc_replace(concept_filter, limit=None) if concept_filter is not None else None
+        )
         raw = self.get_nearest_concepts(
             vectors,
-            concept_filter=concept_filter,
+            concept_filter=inner_filter,
             k=effective_k + 1,  # +1 because we will filter out the query concept itself from results
             faiss_index_config=faiss_index_config,
         )
@@ -475,7 +504,7 @@ class EmbeddingReaderInterface:
         self,
         omop_cdm_engine: Engine,
         *,
-        concept_filter: Optional[CDMConceptFilter] = None,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
     ) -> Mapping[int, Row]:
         """Return CDM rows for concepts lacking embeddings, keyed by concept_id.
 
@@ -499,7 +528,7 @@ class EmbeddingReaderInterface:
         self,
         omop_cdm_engine: Engine,
         *,
-        concept_filter: Optional[CDMConceptFilter] = None,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
     ) -> int:
         """Return how many CDM concepts match *concept_filter* but lack an embedding."""
         embedded_ids = self._backend.get_all_stored_concept_ids(
@@ -513,7 +542,7 @@ class EmbeddingReaderInterface:
         omop_cdm_engine: Engine,
         *,
         batch_size: int,
-        concept_filter: Optional[CDMConceptFilter] = None,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
         limit: Optional[int] = None,
     ) -> Iterable[Mapping[int, Row]]:
         """Yield ``{concept_id: Row}`` batches for concepts lacking embeddings.
@@ -562,7 +591,7 @@ class EmbeddingReaderInterface:
             return raw
 
         unique_ids = {r.concept_id for results in raw for r in results}
-        concept_filter = CDMConceptFilter(concept_ids=tuple(unique_ids))
+        concept_filter = EmbeddingConceptFilter(concept_ids=tuple(unique_ids))
         rows = fetch_cdm_concepts_for_filter(
             concept_filter=concept_filter, cdm_engine=self._cdm_engine
         )

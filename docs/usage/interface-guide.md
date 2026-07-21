@@ -224,12 +224,8 @@ when `faiss_cache_dir` is not passed directly.
 
 ## EmbeddingConceptFilter
 
-`EmbeddingConceptFilter` is an in-database pre-filter applied during KNN search.
-All filtering happens before the nearest-neighbour step — only matching concepts
-are candidates. It controls only *which* concepts are eligible; it never controls
-*how many* results come back, as that's always controlled by `k` (see
-[Query nearest concepts](#query-nearest-concepts)). For plain CDM queries (no KNN
-involved), use [`CDMConceptFilter`](#cdmconceptfilter) instead.
+`EmbeddingConceptFilter` is an in-database pre-filter used both during KNN search
+and for plain CDM queries (e.g. `get_concepts_without_embedding`).
 
 ```python
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
@@ -240,6 +236,7 @@ concept_filter = EmbeddingConceptFilter(
     concept_ids=(313217, 4329847),          # restrict to specific concept IDs
     require_standard=True,                  # standard_concept = 'S' or 'C'
     require_active=True,                    # invalid_reason NOT IN ('D', 'U')
+    limit=20,                               # cap on results returned
 )
 ```
 
@@ -247,31 +244,13 @@ All fields are optional and combinable. `require_standard` and `require_active`
 are stored as columns in the embedding table and are resolved entirely inside the
 primary backend — no CDM round-trip at query time.
 
----
-
-## CDMConceptFilter
-
-`CDMConceptFilter` is the equivalent filter for plain queries against the OMOP
-CDM `concept` table. It should not be used for embeddings or KNN search. Used by
-`get_concepts_without_embedding`, `count_concepts_without_embedding`, and
-`get_concepts_without_embedding_batched` on `EmbeddingWriterInterface`. Unlike
-`EmbeddingConceptFilter`, it carries its own `limit`, since there's no separate
-`k`-style parameter for these CDM-only queries.
-
-```python
-from omop_emb.utils.embedding_utils import CDMConceptFilter
-
-concept_filter = CDMConceptFilter(
-    domains=("Condition", "Observation"),
-    require_standard=True,
-    limit=1000,   # cap on CDM rows returned; unrelated to any KNN k
-)
-
-n_missing = embedding_writer.count_concepts_without_embedding(
-    omop_cdm_engine=cdm_engine,
-    concept_filter=concept_filter,
-)
-```
+!!! warning "`limit` is deprecated for KNN search"
+    For [`get_nearest_concepts`](#query-nearest-concepts) and similar KNN methods,
+    pass `k` instead of setting `limit` on the filter. `limit` is still honored
+    as a fallback when `k` isn't given, and validated for consistency when both
+    are given, but will stop affecting KNN result count in 2.0. `limit` remains
+    fully supported (and is not deprecated) for CDM-only queries like
+    `get_concepts_without_embedding`.
 
 ---
 

@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from functools import wraps
 import logging
 from datetime import datetime
-from typing import Any, Callable, Generic, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar, Union
+from typing import Any, Callable, Generic, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar
 from numpy import ndarray
 from sqlalchemy import Engine
 from sqlalchemy.orm import sessionmaker

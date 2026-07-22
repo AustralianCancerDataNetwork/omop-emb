@@ -28,16 +28,16 @@ EMBEDDING_DIM = 1
 # This makes L2 and cosine tests fully deterministic.
 CONCEPT_RECORDS: tuple[ConceptEmbeddingRecord, ...] = (
     ConceptEmbeddingRecord(
-        concept_id=1, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True
+        concept_id=1, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True, is_valid=True
     ),
     ConceptEmbeddingRecord(
-        concept_id=2, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True
+        concept_id=2, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True, is_valid=True
     ),
     ConceptEmbeddingRecord(
-        concept_id=3, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True
+        concept_id=3, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True, is_valid=True
     ),
     ConceptEmbeddingRecord(
-        concept_id=4, domain_id="Drug", vocabulary_id="RxNorm", is_standard=False
+        concept_id=4, domain_id="Drug", vocabulary_id="RxNorm", is_standard=False, is_valid=True
     ),
 )
 

@@ -48,7 +48,7 @@ def _populate(
     )
     records = [
         ConceptEmbeddingRecord(
-            concept_id=i, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True
+            concept_id=i, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True, is_valid=True
         )
         for i in ids
     ]

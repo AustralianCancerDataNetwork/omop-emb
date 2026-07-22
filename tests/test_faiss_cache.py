@@ -42,7 +42,7 @@ _COSINE_EXPECTED = {1: 1.0, 2: 0.5, 3: 0.0}
 
 _COSINE_RECORDS = [
     ConceptEmbeddingRecord(
-        concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True
+        concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True, is_valid=True
     )
     for i in _COSINE_IDS
 ]
@@ -60,7 +60,7 @@ _L2_EXPECTED = {1: 1.0, 2: 0.5, 3: 1 / 3, 4: 0.2}
 
 _L2_RECORDS = [
     ConceptEmbeddingRecord(
-        concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True
+        concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True, is_valid=True
     )
     for i in _L2_IDS
 ]
@@ -457,7 +457,7 @@ class TestConceptFilterPrefiltering:
         records = [
             ConceptEmbeddingRecord(
                 concept_id=i, domain_id="Drug" if i == 5 else "Condition",
-                vocabulary_id="Test", is_standard=True,
+                vocabulary_id="Test", is_standard=True, is_valid=True,
             )
             for i in range(1, 6)
         ]
@@ -550,7 +550,7 @@ class TestStalenessAfterUpsert:
             metric_type=MetricType.L2,
             records=[
                 ConceptEmbeddingRecord(
-                    concept_id=99, domain_id="Test", vocabulary_id="Test", is_standard=True
+                    concept_id=99, domain_id="Test", vocabulary_id="Test", is_standard=True, is_valid=True
                 )
             ],
             embeddings=np.array([[5, 0]], dtype=np.float32),

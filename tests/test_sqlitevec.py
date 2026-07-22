@@ -74,9 +74,14 @@ class TestSQLiteVecSpecific:
                 domain_id="Condition",
                 vocabulary_id="SNOMED",
                 is_standard=True,
+                is_valid=True,
             ),
             ConceptEmbeddingRecord(
-                concept_id=3, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True
+                concept_id=3,
+                domain_id="Drug",
+                vocabulary_id="RxNorm",
+                is_standard=True,
+                is_valid=True,
             ),
         ]
         nonzero_embeddings = np.array([[-10.0], [10.0]], dtype=np.float32)

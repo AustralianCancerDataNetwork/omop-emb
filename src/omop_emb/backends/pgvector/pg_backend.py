@@ -333,7 +333,10 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                 NearestConceptMatch(
                     concept_id=int(row.concept_id),
                     similarity=float(similarity),
+                    domain_id=row.domain_id,
+                    vocabulary_id=row.vocabulary_id,
                     is_standard=bool(row.is_standard),
+                    is_active=bool(row.is_valid),
                 )
             )
 

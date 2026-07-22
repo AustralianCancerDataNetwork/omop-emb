@@ -74,13 +74,15 @@ class ConceptEmbeddingRecord:
         Source vocabulary (e.g. ``'SNOMED'``, ``'RxNorm'``).
     is_standard : bool
         ``True`` if ``standard_concept`` is ``'S'`` or ``'C'``.
+    is_valid : bool
+        ``True`` if ``invalid_reason`` is not ``'D'`` or ``'U'``.
     """
 
     concept_id: int
     domain_id: str
     vocabulary_id: str
     is_standard: bool
-    is_valid: bool = True
+    is_valid: bool
 
 
 class EmbeddingTableBase(DeclarativeBase):

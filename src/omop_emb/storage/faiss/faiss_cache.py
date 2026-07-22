@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from collections import OrderedDict
-from typing import Optional, Tuple
+from typing import Mapping, Optional, Tuple, cast
 
 import numpy as np
 from tqdm import tqdm
@@ -425,14 +425,21 @@ class FAISSCache:
         concept_filter : EmbeddingConceptFilter, optional
             Applied as a pre-filter over the live backend.
         backend : EmbeddingBackend, optional
-            Required when concept_filter is set and non-empty. Used to
-            resolve the filter to a concept-ID set via
-            :meth:`EmbeddingBackend.get_concept_ids_matching_filter`.
+            Used to resolve concept_filter to a concept-ID set (via
+            :meth:`EmbeddingBackend.get_concept_ids_matching_filter`) and,
+            regardless of concept_filter, to populate each result's
+            ``domain_id``, ``vocabulary_id``, ``is_standard``, and
+            ``is_active`` from the embedding table (via
+            :meth:`EmbeddingBackend.get_concept_filter_metadata`).  FAISS
+            indices store only vectors and IDs, so these fields stay
+            ``None`` when backend is omitted. Required when
+            concept_filter is set and non-empty.
 
         Returns
         -------
         tuple[tuple[NearestConceptMatch, ...], ...]
-            Shape ``(Q, <=k)``. CDM enrichment is the caller's responsibility.
+            Shape ``(Q, <=k)``. ``concept_name`` (the only CDM-sourced field)
+            is left ``None``. CDM enrichment is the caller's esponsibility.
 
         Notes
         -----
@@ -460,21 +467,38 @@ class FAISSCache:
 
         distances, ids_matrix = index.search(query, k, params=params)
 
+        metadata_by_id: dict[int, Mapping[str, object]] = {}
+        if backend is not None:
+            unique_ids = {int(cid) for id_row in ids_matrix for cid in id_row if cid != -1}
+            if unique_ids:
+                metadata_by_id = backend.get_concept_filter_metadata(
+                    model_name=self._model_name,
+                    metric_type=metric_type,
+                    concept_ids=tuple(unique_ids),
+                )
+
         results: list[tuple[NearestConceptMatch, ...]] = []
         for dist_row, id_row in zip(distances, ids_matrix):
-            row_results = tuple(
-                NearestConceptMatch(
-                    concept_id=int(cid),
-                    similarity=float(
-                        get_similarity_from_distance(
-                            self._to_metric_dist(float(dist), metric_type), metric_type
-                        )
-                    ),
+            row_matches = []
+            for dist, cid in zip(dist_row, id_row):
+                if cid == -1:
+                    continue
+                meta = metadata_by_id.get(int(cid), {})
+                row_matches.append(
+                    NearestConceptMatch(
+                        concept_id=int(cid),
+                        similarity=float(
+                            get_similarity_from_distance(
+                                self._to_metric_dist(float(dist), metric_type), metric_type
+                            )
+                        ),
+                        domain_id=cast(Optional[str], meta.get("domain_id")),
+                        vocabulary_id=cast(Optional[str], meta.get("vocabulary_id")),
+                        is_standard=cast(Optional[bool], meta.get("is_standard")),
+                        is_active=cast(Optional[bool], meta.get("is_valid")),
+                    )
                 )
-                for dist, cid in zip(dist_row, id_row)
-                if cid != -1
-            )
-            results.append(row_results)
+            results.append(tuple(row_matches))
         return tuple(results)
 
     # ------------------------------------------------------------------

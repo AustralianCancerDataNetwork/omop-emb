@@ -122,8 +122,12 @@ class NearestConceptMatch:
     """Single nearest-neighbour result as returned to callers.
 
     ``concept_id`` and ``similarity`` are always populated by the backend.
-    The remaining fields are optionally enriched by the interface layer from
-    the OMOP CDM when an ``omop_cdm_engine`` is provided.
+    ``domain_id``, ``vocabulary_id``, ``is_standard``, and ``is_active`` are
+    also populated by the backend directly from the embedding table's filter
+    columns (see :class:`~omop_emb.backends.embedding_table.ConceptEmbeddingMixin`),
+    so they are available regardless of whether a CDM engine is configured.
+    ``concept_name`` is the only field enriched by the interface layer from
+    the OMOP CDM, and only when an ``omop_cdm_engine`` is provided.
 
     Attributes
     ----------
@@ -133,17 +137,27 @@ class NearestConceptMatch:
         Similarity score in ``[0.0, 1.0]``. Higher is more similar.
     concept_name : str, optional
         Human-readable concept name. ``None`` when no CDM engine is provided.
+    domain_id : str, optional
+        OMOP domain (e.g. ``'Condition'``, ``'Drug'``), taken from the
+        embedding table. ``None`` only if the backend could not resolve it.
+    vocabulary_id : str, optional
+        Source vocabulary (e.g. ``'SNOMED'``, ``'RxNorm'``), taken from the
+        embedding table. ``None`` only if the backend could not resolve it.
     is_standard : bool, optional
-        ``True`` if ``standard_concept`` is ``'S'`` or ``'C'``. ``None``
-        when no CDM engine is provided.
+        ``True`` if ``standard_concept`` is ``'S'`` or ``'C'``, taken from
+        the embedding table. ``None`` only if the backend could not resolve
+        it.
     is_active : bool, optional
-        ``True`` if ``invalid_reason`` is not ``'D'`` or ``'U'``. ``None``
-        when no CDM engine is provided.
+        ``True`` if ``invalid_reason`` is not ``'D'`` or ``'U'``, taken from
+        the embedding table. ``None`` only if the backend could not resolve
+        it.
     """
 
     concept_id: int
     similarity: float
     concept_name: Optional[str] = None
+    domain_id: Optional[str] = None
+    vocabulary_id: Optional[str] = None
     is_standard: Optional[bool] = None
     is_active: Optional[bool] = None
 

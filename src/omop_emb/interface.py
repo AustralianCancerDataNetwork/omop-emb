@@ -7,8 +7,12 @@ Design
 * Table identity is ``(model_name, provider_type)``: one row per model in the
   registry. ``metric_type`` is supplied by the caller at query time.
 * ``omop_cdm_engine`` is **optional** on the reader interface.  When provided,
-  KNN results are enriched with concept names and flags from the CDM.
-  When absent, ``NearestConceptMatch.concept_name`` etc. are ``None``.
+  KNN results are enriched with ``concept_name`` from the CDM.  When absent,
+  ``NearestConceptMatch.concept_name`` is ``None``.
+  ``domain_id``, ``vocabulary_id``, ``is_standard``, and ``is_active`` come
+  from the embedding table directly and are always populated regardless.
+  These attributes are necessary to be in the embedding table for filtering
+  without round-tripping to the CDM, and are populated from the CDM at ingestion time.
 * ``omop_cdm_engine`` is **required** for ingestion methods
   (``embed_and_upsert_concepts``) because concept metadata must be fetched
   from the CDM to populate the embedding table filter columns.
@@ -105,8 +109,10 @@ class EmbeddingReaderInterface:
         Distance metric used for KNN queries and validated against the registry.
     omop_cdm_engine : Engine, optional
         Engine for the user's OMOP CDM.  When provided, KNN results are
-        enriched with ``concept_name``, ``is_standard``, and ``is_active``
-        from the CDM.  When absent, those fields are ``None``.
+        enriched with ``concept_name`` from the CDM.  When absent,
+        ``concept_name`` is ``None``. ``domain_id``, ``vocabulary_id``,
+        ``is_standard``, and ``is_active`` are populated directly from the
+        embedding table by the backend.
     model : str
         Model name in canonical form.
     canonical_model_name : str, optional
@@ -262,7 +268,12 @@ class EmbeddingReaderInterface:
         Returns
         -------
         Tuple[Tuple[NearestConceptMatch, ...], ...]
-            Shape ``(Q, ≤k)``.  Enrichment fields are ``None`` if no CDM engine.
+            Shape ``(Q, ≤k)``. A row has fewer than *k* entries only when fewer
+            than *k* stored concepts exist that match *concept_filter* (or
+            exist at all). ``domain_id``, ``vocabulary_id``, ``is_standard``,
+            and ``is_active`` are always populated from the embedding table.
+            ``concept_name`` is ``None`` if no CDM engine was provided to the
+            interface.
         """
         effective_k = k or (concept_filter.limit if concept_filter else None) or self._k
 
@@ -449,8 +460,10 @@ class EmbeddingReaderInterface:
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         """Enrich backend results with concept names from the CDM.
 
-        Only ``concept_name`` is populated here.  ``is_standard`` is already
-        set by the backend from the embedding table filter columns.
+        Notes
+        -----
+        Enriched concepts (if a CDM engine is provided) will have the following attributes:
+            - `concept_name` (str): The name of the concept from the CDM.
         """
         if not self._cdm_engine:
             return raw

@@ -7,7 +7,7 @@ from typing import ClassVar, Dict, Tuple
 
 from pydantic import Field
 from sqlalchemy import Engine
-from oa_configurator import DatabaseConfig, PackageConfigBase, ResourceSpec
+from oa_configurator import ConfigurationError, DatabaseConfig, PackageConfigBase, ResourceSpec
 
 from omop_alchemy.config import OmopAlchemyConfig
 
@@ -122,6 +122,33 @@ class OmopEmbConfig(PackageConfigBase):
         default="qwen3-embedding:0.6b",
         description="Model name for generating concept embeddings.",
     )
+
+
+def load_omop_emb_config() -> OmopEmbConfig:
+    """Load the active OmopEmbConfig, the one place CLI entry points should
+    read config from.
+
+    Converts config errors into an actionable RuntimeError instead of
+    letting them propagate raw.
+
+    Raises
+    ------
+    RuntimeError
+        If no config file exists, or the config exists but is missing a
+        required resource (e.g. the CDM database).
+    """
+    try:
+        return OmopEmbConfig.get_config()
+    except FileNotFoundError:
+        raise RuntimeError(
+            "No omop-emb configuration file found. "
+            "Run `omop-config configure omop-emb` to set it up."
+        )
+    except ConfigurationError as exc:
+        raise RuntimeError(
+            f"omop-emb configuration is incomplete: {exc} "
+            "Run `omop-config configure omop-emb` to fix it."
+        ) from exc
 
 
 def resolve_omop_cdm_engine() -> Engine:

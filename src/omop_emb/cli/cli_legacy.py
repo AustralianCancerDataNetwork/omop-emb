@@ -12,9 +12,9 @@ import numpy as np
 import typer
 from tqdm import tqdm
 
-from omop_emb.backends import resolve_backend
+from omop_emb.backends import resolve_backend_from_config
 from omop_emb.backends.index_config import IndexConfig, index_config_from_index_type
-from omop_emb.config import IndexType, MetricType, ProviderType
+from omop_emb.config import IndexType, MetricType, ProviderType, load_omop_emb_config
 from omop_emb.storage import embedding_bundle
 
 if TYPE_CHECKING:
@@ -249,7 +249,8 @@ def import_legacy_faiss_cache(
         err=True,
     )
 
-    backend = resolve_backend()
+    cfg = load_omop_emb_config()
+    backend = resolve_backend_from_config(cfg)
     try:
         from omop_emb.storage.faiss import FAISSCache
     except ImportError as e:

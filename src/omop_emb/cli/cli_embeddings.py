@@ -9,12 +9,13 @@ from tqdm import tqdm
 
 from omop_emb.utils.cdm import check_concept_cdm
 from omop_emb.backends.index_config import index_config_from_index_type
-from omop_emb.backends import resolve_backend
+from omop_emb.backends import resolve_backend_from_config
 from omop_emb.config import (
     IndexType,
     MetricType,
     OmopEmbConfig,
     ProviderType,
+    load_omop_emb_config,
     provider_type_examples,
     resolve_omop_cdm_engine,
 )
@@ -53,17 +54,26 @@ def consolidate_queries(
         raise ValueError("No queries provided.")
 
 
-def _get_config() -> OmopEmbConfig:
-    """Load and return the active OmopEmbConfig, converting a missing-file
-    error into an actionable setup message.
-    """
-    try:
-        return OmopEmbConfig.get_config()
-    except FileNotFoundError:
-        raise RuntimeError(
-            "No omop-emb configuration file found. "
-            "Run `omop-config configure omop-emb` to set it up."
-        )
+def _build_embedding_client(
+    cfg: OmopEmbConfig,
+    *,
+    model: str,
+    api_base: str,
+    api_key: str,
+    provider_type: ProviderType,
+    embedding_batch_size: int = 32,
+) -> EmbeddingClient:
+    """Construct an EmbeddingClient, applying config-derived dim/prefixes."""
+    return EmbeddingClient(
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
+        embedding_batch_size=embedding_batch_size,
+        provider_type=provider_type,
+        embedding_dim=cfg.embedding_dim,
+        document_embedding_prefix=cfg.document_embedding_prefix,
+        query_embedding_prefix=cfg.query_embedding_prefix,
+    )
 
 
 def _render_search_results(
@@ -167,21 +177,22 @@ def add_embeddings(
     ``create-index`` afterwards to upgrade to an HNSW approximate index.
     """
 
-    cfg = _get_config()
+    cfg = load_omop_emb_config()
     resolved_api_base = api_base or cfg.api_base
     resolved_api_key = api_key or cfg.api_key
     resolved_provider = provider or cfg.provider_type
     resolved_model = model or cfg.embedding_model
 
-    backend = resolve_backend()
+    backend = resolve_backend_from_config(cfg)
     omop_cdm_engine = resolve_omop_cdm_engine()
 
-    embedding_client = EmbeddingClient(
+    embedding_client = _build_embedding_client(
+        cfg,
         model=resolved_model,
         api_base=resolved_api_base,
         api_key=resolved_api_key,
-        embedding_batch_size=batch_size,
         provider_type=resolved_provider,
+        embedding_batch_size=batch_size,
     )
     # FLAT registration: metric_type=COSINE is used only for upsert validation;
     # FLAT accepts any backend-supported metric, so COSINE is always valid here.
@@ -322,14 +333,15 @@ def create_index(
     locked in and all subsequent queries must use the same metric.
     """
 
-    cfg = _get_config()
+    cfg = load_omop_emb_config()
     resolved_api_base = api_base or cfg.api_base
     resolved_api_key = api_key or cfg.api_key
     resolved_provider = provider or cfg.provider_type
     resolved_model = model or cfg.embedding_model
 
-    backend = resolve_backend()
-    embedding_client = EmbeddingClient(
+    backend = resolve_backend_from_config(cfg)
+    embedding_client = _build_embedding_client(
+        cfg,
         model=resolved_model,
         api_base=resolved_api_base,
         api_key=resolved_api_key,
@@ -611,7 +623,7 @@ def search(
     ] = None,
 ):
 
-    cfg = _get_config()
+    cfg = load_omop_emb_config()
     resolved_api_base = api_base or cfg.api_base
     resolved_api_key = api_key or cfg.api_key
     resolved_provider = provider or cfg.provider_type
@@ -619,7 +631,7 @@ def search(
     resolved_model = model or cfg.embedding_model
 
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
-    backend = resolve_backend()
+    backend = resolve_backend_from_config(cfg)
 
     # CDM enrichment is optional for search
     try:
@@ -630,12 +642,13 @@ def search(
             "CDM engine not configured; concept names will not be enriched in results."
         )
 
-    embedding_client = EmbeddingClient(
+    embedding_client = _build_embedding_client(
+        cfg,
         model=resolved_model,
         api_base=resolved_api_base,
         api_key=resolved_api_key,
-        embedding_batch_size=batch_size,
         provider_type=resolved_provider,
+        embedding_batch_size=batch_size,
     )
     embedding_reader = EmbeddingReaderInterface(
         model=embedding_client.canonical_model_name,

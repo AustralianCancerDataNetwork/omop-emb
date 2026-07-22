@@ -16,7 +16,7 @@ import numpy as np
 from openai import OpenAI
 
 from .embedding_providers import EmbeddingProvider, get_provider_from_provider_type
-from omop_emb.config import OmopEmbConfig, ProviderType
+from omop_emb.config import ProviderType
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,16 @@ class EmbeddingClient:
         when both are supplied.
     provider_type : ProviderType, optional
         Used to construct a provider when *provider* is not supplied.
+    embedding_dim : int, optional
+        Known embedding dimensionality, e.g. resolved by the caller from
+        config. When omitted, resolved lazily on first access to
+        ``embedding_dim`` (provider API discovery, then a live probe call).
+    document_embedding_prefix : str, optional
+        Text prefix prepended to texts embedded with ``EmbeddingRole.DOCUMENT``.
+        Defaults to ``""`` (no prefix).
+    query_embedding_prefix : str, optional
+        Text prefix prepended to texts embedded with ``EmbeddingRole.QUERY``.
+        Defaults to ``""`` (no prefix).
 
     Raises
     ------
@@ -71,6 +81,9 @@ class EmbeddingClient:
         embedding_batch_size: int = 32,
         provider: Optional[EmbeddingProvider] = None,
         provider_type: Optional[ProviderType] = None,
+        embedding_dim: Optional[int] = None,
+        document_embedding_prefix: str = "",
+        query_embedding_prefix: str = "",
     ) -> None:
         if provider is not None and provider_type is not None:
             logger.warning(
@@ -85,14 +98,26 @@ class EmbeddingClient:
             raise ValueError("Must supply either provider or provider_type.")
         self._model = self._provider.canonical_model_name(model)
         self._embedding_batch_size = embedding_batch_size
-        self._embedding_dim: Optional[int] = None
+        self._embedding_dim: Optional[int] = embedding_dim
         self._base_client = OpenAI(base_url=api_base, api_key=api_key)
-        doc_prefix, query_prefix = self.load_embedding_prefixes()
 
         self._embedding_prefixes = {
-            EmbeddingRole.DOCUMENT: doc_prefix,
-            EmbeddingRole.QUERY: query_prefix,
+            EmbeddingRole.DOCUMENT: document_embedding_prefix,
+            EmbeddingRole.QUERY: query_embedding_prefix,
         }
+        for role, prefix in self._embedding_prefixes.items():
+            if prefix:
+                logger.info(
+                    f"{role.value.capitalize()} embedding prefix set: {prefix!r}. "
+                    f"All {role.value} texts will be prepended with this prefix."
+                )
+            else:
+                logger.warning(
+                    f"{role.value.capitalize()} embedding prefix is not set. "
+                    f"This is fine for symmetric models. For asymmetric models (e.g. nomic-embed-text, "
+                    f"E5, BGE), set {role.value.lower()}_embedding_prefix via "
+                    f"'omop-config configure omop_emb'."
+                )
 
         logger.info(
             f"{EmbeddingClient.__name__} initialised for model={self._model!r}.\n"
@@ -132,7 +157,7 @@ class EmbeddingClient:
         """Embedding vector dimension, resolved on first access and cached.
 
         Resolution order:
-        1. ``OMOP_EMB_EMBEDDING_DIM`` environment variable (explicit override).
+        1. ``embedding_dim`` constructor argument (explicit override).
         2. Provider API discovery (e.g. Ollama ``/api/show``).
         3. Live probe: embed the string ``"test"`` and read the returned shape.
            One extra API call, but works for any OpenAI-compatible endpoint
@@ -140,15 +165,6 @@ class EmbeddingClient:
         """
         if self._embedding_dim is not None:
             return self._embedding_dim
-
-        try:
-            cfg_dim = OmopEmbConfig.get_config().embedding_dim
-        except FileNotFoundError:
-            cfg_dim = None
-        if cfg_dim is not None:
-            self._embedding_dim = cfg_dim
-            logger.debug(f"Embedding dimension set from config: {cfg_dim}.")
-            return cfg_dim
 
         provider_dim = self._provider.get_embedding_dim(
             model=self._model, api_base=self.api_base
@@ -270,42 +286,6 @@ class EmbeddingClient:
         a = self.embeddings(text1, embedding_role=text1_role)
         b = self.embeddings(text2, embedding_role=text2_role)
         return float(np.linalg.norm(a - b))
-
-    @staticmethod
-    def load_embedding_prefixes() -> Tuple[str, str]:
-        """Load embedding prefixes for document and query roles from the OA_Configurator config.
-
-        Returns
-        -------
-        Tuple[str, str]
-            A tuple containing the document embedding prefix and the query embedding prefix.
-        """
-        try:
-            cfg = OmopEmbConfig.get_config()
-            document_embedding_prefix = cfg.document_embedding_prefix
-            query_embedding_prefix = cfg.query_embedding_prefix
-        except Exception:
-            document_embedding_prefix = ""
-            query_embedding_prefix = ""
-
-        for role, prefix in [
-            (EmbeddingRole.DOCUMENT, document_embedding_prefix),
-            (EmbeddingRole.QUERY, query_embedding_prefix),
-        ]:
-            if prefix:
-                logger.info(
-                    f"{role.value.capitalize()} embedding prefix loaded from config: {prefix!r}. "
-                    f"All {role.value} texts will be prepended with this prefix."
-                )
-            else:
-                logger.warning(
-                    f"{role.value.capitalize()} embedding prefix is not set in config. "
-                    f"This is fine for symmetric models. For asymmetric models (e.g. nomic-embed-text, "
-                    f"E5, BGE), set document_embedding_prefix / query_embedding_prefix via "
-                    f"'omop-config configure omop_emb'."
-                )
-
-        return document_embedding_prefix, query_embedding_prefix
 
     def _apply_embedding_prefix(
         self,

@@ -4,12 +4,13 @@ import logging
 from typing import Annotated, Optional
 
 import typer
-from omop_emb.backends import resolve_backend
+from omop_emb.backends import resolve_backend_from_config
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.config import (
     IndexType,
     MetricType,
     ProviderType,
+    load_omop_emb_config,
 )
 from omop_emb.embeddings.embedding_providers import get_provider_from_provider_type
 from omop_emb.interface import list_registered_models
@@ -38,7 +39,8 @@ def list_models(
     ] = None,
 ):
 
-    backend = resolve_backend()
+    cfg = load_omop_emb_config()
+    backend = resolve_backend_from_config(cfg)
     records = list_registered_models(
         backend=backend,
         provider_type=provider_type,
@@ -128,7 +130,8 @@ def rebuild_index(
         embedding_provider = get_provider_from_provider_type(provider_type)
         model = embedding_provider.canonical_model_name(model)
 
-    backend = resolve_backend()
+    cfg = load_omop_emb_config()
+    backend = resolve_backend_from_config(cfg)
 
     record = backend.get_registered_model(model_name=model)
     if record is None:
@@ -196,7 +199,8 @@ def delete_model(
             abort=True,
         )
 
-    backend = resolve_backend()
+    cfg = load_omop_emb_config()
+    backend = resolve_backend_from_config(cfg)
     record = backend.get_registered_model(model_name=model)
     if record is None:
         typer.echo(
@@ -254,7 +258,8 @@ def export_bundle_cmd(
         embedding_provider = get_provider_from_provider_type(provider_type)
         model = embedding_provider.canonical_model_name(model)
 
-    backend = resolve_backend()
+    cfg = load_omop_emb_config()
+    backend = resolve_backend_from_config(cfg)
 
     meta, h5_path = embedding_bundle.export_bundle(
         backend=backend,
@@ -339,7 +344,8 @@ def build_faiss_cache(
         embedding_provider = get_provider_from_provider_type(provider_type)
         model = embedding_provider.canonical_model_name(model)
 
-    backend = resolve_backend()
+    cfg = load_omop_emb_config()
+    backend = resolve_backend_from_config(cfg)
 
     index_config = index_config_from_index_type(
         index_type,
@@ -407,7 +413,8 @@ def check_faiss_cache(
         embedding_provider = get_provider_from_provider_type(provider_type)
         model = embedding_provider.canonical_model_name(model)
 
-    backend = resolve_backend()
+    cfg = load_omop_emb_config()
+    backend = resolve_backend_from_config(cfg)
     record = backend.get_registered_model(model_name=model)
     if record is None:
         typer.echo(
@@ -475,7 +482,8 @@ def import_bundle_cmd(
     ] = False,
 ):
 
-    backend = resolve_backend()
+    cfg = load_omop_emb_config()
+    backend = resolve_backend_from_config(cfg)
     try:
         imported = embedding_bundle.import_bundle(
             backend=backend,

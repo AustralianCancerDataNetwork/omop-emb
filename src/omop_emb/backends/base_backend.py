@@ -993,46 +993,45 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
 
 
 def resolve_backend(
-    backend_type: Optional[Union[str, BackendType]] = None,
+    backend_type: str | BackendType,
+    *,
+    sqlite_path: Optional[str] = None,
 ) -> EmbeddingBackend:
-    """Return the configured embedding backend via oa-configurator.
+    """Return the embedding backend for *backend_type*.
 
-    When backend_type is omitted, reads from the active oa-configurator config.
     Connection details are resolved via the oa-configurator Resolver:
 
-    - ``sqlitevec``: uses sqlite_path from config (required; must be set explicitly).
+    - ``sqlitevec``: uses *sqlite_path* (required; must be set explicitly).
     - ``pgvector``: uses the ``emb_db`` resource from oa-configurator.
+
+    Callers that have a loaded ``OmopEmbConfig`` should prefer
+    :func:`resolve_backend_from_config` over calling this directly.
     """
-    cfg = OmopEmbConfig.get_config()
-    if backend_type is None:
-        backend_str = cfg.backend
-    else:
-        backend_str = (
-            backend_type if isinstance(backend_type, str) else backend_type.value
-        )
+    backend_str = (
+        backend_type if isinstance(backend_type, str) else backend_type.value
+    )
 
     try:
-        resolved_backend = BackendType(backend_str.lower())
+        resolved_backend_type = BackendType(backend_str.lower())
     except ValueError:
         raise RuntimeError(
             f"Unknown backend {backend_str!r}. "
             f"Supported: {[b.value for b in BackendType]}."
         )
 
-    if resolved_backend == BackendType.SQLITEVEC:
+    if resolved_backend_type == BackendType.SQLITEVEC:
         from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 
-        if not cfg.sqlite_path:
+        if not sqlite_path:
             raise RuntimeError(
                 "sqlitevec backend requires 'sqlite_path' to be configured. "
                 "Set it via `omop-config configure omop-emb`. "
                 "To use an ephemeral in-memory store intentionally, set sqlite_path = ':memory:'."
             )
-        path = cfg.sqlite_path
-        logger.info(f"Using SQLiteVec backend with database file: {path}")
-        return SQLiteVecEmbeddingBackend.from_path(path)
+        logger.info(f"Using SQLiteVec backend with database file: {sqlite_path}")
+        return SQLiteVecEmbeddingBackend.from_path(sqlite_path)
 
-    if resolved_backend == BackendType.PGVECTOR:
+    if resolved_backend_type == BackendType.PGVECTOR:
         engine = resolve_omop_emb_engine()
         if engine.dialect.name != "postgresql":
             raise RuntimeError(
@@ -1049,4 +1048,14 @@ def resolve_backend(
         logger.info(f"Using pgvector backend with engine: {engine.url}")
         return PGVectorEmbeddingBackend(emb_engine=engine)
 
-    raise RuntimeError(f"Implementation for {resolved_backend.value} is not available.")
+    raise RuntimeError(f"Implementation for {resolved_backend_type.value} is not available.")
+
+
+def resolve_backend_from_config(cfg: OmopEmbConfig) -> EmbeddingBackend:
+    """Resolve the embedding backend using an already-loaded config object.
+
+    The one place config is read for backend selection; call sites that
+    already have *cfg* in scope should prefer this over calling
+    :func:`resolve_backend` directly.
+    """
+    return resolve_backend(cfg.backend, sqlite_path=cfg.sqlite_path)

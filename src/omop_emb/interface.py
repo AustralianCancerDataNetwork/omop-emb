@@ -443,6 +443,28 @@ class EmbeddingReaderInterface:
             concept_ids=concept_ids,
         )
 
+    def get_indexed_concept_ids(
+        self,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+    ) -> set[int]:
+        """Return every stored concept_id matching *concept_filter*.
+
+        .. deprecated::
+            This method is deprecated and will be removed in 2.0.
+            Prefer backend- or workflow-specific alternatives instead.
+        """
+        warnings.warn(
+            "EmbeddingReaderInterface.get_indexed_concept_ids() is deprecated and "
+            "will be removed in 2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._backend.get_concept_ids_matching_filter(
+            model_name=self.canonical_model_name,
+            metric_type=self._metric_type,
+            concept_filter=concept_filter or EmbeddingConceptFilter(),
+        )
+
     def get_joint_embedding(
         self,
         concept_ids: Tuple[int, ...],

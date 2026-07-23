@@ -194,6 +194,25 @@ class SharedBackendTests:
         assert len(results) == 1
         assert len(results[0]) == 3
 
+    def test_knn_returns_concept_filter_metadata(self, backend: EmbeddingBackend):
+        """domain_id/vocabulary_id/is_standard/is_active must come back on
+        every match, populated straight from the embedding table (no CDM
+        engine involved at this layer)."""
+        self._upsert_all(backend)
+        results = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            query_embeddings=QUERY_EMBEDDING,
+            k=len(CONCEPT_RECORDS),
+        )
+        matches_by_id = {m.concept_id: m for m in results[0]}
+        for record in CONCEPT_RECORDS:
+            match = matches_by_id[record.concept_id]
+            assert match.domain_id == record.domain_id
+            assert match.vocabulary_id == record.vocabulary_id
+            assert match.is_standard == record.is_standard
+            assert match.is_active == record.is_valid
+
     def test_knn_top1_is_closest(self, backend: EmbeddingBackend):
         # Query [-1] is closest to Diabetes [0] under L2
         self._upsert_all(backend)

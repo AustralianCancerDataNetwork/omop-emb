@@ -1284,13 +1284,12 @@ are stored as columns in the embedding table and are resolved entirely inside th
 primary backend — no CDM round-trip at query time.</p>
 <hr />
 <h2 id="embeddingclient-and-providers">EmbeddingClient and providers</h2>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Currently, only <code>OllamaProvider</code> is supported.</p>
-</div>
 <p><code>EmbeddingClient</code> wraps any OpenAI-compatible endpoint. It canonicalises the
 model name at construction time and exposes <code>canonical_model_name</code> as the stable
-identifier used in the registry.</p>
+identifier used in the registry. Two providers are supported: <code>OllamaProvider</code>
+for self-hosted models served via Ollama, and <code>OpenAIProvider</code> for OpenAI-hosted
+models (or any OpenAI-compatible API reachable with an API key, without an
+Ollama compatibility layer in front of it).</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddingClient</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProviderType</span>
 
@@ -1304,6 +1303,17 @@ identifier used in the registry.</p>
 <span class="nb">print</span><span class="p">(</span><span class="n">client</span><span class="o">.</span><span class="n">canonical_model_name</span><span class="p">)</span>  <span class="c1"># &quot;nomic-embed-text:v1.5&quot;</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">client</span><span class="o">.</span><span class="n">embedding_dim</span><span class="p">)</span>         <span class="c1"># auto-discovered via Ollama /api/show</span>
 </code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="c1"># OpenAI — hosted model, authenticated via API key</span>
+<span class="n">client</span> <span class="o">=</span> <span class="n">EmbeddingClient</span><span class="p">(</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;text-embedding-3-large&quot;</span><span class="p">,</span>
+    <span class="n">api_base</span><span class="o">=</span><span class="s2">&quot;https://api.openai.com/v1&quot;</span><span class="p">,</span>
+    <span class="n">api_key</span><span class="o">=</span><span class="s2">&quot;sk-...&quot;</span><span class="p">,</span>
+    <span class="n">provider_type</span><span class="o">=</span><span class="n">ProviderType</span><span class="o">.</span><span class="n">OPENAI</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">client</span><span class="o">.</span><span class="n">canonical_model_name</span><span class="p">)</span>  <span class="c1"># &quot;text-embedding-3-large&quot;</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">client</span><span class="o">.</span><span class="n">embedding_dim</span><span class="p">)</span>         <span class="c1"># discovered via a live probe call (no discovery endpoint)</span>
+</code></pre></div>
 <hr />
 <h2 id="model-name-validation">Model name validation</h2>
 <h3 id="valid-names">Valid names</h3>
@@ -1312,6 +1322,11 @@ identifier used in the registry.</p>
 <li>✅ <code>nomic-embed-text:v1.5</code></li>
 <li>✅ <code>llama3:8b</code></li>
 <li>Any name with an explicit, immutable tag</li>
+</ul>
+<p><strong>OpenAI:</strong></p>
+<ul>
+<li>✅ <code>text-embedding-3-large</code></li>
+<li>Any name — no tag normalisation is required or applied</li>
 </ul>
 <h3 id="invalid-names-raise-valueerror">Invalid names (raise <code>ValueError</code>)</h3>
 <p><strong>Ollama:</strong></p>
@@ -1324,7 +1339,9 @@ identifier used in the registry.</p>
 <p><strong>Why the strictness?</strong> In long-term healthcare data storage, <code>:latest</code> is a
 moving target. Running <code>ollama pull llama3</code> silently changes which model
 version <code>:latest</code> points to, breaking consistency between stored embeddings
-and new query embeddings.</p>
+and new query embeddings. OpenAI-hosted model identifiers do not have this
+problem: a given name (e.g. <code>text-embedding-3-large</code>) refers to a fixed
+model version, so no equivalent tag requirement applies.</p>
 </div>
 <hr />
 <h2 id="utility-functions">Utility functions</h2>

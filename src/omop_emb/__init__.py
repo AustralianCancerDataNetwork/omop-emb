@@ -1,8 +1,8 @@
 from omop_emb.interface import (
     EmbeddingReaderInterface,
     EmbeddingWriterInterface,
-    EmbeddingRole,
 )
+from omop_llm import EmbeddingRole
 from omop_emb.config import (
     BackendType,
     IndexType,

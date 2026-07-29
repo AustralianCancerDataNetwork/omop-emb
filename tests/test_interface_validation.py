@@ -3,6 +3,7 @@
 from unittest.mock import Mock, patch
 
 import pytest
+from oa_configurator.resolver import ResolvedModel, ResolvedProvider
 
 from omop_emb.config import MetricType
 from omop_emb.backends.index_config import FlatIndexConfig
@@ -25,19 +26,28 @@ class TestCanonicalModelName:
 
         backend = _make_mock_backend()
 
-        with patch("omop_emb.interface.build_model_backend") as mock_build_model_backend:
+        with patch("omop_emb.interface.build_model_backend_from_resolved") as mock_build_model_backend:
             model_backend = Mock()
             model_backend.model = "pseudo-model:v1"
             model_backend.provider = "ollama"
             model_backend.dimensions.return_value = 1
             mock_build_model_backend.return_value = model_backend
 
+            resolved = ResolvedModel(
+                name="test-model",
+                provider=ResolvedProvider(
+                    name="test-provider", provider="ollama", base_url="http://localhost:11434", api_key=None
+                ),
+                model="pseudo-model",
+                embedding_dim=None,
+                document_prefix=None,
+                query_prefix=None,
+                configuration={},
+            )
             interface = EmbeddingWriterInterface(
                 backend=backend,
                 metric_type=MetricType.L2,
-                model="pseudo-model",
-                provider_type="ollama",
-                api_base="http://localhost:11434",
+                resolved_model=resolved,
             )
 
         backend.register_model = Mock(

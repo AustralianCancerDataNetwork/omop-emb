@@ -39,20 +39,22 @@ backend = PGVectorEmbeddingBackend.from_db_url(db_url="postgresql+psycopg://user
 ### Creating the interface
 
 ```python
+from oa_configurator import Resolver, load_stack_config
 from omop_emb import EmbeddingWriterInterface
-from omop_emb.config import MetricType
+from omop_emb.config import MetricType, OmopEmbConfig
+
+cfg = OmopEmbConfig.get_config()
+resolved_model = Resolver(load_stack_config()).resolve_model(cfg.embedding_model_name)
 
 writer = EmbeddingWriterInterface(
     backend=backend,
     metric_type=MetricType.COSINE,
-    model="nomic-embed-text:v1.5",
-    provider_type="ollama",
-    api_base="http://localhost:11434",
+    resolved_model=resolved_model,
     omop_cdm_engine=cdm_engine,  # optional; used to enrich search results
 )
 ```
 
-`model`/`provider_type`/`api_base`/`api_key` are passed straight through to `omop_llm.build_model_backend(...)` at construction time. The interface builds and owns the `ModelBackend` itself; there is no separate client object to construct first.
+`resolved_model` is an `oa_configurator.ResolvedModel` — provider, connection details, `embedding_dim`, and `document_prefix`/`query_prefix` all live on the `[models.*]` entry it was resolved from (see [Asymmetric Embeddings](asymmetric-embeddings.md)), not on `omop-emb`'s own config. The interface builds and owns the `ModelBackend` itself via `omop_llm.build_model_backend_from_resolved(resolved_model)`; there is no separate client object to construct first.
 
 ### Register and initialise
 
@@ -83,7 +85,7 @@ writer.embed_and_upsert_concepts(
 ```
 
 !!! info "Asymmetric embedding models"
-    `embed_and_upsert_concepts` always applies the **document** role, and `get_nearest_concepts_from_query_texts` always applies the **query** role. When calling `embed_texts` directly you must pass `embedding_role` explicitly. See [Asymmetric Embeddings](asymmetric-embeddings.md) for task prefix configuration.
+    `embed_and_upsert_concepts` always applies the **document** role, and `get_nearest_concepts_from_query_texts` always applies the **query** role. When calling `embed_texts` directly you must pass `role` explicitly. See [Asymmetric Embeddings](asymmetric-embeddings.md) for task prefix configuration.
 
 ### Build an HNSW index
 
@@ -202,7 +204,7 @@ All fields are optional and combinable. `require_standard` and `require_active` 
 
 ## Model backends and providers
 
-Model calling (construction, canonicalization, dimension discovery, batched embedding calls) is entirely `omop_llm.ModelBackend`'s job. `omop-emb` never talks to a provider endpoint directly; `EmbeddingWriterInterface` builds one internally via `omop_llm.build_model_backend(provider, model, base_url=..., api_key=...)`, and any caller that needs to embed text without a full writer interface (e.g. on-the-fly query embedding) can build one the same way and pass it around.
+Model calling (construction, canonicalization, dimension discovery, batched embedding calls, role-prefix application) is entirely `omop_llm.ModelBackend`'s job. `omop-emb` never talks to a provider endpoint directly; `EmbeddingWriterInterface` builds one internally via `omop_llm.build_model_backend_from_resolved(resolved_model)` (see "Creating the interface" above). Any caller that needs to embed text without a full writer interface (e.g. on-the-fly query embedding, or a quick standalone script) can build a `ModelBackend` directly with plain keyword arguments instead:
 
 ```python
 from omop_llm import build_model_backend

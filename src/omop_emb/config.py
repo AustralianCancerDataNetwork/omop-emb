@@ -10,7 +10,6 @@ from sqlalchemy import Engine
 from oa_configurator import DatabaseConfig, PackageConfigBase, ResourceSpec
 
 from omop_alchemy.config import OmopAlchemyConfig
-from omop_llm import supported_providers
 
 
 class OmopEmbConfig(PackageConfigBase):
@@ -63,37 +62,16 @@ class OmopEmbConfig(PackageConfigBase):
         default=None,
         description="Path to the SQLite database file (sqlitevec backend only).",
     )
-    document_embedding_prefix: str = Field(
-        default="",
-        description="Text prefix prepended to documents before embedding.",
-    )
-    query_embedding_prefix: str = Field(
-        default="",
-        description="Text prefix prepended to queries before embedding.",
-    )
     faiss_cache_dir: str | None = Field(
         default=None,
         description="Default directory for FAISS index files.",
     )
-    embedding_dim: int | None = Field(
-        default=None,
-        description="Embedding dimensionality hint (rarely needed; usually auto-discovered from the model API).",
-    )
-    api_base: str = Field(
-        default="http://ollama:11434/v1",
-        description="Base URL for the embedding API (OpenAI-compatible).",
-    )
-    api_key: str = Field(
-        default="ollama",
-        description="API key for the model provider ('ollama' for local Ollama).",
-    )
-    provider_type: str = Field(
-        default="ollama",
-        description=f"omop-llm provider key (e.g. {', '.join(supported_providers())}).",
-    )
-    embedding_model: str = Field(
-        default="qwen3-embedding:0.6b",
-        description="Model name for generating concept embeddings.",
+    embedding_model_name: str = Field(
+        default="embedding-model",
+        description=(
+            "Name of a [models.*] entry (see 'omop-config models add') to use for "
+            "generating concept embeddings."
+        ),
     )
 
 

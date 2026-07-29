@@ -6,7 +6,8 @@ from typing import Annotated, Generator, List, Optional, Sequence, Union
 
 import typer
 from tqdm import tqdm
-from omop_llm import build_model_backend, supported_providers
+from oa_configurator import Resolver, ResolvedModel, load_stack_config
+from omop_llm import build_model_backend_from_resolved
 
 from omop_emb.utils.cdm import check_concept_cdm
 from omop_emb.backends.index_config import index_config_from_index_type
@@ -64,6 +65,22 @@ def _get_config() -> OmopEmbConfig:
         )
 
 
+def _resolve_model(model_name: Optional[str], cfg: OmopEmbConfig) -> ResolvedModel:
+    """Resolve a [models.*] entry by name, defaulting to cfg.embedding_model_name.
+
+    Converts an unknown model/provider name into an actionable setup message
+    (mirrors _get_config's FileNotFoundError handling).
+    """
+    name = model_name or cfg.embedding_model_name
+    try:
+        return Resolver(load_stack_config()).resolve_model(name)
+    except KeyError as exc:
+        raise RuntimeError(
+            f"{exc}. Run `omop-config models add {name}` "
+            "(and `omop-config providers add <provider-name>` first, if needed) to set it up."
+        )
+
+
 def _render_search_results(
     *,
     query_id: int,
@@ -83,30 +100,6 @@ def _render_search_results(
 
 @app.command()
 def add_embeddings(
-    api_base: Annotated[
-        Optional[str],
-        typer.Option(
-            "--api-base",
-            help="Base URL for the embedding API. Defaults to the value configured via omop-config.",
-            rich_help_panel="Embedding API Options",
-        ),
-    ] = None,
-    api_key: Annotated[
-        Optional[str],
-        typer.Option(
-            "--api-key",
-            help="API key for the embedding API. Defaults to the value configured via omop-config.",
-            rich_help_panel="Embedding API Options",
-        ),
-    ] = None,
-    provider: Annotated[
-        Optional[str],
-        typer.Option(
-            "--provider",
-            help=f"omop-llm provider key. Supported values: {', '.join(supported_providers())}. Defaults to the value configured via omop-config.",
-            rich_help_panel="Embedding API Options",
-        ),
-    ] = None,
     batch_size: Annotated[
         int,
         typer.Option(
@@ -116,12 +109,13 @@ def add_embeddings(
             rich_help_panel="Embedding API Options",
         ),
     ] = 100,
-    model: Annotated[
+    model_name: Annotated[
         Optional[str],
         typer.Option(
-            "--model",
+            "--model-name",
             "-m",
-            help="Embedding model name (e.g. 'text-embedding-3-small'). Defaults to the value configured via omop-config.",
+            help="Name of a [models.*] entry to use (see 'omop-config models add'/'list'). "
+            "Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
     ] = None,
@@ -166,10 +160,7 @@ def add_embeddings(
     """
 
     cfg = _get_config()
-    resolved_api_base = api_base or cfg.api_base
-    resolved_api_key = api_key or cfg.api_key
-    resolved_provider = provider or cfg.provider_type
-    resolved_model = model or cfg.embedding_model
+    resolved_model = _resolve_model(model_name, cfg)
 
     backend = resolve_backend()
     omop_cdm_engine = resolve_omop_cdm_engine()
@@ -179,10 +170,7 @@ def add_embeddings(
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
         metric_type=MetricType.COSINE,
-        model=resolved_model,
-        provider_type=resolved_provider,
-        api_base=resolved_api_base,
-        api_key=resolved_api_key,
+        resolved_model=resolved_model,
         embedding_batch_size=batch_size,
     )
     check_concept_cdm(omop_cdm_engine)
@@ -236,36 +224,13 @@ def add_embeddings(
 
 @app.command()
 def create_index(
-    api_base: Annotated[
+    model_name: Annotated[
         Optional[str],
         typer.Option(
-            "--api-base",
-            help="Base URL for the embedding API. Defaults to the value configured via omop-config.",
-            rich_help_panel="Embedding API Options",
-        ),
-    ] = None,
-    api_key: Annotated[
-        Optional[str],
-        typer.Option(
-            "--api-key",
-            help="API key for the embedding API. Defaults to the value configured via omop-config.",
-            rich_help_panel="Embedding API Options",
-        ),
-    ] = None,
-    provider: Annotated[
-        Optional[str],
-        typer.Option(
-            "--provider",
-            help=f"omop-llm provider key. Supported values: {', '.join(supported_providers())}. Defaults to the value configured via omop-config.",
-            rich_help_panel="Embedding API Options",
-        ),
-    ] = None,
-    model: Annotated[
-        Optional[str],
-        typer.Option(
-            "--model",
+            "--model-name",
             "-m",
-            help="Embedding model name to build the index for. Defaults to the value configured via omop-config.",
+            help="Name of a [models.*] entry to build the index for (see 'omop-config models add'/'list'). "
+            "Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
     ] = None,
@@ -318,19 +283,13 @@ def create_index(
     """
 
     cfg = _get_config()
-    resolved_api_base = api_base or cfg.api_base
-    resolved_api_key = api_key or cfg.api_key
-    resolved_provider = provider or cfg.provider_type
-    resolved_model = model or cfg.embedding_model
+    resolved_model = _resolve_model(model_name, cfg)
 
     backend = resolve_backend()
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
         metric_type=metric_type,
-        model=resolved_model,
-        provider_type=resolved_provider,
-        api_base=resolved_api_base,
-        api_key=resolved_api_key,
+        resolved_model=resolved_model,
     )
 
     index_config = index_config_from_index_type(
@@ -344,35 +303,11 @@ def create_index(
     metric_info = (
         f" (metric={metric_type.value})" if index_type == IndexType.HNSW else ""
     )
-    typer.echo(f"Index ({index_type.value}) built for '{model}'{metric_info}.")
+    typer.echo(f"Index ({index_type.value}) built for '{embedding_writer.canonical_model_name}'{metric_info}.")
 
 
 @app.command()
 def add_embeddings_with_index(
-    api_base: Annotated[
-        Optional[str],
-        typer.Option(
-            "--api-base",
-            help="Base URL for the embedding API. Defaults to the value configured via omop-config.",
-            rich_help_panel="Embedding API Options",
-        ),
-    ] = None,
-    api_key: Annotated[
-        Optional[str],
-        typer.Option(
-            "--api-key",
-            help="API key for the embedding API. Defaults to the value configured via omop-config.",
-            rich_help_panel="Embedding API Options",
-        ),
-    ] = None,
-    provider: Annotated[
-        Optional[str],
-        typer.Option(
-            "--provider",
-            help=f"omop-llm provider key. Supported values: {', '.join(supported_providers())}. Defaults to the value configured via omop-config.",
-            rich_help_panel="Embedding API Options",
-        ),
-    ] = None,
     metric_type: Annotated[
         MetricType,
         typer.Option(
@@ -398,12 +333,13 @@ def add_embeddings_with_index(
             rich_help_panel="Embedding API Options",
         ),
     ] = 100,
-    model: Annotated[
+    model_name: Annotated[
         Optional[str],
         typer.Option(
-            "--model",
+            "--model-name",
             "-m",
-            help="Embedding model name (e.g. 'text-embedding-3-small'). Defaults to the value configured via omop-config.",
+            help="Name of a [models.*] entry to use (see 'omop-config models add'/'list'). "
+            "Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
     ] = None,
@@ -471,11 +407,8 @@ def add_embeddings_with_index(
     index is rebuilt to the requested type. Index creation is expensive. Only use a non-Flat index after all embeddings are stored.
     """
     add_embeddings(
-        api_base=api_base,
-        api_key=api_key,
-        provider=provider,
         batch_size=batch_size,
-        model=model,
+        model_name=model_name,
         standard_only=standard_only,
         vocabularies=vocabularies,
         domains=domains,
@@ -483,10 +416,7 @@ def add_embeddings_with_index(
     )
 
     create_index(
-        api_base=api_base,
-        api_key=api_key,
-        provider=provider,
-        model=model,
+        model_name=model_name,
         metric_type=metric_type,
         index_type=index_type,
         index_hnsw_num_neighbors=index_hnsw_num_neighbors,
@@ -497,30 +427,6 @@ def add_embeddings_with_index(
 
 @app.command()
 def search(
-    api_base: Annotated[
-        Optional[str],
-        typer.Option(
-            "--api-base",
-            help="Base URL for the embedding API. Defaults to the value configured via omop-config.",
-            rich_help_panel="Embedding API Options",
-        ),
-    ] = None,
-    api_key: Annotated[
-        Optional[str],
-        typer.Option(
-            "--api-key",
-            help="API key for the embedding API. Defaults to the value configured via omop-config.",
-            rich_help_panel="Embedding API Options",
-        ),
-    ] = None,
-    provider: Annotated[
-        Optional[str],
-        typer.Option(
-            "--provider",
-            help=f"omop-llm provider key. Supported values: {', '.join(supported_providers())}. Defaults to the value configured via omop-config.",
-            rich_help_panel="Embedding API Options",
-        ),
-    ] = None,
     queries: Annotated[
         Optional[List[str]],
         typer.Option(
@@ -552,12 +458,13 @@ def search(
             rich_help_panel="Embedding API Options",
         ),
     ] = 100,
-    model: Annotated[
+    model_name: Annotated[
         Optional[str],
         typer.Option(
-            "--model",
+            "--model-name",
             "-m",
-            help="Embedding model name. Defaults to the value configured via omop-config.",
+            help="Name of a [models.*] entry to use (see 'omop-config models add'/'list'). "
+            "Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
     ] = None,
@@ -604,11 +511,8 @@ def search(
 ):
 
     cfg = _get_config()
-    resolved_api_base = api_base or cfg.api_base
-    resolved_api_key = api_key or cfg.api_key
-    resolved_provider = provider or cfg.provider_type
     resolved_faiss_cache_dir = faiss_cache_dir or cfg.faiss_cache_dir
-    resolved_model = model or cfg.embedding_model
+    resolved_model = _resolve_model(model_name, cfg)
 
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
     backend = resolve_backend()
@@ -622,9 +526,7 @@ def search(
             "CDM engine not configured; concept names will not be enriched in results."
         )
 
-    model_backend = build_model_backend(
-        resolved_provider, resolved_model, base_url=resolved_api_base, api_key=resolved_api_key
-    )
+    model_backend = build_model_backend_from_resolved(resolved_model)
     embedding_reader = EmbeddingReaderInterface(
         model=model_backend.model,
         backend=backend,

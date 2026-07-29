@@ -12,7 +12,6 @@ from sqlalchemy.orm import sessionmaker
 from omop_emb.config import (
     BackendType,
     MetricType,
-    ProviderType,
     IndexType,
     get_supported_index_types_for_backend,
     is_supported_index_metric_combination_for_backend,
@@ -229,7 +228,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         *,
         model_name: str,
         dimensions: int,
-        provider_type: ProviderType,
+        provider_type: str,
         index_config: Optional[IndexConfig] = None,
         metadata: Optional[Mapping[str, object]] = None,
         registered_at: Optional[datetime] = None,
@@ -242,8 +241,8 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             Canonical model name including tag.
         dimensions : int
             Embedding vector dimensionality.
-        provider_type : ProviderType
-            Provider that serves the model.
+        provider_type : str
+            omop-llm provider key that serves the model.
         index_config : IndexConfig, optional
             Index configuration. Defaults to ``FlatIndexConfig()`` when not
             provided.
@@ -291,7 +290,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         # Disable for now as we prevent non-FLAT index registration
         # self._rebuild_index_impl(model_record=record, index_config=index_config)
         logger.info(
-            f"Registered model '{model_name}' (provider='{provider_type.value}') in backend '{self.backend_type.value}'."
+            f"Registered model '{model_name}' (provider='{provider_type}') in backend '{self.backend_type.value}'."
         )
         return record
 
@@ -429,7 +428,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         self,
         *,
         model_name: Optional[str] = None,
-        provider_type: Optional[ProviderType] = None,
+        provider_type: Optional[str] = None,
     ) -> tuple[EmbeddingModelRecord, ...]:
         """Return all registry entries for this backend, with optional filters.
 
@@ -437,8 +436,8 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         ----------
         model_name : str, optional
             Canonical model name to filter by.
-        provider_type : ProviderType, optional
-            Provider that serves the model.
+        provider_type : str, optional
+            omop-llm provider key that serves the model.
 
         Returns
         -------

@@ -16,12 +16,17 @@ Design
 * ``omop_cdm_engine`` is **required** for ingestion methods
   (``embed_and_upsert_concepts``) because concept metadata must be fetched
   from the CDM to populate the embedding table filter columns.
+* Model calling is entirely ``omop_llm.ModelBackend``'s job (construction,
+  canonicalization, dimension discovery, batched embedding calls). The writer
+  interface builds one at construction time and owns only the domain logic
+  ``omop_llm`` doesn't: role-based text prefixing and shape validation.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import replace as dc_replace
+from enum import StrEnum
 from typing import (
     TYPE_CHECKING,
     Iterable,
@@ -36,16 +41,13 @@ from typing import (
 import numpy as np
 from numpy import ndarray
 from sqlalchemy import Engine, Row
+from omop_llm import ModelBackend, build_backend
+from omop_llm.providers import canonical_model_name as resolve_canonical_model_name
 
 from omop_emb.utils.cdm import (
     count_missing_concepts,
     fetch_cdm_concepts_for_filter,
     iter_cdm_concepts_for_filter,
-)
-from omop_emb.embeddings import (
-    EmbeddingClient,
-    EmbeddingRole,
-    get_provider_from_provider_type,
 )
 from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
@@ -53,7 +55,7 @@ from omop_emb.backends.base_backend import (
     EmbeddingModelRecord,
 )
 from omop_emb.backends.index_config import IndexConfig
-from omop_emb.config import BackendType, MetricType, ProviderType
+from omop_emb.config import BackendType, MetricType, OmopEmbConfig
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
 
 if TYPE_CHECKING:
@@ -62,35 +64,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Standalone utility
-# ---------------------------------------------------------------------------
+class EmbeddingRole(StrEnum):
+    """Role of text being embedded, used to apply an asymmetric-model prefix."""
 
-
-def list_registered_models(
-    backend: EmbeddingBackend,
-    provider_type: Optional[ProviderType] = None,
-    model_name: Optional[str] = None,
-) -> tuple[EmbeddingModelRecord, ...]:
-    """List models registered by the backend, optionally filtered by provider and/or model name.
-
-    Parameters
-    ----------
-    backend : EmbeddingBackend
-        Backend to query.
-    provider_type : ProviderType, optional
-        Provider that serves the model.
-    model_name : str, optional
-        Filter by canonical model name.
-
-    Returns
-    -------
-    tuple[EmbeddingModelRecord, ...]
-    """
-    return backend.get_registered_models(
-        model_name=model_name,
-        provider_type=provider_type,
-    )
+    DOCUMENT = "document"
+    QUERY = "query"
 
 
 # ---------------------------------------------------------------------------
@@ -115,15 +93,14 @@ class EmbeddingReaderInterface:
         embedding table by the backend.
     model : str
         Model name in canonical form.
-    canonical_model_name : str, optional
-    provider_name_or_type : str | ProviderType, optional
-        Embedding provider.
+    provider_name_or_type : str, optional
+        omop-llm provider key. Defaults to ``'ollama'``.
     k : int
         Default number of nearest neighbors to return.
     faiss_cache_dir : str, optional
         Optional directory for FAISS index caching.  If provided, the interface
         will attempt to use FAISS for faster KNN search.  Only supported
-        if the 'faiss' package is installed.  
+        if the 'faiss' package is installed.
     """
 
     def __init__(
@@ -133,24 +110,12 @@ class EmbeddingReaderInterface:
         metric_type: MetricType,
         *,
         omop_cdm_engine: Optional[Engine] = None,
-        provider_name_or_type: Optional[Union[str, ProviderType]] = None,
+        provider_name_or_type: Optional[str] = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
         faiss_cache_dir: Optional[str] = None,
     ):
-        # Resolve provider type
-        if isinstance(provider_name_or_type, str):
-            provider_type = ProviderType(provider_name_or_type)
-        elif isinstance(provider_name_or_type, ProviderType):
-            provider_type = provider_name_or_type
-        elif provider_name_or_type is None:
-            provider_type = ProviderType.OLLAMA
-        else:
-            raise ValueError(
-                f"Invalid provider_name_or_type: {type(provider_name_or_type).__name__}."
-            )
-
-        provider = get_provider_from_provider_type(provider_type)
-        canonical_model_name = provider.canonical_model_name(model)
+        provider_type = provider_name_or_type if provider_name_or_type is not None else "ollama"
+        canonical_model_name = resolve_canonical_model_name(provider_type, model)
 
         self._backend = backend
 
@@ -200,12 +165,162 @@ class EmbeddingReaderInterface:
         return self._canonical_model_name
 
     @property
-    def provider_type(self) -> ProviderType:
+    def provider_type(self) -> str:
         return self._provider_type
+
+    # ------------------------------------------------------------------
+    # Embedding generation (static -> no interface instance required)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def load_embedding_prefixes() -> dict[EmbeddingRole, str]:
+        """Load per-role text prefixes from the OA_Configurator config.
+
+        Returns
+        -------
+        dict[EmbeddingRole, str]
+        """
+        try:
+            cfg = OmopEmbConfig.get_config()
+            document_embedding_prefix = cfg.document_embedding_prefix
+            query_embedding_prefix = cfg.query_embedding_prefix
+        except Exception:
+            document_embedding_prefix = ""
+            query_embedding_prefix = ""
+
+        for role, prefix in [
+            (EmbeddingRole.DOCUMENT, document_embedding_prefix),
+            (EmbeddingRole.QUERY, query_embedding_prefix),
+        ]:
+            if prefix:
+                logger.info(
+                    f"{role.value.capitalize()} embedding prefix loaded from config: {prefix!r}. "
+                    f"All {role.value} texts will be prepended with this prefix."
+                )
+            else:
+                logger.warning(
+                    f"{role.value.capitalize()} embedding prefix is not set in config. "
+                    f"This is fine for symmetric models. For asymmetric models (e.g. nomic-embed-text, "
+                    f"E5, BGE), set document_embedding_prefix / query_embedding_prefix via "
+                    f"'omop-config configure omop_emb'."
+                )
+
+        return {
+            EmbeddingRole.DOCUMENT: document_embedding_prefix,
+            EmbeddingRole.QUERY: query_embedding_prefix,
+        }
+
+    @staticmethod
+    def _apply_embedding_prefix(
+        texts: Tuple[str, ...],
+        *,
+        role: EmbeddingRole,
+        prefixes: Mapping[EmbeddingRole, str],
+    ) -> Tuple[str, ...]:
+        prefix = prefixes.get(role, "")
+        if not prefix:
+            return texts
+        return tuple(f"{prefix}{text}" for text in texts)
+
+    @staticmethod
+    def generate_embeddings(
+        model_backend: ModelBackend,
+        text: Union[str, List[str], Tuple[str, ...]],
+        *,
+        embedding_role: EmbeddingRole,
+        prefixes: Optional[Mapping[EmbeddingRole, str]] = None,
+        batch_size: Optional[int] = None,
+    ) -> np.ndarray:
+        """Embed *text* against *model_backend*, applying a role prefix and validating shape.
+
+        Callable without an interface instance for callers that hold a
+        ``ModelBackend`` directly (e.g. on-the-fly query embedding against a
+        registry-resolved model, decoupled from any specific write session).
+
+        Parameters
+        ----------
+        model_backend : omop_llm.ModelBackend
+            Backend to generate embeddings with.
+        text : str | list[str] | tuple[str, ...]
+            Input text(s) to embed.
+        embedding_role : EmbeddingRole
+            Role of the input text(s), used to apply a configured prefix.
+        prefixes : Mapping[EmbeddingRole, str], optional
+            Role -> prefix mapping. Must cover every :class:`EmbeddingRole`
+            member if supplied -- a partial mapping is rejected rather than
+            silently treating the missing role as unprefixed. Omit entirely
+            to load both roles fresh via :meth:`load_embedding_prefixes`.
+        batch_size : int, optional
+            Forwarded to ``ModelBackend.embed_texts``.
+
+        Returns
+        -------
+        np.ndarray
+            2-D float array of shape ``(n_texts, embedding_dim)``.
+
+        Raises
+        ------
+        ValueError
+            If *prefixes* is supplied but missing an ``EmbeddingRole`` member.
+        """
+        if isinstance(text, str):
+            text_tuple: Tuple[str, ...] = (text,)
+        else:
+            text_tuple = tuple(text)
+
+        if prefixes is not None:
+            missing_roles = set(EmbeddingRole) - prefixes.keys()
+            if missing_roles:
+                raise ValueError(
+                    f"prefixes is missing entries for: {sorted(missing_roles)}. Supply a "
+                    "prefix (even an empty string) for every EmbeddingRole, or omit "
+                    "`prefixes` entirely to load both roles from config."
+                )
+            resolved_prefixes = prefixes
+        else:
+            resolved_prefixes = EmbeddingReaderInterface.load_embedding_prefixes()
+        text_tuple = EmbeddingReaderInterface._apply_embedding_prefix(
+            text_tuple, role=embedding_role, prefixes=resolved_prefixes
+        )
+
+        vectors = model_backend.embed_texts(list(text_tuple), batch_size=batch_size)
+
+        result = np.array(vectors)
+        if result.ndim != 2:
+            raise RuntimeError(f"Expected 2-D embedding array, got shape {result.shape}")
+        if result.shape[0] != len(text_tuple):
+            raise RuntimeError(f"Expected {len(text_tuple)} embeddings, got {result.shape[0]}")
+        return result
 
     # ------------------------------------------------------------------
     # Registry queries
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def list_registered_models(
+        backend: EmbeddingBackend,
+        provider_type: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ) -> tuple[EmbeddingModelRecord, ...]:
+        """List models registered by the backend, optionally filtered by provider and/or model name.
+
+        Parameters
+        ----------
+        backend : EmbeddingBackend
+            Backend to query.
+        provider_type : str, optional
+            omop-llm provider key that serves the model.
+        model_name : str, optional
+            Filter by canonical model name.
+
+        Returns
+        -------
+        tuple[EmbeddingModelRecord, ...]
+        """
+        return backend.get_registered_models(
+            model_name=model_name,
+            provider_type=provider_type,
+        )
 
     def get_model_table_name(self) -> Optional[str]:
         record = self._backend.get_registered_model(
@@ -317,20 +432,27 @@ class EmbeddingReaderInterface:
     def get_nearest_concepts_from_query_texts(
         self,
         query_texts: Union[str, Tuple[str, ...], List[str]],
-        embedding_client: EmbeddingClient,
+        model_backend: Optional[ModelBackend] = None,
         *,
+        prefixes: Optional[Mapping[EmbeddingRole, str]] = None,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         batch_size: Optional[int] = None,
         k: Optional[int] = None,
         faiss_index_config: Optional[IndexConfig] = None,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         """Embed *query_texts* then search for nearest concepts."""
+        if model_backend is None:
+            raise ValueError(
+                "model_backend is required (EmbeddingReaderInterface has no default backend)."
+            )
         if isinstance(query_texts, str):
             query_texts = (query_texts,)
-        query_embeddings = embedding_client.embeddings(
+        query_embeddings = self.generate_embeddings(
+            model_backend,
             tuple(query_texts),
-            batch_size=batch_size,
             embedding_role=EmbeddingRole.QUERY,
+            prefixes=prefixes,
+            batch_size=batch_size,
         )
         return self.get_nearest_concepts(
             query_embedding=query_embeddings,
@@ -496,15 +618,28 @@ class EmbeddingReaderInterface:
 class EmbeddingWriterInterface(EmbeddingReaderInterface):
     """Reader interface extended with embedding generation and write operations.
 
+    Builds and owns an ``omop_llm.ModelBackend`` directly -- there is no
+    separate client object between this interface and the model backend.
+
     Parameters
     ----------
     backend : EmbeddingBackend
         Pre-constructed backend.
     metric_type : MetricType
         Distance metric for the table.
-    embedding_client : EmbeddingClient
-        Required.  Supplies model name, provider type, and dimensionality, and
-        is used for generating embeddings.
+    model : str
+        Model name. Canonicalised on construction (e.g. ``'llama3'`` ->
+        ``'llama3:8b'`` for Ollama). After construction ``self.canonical_model_name``
+        is the stable key used in the omop-emb registry.
+    provider_type : str
+        omop-llm provider key (see ``omop_llm.providers.supported_providers()``).
+    api_base : str
+        API endpoint base URL, e.g. ``'http://host.docker.internal:11434/v1'``.
+    api_key : str, optional
+        API key. Defaults to ``'ollama'`` (ignored by Ollama, required by the
+        OpenAI SDK).
+    embedding_batch_size : int, optional
+        Default number of texts per API call. Default is 32.
     omop_cdm_engine : Engine, optional
         CDM engine used for result enrichment.  Pass to write methods directly
         when needed for ingestion.
@@ -514,22 +649,56 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         self,
         backend: EmbeddingBackend,
         metric_type: MetricType,
-        embedding_client: EmbeddingClient,
+        model: str,
+        provider_type: str,
+        api_base: str,
+        api_key: str = "ollama",
+        embedding_batch_size: int = 32,
         *,
         omop_cdm_engine: Optional[Engine] = None,
     ):
-        self._embedding_client = embedding_client
+        try:
+            cfg_dim = OmopEmbConfig.get_config().embedding_dim
+        except FileNotFoundError:
+            cfg_dim = None
+        configuration = {"embedding_dim": cfg_dim} if cfg_dim is not None else None
+
+        self._model_backend: ModelBackend = build_backend(
+            provider_type, model, base_url=api_base, api_key=api_key, configuration=configuration
+        )
+        self._embedding_batch_size = embedding_batch_size
+        self._embedding_dim: Optional[int] = None
+        self._prefixes = self.load_embedding_prefixes()
+
         super().__init__(
             backend=backend,
             metric_type=metric_type,
             omop_cdm_engine=omop_cdm_engine,
-            model=embedding_client.canonical_model_name,
-            provider_name_or_type=embedding_client.provider.provider_type,
+            model=self._model_backend.model,
+            provider_name_or_type=self._model_backend.provider,
+        )
+
+        logger.info(
+            f"{EmbeddingWriterInterface.__name__} initialised for model={self.canonical_model_name!r}.\n"
+            f"URL: {api_base} | Provider: {self._model_backend.provider!r}"
         )
 
     @property
+    def model_backend(self) -> ModelBackend:
+        return self._model_backend
+
+    @property
     def embedding_dim(self) -> int:
-        return self._embedding_client.embedding_dim
+        """Embedding vector dimension, resolved on first access and cached.
+
+        Delegates entirely to ``ModelBackend.dimensions()``'s three-tier
+        lookup (configured override, provider fast path, live probe); the
+        configured override was already passed in as ``configuration`` at
+        construction time.
+        """
+        if self._embedding_dim is None:
+            self._embedding_dim = self._model_backend.dimensions()
+        return self._embedding_dim
 
     # ------------------------------------------------------------------
     # Model management
@@ -557,7 +726,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         """
         return self._backend.register_model(
             model_name=self.canonical_model_name,
-            provider_type=self._embedding_client.provider.provider_type,
+            provider_type=self._model_backend.provider,
             dimensions=self.embedding_dim,
             index_config=index_config,
             metadata=metadata,
@@ -596,8 +765,12 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         embedding_role: EmbeddingRole,
         batch_size: Optional[int] = None,
     ) -> np.ndarray:
-        return self._embedding_client.embeddings(
-            texts, batch_size=batch_size, embedding_role=embedding_role
+        return self.generate_embeddings(
+            self._model_backend,
+            texts,
+            embedding_role=embedding_role,
+            prefixes=self._prefixes,
+            batch_size=batch_size if batch_size is not None else self._embedding_batch_size,
         )
 
     # ------------------------------------------------------------------
@@ -700,8 +873,9 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
     def get_nearest_concepts_from_query_texts(
         self,
         query_texts: Union[str, Tuple[str, ...], List[str]],
-        embedding_client: Optional[EmbeddingClient] = None,
+        model_backend: Optional[ModelBackend] = None,
         *,
+        prefixes: Optional[Mapping[EmbeddingRole, str]] = None,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         batch_size: Optional[int] = None,
         k: Optional[int] = None,
@@ -709,7 +883,8 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         return super().get_nearest_concepts_from_query_texts(
             query_texts=query_texts,
-            embedding_client=embedding_client or self._embedding_client,
+            model_backend=model_backend if model_backend is not None else self._model_backend,
+            prefixes=prefixes if prefixes is not None else self._prefixes,
             concept_filter=concept_filter,
             batch_size=batch_size,
             k=k,

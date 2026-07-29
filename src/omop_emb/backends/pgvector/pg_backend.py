@@ -14,7 +14,7 @@ except ImportError as _e:
         "pgvector is not installed. Install it with: pip install omop-emb[pgvector]"
     ) from _e
 
-from omop_emb.config import BackendType, MetricType, ProviderType
+from omop_emb.config import BackendType, MetricType
 from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
     EmbeddingBackend,
@@ -147,7 +147,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         *,
         model_name: str,
         dimensions: int,
-        provider_type: ProviderType,
+        provider_type: str,
         index_config: Optional[IndexConfig] = None,
         metadata: Optional[Mapping[str, object]] = None,
         registered_at: Optional[datetime] = None,
@@ -160,8 +160,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             Canonical model name including tag.
         dimensions : int
             Embedding vector dimensionality.
-        provider_type : ProviderType
-            Provider that serves the model.
+        provider_type : str
+            omop-llm provider key that serves the model.
         index_config : IndexConfig, optional
             Defaults to ``FlatIndexConfig()`` when not provided.
         metadata : Mapping[str, object], optional

@@ -5,10 +5,11 @@ from typing import Any, Optional
 from sqlalchemy import DateTime, Engine, Integer, JSON, String, Enum, func
 from sqlalchemy.orm import DeclarativeBase, mapped_column, validates, Mapped
 
+from omop_llm import supported_providers
+
 from omop_emb.config import (
     IndexType,
     MetricType,
-    ProviderType,
 )
 from omop_emb.backends.index_config import IndexConfig
 
@@ -33,8 +34,9 @@ class ModelRegistry(ModelRegistryBase):
     ----------
     model_name : str
         Canonical model name including tag.
-    provider_type : ProviderType
-        Provider that served the model (informational only).
+    provider_type : str
+        Provider that served the model (informational only; the omop-llm
+        provider key, e.g. ``'ollama'``).
     storage_identifier : str
         Physical table name where the model's embeddings are stored.
         Must be unique across the registry. Format: ``<backend>_<safe_model>``.
@@ -68,7 +70,7 @@ class ModelRegistry(ModelRegistryBase):
 
     model_name = mapped_column(String, primary_key=True)
 
-    provider_type = mapped_column(Enum(ProviderType, native_enum=False))
+    provider_type = mapped_column(String)
     storage_identifier = mapped_column(String, nullable=False, unique=True)
     dimensions = mapped_column(Integer, nullable=False)
 
@@ -92,11 +94,11 @@ class ModelRegistry(ModelRegistryBase):
     )
 
     @validates("provider_type")
-    def _validate_provider_type(self, _key: str, value: str) -> str:
-        """Reject unknown provider types on assignment."""
-        if value not in ProviderType:
+    def _validate_provider_type(self, _key: str, value: Optional[str]) -> Optional[str]:
+        """Reject a provider key omop-llm doesn't recognize, when one is given."""
+        if value is not None and value not in supported_providers():
             raise ValueError(
-                f"Unsupported provider type: {value!r}. Supported: {list(ProviderType)}"
+                f"Unsupported provider type: {value!r}. Supported: {sorted(supported_providers())}"
             )
         return value
 

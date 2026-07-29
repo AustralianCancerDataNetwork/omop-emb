@@ -2,10 +2,10 @@
 
 `omop-emb` exposes two complementary Python interfaces:
 
-- **`EmbeddingWriterInterface`** — write + read. Wraps an `EmbeddingClient` for embedding generation, model registration, and upsert.
-- **`EmbeddingReaderInterface`** — read-only. No `EmbeddingClient` needed; nearest-neighbour queries and registry lookups only.
+- **`EmbeddingWriterInterface`** — write + read. Builds and owns an `omop_llm.ModelBackend` for embedding generation, model registration, and upsert.
+- **`EmbeddingReaderInterface`** — read-only. No model backend owned by the interface; nearest-neighbour queries and registry lookups only.
 
-Both interfaces accept a **pre-constructed** `EmbeddingBackend` (sqlite-vec or pgvector) and validate model names via the configured provider.
+Both interfaces accept a **pre-constructed** `EmbeddingBackend` (sqlite-vec or pgvector) and validate model names via `omop_llm`'s provider registry.
 
 ---
 
@@ -39,22 +39,23 @@ backend = PGVectorEmbeddingBackend.from_db_url(db_url="postgresql+psycopg://user
 ### Creating the interface
 
 ```python
-from omop_emb import EmbeddingWriterInterface, EmbeddingClient
-from omop_emb.config import MetricType, ProviderType
-
-embedding_client = EmbeddingClient(
-    model="nomic-embed-text:v1.5",
-    api_base="http://localhost:11434/v1",
-    provider_type=ProviderType.OLLAMA,
-)
+from omop_emb import EmbeddingWriterInterface
+from omop_emb.config import MetricType
 
 writer = EmbeddingWriterInterface(
     backend=backend,
     metric_type=MetricType.COSINE,
-    embedding_client=embedding_client,
+    model="nomic-embed-text:v1.5",
+    provider_type="ollama",
+    api_base="http://localhost:11434",
     omop_cdm_engine=cdm_engine,  # optional; used to enrich search results
 )
 ```
+
+`model`/`provider_type`/`api_base`/`api_key` are passed straight through to
+`omop_llm.build_backend(...)` at construction time. The interface builds and
+owns the `ModelBackend` itself; there is no separate client object to
+construct first.
 
 ### Register and initialise
 
@@ -115,18 +116,18 @@ This is equivalent to running `omop-emb maintenance rebuild-index --index-type h
 
 ## EmbeddingReaderInterface
 
-Use this when you only need to query stored embeddings — no embedding generation,
-no `EmbeddingClient` required.
+Use this when you only need to query stored embeddings — no embedding
+generation, no model backend owned by the interface.
 
 ```python
 from omop_emb import EmbeddingReaderInterface
-from omop_emb.config import MetricType, ProviderType
+from omop_emb.config import MetricType
 
 reader = EmbeddingReaderInterface(
     model="nomic-embed-text:v1.5",
     backend=backend,
     metric_type=MetricType.COSINE,
-    provider_name_or_type=ProviderType.OLLAMA,
+    provider_name_or_type="ollama",
     omop_cdm_engine=cdm_engine,   # optional; enriches results with concept_name
 )
 ```
@@ -153,19 +154,18 @@ results = reader.get_nearest_concepts(
 
 ### Query by text
 
-```python
-from omop_emb import EmbeddingClient
-from omop_emb.config import ProviderType
+`get_nearest_concepts_from_query_texts` takes a `ModelBackend` directly —
+build one with `omop_llm.build_backend` (the reader has no default backend of
+its own to embed with):
 
-embedding_client = EmbeddingClient(
-    model="nomic-embed-text:v1.5",
-    api_base="http://localhost:11434/v1",
-    provider_type=ProviderType.OLLAMA,
-)
+```python
+from omop_llm import build_backend
+
+model_backend = build_backend("ollama", "nomic-embed-text:v1.5", base_url="http://localhost:11434")
 
 results = reader.get_nearest_concepts_from_query_texts(
     query_texts=("high blood pressure", "type 2 diabetes"),
-    embedding_client=embedding_client,
+    model_backend=model_backend,
     k=5,
 )
 ```
@@ -182,7 +182,7 @@ reader = EmbeddingReaderInterface(
     model="nomic-embed-text:v1.5",
     backend=backend,
     metric_type=MetricType.COSINE,
-    provider_name_or_type=ProviderType.OLLAMA,
+    provider_name_or_type="ollama",
     faiss_cache_dir="/data/faiss_cache",
 )
 # Searches automatically use FAISS when the cache is fresh; SQL path otherwise.
@@ -218,42 +218,45 @@ primary backend — no CDM round-trip at query time.
 
 ---
 
-## EmbeddingClient and providers
+## Model backends and providers
 
-`EmbeddingClient` wraps any OpenAI-compatible endpoint. It canonicalises the
-model name at construction time and exposes `canonical_model_name` as the stable
-identifier used in the registry. Two providers are supported: `OllamaProvider`
-for self-hosted models served via Ollama, and `OpenAIProvider` for OpenAI-hosted
-models (or any OpenAI-compatible API reachable with an API key, without an
-Ollama compatibility layer in front of it).
+Model calling — construction, canonicalization, dimension discovery, batched
+embedding calls — is entirely `omop_llm.ModelBackend`'s job. `omop-emb` never
+talks to a provider endpoint directly; `EmbeddingWriterInterface` builds one
+internally via `omop_llm.build_backend(provider, model, base_url=..., api_key=...)`,
+and any caller that needs to embed text without a full writer interface (e.g.
+on-the-fly query embedding) can build one the same way and pass it around.
 
 ```python
-from omop_emb import EmbeddingClient
-from omop_emb.config import ProviderType
+from omop_llm import build_backend
 
 # Ollama — provider specified explicitly (works with any hostname or IP)
-client = EmbeddingClient(
-    model="nomic-embed-text:v1.5",
-    api_base="http://host.docker.internal:11434/v1",
-    provider_type=ProviderType.OLLAMA,
+model_backend = build_backend(
+    "ollama",
+    "nomic-embed-text:v1.5",
+    base_url="http://host.docker.internal:11434",
 )
 
-print(client.canonical_model_name)  # "nomic-embed-text:v1.5"
-print(client.embedding_dim)         # auto-discovered via Ollama /api/show
+print(model_backend.model)  # "nomic-embed-text:v1.5"
+print(model_backend.dimensions())  # auto-discovered via Ollama /api/show
 ```
 
 ```python
 # OpenAI — hosted model, authenticated via API key
-client = EmbeddingClient(
-    model="text-embedding-3-large",
-    api_base="https://api.openai.com/v1",
+model_backend = build_backend(
+    "openai",
+    "text-embedding-3-large",
+    base_url="https://api.openai.com/v1",
     api_key="sk-...",
-    provider_type=ProviderType.OPENAI,
 )
 
-print(client.canonical_model_name)  # "text-embedding-3-large"
-print(client.embedding_dim)         # discovered via a live probe call (no discovery endpoint)
+print(model_backend.model)  # "text-embedding-3-large"
+print(model_backend.dimensions())  # discovered via a live probe call (no discovery endpoint)
 ```
+
+See `omop_llm.providers.supported_providers()` for the full list of provider
+keys, and `omop-llm`'s own `docs/providers.md` for the capability matrix per
+provider.
 
 ---
 
@@ -292,12 +295,11 @@ print(client.embedding_dim)         # discovered via a live probe call (no disco
 ## Utility functions
 
 ```python
-from omop_emb import list_registered_models
-from omop_emb.config import ProviderType
+from omop_emb import EmbeddingReaderInterface
 
-models = list_registered_models(
+models = EmbeddingReaderInterface.list_registered_models(
     backend=backend,
-    provider_type=ProviderType.OLLAMA,  # optional filter
+    provider_type="ollama",  # optional filter
 )
 for m in models:
     print(m.model_name, m.provider_type, m.dimensions, m.index_type)
@@ -323,8 +325,8 @@ for m in models:
         │                          │
         ▼                          │
 ┌───────────────────┐              │
-│  EmbeddingClient  │              │
-│  + Provider       │              │
+│  omop_llm         │              │
+│  ModelBackend     │              │
 └───────────────────┘              │
         │                          │
         └──────────┬───────────────┘
@@ -350,7 +352,7 @@ methods are available on the writer too.
 
 1. **Use the interfaces**, not backends directly — they enforce canonical naming.
 2. **`EmbeddingWriterInterface` for write flows**, `EmbeddingReaderInterface` for query-only services.
-3. **Use `embedding_client.canonical_model_name`** when constructing a matching reader — it is guaranteed to be canonical.
+3. **Use `writer.canonical_model_name`** when constructing a matching reader — it is guaranteed to be canonical.
 4. **Always register with `FlatIndexConfig`** first. Run `rebuild_index` or `omop-emb maintenance rebuild-index` after ingestion to build HNSW.
 5. **CDM enrichment is optional** — omit `omop_cdm_engine` when `concept_name` is not needed to avoid the CDM round-trip.
 6. **FAISS is a read-acceleration sidecar, never the source of truth** — build it directly from the backend with `omop-emb maintenance build-faiss-cache` and supply `faiss_cache_dir` to `EmbeddingReaderInterface` for faster approximate search.

@@ -195,3 +195,29 @@ class TestRegistryManager:
             safe_model_name="mymodel_v1",
         )
         assert name == "emb_mymodel_v1"
+
+
+@pytest.mark.unit
+class TestProviderTypeValidation:
+    """provider_type is checked live against omop_llm.supported_providers()."""
+
+    def test_unsupported_provider_type_raises(self, registry: RegistryManager):
+        with pytest.raises(ValueError, match="Unsupported provider type"):
+            registry.register_model(
+                model_name=MODEL_NAME,
+                provider_type="not-a-real-provider",
+                index_config=FLAT,
+                dimensions=EMBEDDING_DIM,
+            )
+
+    def test_every_supported_provider_is_accepted(self, registry: RegistryManager):
+        from omop_llm import supported_providers
+
+        for i, provider in enumerate(supported_providers()):
+            record = registry.register_model(
+                model_name=f"{MODEL_NAME}-{i}",
+                provider_type=provider,
+                index_config=FLAT,
+                dimensions=EMBEDDING_DIM,
+            )
+            assert record.provider_type == provider

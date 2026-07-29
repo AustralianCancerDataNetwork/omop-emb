@@ -18,13 +18,13 @@ from omop_emb.backends.sqlitevec import (
     SQLiteVecEmbeddingBackend,
     create_sqlitevec_engine,
 )
-from omop_emb.config import MetricType, ProviderType
+from omop_emb.config import MetricType
 from omop_emb.storage import embedding_bundle
 
 pytest.importorskip("h5py", reason="h5py not installed")
 
 _MODEL = "test-bundle-model:v1"
-_PROVIDER = ProviderType.OLLAMA
+_PROVIDER = "ollama"
 
 
 def _make_backend() -> SQLiteVecEmbeddingBackend:

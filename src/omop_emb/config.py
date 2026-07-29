@@ -10,34 +10,7 @@ from sqlalchemy import Engine
 from oa_configurator import DatabaseConfig, PackageConfigBase, ResourceSpec
 
 from omop_alchemy.config import OmopAlchemyConfig
-
-
-class ProviderType(StrEnum):
-    """Embedding model provider.
-
-    Members
-    -------
-    OLLAMA
-        Self-hosted models served via the Ollama runtime.
-    OPENAI
-        OpenAI-hosted models (or any OpenAI-compatible API), authenticated via
-        an API key rather than a local, unauthenticated endpoint.
-    """
-
-    OLLAMA = "ollama"
-    OPENAI = "openai"
-
-
-def provider_type_examples() -> str:
-    """Return a human-readable list of ProviderType values for help text.
-
-    e.g. ``"'ollama' or 'openai'"`` for two values, or
-    ``"'ollama', 'openai', or 'anthropic'"`` once a third is added.
-    """
-    values = [f"'{p.value}'" for p in ProviderType]
-    if len(values) <= 2:
-        return " or ".join(values)
-    return f"{', '.join(values[:-1])}, or {values[-1]}"
+from omop_llm import supported_providers
 
 
 class OmopEmbConfig(PackageConfigBase):
@@ -114,9 +87,9 @@ class OmopEmbConfig(PackageConfigBase):
         default="ollama",
         description="API key for the model provider ('ollama' for local Ollama).",
     )
-    provider_type: ProviderType = Field(
-        default=ProviderType.OLLAMA,
-        description=f"Embedding provider type (e.g. {provider_type_examples()}).",
+    provider_type: str = Field(
+        default="ollama",
+        description=f"omop-llm provider key (e.g. {', '.join(supported_providers())}).",
     )
     embedding_model: str = Field(
         default="qwen3-embedding:0.6b",

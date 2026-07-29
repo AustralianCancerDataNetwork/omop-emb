@@ -1,18 +1,12 @@
 from omop_emb.interface import (
     EmbeddingReaderInterface,
     EmbeddingWriterInterface,
-)
-from omop_emb.embeddings import (
-    EmbeddingClient,
-    EmbeddingProvider,
-    OllamaProvider,
-    OpenAIProvider,
+    EmbeddingRole,
 )
 from omop_emb.config import (
     BackendType,
     IndexType,
     MetricType,
-    ProviderType,
     parse_backend_type,
     parse_index_type,
     parse_metric_type,
@@ -41,14 +35,10 @@ from omop_emb.backends.sqlitevec import (
 __all__ = [
     "EmbeddingReaderInterface",
     "EmbeddingWriterInterface",
-    "EmbeddingClient",
-    "EmbeddingProvider",
-    "OllamaProvider",
-    "OpenAIProvider",
+    "EmbeddingRole",
     "BackendType",
     "IndexType",
     "MetricType",
-    "ProviderType",
     "parse_backend_type",
     "parse_index_type",
     "parse_metric_type",

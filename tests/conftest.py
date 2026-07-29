@@ -13,7 +13,7 @@ from omop_emb.backends.sqlitevec import (
     SQLiteVecEmbeddingBackend,
     create_sqlitevec_engine,
 )
-from omop_emb.config import OmopEmbConfig, ProviderType
+from omop_emb.config import OmopEmbConfig
 
 
 # ---------------------------------------------------------------------------
@@ -21,7 +21,7 @@ from omop_emb.config import OmopEmbConfig, ProviderType
 # ---------------------------------------------------------------------------
 
 MODEL_NAME = "test-model:v1"
-PROVIDER_TYPE = ProviderType.OLLAMA
+PROVIDER_TYPE = "ollama"
 EMBEDDING_DIM = 1
 
 # Fixed 1-D embeddings: Hypertension=-10, Diabetes=0, Aspirin=+10

@@ -6,6 +6,7 @@ from typing import Annotated, Generator, List, Optional, Sequence, Union
 
 import typer
 from tqdm import tqdm
+from omop_llm import build_backend, supported_providers
 
 from omop_emb.utils.cdm import check_concept_cdm
 from omop_emb.backends.index_config import index_config_from_index_type
@@ -14,11 +15,8 @@ from omop_emb.config import (
     IndexType,
     MetricType,
     OmopEmbConfig,
-    ProviderType,
-    provider_type_examples,
     resolve_omop_cdm_engine,
 )
-from omop_emb.embeddings import EmbeddingClient
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
 
@@ -102,10 +100,10 @@ def add_embeddings(
         ),
     ] = None,
     provider: Annotated[
-        Optional[ProviderType],
+        Optional[str],
         typer.Option(
             "--provider",
-            help=f"Embedding provider type (e.g. {provider_type_examples()}). Defaults to the value configured via omop-config.",
+            help=f"omop-llm provider key. Supported values: {', '.join(supported_providers())}. Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
     ] = None,
@@ -176,19 +174,16 @@ def add_embeddings(
     backend = resolve_backend()
     omop_cdm_engine = resolve_omop_cdm_engine()
 
-    embedding_client = EmbeddingClient(
-        model=resolved_model,
-        api_base=resolved_api_base,
-        api_key=resolved_api_key,
-        embedding_batch_size=batch_size,
-        provider_type=resolved_provider,
-    )
     # FLAT registration: metric_type=COSINE is used only for upsert validation;
     # FLAT accepts any backend-supported metric, so COSINE is always valid here.
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
         metric_type=MetricType.COSINE,
-        embedding_client=embedding_client,
+        model=resolved_model,
+        provider_type=resolved_provider,
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
+        embedding_batch_size=batch_size,
     )
     check_concept_cdm(omop_cdm_engine)
 
@@ -258,10 +253,10 @@ def create_index(
         ),
     ] = None,
     provider: Annotated[
-        Optional[ProviderType],
+        Optional[str],
         typer.Option(
             "--provider",
-            help=f"Embedding provider type (e.g. {provider_type_examples()}). Defaults to the value configured via omop-config.",
+            help=f"omop-llm provider key. Supported values: {', '.join(supported_providers())}. Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
     ] = None,
@@ -329,16 +324,13 @@ def create_index(
     resolved_model = model or cfg.embedding_model
 
     backend = resolve_backend()
-    embedding_client = EmbeddingClient(
-        model=resolved_model,
-        api_base=resolved_api_base,
-        api_key=resolved_api_key,
-        provider_type=resolved_provider,
-    )
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
         metric_type=metric_type,
-        embedding_client=embedding_client,
+        model=resolved_model,
+        provider_type=resolved_provider,
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
     )
 
     index_config = index_config_from_index_type(
@@ -374,10 +366,10 @@ def add_embeddings_with_index(
         ),
     ] = None,
     provider: Annotated[
-        Optional[ProviderType],
+        Optional[str],
         typer.Option(
             "--provider",
-            help=f"Embedding provider type (e.g. {provider_type_examples()}). Defaults to the value configured via omop-config.",
+            help=f"omop-llm provider key. Supported values: {', '.join(supported_providers())}. Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
     ] = None,
@@ -522,10 +514,10 @@ def search(
         ),
     ] = None,
     provider: Annotated[
-        Optional[ProviderType],
+        Optional[str],
         typer.Option(
             "--provider",
-            help=f"Embedding provider type (e.g. {provider_type_examples()}). Defaults to the value configured via omop-config.",
+            help=f"omop-llm provider key. Supported values: {', '.join(supported_providers())}. Defaults to the value configured via omop-config.",
             rich_help_panel="Embedding API Options",
         ),
     ] = None,
@@ -630,19 +622,15 @@ def search(
             "CDM engine not configured; concept names will not be enriched in results."
         )
 
-    embedding_client = EmbeddingClient(
-        model=resolved_model,
-        api_base=resolved_api_base,
-        api_key=resolved_api_key,
-        embedding_batch_size=batch_size,
-        provider_type=resolved_provider,
+    model_backend = build_backend(
+        resolved_provider, resolved_model, base_url=resolved_api_base, api_key=resolved_api_key
     )
     embedding_reader = EmbeddingReaderInterface(
-        model=embedding_client.canonical_model_name,
+        model=model_backend.model,
         backend=backend,
         metric_type=metric_type,
         omop_cdm_engine=omop_cdm_engine,
-        provider_name_or_type=embedding_client.provider.provider_type,
+        provider_name_or_type=model_backend.provider,
         faiss_cache_dir=resolved_faiss_cache_dir,
     )
 
@@ -658,7 +646,7 @@ def search(
     ):
         batched_matches = embedding_reader.get_nearest_concepts_from_query_texts(
             query_texts=batched_queries,
-            embedding_client=embedding_client,
+            model_backend=model_backend,
             concept_filter=concept_filter,
             k=k,
         )

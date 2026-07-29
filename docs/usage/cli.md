@@ -4,14 +4,13 @@
 management, and diagnostics. All commands load a `.env` file from the working
 directory automatically.
 
-Commands are organised into four subcommand groups:
+Commands are organised into three subcommand groups:
 
 | Group | Purpose |
 |---|---|
 | `embeddings` | Ingestion, search, index creation |
 | `maintenance` | Model management, FAISS export/import |
 | `diagnostics` | Health checks |
-| `legacy` | Import pre-built embeddings from HDF5 files |
 
 Run `omop-emb <group> --help` to list commands within a group.
 
@@ -453,38 +452,6 @@ Verify backend connectivity and list registered models with embedding counts.
 ```bash
 omop-emb diagnostics health-check [--verbose]
 ```
-
----
-
-## `legacy` group
-
-### `import-legacy-faiss-cache`
-
-**Deprecated** migration path for FAISS caches built by an old version of
-`export-faiss-cache`, before the bundle format existed. Reconstructs vectors
-directly from the `.faiss` file. For `metric=cosine` caches, the
-reconstructed vectors are L2-normalized. As a result, they are **not** the original raw
-embeddings, and that magnitude cannot be recovered. New exports should use
-`maintenance export` / `maintenance import`, which round-trip losslessly via
-a bundle. Requires `pip install "omop-emb[faiss-cpu]"`.
-
-```bash
-omop-emb legacy import-legacy-faiss-cache --model <NAME> --cache-dir <DIR> --provider-type <TYPE> [OPTIONS]
-```
-
-| Option | Short | Default | Description |
-|---|---|---|---|
-| `--model` | `-m` | **required** | Canonical model name the FAISS cache was built for. |
-| `--cache-dir` | | **required** | Root cache directory containing the FAISS index files. |
-| `--provider-type` | | **required** | Embedding provider. Used to register the model if not already present. |
-| `--force` | | `False` | Overwrite existing embeddings without prompting. |
-
-**Index Options**
-
-| Option | Default | Description |
-|---|---|---|
-| `--metric-type` | `cosine` | Metric of the cache to import from. |
-| `--index-type` | `flat` | Index type to import from (`flat` or `hnsw`). |
 
 | Option | Short | Description |
 |---|---|---|

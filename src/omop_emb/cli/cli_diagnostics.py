@@ -7,7 +7,7 @@ import typer
 
 from omop_emb.backends import resolve_backend
 from omop_emb.config import MetricType, resolve_omop_cdm_engine
-from omop_emb.interface import list_registered_models
+from omop_emb.interface import EmbeddingReaderInterface
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(help="Diagnostics for embedding storage and retrieval.")
@@ -31,7 +31,7 @@ def health_check():
     except Exception as exc:
         typer.echo(f"CDM engine: connection failed. {exc}")
 
-    records = list_registered_models(backend=backend)
+    records = EmbeddingReaderInterface.list_registered_models(backend=backend)
     if not records:
         typer.echo("No registered models found.")
         return
@@ -44,7 +44,7 @@ def health_check():
     for r in records:
         index_str = r.index_type.value if r.index_type else "none"
         metric_str = r.metric_type.value if r.metric_type else "any"
-        provider_str = r.provider_type.value if r.provider_type else "-"
+        provider_str = r.provider_type if r.provider_type else "-"
         typer.echo(
             f"  {r.model_name:<40} {provider_str:<10} {metric_str:<8} "
             f"{index_str:<6} {r.dimensions:<6} {r.storage_identifier}"

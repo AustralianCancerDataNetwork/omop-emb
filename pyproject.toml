@@ -37,7 +37,7 @@ dependencies = [
     "oa-configurator==0.1.2",
     "typing-extensions>=4.15.0",
     "sqlite-vec>=0.1.9",
-    "openai",
+    # "omop-llm">=0.2,  # Activate once it is public
     "requests",
     "urllib3>=2.7.0", # CVE-2026-44432, CVE-2026-44431
     "typer",

@@ -13,7 +13,6 @@ from omop_emb.backends.index_config import (
     IndexConfig,
     index_config_from_orm_row,
 )
-from omop_emb.config import ProviderType
 from omop_emb.model_registry.model_registry_orm import (
     ModelRegistry,
     ensure_registry_schema,
@@ -62,7 +61,7 @@ class RegistryManager:
         self,
         *,
         model_name: Optional[str] = None,
-        provider_type: Optional[ProviderType] = None,
+        provider_type: Optional[str] = None,
     ) -> tuple[EmbeddingModelRecord, ...]:
         """Return all registered models matching the given filters.
 
@@ -70,8 +69,8 @@ class RegistryManager:
         ----------
         model_name : str, optional
             Filter by canonical model name.
-        provider_type : ProviderType, optional
-            Provider that serves the model.
+        provider_type : str, optional
+            omop-llm provider key that serves the model.
         Returns
         -------
         tuple[EmbeddingModelRecord, ...]
@@ -96,7 +95,7 @@ class RegistryManager:
         model_name: str,
         index_config: IndexConfig,
         dimensions: int,
-        provider_type: ProviderType,
+        provider_type: str,
         metadata: Optional[Mapping[str, object]] = None,
         registered_at: Optional[datetime] = None,
     ) -> EmbeddingModelRecord:
@@ -110,8 +109,8 @@ class RegistryManager:
             Initial index configuration.
         dimensions : int
             Embedding vector dimensionality.
-        provider_type : ProviderType
-            Provider that serves the model.
+        provider_type : str
+            omop-llm provider key that serves the model.
         metadata : Mapping[str, object], optional
             Free-form operational metadata.
         registered_at : datetime, optional
@@ -324,10 +323,23 @@ class RegistryManager:
 
     @staticmethod
     def _row_to_record(row: ModelRegistry) -> EmbeddingModelRecord:
+        """Convert a SQLAlchemy ORM row to a dataclass record.
+
+        Notes
+        -----
+        Rows written with v1.X ProviderType Enum column stored the
+        Python enum *member name* ("OLLAMA"), not its value ("ollama"). This function normalises
+        legacy rows to the lowercase omop-llm provider key every current/future row already uses.
+        The only two deprecated omop-emb providers are the following:
+        - OLLAMA -> ollama
+        - OPENAI -> openai
+        """
+
         index_config = index_config_from_orm_row(row.index_type, row.index_config)
+        provider_type = row.provider_type.lower() if row.provider_type else row.provider_type
         return EmbeddingModelRecord(
             model_name=row.model_name,
-            provider_type=row.provider_type,
+            provider_type=provider_type,
             index_config=index_config,
             dimensions=row.dimensions,
             storage_identifier=row.storage_identifier,

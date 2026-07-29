@@ -19,14 +19,17 @@ For a symmetric model these are interchangeable. For an asymmetric model the doc
 
 ## Configuration
 
-`omop-emb` reads two environment variables when `EmbeddingClient` is constructed:
+`omop-emb` reads two environment variables:
 
 | Variable | Role | Example value |
 |---|---|---|
 | `OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX` | Prepended to all **document** texts before indexing | `search_document: ` |
 | `OMOP_EMB_QUERY_EMBEDDING_PREFIX` | Prepended to all **query** texts before searching | `search_query: ` |
 
-Both default to `""`. When either is empty, `omop-emb` logs a warning at startup explaining what the variable is for. This is not an error — it is correct behaviour for symmetric models.
+Both default to `""`. `EmbeddingWriterInterface` reads them once, at construction, and caches the result for the lifetime of the instance. `EmbeddingReaderInterface` has no equivalent cache, as it has no notion of a model (by design) at all outside of `get_nearest_concepts_from_query_texts`, which reads them fresh on every call unless you pass `prefixes` explicitly. Either way, when a prefix is empty, `omop-emb` logs a warning explaining what the variable is for.
+
+!!! warning "A caller-supplied `prefixes` mapping must cover both roles"
+    `generate_embeddings()`/`embed_texts()` accept an optional `prefixes` override. If you pass one, it must include **both** `EmbeddingRole.DOCUMENT` and `EmbeddingRole.QUERY`. A partial mapping raises `ValueError` rather than silently treating the missing role as unprefixed. Omit `prefixes` entirely to load both roles from config instead of overriding either.
 
 !!! tip "Prefix examples by model family"
     | Model | Document prefix | Query prefix |
@@ -70,7 +73,7 @@ results = interface.get_nearest_concepts_from_query_texts(
 When you call `embed_texts` directly you must pass the role explicitly:
 
 ```python
-from omop_emb.embeddings import EmbeddingRole
+from omop_emb import EmbeddingRole
 
 # Indexing — use DOCUMENT
 doc_embeddings = interface.embed_texts(
@@ -85,25 +88,22 @@ query_embeddings = interface.embed_texts(
 )
 ```
 
-Similarly, `EmbeddingClient.embeddings()` and `EmbeddingClient.similarity()` require explicit roles:
+The same applies to `EmbeddingReaderInterface.generate_embeddings()`, the
+lower-level entry point used when you hold an `omop_llm.ModelBackend` directly
+without a full writer interface (e.g. on-the-fly query embedding):
 
 ```python
-# embeddings()
-vecs = client.embeddings(texts, embedding_role=EmbeddingRole.DOCUMENT)
+from omop_emb import EmbeddingReaderInterface
 
-# similarity() — terms_role for the first argument, terms_to_match_role for the second
-scores = client.similarity(
-    "high blood pressure",
-    "Hypertension",
-    terms_role=EmbeddingRole.QUERY,
-    terms_to_match_role=EmbeddingRole.DOCUMENT,
+vecs = EmbeddingReaderInterface.generate_embeddings(
+    model_backend, texts, embedding_role=EmbeddingRole.DOCUMENT
 )
 ```
 
-### Inspecting active prefixes
+### Inspecting configured prefixes
 
 ```python
-print(client.embedding_role_prefixes())
+print(EmbeddingReaderInterface.load_embedding_prefixes())
 # {<EmbeddingRole.DOCUMENT: 'document'>: 'search_document: ',
 #  <EmbeddingRole.QUERY: 'query'>: 'search_query: '}
 ```

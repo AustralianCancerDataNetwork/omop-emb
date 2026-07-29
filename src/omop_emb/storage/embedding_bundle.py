@@ -53,7 +53,7 @@ from tqdm import tqdm
 from omop_emb.backends.base_backend import EmbeddingBackend
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import IndexConfig, index_config_from_index_type
-from omop_emb.config import MetricType, ProviderType
+from omop_emb.config import MetricType
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,7 @@ class ExportMetadata:
     model_name: str
     dimensions: int
     metric_type: MetricType
-    provider_type: ProviderType
+    provider_type: str
     index_config: IndexConfig
     row_count: int
     exported_at: str
@@ -157,7 +157,7 @@ class ExportMetadata:
             model_name=get_required_attribute(attrs, ATTR_MODEL_NAME),
             dimensions=int(get_required_attribute(attrs, ATTR_DIMENSIONS)),
             metric_type=MetricType(get_required_attribute(attrs, ATTR_METRIC_TYPE)),
-            provider_type=ProviderType(get_required_attribute(attrs, ATTR_PROVIDER_TYPE)),
+            provider_type=str(get_required_attribute(attrs, ATTR_PROVIDER_TYPE)),
             index_config=index_config_from_index_type(
                 **json.loads(get_required_attribute(attrs, ATTR_INDEX_CONFIG))
             ),
@@ -171,7 +171,7 @@ class ExportMetadata:
                 "model_name": self.model_name,
                 "dimensions": self.dimensions,
                 "metric_type": self.metric_type.value,
-                "provider_type": self.provider_type.value,
+                "provider_type": self.provider_type,
                 "index_config": self.index_config.to_dict(),
                 "row_count": self.row_count,
                 "exported_at": self.exported_at,
@@ -196,7 +196,7 @@ class ExportMetadata:
             model_name=d.get("model_name", ""),
             dimensions=int(d.get("dimensions", 0)),
             metric_type=MetricType(d["metric_type"]),
-            provider_type=ProviderType(d["provider_type"]),
+            provider_type=str(d["provider_type"]),
             index_config=index_config_from_index_type(**d["index_config"]),
             row_count=int(d.get("row_count", -1)),
             exported_at=d.get("exported_at", ""),
@@ -438,7 +438,7 @@ def export_bundle(
         f.attrs[ATTR_MODEL_NAME] = meta.model_name
         f.attrs[ATTR_DIMENSIONS] = meta.dimensions
         f.attrs[ATTR_METRIC_TYPE] = meta.metric_type.value
-        f.attrs[ATTR_PROVIDER_TYPE] = meta.provider_type.value
+        f.attrs[ATTR_PROVIDER_TYPE] = meta.provider_type
         f.attrs[ATTR_INDEX_CONFIG] = json.dumps(meta.index_config.to_dict())
         f.attrs[ATTR_ROW_COUNT] = meta.row_count
         f.attrs[ATTR_EXPORTED_AT] = meta.exported_at

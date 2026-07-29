@@ -16,7 +16,7 @@ from omop_emb.backends.sqlitevec import (
     SQLiteVecEmbeddingBackend,
     create_sqlitevec_engine,
 )
-from omop_emb.config import MetricType, ProviderType
+from omop_emb.config import MetricType
 from omop_emb.storage import embedding_bundle
 from omop_emb.storage.faiss.faiss_cache import FAISSCache
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
@@ -28,7 +28,7 @@ pytest.importorskip("faiss", reason="faiss-cpu not installed")
 # ---------------------------------------------------------------------------
 
 _MODEL = "test-faiss-model:v1"
-_PROVIDER = ProviderType.OLLAMA
+_PROVIDER = "ollama"
 
 # 2-D unit vectors — exact cosine inner products without floating-point error.
 #   ID 1: [1, 0]   aligned with query → IP = 1  → cosine_dist = 0  → sim = 1.0

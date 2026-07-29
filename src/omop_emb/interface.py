@@ -547,7 +547,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         Distance metric for the table.
     resolved_model : oa_configurator.ResolvedModel
         A model resolved via ``oa_configurator.Resolver.resolve_model()``,
-        e.g. ``Resolver(load_stack_config()).resolve_model(cfg.embedding_model_name)``.
+        e.g. ``Resolver.from_active_config().resolve_model(cfg.embedding_model_name)``.
         Provider, connection details, ``embedding_dim``, and
         ``document_prefix``/``query_prefix`` all come from this, not from
         ``omop-emb``'s own config.

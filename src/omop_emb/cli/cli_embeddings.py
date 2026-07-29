@@ -6,7 +6,7 @@ from typing import Annotated, Generator, List, Optional, Sequence, Union
 
 import typer
 from tqdm import tqdm
-from oa_configurator import Resolver, ResolvedModel, load_stack_config
+from oa_configurator import Resolver, ResolvedModel
 from omop_llm import build_model_backend_from_resolved
 
 from omop_emb.utils.cdm import check_concept_cdm
@@ -73,7 +73,7 @@ def _resolve_model(model_name: Optional[str], cfg: OmopEmbConfig) -> ResolvedMod
     """
     name = model_name or cfg.embedding_model_name
     try:
-        return Resolver(load_stack_config()).resolve_model(name)
+        return Resolver.from_active_config().resolve_model(name)
     except KeyError as exc:
         raise RuntimeError(
             f"{exc}. Run `omop-config models add {name}` "

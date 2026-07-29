@@ -39,12 +39,12 @@ backend = PGVectorEmbeddingBackend.from_db_url(db_url="postgresql+psycopg://user
 ### Creating the interface
 
 ```python
-from oa_configurator import Resolver, load_stack_config
+from oa_configurator import Resolver
 from omop_emb import EmbeddingWriterInterface
 from omop_emb.config import MetricType, OmopEmbConfig
 
 cfg = OmopEmbConfig.get_config()
-resolved_model = Resolver(load_stack_config()).resolve_model(cfg.embedding_model_name)
+resolved_model = Resolver.from_active_config().resolve_model(cfg.embedding_model_name)
 
 writer = EmbeddingWriterInterface(
     backend=backend,

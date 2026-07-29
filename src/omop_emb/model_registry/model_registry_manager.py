@@ -360,7 +360,7 @@ def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
     sqlite has no native timezone-aware storage, so SQLAlchemy round-trips
     ``DateTime(timezone=True)`` columns as naive on that backend (pgvector
     preserves tzinfo). Every timestamp this registry writes is UTC, so a
-    naive value read back is always UTC too -- normalize here, once, so
+    naive value read back is always UTC too: normalize here, once, so
     every caller can assume tz-aware and compare against other UTC-aware
     datetimes (e.g. a bundle's ``exported_at``) without crashing.
     """

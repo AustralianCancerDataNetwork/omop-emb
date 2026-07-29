@@ -64,7 +64,7 @@ QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
-# Fixtures — SQLiteVec (in-memory, function-scoped)
+# Fixtures: SQLiteVec (in-memory, function-scoped)
 # ---------------------------------------------------------------------------
 
 
@@ -83,7 +83,7 @@ def svec_backend(svec_engine) -> SQLiteVecEmbeddingBackend:
 
 
 # ---------------------------------------------------------------------------
-# Fixtures — pgvector (session-scoped engine, function-scoped backend)
+# Fixtures: pgvector (session-scoped engine, function-scoped backend)
 # ---------------------------------------------------------------------------
 
 

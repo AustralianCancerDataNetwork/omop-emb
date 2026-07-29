@@ -1,15 +1,13 @@
 # OMOP Embeddings
 
-`omop-emb` generates and retrieves vector embeddings for OMOP CDM concepts. It
-works standalone out of the box (sqlite-vec, no external database required) and
-optionally scales to PostgreSQL via the pgvector extension.
+`omop-emb` generates and retrieves vector embeddings for OMOP CDM concepts. It works standalone out of the box (sqlite-vec, no external database required) and optionally scales to PostgreSQL via the pgvector extension.
 
 The package supports:
 
-- dynamic embedding model registration — multiple models per backend, tracked in the embedding database
+- dynamic embedding model registration: multiple models per backend, tracked in the embedding database
 - embedding and lookup for OMOP concepts across configurable storage backends
 - <ins>**Two storage backends**</ins>:
-    - **`sqlite-vec`** (default): zero-config, file-based or in-memory — no external service required
+    - **`sqlite-vec`** (default): zero-config, file-based or in-memory; no external service required
     - **`pgvector`**: PostgreSQL with the pgvector extension (FLAT sequential scan or HNSW SQL index)
 - **FAISS** sidecar on top of `sqlite-vec` backend for approximate nearest-neighbour search
 - CLI scripts to ingest OMOP CDM concepts and manage registered models
@@ -43,13 +41,13 @@ pip install "omop-emb[pgvector,faiss-cpu]" # everything
 
 | Variable | Default | Description |
 |---|---|---|
-| `OMOP_EMB_DB_HOST` | — | PostgreSQL host. |
+| `OMOP_EMB_DB_HOST` | - | PostgreSQL host. |
 | `OMOP_EMB_DB_PORT` | `5432` | PostgreSQL port. |
-| `OMOP_EMB_DB_USER` | — | PostgreSQL user. |
-| `OMOP_EMB_DB_PASSWORD` | — | PostgreSQL password. |
-| `OMOP_EMB_DB_NAME` | — | PostgreSQL database name. |
+| `OMOP_EMB_DB_USER` | - | PostgreSQL user. |
+| `OMOP_EMB_DB_PASSWORD` | - | PostgreSQL password. |
+| `OMOP_EMB_DB_NAME` | - | PostgreSQL database name. |
 | `OMOP_EMB_DB_DRIVER` | `postgresql+psycopg` | SQLAlchemy driver string. Override to use e.g. `psycopg2`. |
-| `OMOP_EMB_DB_URL` | — | Full SQLAlchemy connection URL. Overrides all individual components above when set. |
+| `OMOP_EMB_DB_URL` | - | Full SQLAlchemy connection URL. Overrides all individual components above when set. |
 
 ### Embedding API (CLI concept ingestion)
 
@@ -59,9 +57,7 @@ pip install "omop-emb[pgvector,faiss-cpu]" # everything
 | `OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX` | Task prefix prepended to concept texts at index time. |
 | `OMOP_EMB_QUERY_EMBEDDING_PREFIX` | Task prefix prepended to search queries at query time. |
 
-The prefix variables are optional and default to `""`. They are only needed for
-asymmetric embedding models (e.g. nomic-embed-text, E5, BGE) that require
-different task prefixes for indexing versus querying.
+The prefix variables are optional and default to `""`. They are only needed for asymmetric embedding models (e.g. nomic-embed-text, E5, BGE) that require different task prefixes for indexing versus querying.
 
 ## Documentation overview
 

@@ -1,4 +1,4 @@
-"""Shared backend tests — run against any EmbeddingBackend implementation.
+"""Shared backend tests: run against any EmbeddingBackend implementation.
 
 Subclass SharedBackendTests in backend-specific test modules and provide a
 ``backend`` fixture that returns a registered-free instance of the backend
@@ -31,7 +31,7 @@ from .conftest import (
 
 
 class SharedBackendTests:
-    """Mixin class — drop into any backend test class."""
+    """Mixin class: drop into any backend test class."""
 
     # ------------------------------------------------------------------
     # Helpers
@@ -156,7 +156,7 @@ class SharedBackendTests:
         assert count == len(CONCEPT_RECORDS)
 
     # ------------------------------------------------------------------
-    # Read — concept IDs
+    # Read: concept IDs
     # ------------------------------------------------------------------
 
     def test_get_all_stored_concept_ids(self, backend: EmbeddingBackend):
@@ -180,7 +180,7 @@ class SharedBackendTests:
         assert np.isclose(result[DIABETES_ID][0], 0.0)
 
     # ------------------------------------------------------------------
-    # KNN — basic
+    # KNN: basic
     # ------------------------------------------------------------------
 
     def test_knn_returns_results(self, backend: EmbeddingBackend):
@@ -250,7 +250,7 @@ class SharedBackendTests:
         assert results[1][0].concept_id == ASPIRIN_ID
 
     # ------------------------------------------------------------------
-    # KNN — filters
+    # KNN: filters
     # ------------------------------------------------------------------
 
     def test_knn_domain_filter(self, backend: EmbeddingBackend):
@@ -305,7 +305,7 @@ class SharedBackendTests:
         assert HYPERTENSION_ID in returned_ids
 
     # ------------------------------------------------------------------
-    # KNN — similarity math
+    # KNN: similarity math
     # ------------------------------------------------------------------
 
     def test_l2_similarity_values(self, backend: EmbeddingBackend):

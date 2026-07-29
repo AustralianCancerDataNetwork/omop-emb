@@ -103,7 +103,7 @@ def count_missing_concepts(
     """Return how many CDM concepts match *concept_filter* but lack an embedding.
 
     Streams only ``concept_id`` (one integer column) and checks each against
-    *embedded_ids* via O(1) set lookup — far cheaper than fetching full rows.
+    *embedded_ids* via O(1) set lookup, far cheaper than fetching full rows.
     """
     query = select(Concept.concept_id)
     if concept_filter is not None:

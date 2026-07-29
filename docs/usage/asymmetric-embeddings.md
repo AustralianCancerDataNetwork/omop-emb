@@ -4,7 +4,7 @@
 
 Most general-purpose models (e.g. `text-embedding-3-small`) produce vectors in a symmetric space: the same transformation is applied whether you are indexing a document or submitting a search query.
 
-**Asymmetric models** — such as [nomic-embed-text](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5), [E5](https://huggingface.co/intfloat/e5-large-v2), and [BGE](https://huggingface.co/BAAI/bge-large-en-v1.5) — are trained with *task-specific prefixes* prepended to the input. The model's training objective explicitly separates the representation space for documents being indexed from the space for queries being searched. Sending text without the correct prefix does not raise an error, but similarity scores degrade substantially and silently.
+**Asymmetric models**, such as [nomic-embed-text](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5), [E5](https://huggingface.co/intfloat/e5-large-v2), and [BGE](https://huggingface.co/BAAI/bge-large-en-v1.5), are trained with *task-specific prefixes* prepended to the input. The model's training objective explicitly separates the representation space for documents being indexed from the space for queries being searched. Sending text without the correct prefix does not raise an error, but similarity scores degrade substantially and silently.
 
 ## Why it matters for OMOP concept search
 
@@ -38,13 +38,13 @@ Both default to `""`. `EmbeddingWriterInterface` reads them once, at constructio
     | `e5-large-v2` | `passage: ` | `query: ` |
     | `bge-large-en-v1.5` | *(none)* | `Represent this sentence for searching relevant passages: ` |
 
-    Always check the model card — task prefixes are model-specific and can change between versions.
+    Always check the model card: task prefixes are model-specific and can change between versions.
 
 ## Role assignment in the API
 
 The two high-level methods handle roles automatically. You only need to think about roles when calling `embed_texts` directly.
 
-### Indexing concepts — `DOCUMENT` is automatic
+### Indexing concepts: `DOCUMENT` is automatic
 
 `embed_and_upsert_concepts` always uses `EmbeddingRole.DOCUMENT`:
 
@@ -56,7 +56,7 @@ interface.embed_and_upsert_concepts(
 )
 ```
 
-### Querying — `QUERY` is automatic
+### Querying: `QUERY` is automatic
 
 `get_nearest_concepts_from_query_texts` always uses `EmbeddingRole.QUERY`:
 
@@ -68,29 +68,27 @@ results = interface.get_nearest_concepts_from_query_texts(
 )
 ```
 
-### Direct embedding generation — caller chooses the role
+### Direct embedding generation: caller chooses the role
 
 When you call `embed_texts` directly you must pass the role explicitly:
 
 ```python
 from omop_emb import EmbeddingRole
 
-# Indexing — use DOCUMENT
+# Indexing: use DOCUMENT
 doc_embeddings = interface.embed_texts(
     ["Hypertension", "Diabetes"],
     embedding_role=EmbeddingRole.DOCUMENT,
 )
 
-# Searching — use QUERY
+# Searching: use QUERY
 query_embeddings = interface.embed_texts(
     ["high blood pressure"],
     embedding_role=EmbeddingRole.QUERY,
 )
 ```
 
-The same applies to `EmbeddingReaderInterface.generate_embeddings()`, the
-lower-level entry point used when you hold an `omop_llm.ModelBackend` directly
-without a full writer interface (e.g. on-the-fly query embedding):
+The same applies to `EmbeddingReaderInterface.generate_embeddings()`, the lower-level entry point used when you hold an `omop_llm.ModelBackend` directly without a full writer interface (e.g. on-the-fly query embedding):
 
 ```python
 from omop_emb import EmbeddingReaderInterface

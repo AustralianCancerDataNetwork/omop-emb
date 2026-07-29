@@ -1,7 +1,6 @@
 # Installation
 
-`omop-emb` supports backend-specific optional dependencies so you can install
-only what you need.
+`omop-emb` supports backend-specific optional dependencies so you can install only what you need.
 
 ## sqlite-vec (default, no extras required)
 
@@ -9,9 +8,7 @@ only what you need.
 pip install omop-emb
 ```
 
-The default backend is sqlite-vec — a file-based or in-memory vector store that
-requires no external database server. This is ready to use immediately after
-install.
+The default backend is sqlite-vec: a file-based or in-memory vector store that requires no external database server. This is ready to use immediately after install.
 
 ## pgvector backend
 
@@ -19,9 +16,7 @@ install.
 pip install "omop-emb[pgvector]"
 ```
 
-Adds `psycopg` and the `pgvector` SQLAlchemy type adapter. Requires a running
-PostgreSQL instance with the pgvector extension installed (e.g.
-[`pgvector/pgvector`](https://hub.docker.com/r/pgvector/pgvector) Docker image).
+Adds `psycopg` and the `pgvector` SQLAlchemy type adapter. Requires a running PostgreSQL instance with the pgvector extension installed (e.g. [`pgvector/pgvector`](https://hub.docker.com/r/pgvector/pgvector) Docker image).
 
 ## FAISS sidecar
 
@@ -29,10 +24,7 @@ PostgreSQL instance with the pgvector extension installed (e.g.
 pip install "omop-emb[faiss-cpu]"
 ```
 
-Adds `faiss-cpu`. FAISS is a read-acceleration sidecar that layers on top of
-any primary backend — it does not replace sqlite-vec or pgvector.  The primary
-backend remains the source of truth; FAISS indices are exported from it and used
-for faster in-memory approximate-nearest-neighbour search.
+Adds `faiss-cpu`. FAISS is a read-acceleration sidecar that layers on top of any primary backend; it does not replace sqlite-vec or pgvector. The primary backend remains the source of truth; FAISS indices are exported from it and used for faster in-memory approximate-nearest-neighbour search.
 
 ## Everything
 
@@ -40,8 +32,7 @@ for faster in-memory approximate-nearest-neighbour search.
 pip install "omop-emb[pgvector,faiss-cpu]"
 ```
 
-Installs all optional dependencies. Recommended for development and mixed
-environments.
+Installs all optional dependencies. Recommended for development and mixed environments.
 
 ---
 
@@ -50,7 +41,7 @@ environments.
 Set `OMOP_EMB_BACKEND` to select the backend (default: `sqlitevec`):
 
 ```bash
-export OMOP_EMB_BACKEND=sqlitevec   # default — no external service needed
+export OMOP_EMB_BACKEND=sqlitevec   # default; no external service needed
 export OMOP_EMB_BACKEND=pgvector    # requires PostgreSQL + pgvector
 ```
 
@@ -66,8 +57,7 @@ export OMOP_EMB_SQLITE_PATH=:memory:
 
 ### pgvector connection
 
-Supply individual connection components (recommended, matches `.env` and
-Docker Compose patterns):
+Supply individual connection components (recommended, matches `.env` and Docker Compose patterns):
 
 ```bash
 export OMOP_EMB_DB_HOST=localhost
@@ -83,13 +73,11 @@ Or supply a full SQLAlchemy URL (overrides all individual components):
 export OMOP_EMB_DB_URL=postgresql+psycopg://omop_emb:omop_emb@localhost:5432/omop_emb
 ```
 
-The default driver string is `postgresql+psycopg` (psycopg3). Override via
-`OMOP_EMB_DB_DRIVER` if you need a different driver (e.g. `postgresql+psycopg2`).
+The default driver string is `postgresql+psycopg` (psycopg3). Override via `OMOP_EMB_DB_DRIVER` if you need a different driver (e.g. `postgresql+psycopg2`).
 
 ### Docker Compose
 
-A reference `docker-compose.yaml` for the pgvector service ships with the
-package. Create a `.env` file alongside it:
+A reference `docker-compose.yaml` for the pgvector service ships with the package. Create a `.env` file alongside it:
 
 ```bash
 OMOP_EMB_DB_USER=omop_emb

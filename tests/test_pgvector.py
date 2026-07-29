@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip(
-    "pgvector", reason="omop-emb[pgvector] not installed — skipping pgvector tests"
+    "pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests"
 )
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig

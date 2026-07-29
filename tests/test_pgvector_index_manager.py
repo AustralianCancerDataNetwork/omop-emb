@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 
 pytest.importorskip(
-    "pgvector", reason="omop-emb[pgvector] not installed — skipping pgvector tests"
+    "pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests"
 )
 
 from omop_emb.config import IndexType, MetricType, VectorColumnType
@@ -61,7 +61,7 @@ def hnsw_manager(pg_engine, hnsw_table) -> PGVectorHNSWIndexManager:
 
 
 # ---------------------------------------------------------------------------
-# PGVectorFlatIndexManager — unit tests (no DB)
+# PGVectorFlatIndexManager: unit tests (no DB)
 # ---------------------------------------------------------------------------
 
 
@@ -125,7 +125,7 @@ class TestPGVectorFlatIndexManagerUnit:
 
 
 # ---------------------------------------------------------------------------
-# PGVectorHNSWIndexManager — DDL generation (pure unit, no DB)
+# PGVectorHNSWIndexManager: DDL generation (pure unit, no DB)
 # ---------------------------------------------------------------------------
 
 
@@ -212,7 +212,7 @@ class TestPGVectorHNSWIndexManagerDDL:
 
 
 # ---------------------------------------------------------------------------
-# Metric support guards — unit tests (no DB)
+# Metric support guards: unit tests (no DB)
 # ---------------------------------------------------------------------------
 
 
@@ -249,7 +249,7 @@ class TestMetricSupportGuards:
 
 
 # ---------------------------------------------------------------------------
-# PGVectorHNSWIndexManager — integration tests (need DB)
+# PGVectorHNSWIndexManager: integration tests (need DB)
 # ---------------------------------------------------------------------------
 
 

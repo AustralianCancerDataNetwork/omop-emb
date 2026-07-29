@@ -35,8 +35,9 @@ class ModelRegistry(ModelRegistryBase):
     model_name : str
         Canonical model name including tag.
     provider_type : str
-        Provider that served the model (informational only; the omop-llm
-        provider key, e.g. ``'ollama'``).
+        Provider that served the model (required; not part of any lookup
+        key, but every registered model has one: the omop-llm provider
+        key, e.g. ``'ollama'``).
     storage_identifier : str
         Physical table name where the model's embeddings are stored.
         Must be unique across the registry. Format: ``<backend>_<safe_model>``.
@@ -70,7 +71,7 @@ class ModelRegistry(ModelRegistryBase):
 
     model_name = mapped_column(String, primary_key=True)
 
-    provider_type = mapped_column(String)
+    provider_type = mapped_column(String, nullable=False)
     storage_identifier = mapped_column(String, nullable=False, unique=True)
     dimensions = mapped_column(Integer, nullable=False)
 
@@ -94,9 +95,11 @@ class ModelRegistry(ModelRegistryBase):
     )
 
     @validates("provider_type")
-    def _validate_provider_type(self, _key: str, value: Optional[str]) -> Optional[str]:
-        """Reject a provider key omop-llm doesn't recognize, when one is given."""
-        if value is not None and value not in supported_providers():
+    def _validate_provider_type(self, _key: str, value: str) -> str:
+        """Reject a missing or unrecognized provider key."""
+        if value is None:
+            raise ValueError("provider_type is required.")
+        if value not in supported_providers():
             raise ValueError(
                 f"Unsupported provider type: {value!r}. Supported: {sorted(supported_providers())}"
             )

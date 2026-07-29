@@ -1,4 +1,4 @@
-"""Placeholder — EmbeddingWriterInterface tests removed.
+"""Placeholder: EmbeddingWriterInterface tests removed.
 
 The high-level interface (EmbeddingWriterInterface / EmbeddingReaderInterface)
 requires a live OMOP CDM engine for concept ingestion.  CDM-integrated tests

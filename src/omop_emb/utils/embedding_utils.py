@@ -204,11 +204,11 @@ def get_similarity_from_distance(
     -----
     Conversion formulas:
 
-    * ``COSINE`` -- distance in ``[0, 2]``, so ``similarity = 1 - dist/2``.
-    * ``L2``     -- ``similarity = 1 / (1 + dist)``.
-    * ``L1``     -- ``similarity = 1 / (1 + dist)``.
-    * ``JACCARD`` -- ``similarity = 1 - dist``.
-    * ``HAMMING`` -- not implemented.
+    * ``COSINE``: distance in ``[0, 2]``, so ``similarity = 1 - dist/2``.
+    * ``L2``: ``similarity = 1 / (1 + dist)``.
+    * ``L1``: ``similarity = 1 / (1 + dist)``.
+    * ``JACCARD``: ``similarity = 1 - dist``.
+    * ``HAMMING``: not implemented.
     """
     if metric == MetricType.COSINE:
         similarity = 1.0 - (distance_col / 2.0)

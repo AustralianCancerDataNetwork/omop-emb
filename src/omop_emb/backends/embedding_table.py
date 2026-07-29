@@ -125,7 +125,7 @@ class PGEmbeddingTable(ConceptEmbeddingMixin, EmbeddingTableBase):
     Concrete per-model subclasses come from
     :func:`~omop_emb.backends.pgvector.pg_sql.pg_embedding_table_descriptor`,
     which adds the ``embedding`` column (type depends on dimensionality, so
-    it can't be declared statically here -- access it via
+    it can't be declared statically here: access it via
     ``getattr(table, EMBEDDING_COLUMN_NAME)``).
     """
 

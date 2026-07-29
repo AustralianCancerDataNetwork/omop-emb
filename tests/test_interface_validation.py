@@ -25,12 +25,12 @@ class TestCanonicalModelName:
 
         backend = _make_mock_backend()
 
-        with patch("omop_emb.interface.build_backend") as mock_build_backend:
+        with patch("omop_emb.interface.build_model_backend") as mock_build_model_backend:
             model_backend = Mock()
             model_backend.model = "pseudo-model:v1"
             model_backend.provider = "ollama"
             model_backend.dimensions.return_value = 1
-            mock_build_backend.return_value = model_backend
+            mock_build_model_backend.return_value = model_backend
 
             interface = EmbeddingWriterInterface(
                 backend=backend,

@@ -51,7 +51,7 @@ def _evict_faiss_modules() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# pgvector — direct module imports still raise immediately
+# pgvector: direct module imports still raise immediately
 # ---------------------------------------------------------------------------
 
 
@@ -78,7 +78,7 @@ def test_pgvector_subpackage_missing_pgvector_install_hint():
 
 
 # ---------------------------------------------------------------------------
-# pgvector — lazy-shielded imports do NOT raise at package level
+# pgvector: lazy-shielded imports do NOT raise at package level
 # ---------------------------------------------------------------------------
 
 
@@ -111,7 +111,7 @@ def test_backends_pgvector_attr_missing_install_hint():
 
 
 # ---------------------------------------------------------------------------
-# FAISS — direct module import still raises immediately
+# FAISS: direct module import still raises immediately
 # ---------------------------------------------------------------------------
 
 
@@ -127,7 +127,7 @@ def test_faiss_cache_module_missing_install_hint():
 
 
 # ---------------------------------------------------------------------------
-# FAISS — lazy-shielded imports do NOT raise at package level
+# FAISS: lazy-shielded imports do NOT raise at package level
 # ---------------------------------------------------------------------------
 
 

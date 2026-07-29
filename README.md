@@ -2,11 +2,7 @@
 
 Vector embedding layer for OMOP CDM concepts.
 
-`omop-emb` generates, stores, and retrieves embeddings for OMOP concepts. It
-works out of the box with **sqlite-vec** (no external database required) and
-scales to **PostgreSQL/pgvector** for larger deployments. The database is the
-source of truth — FAISS is an optional read-acceleration sidecar, not a primary
-store.
+`omop-emb` generates, stores, and retrieves embeddings for OMOP concepts. It works out of the box with **sqlite-vec** (no external database required) and scales to **PostgreSQL/pgvector** for larger deployments. The database is the source of truth; FAISS is an optional read-acceleration sidecar, not a primary store.
 
 ## Installation
 
@@ -41,10 +37,7 @@ omop-emb embeddings search --api-base http://localhost:11434/v1 --api-key ollama
 
 **Ingest concepts (OpenAI-hosted model):**
 
-Configure everything once via oa-configurator (see
-[Configuration via oa-configurator](#configuration-via-oa-configurator) below)
-rather than exporting connection details and passing an API key on the command
-line:
+Configure everything once via oa-configurator (see [Configuration via oa-configurator](#configuration-via-oa-configurator) below) rather than exporting connection details and passing an API key on the command line:
 
 ```bash
 omop-config configure omop_alchemy
@@ -82,18 +75,17 @@ omop-emb maintenance rebuild-index --model nomic-embed-text:v1.5 --index-type hn
 | Variable | Default | Description |
 |---|---|---|
 | `OMOP_EMB_BACKEND` | `sqlitevec` | Backend: `sqlitevec` or `pgvector`. |
-| `OMOP_EMB_SQLITE_PATH` | — | sqlite-vec database file path (or `:memory:`). |
-| `OMOP_EMB_DB_HOST` | — | pgvector: PostgreSQL host. |
+| `OMOP_EMB_SQLITE_PATH` | - | sqlite-vec database file path (or `:memory:`). |
+| `OMOP_EMB_DB_HOST` | - | pgvector: PostgreSQL host. |
 | `OMOP_EMB_DB_PORT` | `5432` | pgvector: PostgreSQL port. |
-| `OMOP_EMB_DB_USER` | — | pgvector: database user. |
-| `OMOP_EMB_DB_PASSWORD` | — | pgvector: database password. |
-| `OMOP_EMB_DB_NAME` | — | pgvector: database name. |
-| `OMOP_EMB_DB_URL` | — | pgvector: full SQLAlchemy URL (overrides individual vars). |
-| `OMOP_CDM_DB_URL` | — | OMOP CDM connection (required for ingestion commands only). |
-| `OMOP_EMB_FAISS_CACHE_DIR` | — | Default FAISS cache directory (alternative to `--faiss-cache-dir`). |
+| `OMOP_EMB_DB_USER` | - | pgvector: database user. |
+| `OMOP_EMB_DB_PASSWORD` | - | pgvector: database password. |
+| `OMOP_EMB_DB_NAME` | - | pgvector: database name. |
+| `OMOP_EMB_DB_URL` | - | pgvector: full SQLAlchemy URL (overrides individual vars). |
+| `OMOP_CDM_DB_URL` | - | OMOP CDM connection (required for ingestion commands only). |
+| `OMOP_EMB_FAISS_CACHE_DIR` | - | Default FAISS cache directory (alternative to `--faiss-cache-dir`). |
 
-See the [Configuration Reference](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/configuration/)
-for the complete list including asymmetric embedding prefixes and driver overrides.
+See the [Configuration Reference](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/configuration/) for the complete list including asymmetric embedding prefixes and driver overrides.
 
 ## Documentation
 
@@ -123,10 +115,7 @@ Full documentation: <https://AustralianCancerDataNetwork.github.io/omop-emb>
 
 ## Configuration via oa-configurator
 
-The database connection can also be configured via
-[oa-configurator](https://github.com/AustralianCancerDataNetwork/oa-configurator),
-which stores settings in `~/.config/omop/config.toml` and eliminates the need
-for environment variables at runtime:
+The database connection can also be configured via [oa-configurator](https://github.com/AustralianCancerDataNetwork/oa-configurator), which stores settings in `~/.config/omop/config.toml` and eliminates the need for environment variables at runtime:
 
 ```bash
 omop-config init
@@ -134,10 +123,7 @@ omop-config configure omop_alchemy   # CDM database (required for ingestion)
 omop-config configure omop_emb       # embedding database
 ```
 
-`omop-config configure omop_emb` is required for local-dev setup before running
-the pgvector-backed test suite (CI provisions this automatically). Without it,
-those tests skip with "Resource 'test_emb_db' not configured" rather than
-failing.
+`omop-config configure omop_emb` is required for local-dev setup before running the pgvector-backed test suite (CI provisions this automatically). Without it, those tests skip with "Resource 'test_emb_db' not configured" rather than failing.
 
 See [oa-configurator Setup](docs/getting-started/configuration.md) for details.
 
@@ -145,9 +131,7 @@ See [oa-configurator Setup](docs/getting-started/configuration.md) for details.
 
 ## Docker Compose
 
-The included `docker-compose.yaml` provides both a CDM PostgreSQL database and a
-pgvector embedding database, plus a Python container with all optional backends
-pre-installed (`[pgvector,faiss-cpu]`). Default credentials work out of the box:
+The included `docker-compose.yaml` provides both a CDM PostgreSQL database and a pgvector embedding database, plus a Python container with all optional backends pre-installed (`[pgvector,faiss-cpu]`). Default credentials work out of the box:
 
 ```bash
 docker compose up
@@ -159,8 +143,7 @@ Include Ollama by adding the `standalone` profile:
 docker compose --profile standalone up
 ```
 
-The `python-emb` service runs `omop-config configure` at startup. To override
-credentials:
+The `python-emb` service runs `omop-config configure` at startup. To override credentials:
 
 ```bash
 cp .env.example .env

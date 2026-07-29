@@ -4,7 +4,7 @@ Covers ``EmbeddingRole`` prefixing, ``EmbeddingReaderInterface.generate_embeddin
 ``EmbeddingWriterInterface``'s non-CDM-dependent behavior (construction,
 ``embedding_dim`` caching, ``embed_texts``). Model calling itself
 (construction, canonicalization, dimension discovery, batching) is
-``omop_llm``'s own tested responsibility -- ``ModelBackend`` is mocked here.
+``omop_llm``'s own tested responsibility: ``ModelBackend`` is mocked here.
 """
 
 from __future__ import annotations
@@ -152,7 +152,7 @@ class TestGenerateEmbeddings:
             )
 
     def test_raises_on_empty_dict_prefixes(self):
-        """An empty dict is a partial mapping too -- both roles are missing."""
+        """An empty dict is a partial mapping too: both roles are missing."""
         backend = _mock_model_backend(vectors=[[0.1]])
         with pytest.raises(ValueError, match="DOCUMENT"):
             EmbeddingReaderInterface.generate_embeddings(
@@ -203,6 +203,25 @@ class TestLoadEmbeddingPrefixes:
         warning_messages = [r.message for r in caplog.records if r.levelname == "WARNING"]
         assert any("omop-config configure omop_emb" in m for m in warning_messages)
 
+    def test_complete_override_returned_as_is(self):
+        override = {EmbeddingRole.DOCUMENT: "passage: ", EmbeddingRole.QUERY: "query: "}
+        assert EmbeddingReaderInterface.load_embedding_prefixes(override) == override
+
+    def test_override_bypasses_config(self, monkeypatch):
+        monkeypatch.setattr(
+            OmopEmbConfig, "get_config", lambda: _make_emb_config("from_config: ", "from_config: ")
+        )
+        override = _EMPTY_PREFIXES
+        assert EmbeddingReaderInterface.load_embedding_prefixes(override) == override
+
+    def test_raises_on_partial_override(self):
+        with pytest.raises(ValueError, match="QUERY"):
+            EmbeddingReaderInterface.load_embedding_prefixes({EmbeddingRole.DOCUMENT: "passage: "})
+
+    def test_raises_on_empty_dict_override(self):
+        with pytest.raises(ValueError, match="DOCUMENT"):
+            EmbeddingReaderInterface.load_embedding_prefixes({})
+
 
 # ---------------------------------------------------------------------------
 # EmbeddingWriterInterface: construction builds the ModelBackend
@@ -213,8 +232,8 @@ class TestLoadEmbeddingPrefixes:
 class TestEmbeddingWriterInterfaceConstruction:
     def test_model_backend_built_with_provider_model_and_base_url(self, monkeypatch):
         monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: _make_emb_config())
-        with patch("omop_emb.interface.build_backend") as mock_build_backend:
-            mock_build_backend.return_value = _mock_model_backend(dim=768)
+        with patch("omop_emb.interface.build_model_backend") as mock_build_model_backend:
+            mock_build_model_backend.return_value = _mock_model_backend(dim=768)
 
             EmbeddingWriterInterface(
                 backend=_mock_storage_backend(),
@@ -225,7 +244,7 @@ class TestEmbeddingWriterInterfaceConstruction:
                 api_key="ollama",
             )
 
-        mock_build_backend.assert_called_once_with(
+        mock_build_model_backend.assert_called_once_with(
             "ollama", "nomic-embed-text", base_url=OLLAMA_BASE, api_key="ollama", configuration=None
         )
 
@@ -233,8 +252,8 @@ class TestEmbeddingWriterInterfaceConstruction:
         monkeypatch.setattr(
             OmopEmbConfig, "get_config", lambda: OmopEmbConfig(embedding_dim=512)
         )
-        with patch("omop_emb.interface.build_backend") as mock_build_backend:
-            mock_build_backend.return_value = _mock_model_backend(dim=512)
+        with patch("omop_emb.interface.build_model_backend") as mock_build_model_backend:
+            mock_build_model_backend.return_value = _mock_model_backend(dim=512)
             EmbeddingWriterInterface(
                 backend=_mock_storage_backend(),
                 metric_type=MetricType.COSINE,
@@ -242,15 +261,15 @@ class TestEmbeddingWriterInterfaceConstruction:
                 provider_type="ollama",
                 api_base=OLLAMA_BASE,
             )
-        mock_build_backend.assert_called_once_with(
+        mock_build_model_backend.assert_called_once_with(
             "ollama", OLLAMA_MODEL, base_url=OLLAMA_BASE, api_key="ollama",
             configuration={"embedding_dim": 512},
         )
 
     def test_canonical_model_name_read_from_backend(self, monkeypatch):
         monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: _make_emb_config())
-        with patch("omop_emb.interface.build_backend") as mock_build_backend:
-            mock_build_backend.return_value = _mock_model_backend(model="nomic-embed-text:v1.5")
+        with patch("omop_emb.interface.build_model_backend") as mock_build_model_backend:
+            mock_build_model_backend.return_value = _mock_model_backend(model="nomic-embed-text:v1.5")
             iface = EmbeddingWriterInterface(
                 backend=_mock_storage_backend(),
                 metric_type=MetricType.COSINE,
@@ -262,8 +281,8 @@ class TestEmbeddingWriterInterfaceConstruction:
 
     def test_provider_type_read_from_backend(self, monkeypatch):
         monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: _make_emb_config())
-        with patch("omop_emb.interface.build_backend") as mock_build_backend:
-            mock_build_backend.return_value = _mock_model_backend(provider="anthropic")
+        with patch("omop_emb.interface.build_model_backend") as mock_build_model_backend:
+            mock_build_model_backend.return_value = _mock_model_backend(provider="anthropic")
             iface = EmbeddingWriterInterface(
                 backend=_mock_storage_backend(),
                 metric_type=MetricType.COSINE,
@@ -283,9 +302,9 @@ class TestEmbeddingWriterInterfaceConstruction:
 class TestEmbeddingDimCaching:
     def test_dimensions_resolved_and_cached(self, monkeypatch):
         monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: _make_emb_config())
-        with patch("omop_emb.interface.build_backend") as mock_build_backend:
+        with patch("omop_emb.interface.build_model_backend") as mock_build_model_backend:
             model_backend = _mock_model_backend(dim=768)
-            mock_build_backend.return_value = model_backend
+            mock_build_model_backend.return_value = model_backend
             iface = EmbeddingWriterInterface(
                 backend=_mock_storage_backend(),
                 metric_type=MetricType.COSINE,
@@ -307,8 +326,8 @@ class TestEmbeddingDimCaching:
 class TestEmbeddingWriterInterfaceEmbedTexts:
     def _make_interface(self, monkeypatch, model_backend: Mock) -> EmbeddingWriterInterface:
         monkeypatch.setattr(OmopEmbConfig, "get_config", lambda: _make_emb_config())
-        with patch("omop_emb.interface.build_backend") as mock_build_backend:
-            mock_build_backend.return_value = model_backend
+        with patch("omop_emb.interface.build_model_backend") as mock_build_model_backend:
+            mock_build_model_backend.return_value = model_backend
             return EmbeddingWriterInterface(
                 backend=_mock_storage_backend(),
                 metric_type=MetricType.COSINE,

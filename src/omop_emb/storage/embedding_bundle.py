@@ -3,16 +3,16 @@
 A bundle is a single HDF5 file holding the raw (never normalized)
 embeddings for one model, plus enough metadata to re-register and
 re-import them into any :class:`EmbeddingBackend`. ``metric_type`` is not
-a caller-facing export parameter -- the embeddings table has no
+a caller-facing export parameter: the embeddings table has no
 metric-specific columns, so it's derived internally from the registry
 purely to label the bundle.
 
 This exists purely for moving raw embeddings between backends or systems
-(backup/restore, migration) -- the *bundle file* has no relationship to
+(backup/restore, migration): the *bundle file* has no relationship to
 FAISS. :class:`~omop_emb.storage.faiss.faiss_cache.FAISSCache` builds
 directly from a live :class:`EmbeddingBackend` (see
 :func:`stream_embedding_batches`, shared by both); it never reads or
-writes a bundle. It does, however, share :class:`ExportMetadata` -- the
+writes a bundle. It does, however, share :class:`ExportMetadata`: the
 same small dataclass backs both the bundle's HDF5 attributes and the
 FAISS cache's per-index JSON sidecar, since both are "facts about an
 exported/built artifact" with the same shape.
@@ -127,7 +127,7 @@ def get_required_dataset(f: h5py.File, ds_name: str) -> h5py.Dataset:
 
 @dataclass(frozen=True)
 class ExportMetadata:
-    """Facts about an exported/built artifact -- a bundle or a FAISS cache.
+    """Facts about an exported/built artifact: a bundle or a FAISS cache.
 
     Deliberately not :class:`EmbeddingModelRecord`: there is no live registry
     row to read when this is reconstructed from a bare file (no
@@ -136,9 +136,9 @@ class ExportMetadata:
     formats via two independent (de)serializers: :meth:`from_h5_attrs`
     (the bundle's HDF5 attributes) and :meth:`to_json`/:meth:`from_json`
     (the FAISS cache's per-index JSON sidecar). Each direction populates
-    every field even though it only reads back some of them -- e.g. the
+    every field even though it only reads back some of them: e.g. the
     bundle path never reads ``index_config`` back, the FAISS path never
-    reads ``provider_type`` back -- both are free to obtain (already on
+    reads ``provider_type`` back: both are free to obtain (already on
     the ``EmbeddingModelRecord`` fetched at write time), so it isn't worth
     two separate types over.
     """
@@ -230,7 +230,7 @@ def stream_embedding_batches(
 
     Shared by :func:`export_bundle` (writes batches to an HDF5 bundle) and
     :meth:`~omop_emb.storage.faiss.faiss_cache.FAISSCache.build_from_backend`
-    (feeds batches straight into a FAISS index) -- the only two places that
+    (feeds batches straight into a FAISS index): the only two places that
     need every embedding for a model out of the backend without loading it
     all into memory at once.
     """
@@ -328,7 +328,7 @@ def export_bundle(
 
     The output filename is derived from the model's
     :attr:`EmbeddingModelRecord.storage_identifier` (already unique per
-    model) under *output_dir* -- never a caller-supplied literal path.
+    model) under *output_dir*: never a caller-supplied literal path.
 
     Returns
     -------
@@ -463,7 +463,7 @@ def import_bundle(
 
     Registers the model from the bundle's attributes if it isn't already
     registered. Vectors are read straight from the bundle's ``embeddings``
-    dataset -- never reconstructed from a FAISS index -- so magnitudes are
+    dataset: never reconstructed from a FAISS index: so magnitudes are
     preserved exactly regardless of metric.
 
     A brand-new registration is backdated to the bundle's own ``exported_at``

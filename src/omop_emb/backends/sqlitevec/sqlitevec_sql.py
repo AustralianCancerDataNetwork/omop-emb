@@ -77,7 +77,7 @@ def sqlite_vec_table_descriptor(table_name: str, metadata: MetaData) -> Table:
     -------
     Table
         Usable for ``select``/``insert``/``delete`` against the virtual
-        table. Does not issue DDL -- the ``vec0`` table must already exist.
+        table. Does not issue DDL: the ``vec0`` table must already exist.
     """
     columns = [
         Column(c.name, c.type_, primary_key=(c.name == "concept_id"))

@@ -65,7 +65,7 @@ class TestBundleRoundTrip:
     def test_cosine_round_trip_preserves_magnitude(self, tmp_path):
         dim = 3
         ids = [1, 2, 3]
-        # Deliberately non-unit-length vectors -- normalizing these would
+        # Deliberately non-unit-length vectors: normalizing these would
         # change their values, which is exactly what must NOT happen here.
         vecs = np.array(
             [[3.0, 0.0, 0.0], [0.0, 5.0, 0.0], [1.0, 1.0, 1.0]], dtype=np.float32
@@ -146,7 +146,7 @@ class TestBundleRoundTrip:
 
         Regression test: import_bundle() used to call bulk_upsert_embeddings()
         directly, bypassing the interface-layer wrapper that bumps
-        registry.updated_at -- so a FAISS cache built before a force
+        registry.updated_at: so a FAISS cache built before a force
         re-import kept reporting is_fresh()==True forever, even though the
         re-import had replaced the embedding content underneath it.
         """
@@ -173,7 +173,7 @@ class TestBundleRoundTrip:
         assert after.updated_at > before.updated_at
 
     def test_fresh_registration_keeps_backdated_timestamp(self, tmp_path):
-        """A brand-new registration must NOT be bumped to "now" -- it stays
+        """A brand-new registration must NOT be bumped to "now": it stays
         backdated to the bundle's own exported_at so a FAISS cache shipped
         alongside the bundle still validates as fresh (see
         TestCrossMachineCacheReuse). Only the *overwrite* path bumps
@@ -264,7 +264,7 @@ class TestImportRebuildIndex:
 @pytest.mark.unit
 class TestImportBackdatesRegistration:
     """A brand-new registration created by import_bundle() is backdated to
-    the bundle's own exported_at, not "now" -- required so a FAISS cache
+    the bundle's own exported_at, not "now": required so a FAISS cache
     shipped alongside the bundle (built before the bundle's exported_at on
     the source machine) still validates as fresh on the target machine."""
 

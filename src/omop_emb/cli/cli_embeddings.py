@@ -6,7 +6,7 @@ from typing import Annotated, Generator, List, Optional, Sequence, Union
 
 import typer
 from tqdm import tqdm
-from omop_llm import build_backend, supported_providers
+from omop_llm import build_model_backend, supported_providers
 
 from omop_emb.utils.cdm import check_concept_cdm
 from omop_emb.backends.index_config import index_config_from_index_type
@@ -622,7 +622,7 @@ def search(
             "CDM engine not configured; concept names will not be enriched in results."
         )
 
-    model_backend = build_backend(
+    model_backend = build_model_backend(
         resolved_provider, resolved_model, base_url=resolved_api_base, api_key=resolved_api_key
     )
     embedding_reader = EmbeddingReaderInterface(
@@ -630,7 +630,7 @@ def search(
         backend=backend,
         metric_type=metric_type,
         omop_cdm_engine=omop_cdm_engine,
-        provider_name_or_type=model_backend.provider,
+        provider_type=model_backend.provider,
         faiss_cache_dir=resolved_faiss_cache_dir,
     )
 

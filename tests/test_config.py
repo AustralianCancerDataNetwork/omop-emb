@@ -1,4 +1,4 @@
-"""Placeholder — backend factory tests removed.
+"""Placeholder: backend factory tests removed.
 
 ``omop_emb.backends.factory`` was not carried forward in the refactor.
 Backend construction is done directly via ``SQLiteVecEmbeddingBackend(emb_engine=...)``

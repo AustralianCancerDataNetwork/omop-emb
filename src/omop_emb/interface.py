@@ -41,7 +41,7 @@ from typing import (
 import numpy as np
 from numpy import ndarray
 from sqlalchemy import Engine, Row
-from omop_llm import ModelBackend, build_backend
+from omop_llm import ModelBackend, build_model_backend
 from omop_llm.providers import canonical_model_name as resolve_canonical_model_name
 
 from omop_emb.utils.cdm import (
@@ -93,7 +93,7 @@ class EmbeddingReaderInterface:
         embedding table by the backend.
     model : str
         Model name in canonical form.
-    provider_name_or_type : str, optional
+    provider_type : str, optional
         omop-llm provider key. Defaults to ``'ollama'``.
     k : int
         Default number of nearest neighbors to return.
@@ -110,11 +110,10 @@ class EmbeddingReaderInterface:
         metric_type: MetricType,
         *,
         omop_cdm_engine: Optional[Engine] = None,
-        provider_name_or_type: Optional[str] = None,
+        provider_type: str = "ollama",
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
         faiss_cache_dir: Optional[str] = None,
     ):
-        provider_type = provider_name_or_type if provider_name_or_type is not None else "ollama"
         canonical_model_name = resolve_canonical_model_name(provider_type, model)
 
         self._backend = backend
@@ -507,7 +506,7 @@ class EmbeddingReaderInterface:
         """Return CDM rows for concepts lacking embeddings, keyed by concept_id.
 
         Each row contains concept_name, domain_id, vocabulary_id,
-        standard_concept, and invalid_reason — all columns needed for both
+        standard_concept, and invalid_reason, all columns needed for both
         text lookup and embedding-record metadata.
         """
         all_concepts = fetch_cdm_concepts_for_filter(
@@ -618,7 +617,7 @@ class EmbeddingReaderInterface:
 class EmbeddingWriterInterface(EmbeddingReaderInterface):
     """Reader interface extended with embedding generation and write operations.
 
-    Builds and owns an ``omop_llm.ModelBackend`` directly -- there is no
+    Builds and owns an ``omop_llm.ModelBackend`` directly: there is no
     separate client object between this interface and the model backend.
 
     Parameters
@@ -663,7 +662,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             cfg_dim = None
         configuration = {"embedding_dim": cfg_dim} if cfg_dim is not None else None
 
-        self._model_backend: ModelBackend = build_backend(
+        self._model_backend: ModelBackend = build_model_backend(
             provider_type, model, base_url=api_base, api_key=api_key, configuration=configuration
         )
         self._embedding_batch_size = embedding_batch_size
@@ -675,7 +674,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
             metric_type=metric_type,
             omop_cdm_engine=omop_cdm_engine,
             model=self._model_backend.model,
-            provider_name_or_type=self._model_backend.provider,
+            provider_type=self._model_backend.provider,
         )
 
         logger.info(

@@ -3,56 +3,41 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar, Dict, Tuple
+from typing import Annotated, ClassVar, Dict, Tuple
 
 from pydantic import Field
 from sqlalchemy import Engine
-from oa_configurator import DatabaseConfig, PackageConfigBase, ResourceSpec
-
-from omop_alchemy.config import OmopAlchemyConfig
+from oa_configurator import DatabaseConfig, ModelConfig, PackageConfigBase, RefTo
 
 
 class OmopEmbConfig(PackageConfigBase):
     """oa-configurator config class for omop-emb.
 
     omop-emb owns the embedding database and requires the CDM database
-    configured by omop-alchemy.
+    configured by omop-alchemy, shared purely by naming convention: this
+    class's ``cdm_db`` field defaults to the same name as
+    ``omop_alchemy.config.OmopAlchemyConfig.cdm_db``.
     """
-
-    EMB_DB: ClassVar[ResourceSpec] = ResourceSpec(
-        semantic_name="emb_db",
-        display_name="Embedding Database",
-        description="pgvector database for storing OMOP concept embeddings.",
-        connection_name_hint="emb",
-        cdm_schema_default="public",
-        is_cdm_database=False,
-    )
-    TEST_DB: ClassVar[ResourceSpec] = ResourceSpec(
-        semantic_name="test_emb_db",
-        display_name="Test Embedding Database",
-        description=(
-            "Dedicated PostgreSQL/pgvector database for running omop-emb integration tests."
-        ),
-        connection_name_hint="pg_test_emb",
-        is_cdm_database=False,
-        cdm_schema_default="public",
-        connection_defaults=DatabaseConfig(
-            dialect="postgresql+psycopg",
-            host="localhost",
-            port=55432,
-            user="test",
-            password="test",
-            database_name="test_omop_emb",
-        ),
-    )
 
     tool_name: ClassVar[str] = "omop_emb"
     extra_logging_namespaces: ClassVar[tuple[str, ...]] = ("orm_loader", "omop_alchemy")
-    required_resources: ClassVar[tuple[str, ...]] = (
-        OmopAlchemyConfig.CDM_DB.semantic_name,
+
+    cdm_db: Annotated[str, RefTo(DatabaseConfig)] = "cdm_db"
+    emb_db: Annotated[str | None, RefTo(DatabaseConfig)] = Field(
+        default=None,
+        description=(
+            "Name of a [databases.*] entry for the pgvector embedding store. "
+            "Only required when backend='pgvector'; unused by sqlitevec."
+        ),
     )
-    owned_resources: ClassVar[tuple[ResourceSpec, ...]] = (EMB_DB,)
-    test_resources: ClassVar[tuple[ResourceSpec, ...]] = (TEST_DB,)
+    test_emb_db: Annotated[str | None, RefTo(DatabaseConfig, is_test=True)] = None
+    embedding_model_name: Annotated[str, RefTo(ModelConfig)] = Field(
+        default="embedding-model",
+        description=(
+            "Name of a [models.*] entry (see 'omop-config models add') to use for "
+            "generating concept embeddings."
+        ),
+    )
 
     backend: str = Field(
         default="pgvector",
@@ -66,23 +51,28 @@ class OmopEmbConfig(PackageConfigBase):
         default=None,
         description="Default directory for FAISS index files.",
     )
-    embedding_model_name: str = Field(
-        default="embedding-model",
-        description=(
-            "Name of a [models.*] entry (see 'omop-config models add') to use for "
-            "generating concept embeddings."
-        ),
-    )
 
 
 def resolve_omop_cdm_engine() -> Engine:
     """Resolve CDM engine via oa-configurator, used read-only."""
-    return OmopEmbConfig.get_engine(OmopAlchemyConfig.CDM_DB.semantic_name)
+    return OmopEmbConfig.get_engine(OmopEmbConfig.get_config().cdm_db)
 
 
 def resolve_omop_emb_engine() -> Engine:
-    """Resolve embedding database engine via oa-configurator."""
-    return OmopEmbConfig.get_engine(OmopEmbConfig.EMB_DB.semantic_name)
+    """Resolve embedding database engine via oa-configurator. 
+    Only meaningful for backends that require a separate database.
+    """
+    cfg = OmopEmbConfig.get_config()
+    if cfg.backend != BackendType.PGVECTOR.value:
+        raise RuntimeError(
+            f"resolve_omop_emb_engine() is pgvector-only, but backend={cfg.backend!r}."
+        )
+    if cfg.emb_db is None:
+        raise RuntimeError(
+            "pgvector backend requires 'emb_db' to be configured. "
+            "Set it via `omop-config configure omop_emb`."
+        )
+    return OmopEmbConfig.get_engine(cfg.emb_db)
 
 
 class BackendType(StrEnum):

@@ -27,10 +27,8 @@ from .conftest import (
 )
 from .shared_backend_tests import SharedBackendTests
 
-from omop_emb.config import OmopEmbConfig
 
-
-@pytest.mark.requires_resource(OmopEmbConfig.TEST_DB)
+@pytest.mark.requires_database("test_emb_db")
 @pytest.mark.pgvector
 @pytest.mark.integration
 class TestPGVectorBackend(SharedBackendTests):
@@ -41,7 +39,7 @@ class TestPGVectorBackend(SharedBackendTests):
         return pg_backend
 
 
-@pytest.mark.requires_resource(OmopEmbConfig.TEST_DB)
+@pytest.mark.requires_database("test_emb_db")
 @pytest.mark.pgvector
 @pytest.mark.integration
 class TestPGVectorHNSWBackend:

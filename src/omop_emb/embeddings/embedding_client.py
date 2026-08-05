@@ -13,7 +13,7 @@ from typing import Any, List, Optional, Tuple, Union, Dict
 from enum import StrEnum
 
 import numpy as np
-from openai import OpenAI
+from openai import APIError, OpenAI
 
 from .embedding_providers import EmbeddingProvider, get_provider_from_provider_type
 from omop_emb.config import OmopEmbConfig, ProviderType
@@ -164,9 +164,17 @@ class EmbeddingClient:
             "Provider cannot discover embedding dimension automatically. "
             "Probing via a test API call. This happens once and is then cached."
         )
-        response = self._base_client.embeddings.create(
-            model=self._model, input=["test"]
-        )
+        try:
+            response = self._base_client.embeddings.create(
+                model=self._model, input=["test"]
+            )
+        except APIError as exc:
+            raise EmbeddingClientError(
+                f"Embedding dimension probe failed for model {self._model!r}. "
+                f"Possible causes include an unreachable/misconfigured endpoint, "
+                f"auth, or an invalid model name — see the original error for the "
+                f"actual cause: {exc}"
+            ) from exc
         dim = len(response.data[0].embedding)
         self._embedding_dim = dim
         logger.info(f"Embedding dimension discovered via live probe: {dim}.")
@@ -208,9 +216,19 @@ class EmbeddingClient:
         for start in range(0, len(text), batch_size):
             chunk = text[start : start + batch_size]
             logger.debug(f"Embedding batch [{start}:{start + len(chunk)}]")
-            response = self._base_client.embeddings.create(
-                model=self._model, input=chunk
-            )
+            try:
+                response = self._base_client.embeddings.create(
+                    model=self._model, input=chunk
+                )
+            except APIError as exc:
+                longest = max(len(t) for t in chunk)
+                raise EmbeddingClientError(
+                    f"Embedding request failed for model {self._model!r} "
+                    f"({len(chunk)} text(s) in this batch, longest {longest} chars). "
+                    f"Possible causes include exceeding the model's maximum input/context "
+                    f"length, but could equally be auth, rate-limit, or connectivity issues "
+                    f"Original Error: {exc}"
+                ) from exc
             buffer.extend(emb.embedding for emb in response.data)
 
         result = np.array(buffer)

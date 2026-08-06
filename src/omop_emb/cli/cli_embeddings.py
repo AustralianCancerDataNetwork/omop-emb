@@ -517,7 +517,7 @@ def search(
 
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
     resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-    resolved_faiss_cache_dir = faiss_cache_dir or resolved_vector_store.configuration.get("faiss_cache_dir")
+    resolved_faiss_cache_dir = faiss_cache_dir or resolved_vector_store.faiss_cache_dir
     backend = resolve_backend_from_resolved_vector_store(resolved_vector_store)
 
     # CDM enrichment is optional for search

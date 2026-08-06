@@ -21,10 +21,10 @@ omop-config models add nomic-embed \
     --query-prefix "search_query: "
 ```
 
-Then point `omop-emb` at it, either via `omop-config configure omop_emb` (prompts for `embedding_model_name` among its other settings) or by hand-editing `[tools.omop_emb.extra]`:
+Then point `omop-emb` at it, either via `omop-config configure omop_emb` (prompts for `embedding_model_name` among its other settings) or by hand-editing `[tools.omop_emb]`:
 
 ```toml
-[tools.omop_emb.extra]
+[tools.omop_emb]
 embedding_model_name = "nomic-embed"
 ```
 

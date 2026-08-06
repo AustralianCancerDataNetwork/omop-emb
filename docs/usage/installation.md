@@ -36,59 +36,15 @@ Installs all optional dependencies. Recommended for development and mixed enviro
 
 ---
 
-## Configuring the backend at runtime
+## Configuring the backend
 
-Set `OMOP_EMB_BACKEND` to select the backend (default: `sqlitevec`):
-
-```bash
-export OMOP_EMB_BACKEND=sqlitevec   # default; no external service needed
-export OMOP_EMB_BACKEND=pgvector    # requires PostgreSQL + pgvector
-```
-
-### sqlite-vec connection
-
-Point to a database file (or use `:memory:` for a transient in-memory store):
+The backend (sqlite-vec or pgvector) is selected by a `[vector_stores.*]` entry's `backend_type`, configured via [oa-configurator](https://AustralianCancerDataNetwork.github.io/oa-configurator/), not environment variables:
 
 ```bash
-export OMOP_EMB_SQLITE_PATH=/data/omop_emb.db
-# or, for a transient in-memory database:
-export OMOP_EMB_SQLITE_PATH=:memory:
+omop-config connections add emb --dialect postgresql+psycopg --host localhost --database-name omop_emb
+omop-config databases add emb_db --kind generic --connection emb
+omop-config vector-stores add vector_store --backend-type pgvector --database emb_db
+omop-config configure omop_emb --vector-store-name vector_store
 ```
 
-### pgvector connection
-
-Supply individual connection components (recommended, matches `.env` and Docker Compose patterns):
-
-```bash
-export OMOP_EMB_DB_HOST=localhost
-export OMOP_EMB_DB_PORT=5432
-export OMOP_EMB_DB_USER=omop_emb
-export OMOP_EMB_DB_PASSWORD=omop_emb
-export OMOP_EMB_DB_NAME=omop_emb
-```
-
-Or supply a full SQLAlchemy URL (overrides all individual components):
-
-```bash
-export OMOP_EMB_DB_URL=postgresql+psycopg://omop_emb:omop_emb@localhost:5432/omop_emb
-```
-
-The default driver string is `postgresql+psycopg` (psycopg3). Override via `OMOP_EMB_DB_DRIVER` if you need a different driver (e.g. `postgresql+psycopg2`).
-
-### Docker Compose
-
-A reference `docker-compose.yaml` for the pgvector service ships with the package. Create a `.env` file alongside it:
-
-```bash
-OMOP_EMB_DB_USER=omop_emb
-OMOP_EMB_DB_PASSWORD=omop_emb
-OMOP_EMB_DB_NAME=omop_emb
-OMOP_EMB_DB_HOST=omop-emb-db
-OMOP_EMB_DB_PORT=5432
-```
-
-Then start the service:
-
-```bash
-docker compose up -d omop-emb-db
-```
+See [Configuration Reference](configuration.md) for the full field list (both backends, plus `faiss_cache_dir`), and [Getting Started: Configuration](../getting-started/configuration.md) for the end-to-end walkthrough.

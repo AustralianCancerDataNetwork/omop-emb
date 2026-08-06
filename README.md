@@ -13,79 +13,43 @@ pip install "omop-emb[faiss-cpu]"            # adds FAISS sidecar support
 pip install "omop-emb[pgvector,faiss-cpu]"   # everything
 ```
 
-## Quick start
+## Configuration
 
-**Ingest concepts (sqlite-vec, no external service):**
+`omop-emb` is configured entirely through [oa-configurator](https://github.com/AustralianCancerDataNetwork/oa-configurator) (`~/.config/omop/config.toml`); there are no `OMOP_EMB_*` environment variables. Set up a CDM database, an embedding model, and a vector store once:
 
 ```bash
-export OMOP_EMB_BACKEND=sqlitevec
-export OMOP_EMB_SQLITE_PATH=/data/omop_emb.db
-export OMOP_CDM_DB_URL=postgresql+psycopg://user:pass@host:5432/omop_cdm
+omop-config init
+omop-config connections add cdm --dialect postgresql+psycopg --host localhost --database-name omop_cdm
+omop-config databases add cdm_db --kind cdm --connection cdm
 
-omop-emb embeddings add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
-    --provider ollama --model nomic-embed-text:v1.5
+omop-config providers add local-ollama --provider ollama --base-url http://localhost:11434
+omop-config models add embedding-model --provider local-ollama --model nomic-embed-text:v1.5
+
+omop-config databases add emb_db --kind generic --connection cdm
+omop-config vector-stores add vector_store --backend-type pgvector --database emb_db
+
+omop-config configure omop_emb   # points OmopEmbConfig at the entries above, prompts for anything unset
 ```
 
-**Search:**
+`omop-config configure omop_emb` writes `[tools.omop_emb]` with `cdm_db`, `embedding_model_name`, and `vector_store_name` (each defaulting to the entry names above, if you use the same names).
+
+## Quick start
 
 ```bash
-omop-emb embeddings search --api-base http://localhost:11434/v1 --api-key ollama \
-    --provider ollama --model nomic-embed-text:v1.5 \
+omop-emb embeddings add-embeddings --model-name embedding-model
+omop-emb embeddings search --model-name embedding-model \
     --query "hypertension" --query "type 2 diabetes" \
     --standard-only --domain Condition --k 5
 ```
 
-**Ingest concepts (OpenAI-hosted model):**
-
-Configure everything once via oa-configurator (see [Configuration via oa-configurator](#configuration-via-oa-configurator) below) rather than exporting connection details and passing an API key on the command line:
-
-```bash
-omop-config configure omop_alchemy
-# CDM database connection
-
-omop-config configure omop_emb
-# backend: sqlitevec
-# sqlite_path: /data/omop_emb.db
-# provider_type: openai
-# api_base: https://api.openai.com/v1
-# api_key: <your OpenAI API key>
-# embedding_model: text-embedding-3-large
-```
-
-```bash
-omop-emb embeddings add-embeddings   # backend/CDM/provider/model/api_base/api_key all resolved from config
-```
+`--model-name` defaults to the configured `embedding_model_name`, so it can be omitted once configured. See the [CLI reference](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/cli/) for the full command list.
 
 **pgvector with HNSW index:**
 
 ```bash
-export OMOP_EMB_BACKEND=pgvector
-export OMOP_EMB_DB_HOST=localhost
-export OMOP_EMB_DB_USER=omop_emb
-export OMOP_EMB_DB_PASSWORD=omop_emb
-export OMOP_EMB_DB_NAME=omop_emb
-
-omop-emb embeddings add-embeddings --api-base http://localhost:11434/v1 --api-key ollama \
-    --provider ollama --model nomic-embed-text:v1.5
-omop-emb maintenance rebuild-index --model nomic-embed-text:v1.5 --index-type hnsw --metric-type cosine
+omop-emb embeddings add-embeddings
+omop-emb maintenance rebuild-index --model-name embedding-model --index-type hnsw --metric-type cosine
 ```
-
-## Environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `OMOP_EMB_BACKEND` | `sqlitevec` | Backend: `sqlitevec` or `pgvector`. |
-| `OMOP_EMB_SQLITE_PATH` | - | sqlite-vec database file path (or `:memory:`). |
-| `OMOP_EMB_DB_HOST` | - | pgvector: PostgreSQL host. |
-| `OMOP_EMB_DB_PORT` | `5432` | pgvector: PostgreSQL port. |
-| `OMOP_EMB_DB_USER` | - | pgvector: database user. |
-| `OMOP_EMB_DB_PASSWORD` | - | pgvector: database password. |
-| `OMOP_EMB_DB_NAME` | - | pgvector: database name. |
-| `OMOP_EMB_DB_URL` | - | pgvector: full SQLAlchemy URL (overrides individual vars). |
-| `OMOP_CDM_DB_URL` | - | OMOP CDM connection (required for ingestion commands only). |
-| `OMOP_EMB_FAISS_CACHE_DIR` | - | Default FAISS cache directory (alternative to `--faiss-cache-dir`). |
-
-See the [Configuration Reference](https://AustralianCancerDataNetwork.github.io/omop-emb/usage/configuration/) for the complete list including asymmetric embedding prefixes and driver overrides.
 
 ## Documentation
 
@@ -110,42 +74,3 @@ Full documentation: <https://AustralianCancerDataNetwork.github.io/omop-emb>
 - [ ] FAISS GPU support
 - [ ] [`pgvectorscale`](https://github.com/timescale/pgvectorscale) support
 - [ ] Vector quantisation for more efficient storage
-
----
-
-## Configuration via oa-configurator
-
-The database connection can also be configured via [oa-configurator](https://github.com/AustralianCancerDataNetwork/oa-configurator), which stores settings in `~/.config/omop/config.toml` and eliminates the need for environment variables at runtime:
-
-```bash
-omop-config init
-omop-config configure omop_alchemy   # CDM database (required for ingestion)
-omop-config configure omop_emb       # embedding database
-```
-
-`omop-config configure omop_emb` is required for local-dev setup before running the pgvector-backed test suite (CI provisions this automatically). Without it, those tests skip with "Resource 'test_emb_db' not configured" rather than failing.
-
-See [oa-configurator Setup](docs/getting-started/configuration.md) for details.
-
----
-
-## Docker Compose
-
-The included `docker-compose.yaml` provides both a CDM PostgreSQL database and a pgvector embedding database, plus a Python container with all optional backends pre-installed (`[pgvector,faiss-cpu]`). Default credentials work out of the box:
-
-```bash
-docker compose up
-```
-
-Include Ollama by adding the `standalone` profile:
-
-```bash
-docker compose --profile standalone up
-```
-
-The `python-emb` service runs `omop-config configure` at startup. To override credentials:
-
-```bash
-cp .env.example .env
-docker compose up
-```

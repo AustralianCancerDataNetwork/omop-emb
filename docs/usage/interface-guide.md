@@ -11,16 +11,16 @@ Both interfaces accept a **pre-constructed** `EmbeddingBackend` (sqlite-vec or p
 
 ## Constructing a backend
 
-Resolve the vector store named in `[tools.omop_emb]` (a `[vector_stores.*]` entry) using `resolve_backend_from_resolved`:
+Resolve the vector store named in `[tools.omop_emb]` (a `[vector_stores.*]` entry) using `resolve_backend_from_resolved_vector_store`:
 
 ```python
 from oa_configurator import Resolver
-from omop_emb.backends import resolve_backend_from_resolved
+from omop_emb.backends import resolve_backend_from_resolved_vector_store
 from omop_emb.config import OmopEmbConfig
 
 cfg = OmopEmbConfig.get_config()
 resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-backend = resolve_backend_from_resolved(resolved)
+backend = resolve_backend_from_resolved_vector_store(resolved)
 ```
 
 `resolve_backend(backend_type, *, database)` is the lower-level, pure resolver underneath. It never reads config itself, so call it directly only when you already have an explicit `backend_type`/`database` (an oa-configurator `ResolvedDatabase`) in hand rather than the configured defaults.
@@ -183,7 +183,7 @@ reader = EmbeddingReaderInterface(
 # Searches automatically use FAISS when the cache is fresh; SQL path otherwise.
 ```
 
-The environment variable `OMOP_EMB_FAISS_CACHE_DIR` is checked as a fallback when `faiss_cache_dir` is not passed directly.
+`EmbeddingReaderInterface` itself has no fallback for `faiss_cache_dir`; pass it explicitly, or read it off the resolved vector store yourself (`resolved.faiss_cache_dir`, see [Configuration Reference](configuration.md)). The `embeddings search` CLI command does exactly that, falling back to the configured value when `--faiss-cache-dir` is omitted.
 
 ---
 

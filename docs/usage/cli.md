@@ -1,6 +1,6 @@
 # CLI Reference
 
-`omop-emb` provides a CLI for concept ingestion, similarity search, index management, and diagnostics. All commands load a `.env` file from the working directory automatically.
+`omop-emb` provides a CLI for concept ingestion, similarity search, index management, and diagnostics. Configuration is read from `~/.config/omop/config.toml` via [oa-configurator](https://AustralianCancerDataNetwork.github.io/oa-configurator/); there is no `.env` file.
 
 Commands are organised into three subcommand groups:
 
@@ -26,51 +26,9 @@ Run `omop-emb <group> --help` to list commands within a group.
 
 - **Backend installed**: `pip install omop-emb` (sqlite-vec) or
   `pip install "omop-emb[pgvector]"`.
-- **Backend configured**: set `OMOP_EMB_BACKEND` and the matching connection
-  variables (see [Installation](installation.md)).
-- **Embedding API**: an OpenAI-compatible embeddings endpoint. Required for ingestion and search commands.
-- **OMOP CDM** (`OMOP_CDM_DB_URL`): required only for concept ingestion
-  (`add-embeddings`, `add-embeddings-with-index`). Not required for search, `list-models`, `rebuild-index`, `delete-model`, or diagnostics.
-
----
-
-## Environment Variables
-
-### Backend
-
-| Variable | Default | Description |
-|---|---|---|
-| `OMOP_EMB_BACKEND` | `sqlitevec` | Backend selector: `sqlitevec`, `pgvector`. |
-
-### sqlite-vec
-
-| Variable | Description |
-|---|---|
-| `OMOP_EMB_SQLITE_PATH` | Path to the sqlite-vec database file (or `:memory:`). |
-
-### pgvector (individual components)
-
-| Variable | Default | Description |
-|---|---|---|
-| `OMOP_EMB_DB_HOST` | - | PostgreSQL host. |
-| `OMOP_EMB_DB_PORT` | `5432` | PostgreSQL port. |
-| `OMOP_EMB_DB_USER` | - | PostgreSQL user. |
-| `OMOP_EMB_DB_PASSWORD` | - | PostgreSQL password. |
-| `OMOP_EMB_DB_NAME` | - | PostgreSQL database name. |
-| `OMOP_EMB_DB_DRIVER` | `postgresql+psycopg` | SQLAlchemy driver string. |
-| `OMOP_EMB_DB_URL` | - | Full connection URL. Overrides individual components. |
-
-### Ingestion (CDM access)
-
-| Variable | Description |
-|---|---|
-| `OMOP_CDM_DB_URL` | SQLAlchemy URL for the OMOP CDM database. |
-
-### FAISS sidecar
-
-| Variable | Description |
-|---|---|
-| `OMOP_EMB_FAISS_CACHE_DIR` | Default FAISS cache directory. Used by `EmbeddingReaderInterface` when `faiss_cache_dir` is not passed explicitly. Equivalent to the `--faiss-cache-dir` CLI option. |
+- **Configured via oa-configurator**: `omop-config configure omop_emb` (see [Getting Started: Configuration](../getting-started/configuration.md)). Resolves `cdm_db`, `embedding_model_name`, and `vector_store_name`.
+- **OMOP CDM** (`cdm_db`): required only for concept ingestion
+  (`add-embeddings`, `add-embeddings-with-index`) and for enriching `search` results with concept names. Not required for `list-models`, `rebuild-index`, `delete-model`, or diagnostics.
 
 ---
 
@@ -81,17 +39,14 @@ Run `omop-emb <group> --help` to list commands within a group.
 Bulk-generate and store embeddings for OMOP concepts that do not yet have embeddings. Models are registered with a FLAT index; use `maintenance rebuild-index` afterwards to build an HNSW index.
 
 ```bash
-omop-emb embeddings add-embeddings --api-base <URL> --provider <TYPE> [OPTIONS]
+omop-emb embeddings add-embeddings [OPTIONS]
 ```
 
 **Embedding API Options**
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--api-base` | | **required** | Base URL of the embedding API. |
-| `--api-key` | | `ollama` | API key for the embedding API. |
-| `--provider` | | from config (default `ollama`) | Embedding provider type (`ollama` or `openai`). |
-| `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
+| `--model-name` | `-m` | value configured via omop-config | Name of a `[models.*]` entry (see `omop-config models add/list`). |
 | `--batch-size` | `-b` | `100` | Concepts per API batch. |
 
 **Concept Filters**
@@ -102,12 +57,6 @@ omop-emb embeddings add-embeddings --api-base <URL> --provider <TYPE> [OPTIONS]
 | `--vocabulary` | | `None` | Restrict to specific OMOP vocabularies (repeatable). |
 | `--domain` | | `None` | Restrict to specific OMOP domains (repeatable). |
 | `--num-embeddings` | `-n` | `None` | Cap on total concepts processed (useful for testing). |
-
-**CDM Fetch Options**
-
-| Option | Default | Description |
-|---|---|---|
-| `--cdm-batch-size` | `50000` | Batch size for fetching concept metadata from the CDM. |
 
 | Option | Short | Description |
 |---|---|---|
@@ -120,7 +69,7 @@ omop-emb embeddings add-embeddings --api-base <URL> --provider <TYPE> [OPTIONS]
 Ingest embeddings and immediately build an index in one step. Equivalent to running `add-embeddings` followed by `create-index`.
 
 ```bash
-omop-emb embeddings add-embeddings-with-index --api-base <URL> --provider <TYPE> [OPTIONS]
+omop-emb embeddings add-embeddings-with-index [OPTIONS]
 ```
 
 Accepts all options from `add-embeddings`, plus:
@@ -139,20 +88,17 @@ Accepts all options from `add-embeddings`, plus:
 
 ### `create-index`
 
-Build or rebuild the index for a model that already has embeddings stored. `--api-base`, `--api-key`, and `--provider` are used only to resolve the canonical model name.
+Build or rebuild the index for a model that already has embeddings stored.
 
 ```bash
-omop-emb embeddings create-index --api-base <URL> --provider <TYPE> --model <NAME> [OPTIONS]
+omop-emb embeddings create-index [OPTIONS]
 ```
 
 **Embedding API Options**
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--api-base` | | **required** | Base URL of the embedding API. |
-| `--api-key` | | `ollama` | API key. |
-| `--provider` | | from config (default `ollama`) | Embedding provider type (`ollama` or `openai`). |
-| `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
+| `--model-name` | `-m` | value configured via omop-config | Name of a `[models.*]` entry to build the index for. |
 
 **Index Options**
 
@@ -174,20 +120,17 @@ omop-emb embeddings create-index --api-base <URL> --provider <TYPE> --model <NAM
 
 Query stored embeddings for nearest OMOP concepts. Outputs tab-separated rows: `query_id`, `query_text`, `rank`, `concept_id`, `similarity`, `concept_name`.
 
-If `OMOP_CDM_DB_URL` is set, results are enriched with concept names from the CDM. Without it, the `concept_name` column is left empty.
+If `cdm_db` is configured, results are enriched with concept names from the CDM. Without it, the `concept_name` column is left empty (a `RuntimeError` from CDM resolution is caught and logged, not fatal).
 
 ```bash
-omop-emb embeddings search --api-base <URL> --provider <TYPE> --query "hypertension" [OPTIONS]
+omop-emb embeddings search --query "hypertension" [OPTIONS]
 ```
 
 **Embedding API Options**
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--api-base` | | **required** | Base URL of the embedding API. |
-| `--api-key` | | `ollama` | API key. |
-| `--provider` | | from config (default `ollama`) | Embedding provider type (`ollama` or `openai`). |
-| `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
+| `--model-name` | `-m` | value configured via omop-config | Name of a `[models.*]` entry. |
 | `--batch-size` | `-b` | `100` | Batch size for embedding generation. |
 
 **Search Options**
@@ -198,7 +141,7 @@ omop-emb embeddings search --api-base <URL> --provider <TYPE> --query "hypertens
 | `--queries-file` | `None` | Path to a `.txt` file with one query per line. |
 | `--metric-type` | `cosine` | Distance metric for search. |
 | `--k` | `10` | Number of nearest concepts to return per query. |
-| `--faiss-cache-dir` | `None` | Use a FAISS sidecar index instead of the primary backend. Requires `omop-emb[faiss-cpu]`. Also readable from `OMOP_EMB_FAISS_CACHE_DIR`. |
+| `--faiss-cache-dir` | vector store's configured `faiss_cache_dir` | Use a FAISS sidecar index instead of the primary backend. Requires `omop-emb[faiss-cpu]`. |
 
 **Concept Filters**
 

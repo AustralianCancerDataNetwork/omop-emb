@@ -1,25 +1,26 @@
 # Embedding Storage Backends
 
-`omop-emb` selects the storage backend at runtime via the `OMOP_EMB_BACKEND` environment variable (default: `sqlitevec`).
+`omop-emb` selects the storage backend via a `[vector_stores.*]` entry's `backend_type`, configured through [oa-configurator](https://AustralianCancerDataNetwork.github.io/oa-configurator/).
 
 ## Supported backends
 
-| Backend | Value | Requires | Notes |
+| Backend | `backend_type` | Requires | Notes |
 |---|---|---|---|
-| **sqlite-vec** | `sqlitevec` | nothing extra | Default. File or in-memory. |
+| **sqlite-vec** | `sqlitevec` | nothing extra | File or in-memory (`database_name = ":memory:"` on the underlying connection). |
 | **pgvector** | `pgvector` | `omop-emb[pgvector]` + PostgreSQL | Scales to large corpora. HNSW indexing and `halfvec` storage. |
 
 !!! note "FAISS is a sidecar, not a backend"
-    FAISS (`omop-emb[faiss-cpu]`) is a read-acceleration layer that sits on top of sqlite-vec or pgvector.  It is not a primary backend and cannot be selected via `OMOP_EMB_BACKEND`.  See the [CLI reference](cli.md#faiss-sidecar) for how to export and use FAISS indices.
+    FAISS (`omop-emb[faiss-cpu]`) is a read-acceleration layer that sits on top of sqlite-vec or pgvector. It is not a primary backend and has no `backend_type` of its own. See the [CLI reference](cli.md#faiss-sidecar) for how to export and use FAISS indices.
 
-## Runtime selection
+## Selecting a backend
 
-```bash
-export OMOP_EMB_BACKEND=sqlitevec   # default; set OMOP_EMB_SQLITE_PATH
-export OMOP_EMB_BACKEND=pgvector    # set OMOP_EMB_DB_* vars or OMOP_EMB_DB_URL
+```toml
+[vector_stores.vector_store]
+backend_type = "pgvector"    # or "sqlitevec"
+database     = "emb_db"
 ```
 
-See [Installation](installation.md) for the full list of connection variables for each backend.
+See [Configuration Reference](configuration.md) for the full field list, both backends' setup.
 
 ## Index types
 
@@ -80,8 +81,8 @@ backend.rebuild_index(model_name=...,
 Or via the CLI:
 
 ```bash
-omop-emb embeddings add-embeddings --api-base ... --api-key ... --model nomic-embed-text
-omop-emb maintenance rebuild-index --model nomic-embed-text --index-type hnsw --metric-type cosine
+omop-emb embeddings add-embeddings
+omop-emb maintenance rebuild-index --model-name embedding-model --index-type hnsw --metric-type cosine
 ```
 
 !!! info "pgvector HNSW"

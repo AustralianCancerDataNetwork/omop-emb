@@ -11,13 +11,19 @@ Both interfaces accept a **pre-constructed** `EmbeddingBackend` (sqlite-vec or p
 
 ## Constructing a backend
 
-Resolve the active backend from environment variables using `resolve_backend`:
+Resolve the vector store named in `[tools.omop_emb]` (a `[vector_stores.*]` entry) using `resolve_backend_from_resolved`:
 
 ```python
-from omop_emb.backends import resolve_backend
+from oa_configurator import Resolver
+from omop_emb.backends import resolve_backend_from_resolved
+from omop_emb.config import OmopEmbConfig
 
-backend = resolve_backend()  # reads OMOP_EMB_BACKEND + connection variables
+cfg = OmopEmbConfig.get_config()
+resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+backend = resolve_backend_from_resolved(resolved)
 ```
+
+`resolve_backend(backend_type, *, database)` is the lower-level, pure resolver underneath. It never reads config itself, so call it directly only when you already have an explicit `backend_type`/`database` (an oa-configurator `ResolvedDatabase`) in hand rather than the configured defaults.
 
 Or construct one directly:
 

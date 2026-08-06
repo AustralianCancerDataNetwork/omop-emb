@@ -4,9 +4,10 @@ import logging
 
 import sqlalchemy as sa
 import typer
+from oa_configurator import Resolver
 
-from omop_emb.backends import resolve_backend
-from omop_emb.config import MetricType, resolve_omop_cdm_engine
+from omop_emb.backends import resolve_backend_from_resolved_vector_store
+from omop_emb.config import MetricType, OmopEmbConfig, resolve_omop_cdm_engine
 from omop_emb.interface import EmbeddingReaderInterface
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,9 @@ app = typer.Typer(help="Diagnostics for embedding storage and retrieval.")
     name="health-check", help="Verify backend connectivity and list registered models."
 )
 def health_check():
-    backend = resolve_backend()
+    cfg = OmopEmbConfig.get_config()
+    resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    backend = resolve_backend_from_resolved_vector_store(resolved)
     typer.echo(f"Backend: {backend.backend_type.value} | connected.")
 
     # CDM connectivity is optional for the health check

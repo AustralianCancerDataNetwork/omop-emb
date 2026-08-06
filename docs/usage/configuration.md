@@ -10,7 +10,7 @@ All configuration is done via environment variables. `omop-emb` loads a `.env` f
 |---|---|---|
 | `OMOP_EMB_BACKEND` | `sqlitevec` | `sqlitevec`, `pgvector` |
 
-Controls which storage backend the CLI and `resolve_backend()` use.
+Controls which storage backend the CLI and `resolve_backend_from_resolved()` use.
 
 ---
 

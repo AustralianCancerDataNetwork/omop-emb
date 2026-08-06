@@ -33,11 +33,11 @@ classifiers = [
 
 dependencies = [
     "numpy>=1.26",
-    "omop-alchemy==0.8.0",
-    "oa-configurator==0.1.2",  # TODO: bump to >=1.0.0 once oa-configurator 1.0 is published (source already migrated)
+    "omop-alchemy==0.8.0",  # TODO: bump to >=1.0.0,<2.0.0
+    "oa-configurator==0.1.2",  # TODO: bump to >=1.0.0,<2.0.0
     "typing-extensions>=4.15.0",
     "sqlite-vec>=0.1.9",
-    # "omop-llm",  # TODO: activate + pin a version once omop-llm is published (source already migrated)
+    # "omop-llm",  # TODO: activate as omop-llm>=X.Y.Z,<N.0.0
     "requests",
     "urllib3>=2.7.0", # CVE-2026-44432, CVE-2026-44431
     "typer",
@@ -54,7 +54,7 @@ faiss-cpu = [
     "faiss-cpu>=1.8.0",
 ]
 dev = [
-    "oa-configurator[postgres]>=0.1.1",  # TODO: bump to >=1.0.0 once oa-configurator 1.0 is published
+    "oa-configurator[postgres]>=0.1.1",  # TODO: bump to >=1.0.0,<2.0.0
     "omop-emb[faiss-cpu,pgvector]",
     "ty>=0.0.59",
     "pytest>=9.0.3",  # CVE-2025-71176

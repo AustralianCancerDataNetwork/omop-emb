@@ -7,7 +7,16 @@ from typing import Annotated, ClassVar, Dict, Tuple
 
 from pydantic import Field
 from sqlalchemy import Engine
-from oa_configurator import DatabaseConfig, ModelConfig, PackageConfigBase, RefTo
+from oa_configurator import (
+    CDMDatabaseConfig,
+    GenericDatabaseConfig,
+    ModelConfig,
+    PackageConfigBase,
+    RefTo,
+    Resolver,
+    ResolvedVectorStore,
+    VectorStoreConfig,
+)
 
 
 class OmopEmbConfig(PackageConfigBase):
@@ -17,20 +26,18 @@ class OmopEmbConfig(PackageConfigBase):
     configured by omop-alchemy, shared purely by naming convention: this
     class's ``cdm_db`` field defaults to the same name as
     ``omop_alchemy.config.OmopAlchemyConfig.cdm_db``.
+
+    Notes
+    -----
+    By design, this config is for internal use only and must not be
+    imported or resolved by any other package.
     """
 
     tool_name: ClassVar[str] = "omop_emb"
     extra_logging_namespaces: ClassVar[tuple[str, ...]] = ("orm_loader", "omop_alchemy")
 
-    cdm_db: Annotated[str, RefTo(DatabaseConfig)] = "cdm_db"
-    emb_db: Annotated[str | None, RefTo(DatabaseConfig)] = Field(
-        default=None,
-        description=(
-            "Name of a [databases.*] entry for the pgvector embedding store. "
-            "Only required when backend='pgvector'; unused by sqlitevec."
-        ),
-    )
-    test_emb_db: Annotated[str | None, RefTo(DatabaseConfig, is_test=True)] = None
+    cdm_db: Annotated[str, RefTo(CDMDatabaseConfig)] = "cdm_db"
+    test_emb_db: Annotated[str | None, RefTo(GenericDatabaseConfig, is_test=True)] = None
     embedding_model_name: Annotated[str, RefTo(ModelConfig)] = Field(
         default="embedding-model",
         description=(
@@ -38,18 +45,12 @@ class OmopEmbConfig(PackageConfigBase):
             "generating concept embeddings."
         ),
     )
-
-    backend: str = Field(
-        default="pgvector",
-        description="Embedding storage backend: 'pgvector' or 'sqlitevec'.",
-    )
-    sqlite_path: str | None = Field(
-        default=None,
-        description="Path to the SQLite database file (sqlitevec backend only).",
-    )
-    faiss_cache_dir: str | None = Field(
-        default=None,
-        description="Default directory for FAISS index files.",
+    vector_store_name: Annotated[str, RefTo(VectorStoreConfig)] = Field(
+        default="vector_store",
+        description=(
+            "Name of a [vector_stores.*] entry (see 'omop-config vector-stores add') "
+            "describing which storage backend to use for concept embeddings."
+        ),
     )
 
 
@@ -58,21 +59,14 @@ def resolve_omop_cdm_engine() -> Engine:
     return OmopEmbConfig.get_engine(OmopEmbConfig.get_config().cdm_db)
 
 
-def resolve_omop_emb_engine() -> Engine:
-    """Resolve embedding database engine via oa-configurator. 
-    Only meaningful for backends that require a separate database.
+def resolve_omop_vector_store() -> ResolvedVectorStore:
+    """Resolve OmopEmbConfig's own configured vector store via oa-configurator.
+
+    Callers that also need an ``EmbeddingBackend`` pass the result to
+    ``omop_emb.backends.resolve_backend_from_resolved``.
     """
     cfg = OmopEmbConfig.get_config()
-    if cfg.backend != BackendType.PGVECTOR.value:
-        raise RuntimeError(
-            f"resolve_omop_emb_engine() is pgvector-only, but backend={cfg.backend!r}."
-        )
-    if cfg.emb_db is None:
-        raise RuntimeError(
-            "pgvector backend requires 'emb_db' to be configured. "
-            "Set it via `omop-config configure omop_emb`."
-        )
-    return OmopEmbConfig.get_engine(cfg.emb_db)
+    return Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
 
 
 class BackendType(StrEnum):

@@ -152,6 +152,35 @@ results = reader.get_nearest_concepts(
 # results: tuple[tuple[NearestConceptMatch, ...], ...], one inner tuple per query row
 ```
 
+### Query similar concepts
+
+Find neighbours of concepts that are already embedded, without fetching and
+passing a raw vector yourself. The query concept is excluded from its own
+result row.
+
+```python
+results = reader.get_similar_concepts(
+    concept_ids=(201826, 320128),
+    k=5,
+    concept_filter=EmbeddingConceptFilter(require_standard=True),
+)
+# results: tuple[tuple[NearestConceptMatch, ...], ...], one row per concept_id, same order
+```
+
+### Combine embeddings (joint/centroid queries)
+
+Build a single query vector from several stored concept embeddings, e.g. to
+search for concepts similar to a *combination* of conditions, then feed it
+into `get_nearest_concepts`.
+
+```python
+joint_vec = reader.get_joint_embedding(
+    concept_ids=(201826, 320128),
+    weights=(0.7, 0.3),   # optional; defaults to an unweighted mean
+)
+results = reader.get_nearest_concepts(query_embedding=joint_vec[None, :], k=10)
+```
+
 ### Query by text
 
 `get_nearest_concepts_from_query_texts` takes a `ModelBackend` directly: build one with `omop_llm.build_model_backend` (the reader has no default backend of its own to embed with):

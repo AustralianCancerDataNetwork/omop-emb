@@ -64,6 +64,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _resolve_k(
+    k: Optional[int], concept_filter: Optional[EmbeddingConceptFilter], default: int
+) -> int:
+    """Resolve the number of nearest neighbours to request.
+
+    *k* wins when given; falls back to ``concept_filter.limit``, then *default*.
+    """
+    return k or (concept_filter.limit if concept_filter else None) or default
+
+
 # ---------------------------------------------------------------------------
 # Reader interface
 # ---------------------------------------------------------------------------
@@ -310,7 +320,7 @@ class EmbeddingReaderInterface:
             ``concept_name`` is ``None`` if no CDM engine was provided to the
             interface.
         """
-        effective_k = k or (concept_filter.limit if concept_filter else None) or self._k
+        effective_k = _resolve_k(k, concept_filter, self._k)
 
         if self._faiss_cache is not None:
             if faiss_index_config is None:
@@ -411,6 +421,124 @@ class EmbeddingReaderInterface:
             metric_type=self._metric_type,
             concept_filter=concept_filter or EmbeddingConceptFilter(),
         )
+
+    def get_similar_concepts(
+        self,
+        concept_ids: Union[int, Sequence[int]],
+        k: Optional[int] = None,
+        *,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        faiss_index_config: Optional[IndexConfig] = None,
+    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+        """Return nearest stored concepts for one or more already-embedded concepts.
+
+        Convenience wrapper around :meth:`get_nearest_concepts`: resolves each
+        of *concept_ids* to its own stored embedding (via
+        :meth:`get_embeddings_by_concept_ids`) instead of requiring the caller
+        to fetch and pass a raw vector. Each concept is excluded from its own
+        row of results.
+
+        Parameters
+        ----------
+        concept_ids : int or sequence of int
+            One or more concept IDs to search neighbours for. Every ID must
+            already have a stored embedding. A bare ``int`` is treated as a
+            single-element sequence.
+        k : int, optional
+            Number of nearest neighbours to return per query concept (defaults
+            to interface-level *k*).
+        concept_filter : EmbeddingConceptFilter, optional
+            In-DB pre-filter applied during KNN (domain, vocabulary, standard).
+        faiss_index_config : IndexConfig, optional
+            Required only if a FAISS cache is configured on this interface.
+
+        Returns
+        -------
+        Tuple[Tuple[NearestConceptMatch, ...], ...]
+            Shape ``(Q, ≤k)`` where ``Q == len(concept_ids)`` (``1`` for a bare
+            ``int``), in the same order as *concept_ids*. Each row excludes its
+            own query concept.
+
+        Raises
+        ------
+        ValueError
+            If *concept_ids* is empty, or any entry has no stored embedding.
+        """
+        ids = (concept_ids,) if isinstance(concept_ids, int) else tuple(concept_ids)
+        if not ids:
+            raise ValueError("concept_ids must be non-empty.")
+
+        stored = self.get_embeddings_by_concept_ids(ids)
+        missing = [cid for cid in ids if cid not in stored]
+        if missing:
+            raise ValueError(f"No stored embedding for concept_ids: {missing}")
+
+        vectors = np.asarray([stored[cid] for cid in ids], dtype=np.float64)
+        effective_k = _resolve_k(k, concept_filter, self._k)
+
+        raw = self.get_nearest_concepts(
+            vectors,
+            concept_filter=concept_filter,
+            k=effective_k + 1,  # +1 because we filter out the query concept itself from results
+            faiss_index_config=faiss_index_config,
+        )
+        return tuple(
+            tuple(m for m in matches if m.concept_id != cid)[:effective_k]
+            for cid, matches in zip(ids, raw)
+        )
+
+    def get_joint_embedding(
+        self,
+        concept_ids: Tuple[int, ...],
+        weights: Optional[Tuple[float, ...]] = None,
+    ) -> np.ndarray:
+        """Return the (optionally weighted) centroid of stored concept embeddings.
+
+        Parameters
+        ----------
+        concept_ids : tuple of int
+            Concept IDs whose stored embeddings should be combined. Must be
+            non-empty, and every ID must already have a stored embedding for
+            the interface's model.
+        weights : tuple of float, optional
+            Per-concept weight, same length as *concept_ids*. Defaults to an
+            unweighted mean.
+
+        Returns
+        -------
+        ndarray
+            Shape ``(D,)`` centroid vector, suitable as a single query row for
+            :meth:`get_nearest_concepts`. Not normalised: backends compute
+            cosine distance directly from raw vectors (and the FAISS cache
+            normalises query vectors internally for ``COSINE``), so this
+            method has no normalisation to do regardless of ``metric_type``.
+
+        Raises
+        ------
+        ValueError
+            If *concept_ids* is empty, *weights* has a mismatched length,
+            *weights* sums to zero, or any *concept_ids* entry has no stored
+            embedding.
+        """
+        if not concept_ids:
+            raise ValueError("concept_ids must be non-empty.")
+        if weights is not None and len(weights) != len(concept_ids):
+            raise ValueError(
+                f"weights must have the same length as concept_ids "
+                f"({len(weights)} != {len(concept_ids)})."
+            )
+        if weights is not None and sum(weights) == 0:
+            raise ValueError("weights sum to zero; cannot compute a weighted average.")
+
+        vectors_by_id = self.get_embeddings_by_concept_ids(concept_ids)
+        missing = [cid for cid in concept_ids if cid not in vectors_by_id]
+        if missing:
+            raise ValueError(f"No stored embedding for concept_ids: {missing}")
+
+        vectors = np.asarray(
+            [vectors_by_id[cid] for cid in concept_ids], dtype=np.float64
+        )
+        return np.average(vectors, axis=0, weights=weights)
 
     # ------------------------------------------------------------------
     # Concepts without embedding (requires CDM)

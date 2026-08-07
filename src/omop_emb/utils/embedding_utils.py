@@ -26,7 +26,11 @@ class EmbeddingConceptFilter:
     Notes
     -----
     Mirrors OMOP grounding needs without importing ``omop_graph`` or its
-    search-constraint types into ``omop_emb``.
+    search-constraint types into ``omop_emb``. Field shape duplicates
+    ``omop_graph.graph.constraints.SearchConstraintConcept`` for the same
+    reason; tracked at
+    https://github.com/AustralianCancerDataNetwork/OMOP_Alchemy/issues/11,
+    remove the duplication once that's resolved.
 
     Attributes
     ----------

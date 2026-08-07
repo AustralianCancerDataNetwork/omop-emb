@@ -191,8 +191,14 @@ def q_nearest_concept_ids(
     Returns
     -------
     Select
-        Columns: ``q_id`` (int), ``concept_id`` (int), ``is_standard`` (bool), ``distance`` (float).
-        Result shape is ``(Q*K, 4)`` before the caller re-groups by ``q_id``.
+        - ``q_id`` (int), 
+        - ``concept_id`` (int), 
+        - ``domain_id`` (str),
+        - ``vocabulary_id`` (str), 
+        - ``is_standard`` (bool), 
+        - ``is_valid`` (bool),
+        - ``distance`` (float).
+        Result shape is ``(Q*K, 7)`` before the caller re-groups by ``q_id``.
 
     Notes
     -----
@@ -213,7 +219,10 @@ def q_nearest_concept_ids(
     inner_stmt = (
         select(
             embedding_table.concept_id,
+            embedding_table.domain_id,
+            embedding_table.vocabulary_id,
             embedding_table.is_standard,
+            embedding_table.is_valid,
             distance.label("distance"),
         )
         .order_by(distance)
@@ -233,7 +242,10 @@ def q_nearest_concept_ids(
         select(
             query_v.c.q_id,
             lateral_subq.c.concept_id,
+            lateral_subq.c.domain_id,
+            lateral_subq.c.vocabulary_id,
             lateral_subq.c.is_standard,
+            lateral_subq.c.is_valid,
             lateral_subq.c.distance,
         )
         .select_from(query_v)

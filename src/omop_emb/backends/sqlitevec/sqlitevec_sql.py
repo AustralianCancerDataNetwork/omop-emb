@@ -8,16 +8,17 @@ from typing import Optional, Sequence
 import numpy as np
 from numpy import ndarray
 from sqlalchemy import (
-    Column, 
-    Engine, 
-    Integer, 
-    MetaData, 
-    Table, 
-    bindparam, 
-    delete, 
-    func, 
-    insert, 
-    select, 
+    Column,
+    Engine,
+    Integer,
+    MetaData,
+    Row,
+    Table,
+    bindparam,
+    delete,
+    func,
+    insert,
+    select,
     text,
     LargeBinary
 )
@@ -208,7 +209,7 @@ def query_knn(
     metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
-) -> list[tuple[int, float, int]]:
+) -> Sequence[Row]:
     """Run a KNN query against a vec0 table using a per-query distance function.
 
     Parameters
@@ -227,8 +228,17 @@ def query_knn(
 
     Returns
     -------
-    list[tuple[int, float, int]]
-        Triples of ``(concept_id, distance, is_standard)`` ordered by distance ascending.
+    Sequence[Row]
+        - ``q_id`` (int), 
+        - ``concept_id`` (int), 
+        - ``domain_id`` (str),
+        - ``vocabulary_id`` (str), 
+        - ``is_standard`` (bool), 
+        - ``is_valid`` (bool),
+        - ``distance`` (float).
+        Orderer by ascending distance. Result shape is ``(≤k,)``. A row has fewer than
+        *k* entries only when fewer than *k* stored concepts exist that match
+        *concept_filter* (or exist at all).
 
     Raises
     ------
@@ -253,7 +263,18 @@ def query_knn(
         table.c[EMBEDDING_COLUMN_NAME], bindparam("q_emb", emb_blob)
     ).label("distance")
 
-    stmt = select(table.c.concept_id, distance, table.c.is_standard).order_by(distance).limit(k)
+    stmt = (
+        select(
+            table.c.concept_id,
+            distance,
+            table.c.domain_id,
+            table.c.vocabulary_id,
+            table.c.is_standard,
+            table.c.is_valid,
+        )
+        .order_by(distance)
+        .limit(k)
+    )
 
     if concept_filter is not None:
         setup_concept_filter_temps(session, concept_filter, "sqlite")
@@ -261,8 +282,7 @@ def query_knn(
         if concept_filter.limit is not None:
             stmt = stmt.limit(concept_filter.limit)
 
-    rows = session.execute(stmt).all()
-    return [(int(row[0]), float(row[1]), int(row[2])) for row in rows]
+    return session.execute(stmt).all()
 
 
 def query_concept_ids_matching_filter(

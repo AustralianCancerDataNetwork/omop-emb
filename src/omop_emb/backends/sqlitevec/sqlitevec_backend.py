@@ -231,11 +231,14 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 )
                 matches = tuple(
                     NearestConceptMatch(
-                        concept_id=concept_id,
-                        similarity=get_similarity_from_distance(distance, metric_type),
-                        is_standard=bool(is_standard),
+                        concept_id=row.concept_id,
+                        similarity=get_similarity_from_distance(row.distance, metric_type),
+                        domain_id=row.domain_id,
+                        vocabulary_id=row.vocabulary_id,
+                        is_standard=bool(row.is_standard),
+                        is_active=bool(row.is_valid),
                     )
-                    for concept_id, distance, is_standard in rows
+                    for row in rows
                 )
                 results.append(matches)
 

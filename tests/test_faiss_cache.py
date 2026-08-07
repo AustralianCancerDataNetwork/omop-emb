@@ -42,7 +42,7 @@ _COSINE_EXPECTED = {1: 1.0, 2: 0.5, 3: 0.0}
 
 _COSINE_RECORDS = [
     ConceptEmbeddingRecord(
-        concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True
+        concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True, is_valid=True
     )
     for i in _COSINE_IDS
 ]
@@ -60,7 +60,7 @@ _L2_EXPECTED = {1: 1.0, 2: 0.5, 3: 1 / 3, 4: 0.2}
 
 _L2_RECORDS = [
     ConceptEmbeddingRecord(
-        concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True
+        concept_id=i, domain_id="Test", vocabulary_id="Test", is_standard=True, is_valid=True
     )
     for i in _L2_IDS
 ]
@@ -457,7 +457,7 @@ class TestConceptFilterPrefiltering:
         records = [
             ConceptEmbeddingRecord(
                 concept_id=i, domain_id="Drug" if i == 5 else "Condition",
-                vocabulary_id="Test", is_standard=True,
+                vocabulary_id="Test", is_standard=True, is_valid=True,
             )
             for i in range(1, 6)
         ]
@@ -483,6 +483,32 @@ class TestConceptFilterPrefiltering:
         )
         returned_ids = {r.concept_id for r in results[0]}
         assert returned_ids == {5}
+
+    def test_search_populates_concept_filter_metadata(self, tmp_path):
+        """When a backend is passed, matches must carry domain_id/vocabulary_id/
+        is_standard/is_active resolved from the embedding table — FAISS itself
+        stores only vectors and IDs, so this depends on the metadata lookup."""
+        backend = _make_svec_backend(_L2_DIM)
+        _populate_backend(
+            backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
+            metric_type=MetricType.L2,
+        )
+        cache = _build_faiss(tmp_path, backend, MetricType.L2)
+
+        results = cache.search(
+            _L2_QUERY,
+            k=len(_L2_RECORDS),
+            metric_type=MetricType.L2,
+            index_config=FlatIndexConfig(),
+            backend=backend,
+        )
+        matches_by_id = {m.concept_id: m for m in results[0]}
+        for record in _L2_RECORDS:
+            match = matches_by_id[record.concept_id]
+            assert match.domain_id == record.domain_id
+            assert match.vocabulary_id == record.vocabulary_id
+            assert match.is_standard == record.is_standard
+            assert match.is_active == record.is_valid
 
     def test_search_with_filter_requires_backend(self, tmp_path):
         backend = _make_svec_backend(_L2_DIM)
@@ -550,7 +576,7 @@ class TestStalenessAfterUpsert:
             metric_type=MetricType.L2,
             records=[
                 ConceptEmbeddingRecord(
-                    concept_id=99, domain_id="Test", vocabulary_id="Test", is_standard=True
+                    concept_id=99, domain_id="Test", vocabulary_id="Test", is_standard=True, is_valid=True
                 )
             ],
             embeddings=np.array([[5, 0]], dtype=np.float32),

@@ -218,7 +218,7 @@ reader = EmbeddingReaderInterface(
 
 ## EmbeddingConceptFilter
 
-`EmbeddingConceptFilter` is an in-database pre-filter applied during KNN search. All filtering happens before the nearest-neighbour step: only matching concepts are candidates.
+`EmbeddingConceptFilter` is an in-database pre-filter applied during KNN search. All filtering happens before the nearest-neighbour step: only matching concepts are candidates. To limit the number of KNN results returned, pass `k` to `get_nearest_concepts`/`get_similar_concepts`.
 
 ```python
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
@@ -229,11 +229,30 @@ concept_filter = EmbeddingConceptFilter(
     concept_ids=(313217, 4329847),          # restrict to specific concept IDs
     require_standard=True,                  # standard_concept = 'S' or 'C'
     require_active=True,                    # invalid_reason NOT IN ('D', 'U')
-    limit=20,                               # cap on results returned
 )
 ```
 
 All fields are optional and combinable. `require_standard` and `require_active` are stored as columns in the embedding table and are resolved entirely inside the primary backend, with no CDM round-trip at query time.
+
+## CDMConceptFilter
+
+`CDMConceptFilter` (`omop_alchemy.cdm.query.ConceptFilter`, re-exported from `omop_emb.utils.embedding_utils`) is the filter type for CDM-only queries. Difference to `EmbeddingConceptFilter`: it carries `limit`, which caps the number of CDM rows returned.
+
+```python
+from omop_emb.utils.embedding_utils import CDMConceptFilter
+
+concept_filter = CDMConceptFilter(
+    domains=("Condition", "Observation"),
+    vocabularies=("SNOMED", "ICD10CM"),
+    require_standard=True,
+    limit=1000,   # cap on CDM rows returned
+)
+
+n_missing = writer.count_concepts_without_embedding(
+    omop_cdm_engine=cdm_engine,
+    concept_filter=concept_filter,
+)
+```
 
 ---
 

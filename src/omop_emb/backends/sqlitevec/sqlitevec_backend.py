@@ -31,12 +31,12 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     ddl_drop_vec0,
     dml_upsert_rows,
     query_all_concept_ids,
+    query_concept_filter_metadata,
     query_concept_ids_matching_filter,
     query_embedding_count_by_vocabulary,
     query_embeddings_by_ids,
-    query_filter_metadata_by_ids,
     query_has_any,
-    query_knn,
+    query_knn_batch,
     table_exists,
     sqlite_vec_table_descriptor,
 )
@@ -117,6 +117,10 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     def backend_type(self) -> BackendType:
         return BackendType.SQLITEVEC
 
+    @property
+    def dialect(self) -> str:
+        return "sqlite"
+
     # ------------------------------------------------------------------
     # Storage table management
     # ------------------------------------------------------------------
@@ -177,7 +181,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 table=table,
                 records=records,
                 embeddings=embeddings.astype(np.float32),
-                dialect=self.emb_engine.dialect.name,
+                dialect=self.dialect,
             )
 
     # ------------------------------------------------------------------
@@ -197,7 +201,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 session=session,
                 table=table,
                 concept_ids=concept_ids,
-                dialect=self.emb_engine.dialect.name,
+                dialect=self.dialect,
             )
         missing = set(concept_ids) - set(result.keys())
         if missing:
@@ -218,30 +222,31 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         self.validate_embeddings(query_embeddings, model_record.dimensions)
 
         table = self._table_cache[model_record.storage_identifier]
-        results: list[tuple[NearestConceptMatch, ...]] = []
         with self.emb_session_factory() as session:
-            for query_vec in query_embeddings:
-                rows = query_knn(
-                    session=session,
-                    table=table,
-                    query_vector=query_vec.astype(np.float32),
-                    metric_type=metric_type,
-                    k=k,
-                    concept_filter=concept_filter,
-                )
-                matches = tuple(
-                    NearestConceptMatch(
-                        concept_id=row.concept_id,
-                        similarity=get_similarity_from_distance(row.distance, metric_type),
-                        domain_id=row.domain_id,
-                        vocabulary_id=row.vocabulary_id,
-                        is_standard=bool(row.is_standard),
-                        is_active=bool(row.is_valid),
-                    )
-                    for row in rows
-                )
-                results.append(matches)
+            batches = query_knn_batch(
+                session=session,
+                table=table,
+                query_vectors=[v.astype(np.float32) for v in query_embeddings],
+                metric_type=metric_type,
+                k=k,
+                concept_filter=concept_filter,
+                dialect=self.dialect,
+            )
 
+        results = [
+            tuple(
+                NearestConceptMatch(
+                    concept_id=row.concept_id,
+                    similarity=get_similarity_from_distance(row.distance, metric_type),
+                    domain_id=row.domain_id,
+                    vocabulary_id=row.vocabulary_id,
+                    is_standard=bool(row.is_standard),
+                    is_active=bool(row.is_valid),
+                )
+                for row in rows
+            )
+            for rows in batches
+        ]
         return tuple(results)
 
     # ------------------------------------------------------------------
@@ -266,14 +271,26 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
     ) -> Mapping[int, Mapping[str, object]]:
+        if not concept_ids:
+            return {}
         table = self._table_cache[model_record.storage_identifier]
+        concept_filter = EmbeddingConceptFilter(concept_ids=tuple(concept_ids))
         with self.emb_session_factory() as session:
-            return query_filter_metadata_by_ids(
+            rows = query_concept_filter_metadata(
                 session=session,
                 table=table,
-                concept_ids=concept_ids,
-                dialect=self.emb_engine.dialect.name,
+                concept_filter=concept_filter,
+                dialect=self.dialect,
             )
+        return {
+            int(row[0]): {
+                "domain_id": row[1] or "",
+                "vocabulary_id": row[2] or "",
+                "is_standard": bool(row[3]),
+                "is_valid": bool(row[4]),
+            }
+            for row in rows
+        }
 
     def _get_concept_ids_matching_filter_impl(
         self,
@@ -289,6 +306,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 session=session,
                 table=table,
                 concept_filter=concept_filter,
+                dialect=self.dialect,
             )
 
     def _get_embedding_count_by_vocabulary_impl(

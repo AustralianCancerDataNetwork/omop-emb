@@ -259,7 +259,7 @@ class SharedBackendTests:
             model_name=MODEL_NAME,
             metric_type=MetricType.L2,
             query_embeddings=QUERY_EMBEDDING,
-            concept_filter=EmbeddingConceptFilter(domains=("Drug",), limit=10),
+            concept_filter=EmbeddingConceptFilter(domains=("Drug",)),
         )
         returned_ids = {r.concept_id for r in results[0]}
         assert ASPIRIN_ID in returned_ids
@@ -272,7 +272,7 @@ class SharedBackendTests:
             model_name=MODEL_NAME,
             metric_type=MetricType.L2,
             query_embeddings=QUERY_EMBEDDING,
-            concept_filter=EmbeddingConceptFilter(vocabularies=("SNOMED",), limit=10),
+            concept_filter=EmbeddingConceptFilter(vocabularies=("SNOMED",)),
         )
         returned_ids = {r.concept_id for r in results[0]}
         assert HYPERTENSION_ID in returned_ids
@@ -286,7 +286,7 @@ class SharedBackendTests:
             metric_type=MetricType.L2,
             query_embeddings=QUERY_EMBEDDING,
             concept_filter=EmbeddingConceptFilter(
-                concept_ids=(HYPERTENSION_ID, ASPIRIN_ID), limit=10
+                concept_ids=(HYPERTENSION_ID, ASPIRIN_ID)
             ),
         )
         returned_ids = {r.concept_id for r in results[0]}
@@ -298,11 +298,24 @@ class SharedBackendTests:
             model_name=MODEL_NAME,
             metric_type=MetricType.L2,
             query_embeddings=QUERY_EMBEDDING,
-            concept_filter=EmbeddingConceptFilter(require_standard=True, limit=10),
+            concept_filter=EmbeddingConceptFilter(require_standard=True),
         )
         returned_ids = {r.concept_id for r in results[0]}
         assert NON_STANDARD_ID not in returned_ids
         assert HYPERTENSION_ID in returned_ids
+
+    def test_knn_k_controls_result_count_with_filter(self, backend: EmbeddingBackend):
+        """k is the sole result-count control; EmbeddingConceptFilter has no such field."""
+        self._upsert_all(backend)
+        results = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            query_embeddings=QUERY_EMBEDDING,
+            k=1,
+            concept_filter=EmbeddingConceptFilter(vocabularies=("SNOMED",)),
+        )
+        assert len(results[0]) == 1
+        assert results[0][0].concept_id == DIABETES_ID  # nearest SNOMED concept by L2
 
     # ------------------------------------------------------------------
     # KNN: similarity math

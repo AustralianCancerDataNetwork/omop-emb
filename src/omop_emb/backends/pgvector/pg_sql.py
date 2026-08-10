@@ -15,14 +15,14 @@ import logging
 from typing import List, Optional, Sequence, Union
 
 from numpy import ndarray
-from sqlalchemy import Engine, Integer, Select, func, inspect as sa_inspect, literal, select, text, TextClause
+from sqlalchemy import Engine, Integer, Row, Select, func, inspect as sa_inspect, literal, select, text, TextClause
 from sqlalchemy.sql import cast, column, values
 from sqlalchemy.sql.elements import ColumnElement
-from sqlalchemy.orm import mapped_column
+from sqlalchemy.orm import Session, mapped_column
 
 from omop_emb.config import MetricType
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.db_utils import apply_concept_filter_where
+from omop_emb.backends.db_utils import apply_concept_filter_where, setup_concept_filter_temps
 from omop_emb.backends.embedding_table import EMBEDDING_COLUMN_NAME, EmbeddingTableBase, PGEmbeddingTable
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
@@ -168,17 +168,20 @@ def q_create_extension_pgvector() -> TextClause:
 # ---------------------------------------------------------------------------
 
 
-def q_nearest_concept_ids(
+def query_nearest_concept_ids(
+    session: Session,
     embedding_table: type[PGEmbeddingTable],
     query_embeddings: List[List[float]],
     metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
-) -> Select:
-    """Build a pgvector ANN query returning the nearest concept IDs per query.
+    dialect: str = "postgresql",
+) -> Sequence[Row]:
+    """Run a pgvector ANN query returning the nearest concept IDs per query.
 
     Parameters
     ----------
+    session : Session
     embedding_table : type[PGEmbeddingTable]
         ORM class for the embedding table.
     query_embeddings : list[list[float]]
@@ -187,15 +190,16 @@ def q_nearest_concept_ids(
     k : int
         Maximum number of results per query.
     concept_filter : EmbeddingConceptFilter, optional
+        Any required temp-table setup is done here, not by the caller.
+    dialect : str
 
     Returns
     -------
-    Select
-        - ``q_id`` (int), 
-        - ``concept_id`` (int), 
+    Sequence[Row]
+        Columns are ``q_id`` (int), ``concept_id`` (int),
         - ``domain_id`` (str),
-        - ``vocabulary_id`` (str), 
-        - ``is_standard`` (bool), 
+        - ``vocabulary_id`` (str),
+        - ``is_standard`` (bool),
         - ``is_valid`` (bool),
         - ``distance`` (float).
         Result shape is ``(Q*K, 7)`` before the caller re-groups by ``q_id``.
@@ -205,6 +209,9 @@ def q_nearest_concept_ids(
     Uses a lateral join so all queries are batched in a single round-trip.
     """
     from pgvector.sqlalchemy import Vector  # optional dependency
+
+    if concept_filter is not None:
+        setup_concept_filter_temps(session, concept_filter, dialect)
 
     query_data = [(i, q) for i, q in enumerate(query_embeddings)]
     query_v = values(
@@ -233,12 +240,10 @@ def q_nearest_concept_ids(
         inner_stmt = apply_concept_filter_where(
             inner_stmt, sa_inspect(embedding_table).columns, concept_filter
         )
-        if concept_filter.limit is not None:
-            inner_stmt = inner_stmt.limit(concept_filter.limit)
 
     lateral_subq = inner_stmt.lateral("top_k")
 
-    return (
+    stmt = (
         select(
             query_v.c.q_id,
             lateral_subq.c.concept_id,
@@ -251,33 +256,36 @@ def q_nearest_concept_ids(
         .select_from(query_v)
         .join(lateral_subq, literal(True))
     )
+    return session.execute(stmt).all()
 
 
-def q_concept_ids_matching_filter(
-    embedding_table: type[PGEmbeddingTable], concept_filter: EmbeddingConceptFilter
-) -> Select:
-    """Build a query returning every ``concept_id`` satisfying *concept_filter*.
-
-    Notes
-    -----
-    Caller must have already called :func:`~omop_emb.backends.db_utils.setup_concept_filter_temps`
-    in the same transaction.
-    """
+def query_concept_ids_matching_filter(
+    session: Session,
+    embedding_table: type[PGEmbeddingTable],
+    concept_filter: EmbeddingConceptFilter,
+    dialect: str = "postgresql",
+) -> set[int]:
+    """Return every ``concept_id`` satisfying *concept_filter*."""
+    setup_concept_filter_temps(session, concept_filter, dialect)
     stmt = select(embedding_table.concept_id)
-    return apply_concept_filter_where(stmt, sa_inspect(embedding_table).columns, concept_filter)
+    stmt = apply_concept_filter_where(stmt, sa_inspect(embedding_table).columns, concept_filter)
+    rows = session.execute(stmt).all()
+    return {int(row[0]) for row in rows}
 
 
-def q_concept_filter_metadata(
-    embedding_table: type[PGEmbeddingTable], concept_filter: EmbeddingConceptFilter
-) -> Select:
-    """Build a query returning filter metadata columns for every concept ID
+def query_concept_filter_metadata(
+    session: Session,
+    embedding_table: type[PGEmbeddingTable],
+    concept_filter: EmbeddingConceptFilter,
+    dialect: str = "postgresql",
+) -> Sequence[Row]:
+    """Return filter metadata columns (raw rows) for every concept ID
     satisfying concept_filter.
 
-    Notes
-    -----
-    Caller must have already called :func:`~omop_emb.backends.db_utils.setup_concept_filter_temps`
-    in the same transaction.
+    Columns: ``concept_id``, ``domain_id``, ``vocabulary_id``, ``is_standard``,
+    ``is_valid``. Row-to-domain-object conversion is the caller's job.
     """
+    setup_concept_filter_temps(session, concept_filter, dialect)
     stmt = select(
         embedding_table.concept_id,
         embedding_table.domain_id,
@@ -285,7 +293,8 @@ def q_concept_filter_metadata(
         embedding_table.is_standard,
         embedding_table.is_valid,
     )
-    return apply_concept_filter_where(stmt, sa_inspect(embedding_table).columns, concept_filter)
+    stmt = apply_concept_filter_where(stmt, sa_inspect(embedding_table).columns, concept_filter)
+    return session.execute(stmt).all()
 
 
 # ---------------------------------------------------------------------------

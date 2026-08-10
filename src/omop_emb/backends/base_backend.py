@@ -152,6 +152,9 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         Backend type identifier (e.g. ``BackendType.PGVECTOR``).
     backend_name : str
         String value of ``backend_type`` (e.g. ``"pgvector"``).
+    dialect : str
+        SQL dialect this backend requires (e.g. ``"postgresql"``, ``"sqlite"``).
+        Matched against ``emb_engine.dialect.name`` at construction time.
     emb_engine : Engine
         SQLAlchemy engine for the embedding store. Obtained through the registry manager.
     emb_session_factory : sessionmaker
@@ -166,6 +169,12 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     DEFAULT_K_NEAREST = 10
 
     def __init__(self, emb_engine: Engine) -> None:
+        actual_dialect = emb_engine.dialect.name
+        if actual_dialect != self.dialect:
+            raise ValueError(
+                f"{type(self).__name__} requires a '{self.dialect}'-dialect engine, "
+                f"got '{actual_dialect}'."
+            )
         super().__init__()
         self._registry = RegistryManager(emb_engine)
         self._table_cache: dict[str, TEmbeddingTable] = {}
@@ -183,6 +192,12 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     def backend_name(self) -> str:
         """String value of ``backend_type``."""
         return self.backend_type.value
+
+    @property
+    @abstractmethod
+    def dialect(self) -> str:
+        """SQL dialect this backend requires, matching ``emb_engine.dialect.name``."""
+        ...
 
     @property
     def emb_engine(self) -> Engine:

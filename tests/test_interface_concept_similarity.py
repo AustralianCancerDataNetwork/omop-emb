@@ -7,7 +7,7 @@ import pytest
 
 from omop_emb.config import MetricType
 from omop_emb.interface import EmbeddingReaderInterface, _resolve_k
-from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
+from omop_emb.utils.embedding_utils import NearestConceptMatch
 
 
 def _make_backend() -> Mock:
@@ -28,13 +28,10 @@ def _make_interface(backend: Mock, metric_type: MetricType) -> EmbeddingReaderIn
 @pytest.mark.unit
 class TestResolveK:
     def test_explicit_k_wins(self):
-        assert _resolve_k(5, EmbeddingConceptFilter(limit=3), default=1) == 5
-
-    def test_falls_back_to_filter_limit(self):
-        assert _resolve_k(None, EmbeddingConceptFilter(limit=3), default=1) == 3
+        assert _resolve_k(5, default=1) == 5
 
     def test_falls_back_to_default(self):
-        assert _resolve_k(None, None, default=1) == 1
+        assert _resolve_k(None, default=1) == 1
 
 
 @pytest.mark.unit
@@ -179,7 +176,7 @@ class TestGetSimilarConcepts:
         with pytest.raises(ValueError, match="No stored embedding"):
             interface.get_similar_concepts((1, 2), k=1)
 
-    def test_concept_filter_limit_used_as_fallback_k(self):
+    def test_falls_back_to_interface_default_k(self):
         backend = _make_backend()
         backend.get_embeddings_by_concept_ids.return_value = {1: [1.0, 0.0]}
         backend.get_nearest_concepts.return_value = (
@@ -189,9 +186,14 @@ class TestGetSimilarConcepts:
                 NearestConceptMatch(concept_id=3, similarity=0.8),
             ),
         )
-        interface = _make_interface(backend, MetricType.COSINE)
+        interface = EmbeddingReaderInterface(
+            model="test-model:v1",
+            backend=backend,
+            metric_type=MetricType.COSINE,
+            k=2,
+        )
 
-        result = interface.get_similar_concepts(1, concept_filter=EmbeddingConceptFilter(limit=2))
+        result = interface.get_similar_concepts(1)
 
         assert [m.concept_id for m in result[0]] == [2, 3]
         assert backend.get_nearest_concepts.call_args.kwargs["k"] == 3

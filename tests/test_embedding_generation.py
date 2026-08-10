@@ -45,6 +45,10 @@ def _make_resolved_model(
         embedding_dim=embedding_dim,
         document_prefix=document_prefix,
         query_prefix=query_prefix,
+        embeddings=True,
+        tool_use=False,
+        structured_output=False,
+        extended_thinking=False,
         configuration=configuration or {},
     )
 

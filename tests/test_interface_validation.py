@@ -42,6 +42,10 @@ class TestCanonicalModelName:
                 embedding_dim=None,
                 document_prefix=None,
                 query_prefix=None,
+                embeddings=True,
+                tool_use=False,
+                structured_output=False,
+                extended_thinking=False,
                 configuration={},
             )
             interface = EmbeddingWriterInterface(

@@ -2,13 +2,24 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from sqlalchemy import DateTime, Engine, Integer, JSON, String, Enum, func
+from sqlalchemy import (
+    DateTime,
+    Engine,
+    Enum,
+    Integer,
+    JSON,
+    String,
+    func,
+    inspect,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, mapped_column, validates, Mapped
+
+from omop_llm import supported_providers
 
 from omop_emb.config import (
     IndexType,
     MetricType,
-    ProviderType,
 )
 from omop_emb.backends.index_config import IndexConfig
 
@@ -33,8 +44,10 @@ class ModelRegistry(ModelRegistryBase):
     ----------
     model_name : str
         Canonical model name including tag.
-    provider_type : ProviderType
-        Provider that served the model (informational only).
+    provider_type : str
+        Provider that served the model (required; not part of any lookup
+        key, but every registered model has one: the omop-llm provider
+        key, e.g. ``'ollama'``).
     storage_identifier : str
         Physical table name where the model's embeddings are stored.
         Must be unique across the registry. Format: ``<backend>_<safe_model>``.
@@ -68,7 +81,7 @@ class ModelRegistry(ModelRegistryBase):
 
     model_name = mapped_column(String, primary_key=True)
 
-    provider_type = mapped_column(Enum(ProviderType, native_enum=False))
+    provider_type = mapped_column(String, nullable=False)
     storage_identifier = mapped_column(String, nullable=False, unique=True)
     dimensions = mapped_column(Integer, nullable=False)
 
@@ -93,10 +106,12 @@ class ModelRegistry(ModelRegistryBase):
 
     @validates("provider_type")
     def _validate_provider_type(self, _key: str, value: str) -> str:
-        """Reject unknown provider types on assignment."""
-        if value not in ProviderType:
+        """Reject a missing or unrecognized provider key."""
+        if value is None:
+            raise ValueError("provider_type is required.")
+        if value not in supported_providers():
             raise ValueError(
-                f"Unsupported provider type: {value!r}. Supported: {list(ProviderType)}"
+                f"Unsupported provider type: {value!r}. Supported: {sorted(supported_providers())}"
             )
         return value
 
@@ -161,7 +176,7 @@ class ModelRegistry(ModelRegistryBase):
 
 
 def ensure_registry_schema(engine: Engine) -> None:
-    """Create the model registry table if it does not exist.
+    """Create or upgrade the model registry table.
 
     Parameters
     ----------
@@ -169,3 +184,44 @@ def ensure_registry_schema(engine: Engine) -> None:
         SQLAlchemy engine connected to the registry database.
     """
     ModelRegistryBase.metadata.create_all(engine, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
+    _migrate_legacy_provider_type_column(engine)
+
+
+def _migrate_legacy_provider_type_column(engine: Engine) -> None:
+    """Upgrade the pre-omop-llm provider column without rebuilding embeddings.
+
+    Older registries used ``Enum(ProviderType, native_enum=False)``, which
+    stored enum member names such as ``OLLAMA`` in a ``VARCHAR(6)`` column.
+    SQLite does not enforce that length, but PostgreSQL does, preventing newer
+    provider keys such as ``anthropic`` from being inserted. Widen the
+    PostgreSQL column and normalize legacy names in place on both backends.
+
+    The migration is deliberately idempotent so normal backend construction
+    can safely run it for both existing and newly-created registries.
+    """
+    columns = inspect(engine).get_columns(ModelRegistry.__tablename__)
+    provider_column = next(
+        (column for column in columns if column["name"] == "provider_type"),
+        None,
+    )
+    if provider_column is None:
+        return
+
+    legacy_length = getattr(provider_column["type"], "length", None)
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql" and legacy_length is not None:
+            connection.execute(
+                text(
+                    "ALTER TABLE model_registry "
+                    "ALTER COLUMN provider_type TYPE VARCHAR "
+                    "USING provider_type::text"
+                )
+            )
+        connection.execute(
+            text(
+                "UPDATE model_registry "
+                "SET provider_type = lower(provider_type) "
+                "WHERE provider_type IS NOT NULL "
+                "AND provider_type <> lower(provider_type)"
+            )
+        )

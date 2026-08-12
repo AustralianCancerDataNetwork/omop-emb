@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .base_backend import EmbeddingBackend, resolve_backend
+from .base_backend import EmbeddingBackend, resolve_backend, resolve_backend_from_resolved_vector_store
 from .sqlitevec import SQLiteVecEmbeddingBackend
 
 if TYPE_CHECKING:
@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 __all__ = [
     "EmbeddingBackend",
     "resolve_backend",
+    "resolve_backend_from_resolved_vector_store",
     "SQLiteVecEmbeddingBackend",
     "PGVectorEmbeddingBackend",
 ]

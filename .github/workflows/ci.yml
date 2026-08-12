@@ -14,20 +14,13 @@ jobs:
       postgres-password: test
       postgres-db: postgres
       setup-commands: |
-        uv run omop-config configure omop_alchemy \
-          --dialect postgresql+psycopg \
-          --host localhost \
-          --port 5432 \
-          --user test \
-          --password test \
-          --database-name postgres \
-          --cdm-schema public
         uv run omop-config configure omop_emb \
-          --test-dialect postgresql+psycopg \
-          --test-database pg_test_emb \
-          --test-host localhost \
-          --test-port 5432 \
-          --test-cdm-schema public \
-          --test-user test \
-          --test-password test \
-          --test-database-name test_omop_emb
+          --set test_emb_db.kind=generic \
+          --set test_emb_db.connection.dialect=postgresql+psycopg \
+          --set test_emb_db.connection.host=localhost \
+          --set test_emb_db.connection.port=5432 \
+          --set test_emb_db.connection.user=test \
+          --set test_emb_db.connection.password=test \
+          --set test_emb_db.connection.database_name=test_omop_emb \
+          --set test_emb_db.connection.test_only=true \
+          --set test_emb_db.schema_name=public

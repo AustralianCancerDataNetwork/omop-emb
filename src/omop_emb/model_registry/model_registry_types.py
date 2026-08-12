@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Mapping, Optional
 
-from omop_emb.config import IndexType, MetricType, ProviderType
+from omop_emb.config import IndexType, MetricType
 from omop_emb.backends.index_config import IndexConfig
 
 
@@ -19,8 +19,8 @@ class EmbeddingModelRecord:
     ----------
     model_name : str
         Canonical model name including tag (e.g. ``'nomic-embed-text:v1.5'``).
-    provider_type : ProviderType
-        Provider that serves the model.
+    provider_type : str
+        omop-llm provider key that serves the model (e.g. ``'ollama'``).
     index_config : IndexConfig
         Active index configuration. ``index_type`` and ``metric_type`` are
         derived from this field via properties.
@@ -44,7 +44,7 @@ class EmbeddingModelRecord:
     """
 
     model_name: str
-    provider_type: ProviderType
+    provider_type: str
     index_config: IndexConfig
     dimensions: int
     storage_identifier: str

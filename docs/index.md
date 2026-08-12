@@ -1,15 +1,13 @@
 # OMOP Embeddings
 
-`omop-emb` generates and retrieves vector embeddings for OMOP CDM concepts. It
-works standalone out of the box (sqlite-vec, no external database required) and
-optionally scales to PostgreSQL via the pgvector extension.
+`omop-emb` generates and retrieves vector embeddings for OMOP CDM concepts. It works standalone out of the box (sqlite-vec, no external database required) and optionally scales to PostgreSQL via the pgvector extension.
 
 The package supports:
 
-- dynamic embedding model registration — multiple models per backend, tracked in the embedding database
+- dynamic embedding model registration: multiple models per backend, tracked in the embedding database
 - embedding and lookup for OMOP concepts across configurable storage backends
 - <ins>**Two storage backends**</ins>:
-    - **`sqlite-vec`** (default): zero-config, file-based or in-memory — no external service required
+    - **`sqlite-vec`** (default): zero-config, file-based or in-memory; no external service required
     - **`pgvector`**: PostgreSQL with the pgvector extension (FLAT sequential scan or HNSW SQL index)
 - **FAISS** sidecar on top of `sqlite-vec` backend for approximate nearest-neighbour search
 - CLI scripts to ingest OMOP CDM concepts and manage registered models
@@ -25,47 +23,25 @@ pip install "omop-emb[faiss-cpu]"          # adds FAISS sidecar support
 pip install "omop-emb[pgvector,faiss-cpu]" # everything
 ```
 
-## Environment Variables { data-toc-label="Environment Variables" }
+## Configuration
 
-### Backend selector
+`omop-emb` is configured entirely through [oa-configurator](https://AustralianCancerDataNetwork.github.io/oa-configurator/) (`~/.config/omop/config.toml`); there are no `OMOP_EMB_*` environment variables. `OmopEmbConfig` (`[tools.omop_emb]`) has three fields:
 
-| Variable | Default | Description |
+| Field | References | Description |
 |---|---|---|
-| `OMOP_EMB_BACKEND` | `sqlitevec` | Backend to use: `sqlitevec` or `pgvector`. |
+| `cdm_db` | a `[databases.*]` entry, `kind = "cdm"` | The OMOP CDM database, for concept enrichment during ingestion/search |
+| `embedding_model_name` | a `[models.*]` entry | Which model generates embeddings |
+| `vector_store_name` | a `[vector_stores.*]` entry | Which storage backend (sqlite-vec or pgvector) holds them |
 
-### sqlite-vec connection
+See [Getting Started: Configuration](getting-started/configuration.md) for the full setup walkthrough, and [Configuration reference](usage/configuration.md) for every field.
 
-| Variable | Description |
-|---|---|
-| `OMOP_EMB_SQLITE_PATH` | Path to the sqlite-vec database file. Use `:memory:` for an in-memory database. |
-
-### pgvector connection (individual components)
-
-| Variable | Default | Description |
-|---|---|---|
-| `OMOP_EMB_DB_HOST` | — | PostgreSQL host. |
-| `OMOP_EMB_DB_PORT` | `5432` | PostgreSQL port. |
-| `OMOP_EMB_DB_USER` | — | PostgreSQL user. |
-| `OMOP_EMB_DB_PASSWORD` | — | PostgreSQL password. |
-| `OMOP_EMB_DB_NAME` | — | PostgreSQL database name. |
-| `OMOP_EMB_DB_DRIVER` | `postgresql+psycopg` | SQLAlchemy driver string. Override to use e.g. `psycopg2`. |
-| `OMOP_EMB_DB_URL` | — | Full SQLAlchemy connection URL. Overrides all individual components above when set. |
-
-### Embedding API (CLI concept ingestion)
-
-| Variable | Description |
-|---|---|
-| `OMOP_CDM_DB_URL` | SQLAlchemy URL for the OMOP CDM database. Required only for concept ingestion commands. |
-| `OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX` | Task prefix prepended to concept texts at index time. |
-| `OMOP_EMB_QUERY_EMBEDDING_PREFIX` | Task prefix prepended to search queries at query time. |
-
-The prefix variables are optional and default to `""`. They are only needed for
-asymmetric embedding models (e.g. nomic-embed-text, E5, BGE) that require
-different task prefixes for indexing versus querying.
+Document/query embedding prefixes for asymmetric models (nomic-embed-text, E5, BGE, ...) live on the `[models.*]` entry itself (`document_prefix`/`query_prefix`), not on `omop-emb`'s own config; see [Asymmetric Embeddings](usage/asymmetric-embeddings.md).
 
 ## Documentation overview
 
+- [Getting Started: Configuration](getting-started/configuration.md)
 - [Installation](usage/installation.md)
 - [Embedding storage backends](usage/backend-selection.md)
 - [CLI Reference](usage/cli.md)
 - [Asymmetric Embeddings](usage/asymmetric-embeddings.md)
+- [Interface guide](usage/interface-guide.md)

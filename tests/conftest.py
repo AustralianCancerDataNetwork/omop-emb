@@ -13,7 +13,7 @@ from omop_emb.backends.sqlitevec import (
     SQLiteVecEmbeddingBackend,
     create_sqlitevec_engine,
 )
-from omop_emb.config import OmopEmbConfig, ProviderType
+from omop_emb.config import OmopEmbConfig
 
 
 # ---------------------------------------------------------------------------
@@ -21,7 +21,7 @@ from omop_emb.config import OmopEmbConfig, ProviderType
 # ---------------------------------------------------------------------------
 
 MODEL_NAME = "test-model:v1"
-PROVIDER_TYPE = ProviderType.OLLAMA
+PROVIDER_TYPE = "ollama"
 EMBEDDING_DIM = 1
 
 # Fixed 1-D embeddings: Hypertension=-10, Diabetes=0, Aspirin=+10
@@ -64,7 +64,7 @@ QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
-# Fixtures — SQLiteVec (in-memory, function-scoped)
+# Fixtures: SQLiteVec (in-memory, function-scoped)
 # ---------------------------------------------------------------------------
 
 
@@ -83,7 +83,7 @@ def svec_backend(svec_engine) -> SQLiteVecEmbeddingBackend:
 
 
 # ---------------------------------------------------------------------------
-# Fixtures — pgvector (session-scoped engine, function-scoped backend)
+# Fixtures: pgvector (session-scoped engine, function-scoped backend)
 # ---------------------------------------------------------------------------
 
 
@@ -95,10 +95,10 @@ def pg_engine() -> Iterator[sa.Engine]:
         drop_test_db,
         ensure_test_user_exists,
         require_pg_extension,
-        resolve_test_resource,
+        resolve_test_database,
     )
 
-    raw_url = resolve_test_resource(OmopEmbConfig.TEST_DB)
+    raw_url = resolve_test_database(OmopEmbConfig, "test_emb_db")
     ensure_test_user_exists(raw_url)
     url = create_fresh_test_db(raw_url, extensions=["vector"])
     require_pg_extension(url, "vector")  # defensive: verify installation succeeded

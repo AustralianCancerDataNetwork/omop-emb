@@ -1,23 +1,19 @@
 # CLI Reference
 
-`omop-emb` provides a CLI for concept ingestion, similarity search, index
-management, and diagnostics. All commands load a `.env` file from the working
-directory automatically.
+`omop-emb` provides a CLI for concept ingestion, similarity search, index management, and diagnostics. Configuration is read from `~/.config/omop/config.toml` via [oa-configurator](https://AustralianCancerDataNetwork.github.io/oa-configurator/); there is no `.env` file.
 
-Commands are organised into four subcommand groups:
+Commands are organised into three subcommand groups:
 
 | Group | Purpose |
 |---|---|
 | `embeddings` | Ingestion, search, index creation |
 | `maintenance` | Model management, FAISS export/import |
 | `diagnostics` | Health checks |
-| `legacy` | Import pre-built embeddings from HDF5 files |
 
 Run `omop-emb <group> --help` to list commands within a group.
 
 !!! note "Verbosity flag placement"
-    The `--verbose` / `-v` flag is a **global option** and must appear **before** the
-    subcommand name, not after it:
+    The `--verbose` / `-v` flag is a **global option** and must appear **before** the subcommand name, not after it:
 
     ```
     omop-emb -v embeddings add-embeddings   # ✓ correct
@@ -30,52 +26,9 @@ Run `omop-emb <group> --help` to list commands within a group.
 
 - **Backend installed**: `pip install omop-emb` (sqlite-vec) or
   `pip install "omop-emb[pgvector]"`.
-- **Backend configured**: set `OMOP_EMB_BACKEND` and the matching connection
-  variables (see [Installation](installation.md)).
-- **Embedding API**: an OpenAI-compatible embeddings endpoint. Required for ingestion and search commands.
-- **OMOP CDM** (`OMOP_CDM_DB_URL`): required only for concept ingestion
-  (`add-embeddings`, `add-embeddings-with-index`). Not required for search,
-  `list-models`, `rebuild-index`, `delete-model`, or diagnostics.
-
----
-
-## Environment Variables
-
-### Backend
-
-| Variable | Default | Description |
-|---|---|---|
-| `OMOP_EMB_BACKEND` | `sqlitevec` | Backend selector: `sqlitevec`, `pgvector`. |
-
-### sqlite-vec
-
-| Variable | Description |
-|---|---|
-| `OMOP_EMB_SQLITE_PATH` | Path to the sqlite-vec database file (or `:memory:`). |
-
-### pgvector (individual components)
-
-| Variable | Default | Description |
-|---|---|---|
-| `OMOP_EMB_DB_HOST` | — | PostgreSQL host. |
-| `OMOP_EMB_DB_PORT` | `5432` | PostgreSQL port. |
-| `OMOP_EMB_DB_USER` | — | PostgreSQL user. |
-| `OMOP_EMB_DB_PASSWORD` | — | PostgreSQL password. |
-| `OMOP_EMB_DB_NAME` | — | PostgreSQL database name. |
-| `OMOP_EMB_DB_DRIVER` | `postgresql+psycopg` | SQLAlchemy driver string. |
-| `OMOP_EMB_DB_URL` | — | Full connection URL. Overrides individual components. |
-
-### Ingestion (CDM access)
-
-| Variable | Description |
-|---|---|
-| `OMOP_CDM_DB_URL` | SQLAlchemy URL for the OMOP CDM database. |
-
-### FAISS sidecar
-
-| Variable | Description |
-|---|---|
-| `OMOP_EMB_FAISS_CACHE_DIR` | Default FAISS cache directory. Used by `EmbeddingReaderInterface` when `faiss_cache_dir` is not passed explicitly. Equivalent to the `--faiss-cache-dir` CLI option. |
+- **Configured via oa-configurator**: `omop-config configure omop_emb` (see [Getting Started: Configuration](../getting-started/configuration.md)). Resolves `cdm_db`, `embedding_model_name`, and `vector_store_name`.
+- **OMOP CDM** (`cdm_db`): required only for concept ingestion
+  (`add-embeddings`, `add-embeddings-with-index`) and for enriching `search` results with concept names. Not required for `list-models`, `rebuild-index`, `delete-model`, or diagnostics.
 
 ---
 
@@ -83,22 +36,17 @@ Run `omop-emb <group> --help` to list commands within a group.
 
 ### `add-embeddings`
 
-Bulk-generate and store embeddings for OMOP concepts that do not yet have
-embeddings. Models are registered with a FLAT index; use
-`maintenance rebuild-index` afterwards to build an HNSW index.
+Bulk-generate and store embeddings for OMOP concepts that do not yet have embeddings. Models are registered with a FLAT index; use `maintenance rebuild-index` afterwards to build an HNSW index.
 
 ```bash
-omop-emb embeddings add-embeddings --api-base <URL> --provider <TYPE> [OPTIONS]
+omop-emb embeddings add-embeddings [OPTIONS]
 ```
 
 **Embedding API Options**
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--api-base` | | **required** | Base URL of the embedding API. |
-| `--api-key` | | `ollama` | API key for the embedding API. |
-| `--provider` | | from config (default `ollama`) | Embedding provider type (`ollama` or `openai`). |
-| `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
+| `--model-name` | `-m` | value configured via omop-config | Name of a `[models.*]` entry (see `omop-config models add/list`). |
 | `--batch-size` | `-b` | `100` | Concepts per API batch. |
 
 **Concept Filters**
@@ -110,12 +58,6 @@ omop-emb embeddings add-embeddings --api-base <URL> --provider <TYPE> [OPTIONS]
 | `--domain` | | `None` | Restrict to specific OMOP domains (repeatable). |
 | `--num-embeddings` | `-n` | `None` | Cap on total concepts processed (useful for testing). |
 
-**CDM Fetch Options**
-
-| Option | Default | Description |
-|---|---|---|
-| `--cdm-batch-size` | `50000` | Batch size for fetching concept metadata from the CDM. |
-
 | Option | Short | Description |
 |---|---|---|
 | `--verbose` | `-v` | Increase log verbosity (pass twice for DEBUG). |
@@ -124,11 +66,10 @@ omop-emb embeddings add-embeddings --api-base <URL> --provider <TYPE> [OPTIONS]
 
 ### `add-embeddings-with-index`
 
-Ingest embeddings and immediately build an index in one step. Equivalent to
-running `add-embeddings` followed by `create-index`.
+Ingest embeddings and immediately build an index in one step. Equivalent to running `add-embeddings` followed by `create-index`.
 
 ```bash
-omop-emb embeddings add-embeddings-with-index --api-base <URL> --provider <TYPE> [OPTIONS]
+omop-emb embeddings add-embeddings-with-index [OPTIONS]
 ```
 
 Accepts all options from `add-embeddings`, plus:
@@ -148,20 +89,16 @@ Accepts all options from `add-embeddings`, plus:
 ### `create-index`
 
 Build or rebuild the index for a model that already has embeddings stored.
-`--api-base`, `--api-key`, and `--provider` are used only to resolve the canonical model name.
 
 ```bash
-omop-emb embeddings create-index --api-base <URL> --provider <TYPE> --model <NAME> [OPTIONS]
+omop-emb embeddings create-index [OPTIONS]
 ```
 
 **Embedding API Options**
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--api-base` | | **required** | Base URL of the embedding API. |
-| `--api-key` | | `ollama` | API key. |
-| `--provider` | | from config (default `ollama`) | Embedding provider type (`ollama` or `openai`). |
-| `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
+| `--model-name` | `-m` | value configured via omop-config | Name of a `[models.*]` entry to build the index for. |
 
 **Index Options**
 
@@ -181,24 +118,19 @@ omop-emb embeddings create-index --api-base <URL> --provider <TYPE> --model <NAM
 
 ### `search`
 
-Query stored embeddings for nearest OMOP concepts. Outputs tab-separated rows:
-`query_id`, `query_text`, `rank`, `concept_id`, `similarity`, `concept_name`.
+Query stored embeddings for nearest OMOP concepts. Outputs tab-separated rows: `query_id`, `query_text`, `rank`, `concept_id`, `similarity`, `concept_name`.
 
-If `OMOP_CDM_DB_URL` is set, results are enriched with concept names from the
-CDM. Without it, the `concept_name` column is left empty.
+If `cdm_db` is configured, results are enriched with concept names from the CDM. Without it, the `concept_name` column is left empty (a `RuntimeError` from CDM resolution is caught and logged, not fatal).
 
 ```bash
-omop-emb embeddings search --api-base <URL> --provider <TYPE> --query "hypertension" [OPTIONS]
+omop-emb embeddings search --query "hypertension" [OPTIONS]
 ```
 
 **Embedding API Options**
 
 | Option | Short | Default | Description |
 |---|---|---|---|
-| `--api-base` | | **required** | Base URL of the embedding API. |
-| `--api-key` | | `ollama` | API key. |
-| `--provider` | | from config (default `ollama`) | Embedding provider type (`ollama` or `openai`). |
-| `--model` | `-m` | `text-embedding-3-small` | Embedding model name. |
+| `--model-name` | `-m` | value configured via omop-config | Name of a `[models.*]` entry. |
 | `--batch-size` | `-b` | `100` | Batch size for embedding generation. |
 
 **Search Options**
@@ -209,7 +141,7 @@ omop-emb embeddings search --api-base <URL> --provider <TYPE> --query "hypertens
 | `--queries-file` | `None` | Path to a `.txt` file with one query per line. |
 | `--metric-type` | `cosine` | Distance metric for search. |
 | `--k` | `10` | Number of nearest concepts to return per query. |
-| `--faiss-cache-dir` | `None` | Use a FAISS sidecar index instead of the primary backend. Requires `omop-emb[faiss-cpu]`. Also readable from `OMOP_EMB_FAISS_CACHE_DIR`. |
+| `--faiss-cache-dir` | vector store's configured `faiss_cache_dir` | Use a FAISS sidecar index instead of the primary backend. Requires `omop-emb[faiss-cpu]`. |
 
 **Concept Filters**
 
@@ -245,10 +177,7 @@ omop-emb maintenance list-models [OPTIONS]
 
 ### `rebuild-index`
 
-Build or rebuild the storage index for an already-registered model. Use this to
-switch between FLAT and HNSW without re-ingesting. The canonical model name is
-passed directly via `--model`; supply `--provider-type` to canonicalize a raw
-name if needed.
+Build or rebuild the storage index for an already-registered model. Use this to switch between FLAT and HNSW without re-ingesting. The canonical model name is passed directly via `--model`; supply `--provider-type` to canonicalize a raw name if needed.
 
 ```bash
 omop-emb maintenance rebuild-index --model <CANONICAL_NAME> [OPTIONS]
@@ -277,8 +206,7 @@ omop-emb maintenance rebuild-index --model <CANONICAL_NAME> [OPTIONS]
 
 ### `delete-model`
 
-Permanently delete a registered model and all its stored embeddings. This
-operation is irreversible.
+Permanently delete a registered model and all its stored embeddings. This operation is irreversible.
 
 ```bash
 omop-emb maintenance delete-model --model <NAME> [OPTIONS]
@@ -295,20 +223,9 @@ omop-emb maintenance delete-model --model <NAME> [OPTIONS]
 
 ### `export`
 
-Stream all embeddings for one model from the primary backend into a
-single, self-describing HDF5 bundle (raw vectors, never normalized, plus
-concept metadata). This is the lossless source of truth for backup/restore
-and for migrating raw embeddings to another backend (see `import`). Peak
-memory stays close to one batch's worth regardless of table size.
+Stream all embeddings for one model from the primary backend into a single, self-describing HDF5 bundle (raw vectors, never normalized, plus concept metadata). This is the lossless source of truth for backup/restore and for migrating raw embeddings to another backend (see `import`). Peak memory stays close to one batch's worth regardless of table size.
 
-There is no `--metric-type` flag: the embeddings table has no
-metric-specific columns (metric only ever selects a distance operator at
-*query* time, which export never does), so it isn't something to choose
-here. The bundle records whatever metric the model's registry entry is
-already locked to (or `cosine`, if the model is FLAT/unconstrained, the
-only state a freshly registered model can be in) purely as metadata.
-The output filename is derived from the model's storage identifier, not a
-literal path you choose.
+There is no `--metric-type` flag: the embeddings table has no metric-specific columns (metric only ever selects a distance operator at *query* time, which export never does), so it isn't something to choose here. The bundle records whatever metric the model's registry entry is already locked to (or `cosine`, if the model is FLAT/unconstrained, the only state a freshly registered model can be in) purely as metadata. The output filename is derived from the model's storage identifier, not a literal path you choose.
 
 ```bash
 omop-emb maintenance export --model <NAME> --output-dir <DIR> [OPTIONS]
@@ -329,12 +246,7 @@ omop-emb maintenance export --model <NAME> --output-dir <DIR> [OPTIONS]
 
 ### `build-faiss-cache`
 
-Build (or rebuild) a local FAISS search-acceleration cache directly from
-the backend. FAISS indices are a derived, disposable artifact, never the
-round-trip source of truth. This function streams every embedding for the model
-straight out of the backend in bounded-memory batches; it has no
-dependency on `export`/`import` or any bundle file. Requires
-`pip install "omop-emb[faiss-cpu]"`.
+Build (or rebuild) a local FAISS search-acceleration cache directly from the backend. FAISS indices are a derived, disposable artifact, never the round-trip source of truth. This function streams every embedding for the model straight out of the backend in bounded-memory batches; it has no dependency on `export`/`import` or any bundle file. Requires `pip install "omop-emb[faiss-cpu]"`.
 
 ```bash
 omop-emb maintenance build-faiss-cache --model <NAME> --faiss-cache-dir <DIR> [OPTIONS]
@@ -363,8 +275,7 @@ omop-emb maintenance build-faiss-cache --model <NAME> --faiss-cache-dir <DIR> [O
 
 ### `check-faiss-cache`
 
-Check whether the FAISS index on disk is fresh relative to the primary backend.
-Exits with code `0` if fresh, `1` if stale or missing.
+Check whether the FAISS index on disk is fresh relative to the primary backend. Exits with code `0` if fresh, `1` if stale or missing.
 
 ```bash
 omop-emb maintenance check-faiss-cache --model <NAME> --cache-dir <DIR> [OPTIONS]
@@ -391,14 +302,7 @@ omop-emb maintenance check-faiss-cache --model <NAME> --cache-dir <DIR> [OPTIONS
 
 ### `import`
 
-Import embeddings from an export bundle into the primary backend. 
-Reads raw vectors straight from the bundle's `embeddings` dataset 
-so magnitudes are preserved exactly regardless of metric. 
-Registers the model from the bundle's own metadata if
-it isn't already registered. A brand-new registration is backdated to the
-bundle's own `exported_at` (the source data's snapshot time) rather than
-"now" (see "Reusing a FAISS cache across machines" below for why this
-matters).
+Import embeddings from an export bundle into the primary backend. Reads raw vectors straight from the bundle's `embeddings` dataset so magnitudes are preserved exactly regardless of metric. Registers the model from the bundle's own metadata if it isn't already registered. A brand-new registration is backdated to the bundle's own `exported_at` (the source data's snapshot time) rather than "now" (see "Reusing a FAISS cache across machines" below for why this matters).
 
 ```bash
 omop-emb maintenance import --bundle-file <FILE.h5> [OPTIONS]
@@ -419,28 +323,15 @@ omop-emb maintenance import --bundle-file <FILE.h5> [OPTIONS]
 
 ### Reusing a FAISS cache across machines
 
-A FAISS cache built on one machine can be shipped alongside its export
-bundle and reused directly on another, without rebuilding it. The
-build order matters: run `export` *then* `build-faiss-cache` from the same
-backend, so the cache's `exported_at` is later than the bundle's. Ship both
-the `.h5` bundle and the FAISS cache directory together. On the target
-machine:
+A FAISS cache built on one machine can be shipped alongside its export bundle and reused directly on another, without rebuilding it. The build order matters: run `export` *then* `build-faiss-cache` from the same backend, so the cache's `exported_at` is later than the bundle's. Ship both the `.h5` bundle and the FAISS cache directory together. On the target machine:
 
 ```bash
 omop-emb maintenance import --bundle-file model.h5
 ```
 
-Point `faiss_cache_dir` (or `--cache-dir`) at the copied cache directory —
-`check-faiss-cache` now reports it as fresh, since the freshly-registered
-model is backdated to the bundle's `exported_at`, which the shipped cache's
-own `exported_at` is newer than.
+Point `faiss_cache_dir` (or `--cache-dir`) at the copied cache directory: `check-faiss-cache` now reports it as fresh, since the freshly-registered model is backdated to the bundle's `exported_at`, which the shipped cache's own `exported_at` is newer than.
 
-**Caveat**: passing `--rebuild-index` (or running `rebuild-index` at any
-point afterward) bumps the registry's `updated_at` back to "now" and
-invalidates any cache shipped this way. Run `build-faiss-cache` again in
-that case. This only matters when the bundle's `index_config` is HNSW
-(registration always starts as FLAT); for FLAT bundles, skip
-`--rebuild-index` and the shipped cache stays valid.
+**Caveat**: passing `--rebuild-index` (or running `rebuild-index` at any point afterward) bumps the registry's `updated_at` back to "now" and invalidates any cache shipped this way. Run `build-faiss-cache` again in that case. This only matters when the bundle's `index_config` is HNSW (registration always starts as FLAT); for FLAT bundles, skip `--rebuild-index` and the shipped cache stays valid.
 
 ---
 
@@ -453,38 +344,6 @@ Verify backend connectivity and list registered models with embedding counts.
 ```bash
 omop-emb diagnostics health-check [--verbose]
 ```
-
----
-
-## `legacy` group
-
-### `import-legacy-faiss-cache`
-
-**Deprecated** migration path for FAISS caches built by an old version of
-`export-faiss-cache`, before the bundle format existed. Reconstructs vectors
-directly from the `.faiss` file. For `metric=cosine` caches, the
-reconstructed vectors are L2-normalized. As a result, they are **not** the original raw
-embeddings, and that magnitude cannot be recovered. New exports should use
-`maintenance export` / `maintenance import`, which round-trip losslessly via
-a bundle. Requires `pip install "omop-emb[faiss-cpu]"`.
-
-```bash
-omop-emb legacy import-legacy-faiss-cache --model <NAME> --cache-dir <DIR> --provider-type <TYPE> [OPTIONS]
-```
-
-| Option | Short | Default | Description |
-|---|---|---|---|
-| `--model` | `-m` | **required** | Canonical model name the FAISS cache was built for. |
-| `--cache-dir` | | **required** | Root cache directory containing the FAISS index files. |
-| `--provider-type` | | **required** | Embedding provider. Used to register the model if not already present. |
-| `--force` | | `False` | Overwrite existing embeddings without prompting. |
-
-**Index Options**
-
-| Option | Default | Description |
-|---|---|---|
-| `--metric-type` | `cosine` | Metric of the cache to import from. |
-| `--index-type` | `flat` | Index type to import from (`flat` or `hnsw`). |
 
 | Option | Short | Description |
 |---|---|---|

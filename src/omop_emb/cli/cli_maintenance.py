@@ -4,15 +4,17 @@ import logging
 from typing import Annotated, Optional
 
 import typer
-from omop_emb.backends import resolve_backend
+from oa_configurator import Resolver
+from omop_llm.providers import canonical_model_name
+
+from omop_emb.backends import resolve_backend_from_resolved_vector_store
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.config import (
     IndexType,
     MetricType,
-    ProviderType,
+    OmopEmbConfig,
 )
-from omop_emb.embeddings.embedding_providers import get_provider_from_provider_type
-from omop_emb.interface import list_registered_models
+from omop_emb.interface import EmbeddingReaderInterface
 from omop_emb.storage import embedding_bundle
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,7 @@ app = typer.Typer(help="Maintenance and management commands for omop-emb.")
 @app.command(name="list-models", help="List all registered embedding models.")
 def list_models(
     provider_type: Annotated[
-        Optional[ProviderType],
+        Optional[str],
         typer.Option(
             "--provider-type",
             help="Filter by embedding provider.",
@@ -38,8 +40,10 @@ def list_models(
     ] = None,
 ):
 
-    backend = resolve_backend()
-    records = list_registered_models(
+    cfg = OmopEmbConfig.get_config()
+    resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    backend = resolve_backend_from_resolved_vector_store(resolved)
+    records = EmbeddingReaderInterface.list_registered_models(
         backend=backend,
         provider_type=provider_type,
         model_name=model,
@@ -56,7 +60,7 @@ def list_models(
     for r in records:
         index_str = r.index_type.value if r.index_type else "none"
         metric_str = r.metric_type.value if r.metric_type else "any"
-        provider_str = r.provider_type.value if r.provider_type else "-"
+        provider_str = r.provider_type if r.provider_type else "-"
         typer.echo(
             f"{r.model_name:<40} {provider_str:<10} {metric_str:<8} "
             f"{index_str:<6} {r.dimensions:<6} {r.storage_identifier}"
@@ -76,7 +80,7 @@ def rebuild_index(
         ),
     ],
     provider_type: Annotated[
-        Optional[ProviderType],
+        Optional[str],
         typer.Option(
             "--provider-type",
             help="Embedding provider type. Required to determine canonical model name.",
@@ -125,10 +129,11 @@ def rebuild_index(
 ):
 
     if provider_type is not None:
-        embedding_provider = get_provider_from_provider_type(provider_type)
-        model = embedding_provider.canonical_model_name(model)
+        model = canonical_model_name(provider_type, model)
 
-    backend = resolve_backend()
+    cfg = OmopEmbConfig.get_config()
+    resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    backend = resolve_backend_from_resolved_vector_store(resolved)
 
     record = backend.get_registered_model(model_name=model)
     if record is None:
@@ -170,7 +175,7 @@ def delete_model(
         ),
     ],
     provider_type: Annotated[
-        Optional[ProviderType],
+        Optional[str],
         typer.Option(
             "--provider-type",
             help="Embedding provider type. Used to check canonical model_name if provided.",
@@ -187,8 +192,7 @@ def delete_model(
 ):
 
     if provider_type is not None:
-        embedding_provider = get_provider_from_provider_type(provider_type)
-        model = embedding_provider.canonical_model_name(model)
+        model = canonical_model_name(provider_type, model)
 
     if not confirm:
         typer.confirm(
@@ -196,7 +200,9 @@ def delete_model(
             abort=True,
         )
 
-    backend = resolve_backend()
+    cfg = OmopEmbConfig.get_config()
+    resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    backend = resolve_backend_from_resolved_vector_store(resolved)
     record = backend.get_registered_model(model_name=model)
     if record is None:
         typer.echo(
@@ -234,7 +240,7 @@ def export_bundle_cmd(
         ),
     ],
     provider_type: Annotated[
-        Optional[ProviderType],
+        Optional[str],
         typer.Option(
             "--provider-type",
             help="Embedding provider type. Used to canonicalize the model name if provided.",
@@ -251,10 +257,11 @@ def export_bundle_cmd(
 ):
 
     if provider_type is not None:
-        embedding_provider = get_provider_from_provider_type(provider_type)
-        model = embedding_provider.canonical_model_name(model)
+        model = canonical_model_name(provider_type, model)
 
-    backend = resolve_backend()
+    cfg = OmopEmbConfig.get_config()
+    resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    backend = resolve_backend_from_resolved_vector_store(resolved)
 
     meta, h5_path = embedding_bundle.export_bundle(
         backend=backend,
@@ -289,7 +296,7 @@ def build_faiss_cache(
         ),
     ],
     provider_type: Annotated[
-        Optional[ProviderType],
+        Optional[str],
         typer.Option(
             "--provider-type",
             help="Embedding provider type. Used to canonicalize the model name if provided.",
@@ -336,10 +343,11 @@ def build_faiss_cache(
         raise typer.Exit(1)
 
     if provider_type is not None:
-        embedding_provider = get_provider_from_provider_type(provider_type)
-        model = embedding_provider.canonical_model_name(model)
+        model = canonical_model_name(provider_type, model)
 
-    backend = resolve_backend()
+    cfg = OmopEmbConfig.get_config()
+    resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    backend = resolve_backend_from_resolved_vector_store(resolved)
 
     index_config = index_config_from_index_type(
         index_type,
@@ -395,7 +403,7 @@ def check_faiss_cache(
         ),
     ] = IndexType.FLAT,
     provider_type: Annotated[
-        Optional[ProviderType],
+        Optional[str],
         typer.Option(
             "--provider-type",
             help="Embedding provider type. Used to canonicalize the model name if provided.",
@@ -404,10 +412,11 @@ def check_faiss_cache(
 ):
 
     if provider_type is not None:
-        embedding_provider = get_provider_from_provider_type(provider_type)
-        model = embedding_provider.canonical_model_name(model)
+        model = canonical_model_name(provider_type, model)
 
-    backend = resolve_backend()
+    cfg = OmopEmbConfig.get_config()
+    resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    backend = resolve_backend_from_resolved_vector_store(resolved)
     record = backend.get_registered_model(model_name=model)
     if record is None:
         typer.echo(
@@ -475,7 +484,9 @@ def import_bundle_cmd(
     ] = False,
 ):
 
-    backend = resolve_backend()
+    cfg = OmopEmbConfig.get_config()
+    resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    backend = resolve_backend_from_resolved_vector_store(resolved)
     try:
         imported = embedding_bundle.import_bundle(
             backend=backend,

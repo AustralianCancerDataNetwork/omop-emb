@@ -18,9 +18,9 @@ uv run ruff check .
    | `feature` | New functionality, backward-compatible |
    | `fix` | Bug fix |
    | `dependencies` | Dependency version update |
-   | `chore` | CI changes, refactoring, test additions, docs — anything that does not affect the public-facing package. Bypasses the label gate; excluded from the changelog and does not bump the version. |
+   | `chore` | CI changes, refactoring, test additions, docs: anything that does not affect the public-facing package. Bypasses the label gate; excluded from the changelog and does not bump the version. |
 
-2. When merging (squash), write a clear extended description in the merge dialog. That text — not the PR's opening description — becomes the changelog entry for this change. Leave it blank for `chore` PRs.
+2. When merging (squash), write a clear extended description in the merge dialog. That text, not the PR's opening description, becomes the changelog entry for this change. Leave it blank for `chore` PRs.
 
 ## Versioning and releases
 

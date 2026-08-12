@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 
 pytest.importorskip(
-    "pgvector", reason="omop-emb[pgvector] not installed — skipping pgvector tests"
+    "pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests"
 )
 
 from omop_emb.config import IndexType, MetricType, VectorColumnType
@@ -21,7 +21,6 @@ from omop_emb.backends.pgvector.pg_index_manager import (
     PGVectorFlatIndexManager,
     PGVectorHNSWIndexManager,
 )
-from omop_emb.config import OmopEmbConfig
 from omop_emb.utils.embedding_utils import vector_column_type_for_dimensions
 
 
@@ -61,7 +60,7 @@ def hnsw_manager(pg_engine, hnsw_table) -> PGVectorHNSWIndexManager:
 
 
 # ---------------------------------------------------------------------------
-# PGVectorFlatIndexManager — unit tests (no DB)
+# PGVectorFlatIndexManager: unit tests (no DB)
 # ---------------------------------------------------------------------------
 
 
@@ -125,7 +124,7 @@ class TestPGVectorFlatIndexManagerUnit:
 
 
 # ---------------------------------------------------------------------------
-# PGVectorHNSWIndexManager — DDL generation (pure unit, no DB)
+# PGVectorHNSWIndexManager: DDL generation (pure unit, no DB)
 # ---------------------------------------------------------------------------
 
 
@@ -212,7 +211,7 @@ class TestPGVectorHNSWIndexManagerDDL:
 
 
 # ---------------------------------------------------------------------------
-# Metric support guards — unit tests (no DB)
+# Metric support guards: unit tests (no DB)
 # ---------------------------------------------------------------------------
 
 
@@ -249,11 +248,11 @@ class TestMetricSupportGuards:
 
 
 # ---------------------------------------------------------------------------
-# PGVectorHNSWIndexManager — integration tests (need DB)
+# PGVectorHNSWIndexManager: integration tests (need DB)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.requires_resource(OmopEmbConfig.TEST_DB)
+@pytest.mark.requires_database("test_emb_db")
 @pytest.mark.pgvector
 @pytest.mark.integration
 class TestPGVectorHNSWIndexManagerIntegration:

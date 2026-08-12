@@ -1,23 +1,13 @@
 """Validation tests for EmbeddingInterface input contracts and naming guarantees."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
+from oa_configurator.resolver import ResolvedModel, ResolvedProvider
 
-from omop_emb.config import MetricType, ProviderType
-from omop_emb.embeddings import OllamaProvider
+from omop_emb.config import MetricType
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.model_registry.model_registry_manager import RegistryManager
-
-
-def _make_mock_client(model_name: str = "test-model:v1") -> Mock:
-    mock_client = Mock()
-    mock_client.canonical_model_name = model_name
-    mock_client.embedding_dim = 1
-    mock_client.provider = Mock()
-    mock_client.provider.canonical_model_name.side_effect = lambda name: name
-    mock_client.provider.provider_type = ProviderType.OLLAMA
-    return mock_client
 
 
 def _make_mock_backend() -> Mock:
@@ -35,16 +25,39 @@ class TestCanonicalModelName:
         from omop_emb.interface import EmbeddingWriterInterface
 
         backend = _make_mock_backend()
-        interface = EmbeddingWriterInterface(
-            backend=backend,
-            metric_type=MetricType.L2,
-            embedding_client=_make_mock_client("pseudo-model:v1"),
-        )
+
+        with patch("omop_emb.interface.build_model_backend_from_resolved") as mock_build_model_backend:
+            model_backend = Mock()
+            model_backend.model = "pseudo-model:v1"
+            model_backend.provider = "ollama"
+            model_backend.dimensions.return_value = 1
+            mock_build_model_backend.return_value = model_backend
+
+            resolved = ResolvedModel(
+                name="test-model",
+                provider=ResolvedProvider(
+                    name="test-provider", provider="ollama", base_url="http://localhost:11434", api_key=None
+                ),
+                model="pseudo-model",
+                embedding_dim=None,
+                document_prefix=None,
+                query_prefix=None,
+                embeddings=True,
+                tool_use=False,
+                structured_output=False,
+                extended_thinking=False,
+                configuration={},
+            )
+            interface = EmbeddingWriterInterface(
+                backend=backend,
+                metric_type=MetricType.L2,
+                resolved_model=resolved,
+            )
 
         backend.register_model = Mock(
             return_value=Mock(
                 model_name="pseudo-model:v1",
-                provider_type=ProviderType.OLLAMA,
+                provider_type="ollama",
                 storage_identifier="pgvector_pseudo_model_v1",
             )
         )
@@ -53,19 +66,7 @@ class TestCanonicalModelName:
 
         call_kwargs = backend.register_model.call_args.kwargs
         assert call_kwargs["model_name"] == "pseudo-model:v1"
-        assert call_kwargs["provider_type"] == ProviderType.OLLAMA
-
-    def test_ollama_provider_rejects_untagged_name(self):
-        provider = OllamaProvider()
-        with pytest.raises(ValueError, match="must include an explicit tag"):
-            provider.canonical_model_name("pseudo-model")
-
-    def test_explicit_tag_is_not_modified(self):
-        provider = OllamaProvider()
-        assert (
-            provider.canonical_model_name("nomic-embed-text:v1.5")
-            == "nomic-embed-text:v1.5"
-        )
+        assert call_kwargs["provider_type"] == "ollama"
 
     def test_storage_name_reflects_tag(self):
         safe = RegistryManager.safe_model_name("pseudo-model:v1")

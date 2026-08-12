@@ -225,10 +225,7 @@ class FAISSCache:
 
         ``build_from_backend()`` no longer writes this file. Concept-filter
         predicates are now evaluated live against the backend (see
-        :meth:`EmbeddingBackend.get_concept_ids_matching_filter`). This path
-        is kept only so ``cli_legacy.py``'s ``import-legacy-faiss-cache``
-        command can still locate ``metadata.npz`` on caches built before
-        this change, for migration.
+        :meth:`EmbeddingBackend.get_concept_ids_matching_filter`).
         """
         return self.model_dir / "metadata.npz"
 

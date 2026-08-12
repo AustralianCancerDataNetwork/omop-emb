@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     MetaData,
     Row,
+    Select,
     Table,
     bindparam,
     delete,
@@ -42,7 +43,7 @@ _MATCH_METRIC_MAP = {
     MetricType.COSINE: "cosine",
 }
 
-# Used by query_knn for per-query metric selection via ORDER BY.
+# Used by q_knn for per-query metric selection via ORDER BY.
 _QUERY_METRIC_FUNC = {
     MetricType.L2: "vec_distance_l2",
     MetricType.COSINE: "vec_distance_cosine",
@@ -77,7 +78,7 @@ def sqlite_vec_table_descriptor(table_name: str, metadata: MetaData) -> Table:
     -------
     Table
         Usable for ``select``/``insert``/``delete`` against the virtual
-        table. Does not issue DDL -- the ``vec0`` table must already exist.
+        table. Does not issue DDL: the ``vec0`` table must already exist.
     """
     columns = [
         Column(c.name, c.type_, primary_key=(c.name == "concept_id"))
@@ -202,55 +203,14 @@ def dml_upsert_rows(
     )
 
 
-def query_knn(
-    session: Session,
+def _build_knn_stmt(
     table: Table,
     query_vector: ndarray,
     metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
-) -> Sequence[Row]:
-    """Run a KNN query against a vec0 table using a per-query distance function.
-
-    Parameters
-    ----------
-    session : Session
-    table : Table
-    query_vector : ndarray
-        Float32 array of shape ``(D,)``.
-    metric_type : MetricType
-        Distance metric. Must be one of the keys in ``_QUERY_METRIC_FUNC``
-        (L2, COSINE, L1).
-    k : int
-        Maximum number of results to return.
-    concept_filter : EmbeddingConceptFilter, optional
-        Row-level filters applied in the WHERE clause before ranking.
-
-    Returns
-    -------
-    Sequence[Row]
-        - ``q_id`` (int), 
-        - ``concept_id`` (int), 
-        - ``domain_id`` (str),
-        - ``vocabulary_id`` (str), 
-        - ``is_standard`` (bool), 
-        - ``is_valid`` (bool),
-        - ``distance`` (float).
-        Orderer by ascending distance. Result shape is ``(≤k,)``. A row has fewer than
-        *k* entries only when fewer than *k* stored concepts exist that match
-        *concept_filter* (or exist at all).
-
-    Raises
-    ------
-    ValueError
-        If ``metric_type`` is not supported for per-query distance functions.
-
-    Notes
-    -----
-    Uses ``ORDER BY vec_distance_*(embedding, :emb) LIMIT k`` instead of the
-    vec0 MATCH syntax. For FLAT (full-scan) tables the performance is identical
-    and the metric can be chosen freely at call time.
-    """
+) -> Select:
+    """Build a single-vector KNN statement. Internal; see :func:`query_knn_batch`."""
     dist_func_name = _QUERY_METRIC_FUNC.get(metric_type)
     if dist_func_name is None:
         raise ValueError(
@@ -277,21 +237,78 @@ def query_knn(
     )
 
     if concept_filter is not None:
-        setup_concept_filter_temps(session, concept_filter, "sqlite")
         stmt = apply_concept_filter_where(stmt, table.c, concept_filter)
-        if concept_filter.limit is not None:
-            stmt = stmt.limit(concept_filter.limit)
 
-    return session.execute(stmt).all()
+    return stmt
+
+
+def query_knn_batch(
+    session: Session,
+    table: Table,
+    query_vectors: Sequence[ndarray],
+    metric_type: MetricType,
+    k: int,
+    concept_filter: Optional[EmbeddingConceptFilter] = None,
+    dialect: str = "sqlite",
+) -> list[Sequence[Row]]:
+    """Run KNN queries against a vec0 table, one per vector in *query_vectors*.
+
+    Parameters
+    ----------
+    session : Session
+    table : Table
+    query_vectors : Sequence[ndarray]
+        Each a float32 array of shape ``(D,)``.
+    metric_type : MetricType
+        Distance metric. Must be one of the keys in ``_QUERY_METRIC_FUNC``
+        (L2, COSINE, L1).
+    k : int
+        Maximum number of results to return per vector.
+    concept_filter : EmbeddingConceptFilter, optional
+        Row-level filters applied in the WHERE clause before ranking. Any
+        required temp-table setup is done once, up front, not per vector.
+    dialect : str
+
+    Returns
+    -------
+    list[Sequence[Row]]
+        One row sequence per query vector. Each row contains ``concept_id``,
+        ``distance``, ``domain_id``, ``vocabulary_id``, ``is_standard``, and
+        ``is_valid``, ordered by distance ascending.
+
+    Raises
+    ------
+    ValueError
+        If ``metric_type`` is not supported for per-query distance functions.
+
+    Notes
+    -----
+    Uses ``ORDER BY vec_distance_*(embedding, :emb) LIMIT k`` instead of the
+    vec0 MATCH syntax. For FLAT (full-scan) tables the performance is identical
+    and the metric can be chosen freely at call time. sqlite-vec has no
+    multi-vector batched form (unlike pgvector's lateral join), so each vector
+    is still its own statement -- only the filter temp-table setup is shared.
+    """
+    if concept_filter is not None:
+        setup_concept_filter_temps(session, concept_filter, dialect)
+
+    results: list[Sequence[Row]] = []
+    for query_vector in query_vectors:
+        stmt = _build_knn_stmt(table, query_vector, metric_type, k, concept_filter)
+        results.append(session.execute(stmt).all())
+    return results
 
 
 def query_concept_ids_matching_filter(
-    session: Session, table: Table, concept_filter: EmbeddingConceptFilter
+    session: Session,
+    table: Table,
+    concept_filter: EmbeddingConceptFilter,
+    dialect: str = "sqlite",
 ) -> set[int]:
     """Return every ``concept_id`` in `table` satisfying `concept_filter`.
     Used to build an exact FAISS pre-filter set, not for ranking.
     """
-    setup_concept_filter_temps(session, concept_filter, "sqlite")
+    setup_concept_filter_temps(session, concept_filter, dialect)
     stmt = apply_concept_filter_where(select(table.c.concept_id), table.c, concept_filter)
     rows = session.execute(stmt).all()
     return {int(row[0]) for row in rows}
@@ -398,29 +415,18 @@ def _blob_to_embedding(blob: bytes) -> list[float]:
     return np.frombuffer(blob, dtype=np.float32).tolist()
 
 
-def query_filter_metadata_by_ids(
+def query_concept_filter_metadata(
     session: Session,
     table: Table,
-    concept_ids: Sequence[int],
+    concept_filter: EmbeddingConceptFilter,
     dialect: str = "sqlite",
-) -> dict[int, dict]:
-    """Fetch filter metadata columns for a set of concept IDs.
+) -> Sequence[Row]:
+    """Return filter metadata columns (raw rows) for every concept ID
+    satisfying concept_filter.
 
-    Parameters
-    ----------
-    session : Session
-    table : Table
-    concept_ids : Sequence[int]
-
-    Returns
-    -------
-    dict[int, dict]
-        ``{concept_id: {"domain_id": str, "vocabulary_id": str,
-        "is_standard": bool, "is_valid": bool}}``
+    Columns: ``concept_id``, ``domain_id``, ``vocabulary_id``, ``is_standard``,
+    ``is_valid``. Row-to-domain-object conversion is the caller's job.
     """
-    if not concept_ids:
-        return {}
-    concept_filter = EmbeddingConceptFilter(concept_ids=tuple(concept_ids))
     setup_concept_filter_temps(session, concept_filter, dialect)
     stmt = apply_concept_filter_where(
         select(
@@ -433,13 +439,4 @@ def query_filter_metadata_by_ids(
         table.c,
         concept_filter,
     )
-    rows = session.execute(stmt).all()
-    return {
-        int(row[0]): {
-            "domain_id": row[1] or "",
-            "vocabulary_id": row[2] or "",
-            "is_standard": bool(row[3]),
-            "is_valid": bool(row[4]),
-        }
-        for row in rows
-    }
+    return session.execute(stmt).all()

@@ -3,9 +3,10 @@ from dataclasses import dataclass, asdict
 from typing import Optional, overload
 import logging
 
-from sqlalchemy import Select, func
+from sqlalchemy import func
 from sqlalchemy.sql.elements import ColumnElement
 
+from omop_alchemy.cdm.query import ConceptFilter as CDMConceptFilter  # noqa: F401
 from omop_emb.config import (
     MetricType,
     PGVECTOR_HALFVEC_MAX_DIMENSIONS,
@@ -20,13 +21,18 @@ logger = logging.getLogger(__name__)
 class EmbeddingConceptFilter:
     """Search constraints applied during KNN retrieval.
 
-    All fields are optional. Unset fields impose no constraint. ``limit``
-    maps directly to the ``k`` nearest neighbours returned.
+    All fields are optional. Unset fields impose no constraint. 
+    To limit the number of KNN results returned, pass `k` to 
+    `get_nearest_concepts`/`get_similar_concepts`. 
 
     Notes
     -----
     Mirrors OMOP grounding needs without importing ``omop_graph`` or its
-    search-constraint types into ``omop_emb``.
+    search-constraint types into ``omop_emb``. Field shape duplicates
+    ``omop_graph.graph.constraints.SearchConstraintConcept`` for the same
+    reason; tracked at
+    https://github.com/AustralianCancerDataNetwork/OMOP_Alchemy/issues/11,
+    remove the duplication once that's resolved.
 
     Attributes
     ----------
@@ -42,9 +48,6 @@ class EmbeddingConceptFilter:
     require_active : bool
         When ``True``, only active concepts (``invalid_reason`` not in
         ``('D', 'U')``) are returned. Default ``False``.
-    limit : int, optional
-        Maximum number of nearest neighbours to return. If not set, the
-        backend default is used.
     """
 
     concept_ids: Optional[tuple[int, ...]] = None
@@ -52,58 +55,6 @@ class EmbeddingConceptFilter:
     vocabularies: Optional[tuple[str, ...]] = None
     require_standard: bool = False
     require_active: bool = False
-    limit: Optional[int] = None
-
-    def __post_init__(self) -> None:
-        if self.limit is not None and self.limit <= 0:
-            raise ValueError(
-                f"EmbeddingConceptFilter.limit must be a positive integer, got {self.limit}."
-            )
-
-    def apply(self, query: Select, table: type) -> Select:
-        """Apply filter constraints to a CDM-backed SQLAlchemy select.
-
-        .. warning::
-            CDM use only.  This method generates ``IN (…)`` bind parameters and
-            is safe only when list fields (``concept_ids``, ``domains``,
-            ``vocabularies``) are small.  Embedding backend queries must use
-            :func:`omop_emb.backends.db_utils.setup_concept_filter_temps` with
-            subquery-based WHERE clauses instead.
-
-        Parameters
-        ----------
-        query : Select
-            Base select statement targeting the OMOP CDM ``concept`` table.
-
-        Returns
-        -------
-        Select
-            Query with all active constraints and ``limit`` applied.
-        """
-        if self.concept_ids is not None:
-            query = query.where(table.concept_id.in_(self.concept_ids))  # ty: ignore[unresolved-attribute]
-
-        if self.domains is not None:
-            query = query.where(table.domain_id.in_(self.domains))  # ty: ignore[unresolved-attribute]
-
-        if self.vocabularies is not None:
-            query = query.where(table.vocabulary_id.in_(self.vocabularies))  # ty: ignore[unresolved-attribute]
-
-        if self.require_standard:
-            if hasattr(table, "is_standard"):
-                query = query.where(table.is_standard == True)  # noqa: E712  # ty: ignore[invalid-argument-type]
-            else:
-                query = query.where(table.standard_concept.in_(["S", "C"]))  # ty: ignore[unresolved-attribute]
-
-        if self.require_active:
-            if hasattr(table, "is_valid"):
-                query = query.where(table.is_valid == True)  # noqa: E712  # ty: ignore[invalid-argument-type]
-            else:
-                query = query.where(table.invalid_reason.not_in(["D", "U"]))  # ty: ignore[unresolved-attribute]
-
-        if self.limit is not None:
-            query = query.limit(self.limit)
-        return query
 
     def is_empty(self) -> bool:
         """Return ``True`` if no constraints are set."""
@@ -113,7 +64,6 @@ class EmbeddingConceptFilter:
             and self.vocabularies is None
             and not self.require_standard
             and not self.require_active
-            and self.limit is None
         )
 
 
@@ -204,11 +154,11 @@ def get_similarity_from_distance(
     -----
     Conversion formulas:
 
-    * ``COSINE`` -- distance in ``[0, 2]``, so ``similarity = 1 - dist/2``.
-    * ``L2``     -- ``similarity = 1 / (1 + dist)``.
-    * ``L1``     -- ``similarity = 1 / (1 + dist)``.
-    * ``JACCARD`` -- ``similarity = 1 - dist``.
-    * ``HAMMING`` -- not implemented.
+    * ``COSINE``: distance in ``[0, 2]``, so ``similarity = 1 - dist/2``.
+    * ``L2``: ``similarity = 1 / (1 + dist)``.
+    * ``L1``: ``similarity = 1 / (1 + dist)``.
+    * ``JACCARD``: ``similarity = 1 - dist``.
+    * ``HAMMING``: not implemented.
     """
     if metric == MetricType.COSINE:
         similarity = 1.0 - (distance_col / 2.0)

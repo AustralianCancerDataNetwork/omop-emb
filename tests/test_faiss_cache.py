@@ -1,4 +1,4 @@
-"""Integration tests for FAISSCache — distance conversion and caching correctness.
+"""Integration tests for FAISSCache: distance conversion and caching correctness.
 
 All tests are self-contained: they build a temporary FAISS index from an
 in-memory SQLiteVec backend and assert expected similarity scores.
@@ -16,7 +16,7 @@ from omop_emb.backends.sqlitevec import (
     SQLiteVecEmbeddingBackend,
     create_sqlitevec_engine,
 )
-from omop_emb.config import MetricType, ProviderType
+from omop_emb.config import MetricType
 from omop_emb.storage import embedding_bundle
 from omop_emb.storage.faiss.faiss_cache import FAISSCache
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
@@ -28,9 +28,9 @@ pytest.importorskip("faiss", reason="faiss-cpu not installed")
 # ---------------------------------------------------------------------------
 
 _MODEL = "test-faiss-model:v1"
-_PROVIDER = ProviderType.OLLAMA
+_PROVIDER = "ollama"
 
-# 2-D unit vectors — exact cosine inner products without floating-point error.
+# 2-D unit vectors: exact cosine inner products without floating-point error.
 #   ID 1: [1, 0]   aligned with query → IP = 1  → cosine_dist = 0  → sim = 1.0
 #   ID 2: [0, 1]   orthogonal         → IP = 0  → cosine_dist = 1  → sim = 0.5
 #   ID 3: [-1, 0]  opposite           → IP = -1 → cosine_dist = 2  → sim = 0.0
@@ -47,7 +47,7 @@ _COSINE_RECORDS = [
     for i in _COSINE_IDS
 ]
 
-# 2-D L2 vectors — true distances are 0, 1, 2, 4 from the origin query.
+# 2-D L2 vectors: true distances are 0, 1, 2, 4 from the origin query.
 #   ID 1: [0, 0]  d=0  → sim = 1/(1+0) = 1.0
 #   ID 2: [1, 0]  d=1  → sim = 1/(1+1) = 0.5
 #   ID 3: [2, 0]  d=2  → sim = 1/(1+2) ≈ 0.333
@@ -305,7 +305,7 @@ class TestIndexCache:
         assert idx_a is idx_b
 
     def test_alternating_metrics_both_stay_cached(self, tmp_path):
-        """Loading a second metric must not evict the first -- both should be
+        """Loading a second metric must not evict the first: both should be
         cache hits on subsequent loads, since each (metric, index_config) key
         gets its own slot rather than sharing one single-entry cache."""
         backend = _make_svec_backend(_COSINE_DIM)
@@ -324,7 +324,7 @@ class TestIndexCache:
             metric_type=MetricType.COSINE,
         )
 
-        # The same raw vectors back both metrics -- build both FAISS indices
+        # The same raw vectors back both metrics: build both FAISS indices
         # straight from the backend (metric only matters to FAISS).
         cache = FAISSCache(model_name=_MODEL, cache_dir=tmp_path / "faiss_cache")
         cache.build_from_backend(

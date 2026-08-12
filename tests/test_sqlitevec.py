@@ -1,6 +1,6 @@
 """Tests for the SQLiteVec embedding backend.
 
-In-memory SQLite — no external service required.
+In-memory SQLite: no external service required.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ class TestSQLiteVecSpecific:
     def test_flat_registration_has_no_metric(
         self, svec_backend: SQLiteVecEmbeddingBackend
     ):
-        """FLAT-registered models have metric_type=None — metric is supplied at query time."""
+        """FLAT-registered models have metric_type=None: metric is supplied at query time."""
         record = svec_backend.register_model(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
@@ -113,7 +113,7 @@ class TestSQLiteVecSpecific:
             assert 0.0 <= match.similarity <= 1.0
 
     def test_one_table_per_model(self, svec_backend: SQLiteVecEmbeddingBackend):
-        """One row and one physical table per model — metric is not part of the key."""
+        """One row and one physical table per model: metric is not part of the key."""
         r1 = svec_backend.register_model(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,

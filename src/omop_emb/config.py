@@ -3,135 +3,70 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar, Dict, Tuple
+from typing import Annotated, ClassVar, Dict, Tuple
 
 from pydantic import Field
 from sqlalchemy import Engine
-from oa_configurator import DatabaseConfig, PackageConfigBase, ResourceSpec
-
-from omop_alchemy.config import OmopAlchemyConfig
-
-
-class ProviderType(StrEnum):
-    """Embedding model provider.
-
-    Members
-    -------
-    OLLAMA
-        Self-hosted models served via the Ollama runtime.
-    OPENAI
-        OpenAI-hosted models (or any OpenAI-compatible API), authenticated via
-        an API key rather than a local, unauthenticated endpoint.
-    """
-
-    OLLAMA = "ollama"
-    OPENAI = "openai"
-
-
-def provider_type_examples() -> str:
-    """Return a human-readable list of ProviderType values for help text.
-
-    e.g. ``"'ollama' or 'openai'"`` for two values, or
-    ``"'ollama', 'openai', or 'anthropic'"`` once a third is added.
-    """
-    values = [f"'{p.value}'" for p in ProviderType]
-    if len(values) <= 2:
-        return " or ".join(values)
-    return f"{', '.join(values[:-1])}, or {values[-1]}"
+from oa_configurator import (
+    CDMDatabaseConfig,
+    GenericDatabaseConfig,
+    ModelConfig,
+    PackageConfigBase,
+    RefTo,
+    Resolver,
+    ResolvedVectorStore,
+    VectorStoreConfig,
+)
 
 
 class OmopEmbConfig(PackageConfigBase):
     """oa-configurator config class for omop-emb.
 
     omop-emb owns the embedding database and requires the CDM database
-    configured by omop-alchemy.
-    """
+    configured by omop-alchemy, shared purely by naming convention: this
+    class's ``cdm_db`` field defaults to the same name as
+    ``omop_alchemy.config.OmopAlchemyConfig.cdm_db``.
 
-    EMB_DB: ClassVar[ResourceSpec] = ResourceSpec(
-        semantic_name="emb_db",
-        display_name="Embedding Database",
-        description="pgvector database for storing OMOP concept embeddings.",
-        connection_name_hint="emb",
-        cdm_schema_default="public",
-        is_cdm_database=False,
-    )
-    TEST_DB: ClassVar[ResourceSpec] = ResourceSpec(
-        semantic_name="test_emb_db",
-        display_name="Test Embedding Database",
-        description=(
-            "Dedicated PostgreSQL/pgvector database for running omop-emb integration tests."
-        ),
-        connection_name_hint="pg_test_emb",
-        is_cdm_database=False,
-        cdm_schema_default="public",
-        connection_defaults=DatabaseConfig(
-            dialect="postgresql+psycopg",
-            host="localhost",
-            port=55432,
-            user="test",
-            password="test",
-            database_name="test_omop_emb",
-        ),
-    )
+    Notes
+    -----
+    By design, this config is for internal use only and must not be
+    imported or resolved by any other package.
+    """
 
     tool_name: ClassVar[str] = "omop_emb"
     extra_logging_namespaces: ClassVar[tuple[str, ...]] = ("orm_loader", "omop_alchemy")
-    required_resources: ClassVar[tuple[str, ...]] = (
-        OmopAlchemyConfig.CDM_DB.semantic_name,
-    )
-    owned_resources: ClassVar[tuple[ResourceSpec, ...]] = (EMB_DB,)
-    test_resources: ClassVar[tuple[ResourceSpec, ...]] = (TEST_DB,)
 
-    backend: str = Field(
-        default="pgvector",
-        description="Embedding storage backend: 'pgvector' or 'sqlitevec'.",
+    cdm_db: Annotated[str, RefTo(CDMDatabaseConfig)] = "cdm_db"
+    test_emb_db: Annotated[str | None, RefTo(GenericDatabaseConfig, is_test=True)] = None
+    embedding_model_name: Annotated[str, RefTo(ModelConfig)] = Field(
+        default="embedding-model",
+        description=(
+            "Name of a [models.*] entry (see 'omop-config models add') to use for "
+            "generating concept embeddings."
+        ),
     )
-    sqlite_path: str | None = Field(
-        default=None,
-        description="Path to the SQLite database file (sqlitevec backend only).",
-    )
-    document_embedding_prefix: str = Field(
-        default="",
-        description="Text prefix prepended to documents before embedding.",
-    )
-    query_embedding_prefix: str = Field(
-        default="",
-        description="Text prefix prepended to queries before embedding.",
-    )
-    faiss_cache_dir: str | None = Field(
-        default=None,
-        description="Default directory for FAISS index files.",
-    )
-    embedding_dim: int | None = Field(
-        default=None,
-        description="Embedding dimensionality hint (rarely needed; usually auto-discovered from the model API).",
-    )
-    api_base: str = Field(
-        default="http://ollama:11434/v1",
-        description="Base URL for the embedding API (OpenAI-compatible).",
-    )
-    api_key: str = Field(
-        default="ollama",
-        description="API key for the model provider ('ollama' for local Ollama).",
-    )
-    provider_type: ProviderType = Field(
-        default=ProviderType.OLLAMA,
-        description=f"Embedding provider type (e.g. {provider_type_examples()}).",
-    )
-    embedding_model: str = Field(
-        default="qwen3-embedding:0.6b",
-        description="Model name for generating concept embeddings.",
+    vector_store_name: Annotated[str, RefTo(VectorStoreConfig)] = Field(
+        default="vector_store",
+        description=(
+            "Name of a [vector_stores.*] entry (see 'omop-config vector-stores add') "
+            "describing which storage backend to use for concept embeddings."
+        ),
     )
 
 
 def resolve_omop_cdm_engine() -> Engine:
     """Resolve CDM engine via oa-configurator, used read-only."""
-    return OmopEmbConfig.get_engine(OmopAlchemyConfig.CDM_DB.semantic_name)
+    return OmopEmbConfig.get_engine(OmopEmbConfig.get_config().cdm_db)
 
 
-def resolve_omop_emb_engine() -> Engine:
-    """Resolve embedding database engine via oa-configurator."""
-    return OmopEmbConfig.get_engine(OmopEmbConfig.EMB_DB.semantic_name)
+def resolve_omop_vector_store() -> ResolvedVectorStore:
+    """Resolve OmopEmbConfig's own configured vector store via oa-configurator.
+
+    Callers that also need an ``EmbeddingBackend`` pass the result to
+    ``omop_emb.backends.resolve_backend_from_resolved``.
+    """
+    cfg = OmopEmbConfig.get_config()
+    return Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
 
 
 class BackendType(StrEnum):

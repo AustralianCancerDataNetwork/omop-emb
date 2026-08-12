@@ -1,47 +1,49 @@
 # Asymmetric Embeddings { data-toc-label="Asymmetric Embeddings" }
 
-## What are asymmetric embedding models?
+Asymmetric embedding models (nomic-embed-text, the E5 family, BGE, and others) need a different text prefix depending on whether the text is being indexed or searched. `EmbeddingRole`, prefix application, and prefix configuration are all owned by `omop_llm`/`oa-configurator`, not `omop-emb` — see:
 
-Most general-purpose models (e.g. `text-embedding-3-small`) produce vectors in a symmetric space: the same transformation is applied whether you are indexing a document or submitting a search query.
+- [omop-llm: Asymmetric Embeddings](https://AustralianCancerDataNetwork.github.io/omop-llm/usage/asymmetric-embeddings/) for what asymmetric models are, why prefixing matters, and how `EmbeddingRole`/prefix application work.
+- [oa-configurator: `[models.<name>]`](https://AustralianCancerDataNetwork.github.io/OA_Configurator/config-reference/#modelsname) for the `document_prefix`/`query_prefix` config schema and `omop-config models add`/`list`.
 
-**Asymmetric models** — such as [nomic-embed-text](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5), [E5](https://huggingface.co/intfloat/e5-large-v2), and [BGE](https://huggingface.co/BAAI/bge-large-en-v1.5) — are trained with *task-specific prefixes* prepended to the input. The model's training objective explicitly separates the representation space for documents being indexed from the space for queries being searched. Sending text without the correct prefix does not raise an error, but similarity scores degrade substantially and silently.
+`omop-emb` re-exports `EmbeddingRole` for convenience (`from omop_emb import EmbeddingRole` is equivalent to `from omop_llm import EmbeddingRole`) and only forwards `role=` through to `omop_llm.ModelBackend.embed_texts`, which applies the prefix internally — `omop-emb` never sees the raw prefix strings itself. `omop-emb`'s own config (`OmopEmbConfig.embedding_model_name`) only names *which* `[models.*]` entry to use.
 
-## Why it matters for OMOP concept search
+## Configuring the model `omop-emb` uses
 
-In `omop-emb` there are two distinct embedding roles:
+Two steps, via `oa-configurator`'s CLI (see its [Quickstart](https://AustralianCancerDataNetwork.github.io/OA_Configurator/quickstart/#3-configure-an-llmembedding-model-optional) for the full walkthrough):
+
+```bash
+omop-config providers add local-ollama --provider ollama --base-url http://localhost:11434
+omop-config models add nomic-embed \
+    --provider local-ollama \
+    --model nomic-embed-text:v1.5 \
+    --embedding-dim 768 \
+    --document-prefix "search_document: " \
+    --query-prefix "search_query: "
+```
+
+Then point `omop-emb` at it, either via `omop-config configure omop_emb` (prompts for `embedding_model_name` among its other settings) or by hand-editing `[tools.omop_emb]`:
+
+```toml
+[tools.omop_emb]
+embedding_model_name = "nomic-embed"
+```
+
+`EmbeddingWriterInterface`/`cli_embeddings.py` resolve this name via `oa_configurator.Resolver.resolve_model(...)` at construction time — nothing about the provider, connection, dimension, or prefixes needs to be repeated in `omop-emb`'s own config.
+
+## The two roles, in OMOP terms
 
 | Role | Example texts | Purpose |
 |------|--------------|---------|
 | **Document** | `"Hypertension"`, `"Type 2 diabetes mellitus"` | Concepts stored in the vector index |
 | **Query** | `"high blood pressure"`, `"T2DM"` | Free-text search terms at query time |
 
-For a symmetric model these are interchangeable. For an asymmetric model the document prefix must be applied to every concept at index time, and the query prefix to every search term at query time. Mixing the two reduces retrieval quality without any visible error.
-
-## Configuration
-
-`omop-emb` reads two environment variables when `EmbeddingClient` is constructed:
-
-| Variable | Role | Example value |
-|---|---|---|
-| `OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX` | Prepended to all **document** texts before indexing | `search_document: ` |
-| `OMOP_EMB_QUERY_EMBEDDING_PREFIX` | Prepended to all **query** texts before searching | `search_query: ` |
-
-Both default to `""`. When either is empty, `omop-emb` logs a warning at startup explaining what the variable is for. This is not an error — it is correct behaviour for symmetric models.
-
-!!! tip "Prefix examples by model family"
-    | Model | Document prefix | Query prefix |
-    |---|---|---|
-    | `nomic-embed-text:v1.5` | `search_document: ` | `search_query: ` |
-    | `e5-large-v2` | `passage: ` | `query: ` |
-    | `bge-large-en-v1.5` | *(none)* | `Represent this sentence for searching relevant passages: ` |
-
-    Always check the model card — task prefixes are model-specific and can change between versions.
+For a symmetric model these are interchangeable. For an asymmetric model, mixing the two reduces retrieval quality without any visible error — the document prefix must be applied to every concept at index time, and the query prefix to every search term at query time.
 
 ## Role assignment in the API
 
 The two high-level methods handle roles automatically. You only need to think about roles when calling `embed_texts` directly.
 
-### Indexing concepts — `DOCUMENT` is automatic
+### Indexing concepts: `DOCUMENT` is automatic
 
 `embed_and_upsert_concepts` always uses `EmbeddingRole.DOCUMENT`:
 
@@ -53,7 +55,7 @@ interface.embed_and_upsert_concepts(
 )
 ```
 
-### Querying — `QUERY` is automatic
+### Querying: `QUERY` is automatic
 
 `get_nearest_concepts_from_query_texts` always uses `EmbeddingRole.QUERY`:
 
@@ -65,45 +67,32 @@ results = interface.get_nearest_concepts_from_query_texts(
 )
 ```
 
-### Direct embedding generation — caller chooses the role
+### Direct embedding generation: caller chooses the role
 
 When you call `embed_texts` directly you must pass the role explicitly:
 
 ```python
-from omop_emb.embeddings import EmbeddingRole
+from omop_emb import EmbeddingRole
 
-# Indexing — use DOCUMENT
+# Indexing: use DOCUMENT
 doc_embeddings = interface.embed_texts(
     ["Hypertension", "Diabetes"],
-    embedding_role=EmbeddingRole.DOCUMENT,
+    role=EmbeddingRole.DOCUMENT,
 )
 
-# Searching — use QUERY
+# Searching: use QUERY
 query_embeddings = interface.embed_texts(
     ["high blood pressure"],
-    embedding_role=EmbeddingRole.QUERY,
+    role=EmbeddingRole.QUERY,
 )
 ```
 
-Similarly, `EmbeddingClient.embeddings()` and `EmbeddingClient.similarity()` require explicit roles:
+The same applies to `EmbeddingReaderInterface.generate_embeddings()`, the lower-level entry point used when you hold an `omop_llm.ModelBackend` directly without a full writer interface (e.g. on-the-fly query embedding):
 
 ```python
-# embeddings()
-vecs = client.embeddings(texts, embedding_role=EmbeddingRole.DOCUMENT)
+from omop_emb import EmbeddingReaderInterface
 
-# similarity() — terms_role for the first argument, terms_to_match_role for the second
-scores = client.similarity(
-    "high blood pressure",
-    "Hypertension",
-    terms_role=EmbeddingRole.QUERY,
-    terms_to_match_role=EmbeddingRole.DOCUMENT,
+vecs = EmbeddingReaderInterface.generate_embeddings(
+    model_backend, texts, role=EmbeddingRole.DOCUMENT
 )
-```
-
-### Inspecting active prefixes
-
-```python
-print(client.embedding_role_prefixes())
-# {<EmbeddingRole.DOCUMENT: 'document'>: 'search_document: ',
-#  <EmbeddingRole.QUERY: 'query'>: 'search_query: '}
 ```

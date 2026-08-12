@@ -6,19 +6,18 @@ import logging
 from datetime import datetime
 from typing import Any, Callable, Generic, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 from numpy import ndarray
+from oa_configurator import ResolvedDatabase, ResolvedVectorStore
 from sqlalchemy import Engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from omop_emb.config import (
     BackendType,
     MetricType,
-    ProviderType,
     IndexType,
     get_supported_index_types_for_backend,
     is_supported_index_metric_combination_for_backend,
     is_index_type_supported_for_backend,
-    OmopEmbConfig,
-    resolve_omop_emb_engine,
 )
 
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
@@ -153,6 +152,9 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         Backend type identifier (e.g. ``BackendType.PGVECTOR``).
     backend_name : str
         String value of ``backend_type`` (e.g. ``"pgvector"``).
+    dialect : str
+        SQL dialect this backend requires (e.g. ``"postgresql"``, ``"sqlite"``).
+        Matched against ``emb_engine.dialect.name`` at construction time.
     emb_engine : Engine
         SQLAlchemy engine for the embedding store. Obtained through the registry manager.
     emb_session_factory : sessionmaker
@@ -167,6 +169,12 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     DEFAULT_K_NEAREST = 10
 
     def __init__(self, emb_engine: Engine) -> None:
+        actual_dialect = emb_engine.dialect.name
+        if actual_dialect != self.dialect:
+            raise ValueError(
+                f"{type(self).__name__} requires a '{self.dialect}'-dialect engine, "
+                f"got '{actual_dialect}'."
+            )
         super().__init__()
         self._registry = RegistryManager(emb_engine)
         self._table_cache: dict[str, TEmbeddingTable] = {}
@@ -184,6 +192,12 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     def backend_name(self) -> str:
         """String value of ``backend_type``."""
         return self.backend_type.value
+
+    @property
+    @abstractmethod
+    def dialect(self) -> str:
+        """SQL dialect this backend requires, matching ``emb_engine.dialect.name``."""
+        ...
 
     @property
     def emb_engine(self) -> Engine:
@@ -229,7 +243,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         *,
         model_name: str,
         dimensions: int,
-        provider_type: ProviderType,
+        provider_type: str,
         index_config: Optional[IndexConfig] = None,
         metadata: Optional[Mapping[str, object]] = None,
         registered_at: Optional[datetime] = None,
@@ -242,8 +256,8 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             Canonical model name including tag.
         dimensions : int
             Embedding vector dimensionality.
-        provider_type : ProviderType
-            Provider that serves the model.
+        provider_type : str
+            omop-llm provider key that serves the model.
         index_config : IndexConfig, optional
             Index configuration. Defaults to ``FlatIndexConfig()`` when not
             provided.
@@ -291,7 +305,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         # Disable for now as we prevent non-FLAT index registration
         # self._rebuild_index_impl(model_record=record, index_config=index_config)
         logger.info(
-            f"Registered model '{model_name}' (provider='{provider_type.value}') in backend '{self.backend_type.value}'."
+            f"Registered model '{model_name}' (provider='{provider_type}') in backend '{self.backend_type.value}'."
         )
         return record
 
@@ -429,7 +443,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         self,
         *,
         model_name: Optional[str] = None,
-        provider_type: Optional[ProviderType] = None,
+        provider_type: Optional[str] = None,
     ) -> tuple[EmbeddingModelRecord, ...]:
         """Return all registry entries for this backend, with optional filters.
 
@@ -437,8 +451,8 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         ----------
         model_name : str, optional
             Canonical model name to filter by.
-        provider_type : ProviderType, optional
-            Provider that serves the model.
+        provider_type : str, optional
+            omop-llm provider key that serves the model.
 
         Returns
         -------
@@ -993,23 +1007,24 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
 
 
 def resolve_backend(
-    backend_type: Optional[Union[str, BackendType]] = None,
+    backend_type: Union[str, BackendType],
+    *,
+    database: ResolvedDatabase,
 ) -> EmbeddingBackend:
-    """Return the configured embedding backend via oa-configurator.
+    """Return the embedding backend for an already-resolved backend type.
 
-    When backend_type is omitted, reads from the active oa-configurator config.
-    Connection details are resolved via the oa-configurator Resolver:
+    A pure resolver: takes an already-resolved database and never reads
+    oa-configurator config itself. Callers that want the backend configured
+    via a ``[vector_stores.*]`` entry should call
+    ``resolve_backend_from_resolved_vector_store()`` instead, from a
+    CLI/entry-point boundary.
 
-    - ``sqlitevec``: uses sqlite_path from config (required; must be set explicitly).
-    - ``pgvector``: uses the ``emb_db`` resource from oa-configurator.
+    Every backend, including an in-memory sqlite-vec store, is backed by a
+    real database entry: the ``sqlite:///:memory:`` case is still a
+    ``database`` whose connection has ``dialect='sqlite'`` and no
+    ``database_name``, not a special, database-less path.
     """
-    cfg = OmopEmbConfig.get_config()
-    if backend_type is None:
-        backend_str = cfg.backend
-    else:
-        backend_str = (
-            backend_type if isinstance(backend_type, str) else backend_type.value
-        )
+    backend_str = backend_type if isinstance(backend_type, str) else backend_type.value
 
     try:
         resolved_backend = BackendType(backend_str.lower())
@@ -1019,25 +1034,25 @@ def resolve_backend(
             f"Supported: {[b.value for b in BackendType]}."
         )
 
+    dialect = make_url(database.connection.url).get_backend_name()
+
     if resolved_backend == BackendType.SQLITEVEC:
         from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 
-        if not cfg.sqlite_path:
+        if dialect != "sqlite":
             raise RuntimeError(
-                "sqlitevec backend requires 'sqlite_path' to be configured. "
-                "Set it via `omop-config configure omop-emb`. "
-                "To use an ephemeral in-memory store intentionally, set sqlite_path = ':memory:'."
+                f"sqlitevec backend requires a sqlite-dialect database, got dialect: {dialect!r}."
             )
-        path = cfg.sqlite_path
-        logger.info(f"Using SQLiteVec backend with database file: {path}")
-        return SQLiteVecEmbeddingBackend.from_path(path)
+        db_path = make_url(database.connection.url).database
+        assert db_path is not None, "ConnectionConfig.build_url() always sets a database segment for sqlite"
+        logger.info(f"Using SQLiteVec backend with database file: {db_path}")
+        return SQLiteVecEmbeddingBackend.from_path(db_path)
 
     if resolved_backend == BackendType.PGVECTOR:
-        engine = resolve_omop_emb_engine()
-        if engine.dialect.name != "postgresql":
+        if dialect != "postgresql":
             raise RuntimeError(
                 "The resolved URL must point to a PostgreSQL database "
-                f"(pgvector extension required), got dialect: {engine.dialect.name!r}."
+                f"(pgvector extension required), got dialect: {dialect!r}."
             )
         try:
             from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
@@ -1046,7 +1061,21 @@ def resolve_backend(
                 "pgvector backend is not installed. "
                 "Install it with: pip install omop-emb[pgvector]"
             ) from exc
-        logger.info(f"Using pgvector backend with engine: {engine.url}")
-        return PGVectorEmbeddingBackend(emb_engine=engine)
+        emb_engine = database.create_engine()
+        logger.info(f"Using pgvector backend with engine: {emb_engine.url}")
+        return PGVectorEmbeddingBackend(emb_engine=emb_engine)
 
     raise RuntimeError(f"Implementation for {resolved_backend.value} is not available.")
+
+
+def resolve_backend_from_resolved_vector_store(resolved: ResolvedVectorStore) -> EmbeddingBackend:
+    """Build an embedding backend from an oa-configurator ``ResolvedVectorStore``.
+
+    The oa-configurator integration point, mirroring
+    ``omop_llm.build_model_backend_from_resolved(resolved: ResolvedModel)``:
+    a consumer of oa-configurator takes its plain resolved output and does
+    its own construction from it. Callers inside library code should
+    receive an ``EmbeddingBackend`` as a parameter instead of calling this;
+    reserve this for a CLI/entry-point boundary.
+    """
+    return resolve_backend(resolved.backend_type, database=resolved.database)

@@ -610,6 +610,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#query-similar-concepts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query similar concepts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#combine-embeddings-jointcentroid-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Combine embeddings (joint/centroid queries)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#query-by-text" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -648,10 +670,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#embeddingclient-and-providers" class="md-nav__link">
+  <a href="#cdmconceptfilter" class="md-nav__link">
     <span class="md-ellipsis">
       
-        EmbeddingClient and providers
+        CDMConceptFilter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-backends-and-providers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model backends and providers
       
     </span>
   </a>
@@ -924,6 +957,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#query-similar-concepts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query similar concepts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#combine-embeddings-jointcentroid-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Combine embeddings (joint/centroid queries)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#query-by-text" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -962,10 +1017,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#embeddingclient-and-providers" class="md-nav__link">
+  <a href="#cdmconceptfilter" class="md-nav__link">
     <span class="md-ellipsis">
       
-        EmbeddingClient and providers
+        CDMConceptFilter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-backends-and-providers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model backends and providers
       
     </span>
   </a>
@@ -1115,17 +1181,22 @@
 <h1 id="interface-guide">Interface Guide</h1>
 <p><code>omop-emb</code> exposes two complementary Python interfaces:</p>
 <ul>
-<li><strong><code>EmbeddingWriterInterface</code></strong> — write + read. Wraps an <code>EmbeddingClient</code> for embedding generation, model registration, and upsert.</li>
-<li><strong><code>EmbeddingReaderInterface</code></strong> — read-only. No <code>EmbeddingClient</code> needed; nearest-neighbour queries and registry lookups only.</li>
+<li><strong><code>EmbeddingWriterInterface</code></strong>: write and read. Builds and owns an <code>omop_llm.ModelBackend</code> for embedding generation, model registration, and upsert.</li>
+<li><strong><code>EmbeddingReaderInterface</code></strong>: read-only. No model backend owned by the interface; nearest-neighbour queries and registry lookups only.</li>
 </ul>
-<p>Both interfaces accept a <strong>pre-constructed</strong> <code>EmbeddingBackend</code> (sqlite-vec or pgvector) and validate model names via the configured provider.</p>
+<p>Both interfaces accept a <strong>pre-constructed</strong> <code>EmbeddingBackend</code> (sqlite-vec or pgvector) and validate model names via <code>omop_llm</code>'s provider registry.</p>
 <hr />
 <h2 id="constructing-a-backend">Constructing a backend</h2>
-<p>Resolve the active backend from environment variables using <code>resolve_backend</code>:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.backends</span><span class="w"> </span><span class="kn">import</span> <span class="n">resolve_backend</span>
+<p>Resolve the vector store named in <code>[tools.omop_emb]</code> (a <code>[vector_stores.*]</code> entry) using <code>resolve_backend_from_resolved_vector_store</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">oa_configurator</span><span class="w"> </span><span class="kn">import</span> <span class="n">Resolver</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.backends</span><span class="w"> </span><span class="kn">import</span> <span class="n">resolve_backend_from_resolved_vector_store</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">OmopEmbConfig</span>
 
-<span class="n">backend</span> <span class="o">=</span> <span class="n">resolve_backend</span><span class="p">()</span>  <span class="c1"># reads OMOP_EMB_BACKEND + connection variables</span>
+<span class="n">cfg</span> <span class="o">=</span> <span class="n">OmopEmbConfig</span><span class="o">.</span><span class="n">get_config</span><span class="p">()</span>
+<span class="n">resolved</span> <span class="o">=</span> <span class="n">Resolver</span><span class="o">.</span><span class="n">from_active_config</span><span class="p">()</span><span class="o">.</span><span class="n">resolve_vector_store</span><span class="p">(</span><span class="n">cfg</span><span class="o">.</span><span class="n">vector_store_name</span><span class="p">)</span>
+<span class="n">backend</span> <span class="o">=</span> <span class="n">resolve_backend_from_resolved_vector_store</span><span class="p">(</span><span class="n">resolved</span><span class="p">)</span>
 </code></pre></div>
+<p><code>resolve_backend(backend_type, *, database)</code> is the lower-level, pure resolver underneath. It never reads config itself, so call it directly only when you already have an explicit <code>backend_type</code>/<code>database</code> (an oa-configurator <code>ResolvedDatabase</code>) in hand rather than the configured defaults.</p>
 <p>Or construct one directly:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.backends.sqlitevec</span><span class="w"> </span><span class="kn">import</span> <span class="n">SQLiteVecEmbeddingBackend</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.backends.pgvector</span><span class="w"> </span><span class="kn">import</span> <span class="n">PGVectorEmbeddingBackend</span>
@@ -1139,22 +1210,21 @@
 <hr />
 <h2 id="embeddingwriterinterface">EmbeddingWriterInterface</h2>
 <h3 id="creating-the-interface">Creating the interface</h3>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddingWriterInterface</span><span class="p">,</span> <span class="n">EmbeddingClient</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">MetricType</span><span class="p">,</span> <span class="n">ProviderType</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">oa_configurator</span><span class="w"> </span><span class="kn">import</span> <span class="n">Resolver</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddingWriterInterface</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">MetricType</span><span class="p">,</span> <span class="n">OmopEmbConfig</span>
 
-<span class="n">embedding_client</span> <span class="o">=</span> <span class="n">EmbeddingClient</span><span class="p">(</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;nomic-embed-text:v1.5&quot;</span><span class="p">,</span>
-    <span class="n">api_base</span><span class="o">=</span><span class="s2">&quot;http://localhost:11434/v1&quot;</span><span class="p">,</span>
-    <span class="n">provider_type</span><span class="o">=</span><span class="n">ProviderType</span><span class="o">.</span><span class="n">OLLAMA</span><span class="p">,</span>
-<span class="p">)</span>
+<span class="n">cfg</span> <span class="o">=</span> <span class="n">OmopEmbConfig</span><span class="o">.</span><span class="n">get_config</span><span class="p">()</span>
+<span class="n">resolved_model</span> <span class="o">=</span> <span class="n">Resolver</span><span class="o">.</span><span class="n">from_active_config</span><span class="p">()</span><span class="o">.</span><span class="n">resolve_model</span><span class="p">(</span><span class="n">cfg</span><span class="o">.</span><span class="n">embedding_model_name</span><span class="p">)</span>
 
 <span class="n">writer</span> <span class="o">=</span> <span class="n">EmbeddingWriterInterface</span><span class="p">(</span>
     <span class="n">backend</span><span class="o">=</span><span class="n">backend</span><span class="p">,</span>
     <span class="n">metric_type</span><span class="o">=</span><span class="n">MetricType</span><span class="o">.</span><span class="n">COSINE</span><span class="p">,</span>
-    <span class="n">embedding_client</span><span class="o">=</span><span class="n">embedding_client</span><span class="p">,</span>
+    <span class="n">resolved_model</span><span class="o">=</span><span class="n">resolved_model</span><span class="p">,</span>
     <span class="n">omop_cdm_engine</span><span class="o">=</span><span class="n">cdm_engine</span><span class="p">,</span>  <span class="c1"># optional; used to enrich search results</span>
 <span class="p">)</span>
 </code></pre></div>
+<p><code>resolved_model</code> is an <code>oa_configurator.ResolvedModel</code> — provider, connection details, <code>embedding_dim</code>, and <code>document_prefix</code>/<code>query_prefix</code> all live on the <code>[models.*]</code> entry it was resolved from (see <a href="../asymmetric-embeddings/">Asymmetric Embeddings</a>), not on <code>omop-emb</code>'s own config. The interface builds and owns the <code>ModelBackend</code> itself via <code>omop_llm.build_model_backend_from_resolved(resolved_model)</code>; there is no separate client object to construct first.</p>
 <h3 id="register-and-initialise">Register and initialise</h3>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.backends.index_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">FlatIndexConfig</span>
 
@@ -1162,8 +1232,7 @@
 <span class="n">writer</span><span class="o">.</span><span class="n">register_model</span><span class="p">()</span>                              <span class="c1"># uses FlatIndexConfig() by default</span>
 <span class="n">writer</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span><span class="n">index_config</span><span class="o">=</span><span class="n">FlatIndexConfig</span><span class="p">())</span>  <span class="c1"># explicit equivalent</span>
 </code></pre></div>
-<p><code>register_model</code> is idempotent — calling it when the model is already registered
-is safe and returns the existing record.</p>
+<p><code>register_model</code> is idempotent: calling it when the model is already registered is safe and returns the existing record.</p>
 <h3 id="generate-and-store-embeddings">Generate and store embeddings</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># Fetch candidate concepts from the CDM, then pass the returned rows back as</span>
 <span class="c1"># concept_meta so filter columns can be stored alongside the embeddings.</span>
@@ -1179,10 +1248,7 @@ is safe and returns the existing record.</p>
 </code></pre></div>
 <div class="admonition info">
 <p class="admonition-title">Asymmetric embedding models</p>
-<p><code>embed_and_upsert_concepts</code> always applies the <strong>document</strong> role, and
-<code>get_nearest_concepts_from_query_texts</code> always applies the <strong>query</strong> role.
-When calling <code>embed_texts</code> directly you must pass <code>embedding_role</code> explicitly.
-See <a href="../asymmetric-embeddings/">Asymmetric Embeddings</a> for task prefix configuration.</p>
+<p><code>embed_and_upsert_concepts</code> always applies the <strong>document</strong> role, and <code>get_nearest_concepts_from_query_texts</code> always applies the <strong>query</strong> role. When calling <code>embed_texts</code> directly you must pass <code>role</code> explicitly. See <a href="../asymmetric-embeddings/">Asymmetric Embeddings</a> for task prefix configuration.</p>
 </div>
 <h3 id="build-an-hnsw-index">Build an HNSW index</h3>
 <p>After all embeddings are ingested, optionally upgrade to an approximate index:</p>
@@ -1201,16 +1267,15 @@ See <a href="../asymmetric-embeddings/">Asymmetric Embeddings</a> for task prefi
 <p>This is equivalent to running <code>omop-emb maintenance rebuild-index --index-type hnsw</code> from the CLI.</p>
 <hr />
 <h2 id="embeddingreaderinterface">EmbeddingReaderInterface</h2>
-<p>Use this when you only need to query stored embeddings — no embedding generation,
-no <code>EmbeddingClient</code> required.</p>
+<p>Use this when you only need to query stored embeddings: no embedding generation, no model backend owned by the interface.</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddingReaderInterface</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">MetricType</span><span class="p">,</span> <span class="n">ProviderType</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">MetricType</span>
 
 <span class="n">reader</span> <span class="o">=</span> <span class="n">EmbeddingReaderInterface</span><span class="p">(</span>
     <span class="n">model</span><span class="o">=</span><span class="s2">&quot;nomic-embed-text:v1.5&quot;</span><span class="p">,</span>
     <span class="n">backend</span><span class="o">=</span><span class="n">backend</span><span class="p">,</span>
     <span class="n">metric_type</span><span class="o">=</span><span class="n">MetricType</span><span class="o">.</span><span class="n">COSINE</span><span class="p">,</span>
-    <span class="n">provider_name_or_type</span><span class="o">=</span><span class="n">ProviderType</span><span class="o">.</span><span class="n">OLLAMA</span><span class="p">,</span>
+    <span class="n">provider_type</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span>
     <span class="n">omop_cdm_engine</span><span class="o">=</span><span class="n">cdm_engine</span><span class="p">,</span>   <span class="c1"># optional; enriches results with concept_name</span>
 <span class="p">)</span>
 </code></pre></div>
@@ -1229,45 +1294,56 @@ no <code>EmbeddingClient</code> required.</p>
         <span class="n">require_active</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="p">),</span>
 <span class="p">)</span>
-<span class="c1"># results: tuple[tuple[NearestConceptMatch, ...], ...] — one inner tuple per query row</span>
+<span class="c1"># results: tuple[tuple[NearestConceptMatch, ...], ...], one inner tuple per query row</span>
+</code></pre></div>
+<h3 id="query-similar-concepts">Query similar concepts</h3>
+<p>Find neighbours of concepts that are already embedded, without fetching and
+passing a raw vector yourself. The query concept is excluded from its own
+result row.</p>
+<div class="highlight"><pre><span></span><code><span class="n">results</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">get_similar_concepts</span><span class="p">(</span>
+    <span class="n">concept_ids</span><span class="o">=</span><span class="p">(</span><span class="mi">201826</span><span class="p">,</span> <span class="mi">320128</span><span class="p">),</span>
+    <span class="n">k</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+    <span class="n">concept_filter</span><span class="o">=</span><span class="n">EmbeddingConceptFilter</span><span class="p">(</span><span class="n">require_standard</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="c1"># results: tuple[tuple[NearestConceptMatch, ...], ...], one row per concept_id, same order</span>
+</code></pre></div>
+<h3 id="combine-embeddings-jointcentroid-queries">Combine embeddings (joint/centroid queries)</h3>
+<p>Build a single query vector from several stored concept embeddings, e.g. to
+search for concepts similar to a <em>combination</em> of conditions, then feed it
+into <code>get_nearest_concepts</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="n">joint_vec</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">get_joint_embedding</span><span class="p">(</span>
+    <span class="n">concept_ids</span><span class="o">=</span><span class="p">(</span><span class="mi">201826</span><span class="p">,</span> <span class="mi">320128</span><span class="p">),</span>
+    <span class="n">weights</span><span class="o">=</span><span class="p">(</span><span class="mf">0.7</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">),</span>   <span class="c1"># optional; defaults to an unweighted mean</span>
+<span class="p">)</span>
+<span class="n">results</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">get_nearest_concepts</span><span class="p">(</span><span class="n">query_embedding</span><span class="o">=</span><span class="n">joint_vec</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:],</span> <span class="n">k</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="query-by-text">Query by text</h3>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddingClient</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProviderType</span>
+<p><code>get_nearest_concepts_from_query_texts</code> takes a <code>ModelBackend</code> directly: build one with <code>omop_llm.build_model_backend</code> (the reader has no default backend of its own to embed with):</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_llm</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_model_backend</span>
 
-<span class="n">embedding_client</span> <span class="o">=</span> <span class="n">EmbeddingClient</span><span class="p">(</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;nomic-embed-text:v1.5&quot;</span><span class="p">,</span>
-    <span class="n">api_base</span><span class="o">=</span><span class="s2">&quot;http://localhost:11434/v1&quot;</span><span class="p">,</span>
-    <span class="n">provider_type</span><span class="o">=</span><span class="n">ProviderType</span><span class="o">.</span><span class="n">OLLAMA</span><span class="p">,</span>
-<span class="p">)</span>
+<span class="n">model_backend</span> <span class="o">=</span> <span class="n">build_model_backend</span><span class="p">(</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span> <span class="s2">&quot;nomic-embed-text:v1.5&quot;</span><span class="p">,</span> <span class="n">base_url</span><span class="o">=</span><span class="s2">&quot;http://localhost:11434&quot;</span><span class="p">)</span>
 
 <span class="n">results</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">get_nearest_concepts_from_query_texts</span><span class="p">(</span>
     <span class="n">query_texts</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;high blood pressure&quot;</span><span class="p">,</span> <span class="s2">&quot;type 2 diabetes&quot;</span><span class="p">),</span>
-    <span class="n">embedding_client</span><span class="o">=</span><span class="n">embedding_client</span><span class="p">,</span>
+    <span class="n">model_backend</span><span class="o">=</span><span class="n">model_backend</span><span class="p">,</span>
     <span class="n">k</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
 <h3 id="faiss-fast-path">FAISS fast path</h3>
-<p>Supply <code>faiss_cache_dir</code> to route searches through a pre-built FAISS index
-instead of the primary backend SQL path.  The cache must have been built
-first with <code>omop-emb maintenance build-faiss-cache</code> (builds the FAISS index
-directly from the backend).  Requires <code>omop-emb[faiss-cpu]</code>.</p>
+<p>Supply <code>faiss_cache_dir</code> to route searches through a pre-built FAISS index instead of the primary backend SQL path. The cache must have been built first with <code>omop-emb maintenance build-faiss-cache</code> (builds the FAISS index directly from the backend). Requires <code>omop-emb[faiss-cpu]</code>.</p>
 <div class="highlight"><pre><span></span><code><span class="n">reader</span> <span class="o">=</span> <span class="n">EmbeddingReaderInterface</span><span class="p">(</span>
     <span class="n">model</span><span class="o">=</span><span class="s2">&quot;nomic-embed-text:v1.5&quot;</span><span class="p">,</span>
     <span class="n">backend</span><span class="o">=</span><span class="n">backend</span><span class="p">,</span>
     <span class="n">metric_type</span><span class="o">=</span><span class="n">MetricType</span><span class="o">.</span><span class="n">COSINE</span><span class="p">,</span>
-    <span class="n">provider_name_or_type</span><span class="o">=</span><span class="n">ProviderType</span><span class="o">.</span><span class="n">OLLAMA</span><span class="p">,</span>
+    <span class="n">provider_type</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span>
     <span class="n">faiss_cache_dir</span><span class="o">=</span><span class="s2">&quot;/data/faiss_cache&quot;</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="c1"># Searches automatically use FAISS when the cache is fresh; SQL path otherwise.</span>
 </code></pre></div>
-<p>The environment variable <code>OMOP_EMB_FAISS_CACHE_DIR</code> is checked as a fallback
-when <code>faiss_cache_dir</code> is not passed directly.</p>
+<p><code>EmbeddingReaderInterface</code> itself has no fallback for <code>faiss_cache_dir</code>; pass it explicitly, or read it off the resolved vector store yourself (<code>resolved.faiss_cache_dir</code>, see <a href="../configuration/">Configuration Reference</a>). The <code>embeddings search</code> CLI command does exactly that, falling back to the configured value when <code>--faiss-cache-dir</code> is omitted.</p>
 <hr />
 <h2 id="embeddingconceptfilter">EmbeddingConceptFilter</h2>
-<p><code>EmbeddingConceptFilter</code> is an in-database pre-filter applied during KNN search.
-All filtering happens before the nearest-neighbour step — only matching concepts
-are candidates.</p>
+<p><code>EmbeddingConceptFilter</code> is an in-database pre-filter applied during KNN search. All filtering happens before the nearest-neighbour step: only matching concepts are candidates. To limit the number of KNN results returned, pass <code>k</code> to <code>get_nearest_concepts</code>/<code>get_similar_concepts</code>.</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.utils.embedding_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddingConceptFilter</span>
 
 <span class="n">concept_filter</span> <span class="o">=</span> <span class="n">EmbeddingConceptFilter</span><span class="p">(</span>
@@ -1276,44 +1352,52 @@ are candidates.</p>
     <span class="n">concept_ids</span><span class="o">=</span><span class="p">(</span><span class="mi">313217</span><span class="p">,</span> <span class="mi">4329847</span><span class="p">),</span>          <span class="c1"># restrict to specific concept IDs</span>
     <span class="n">require_standard</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>                  <span class="c1"># standard_concept = &#39;S&#39; or &#39;C&#39;</span>
     <span class="n">require_active</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>                    <span class="c1"># invalid_reason NOT IN (&#39;D&#39;, &#39;U&#39;)</span>
-    <span class="n">limit</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>                               <span class="c1"># cap on results returned</span>
 <span class="p">)</span>
 </code></pre></div>
-<p>All fields are optional and combinable. <code>require_standard</code> and <code>require_active</code>
-are stored as columns in the embedding table and are resolved entirely inside the
-primary backend — no CDM round-trip at query time.</p>
+<p>All fields are optional and combinable. <code>require_standard</code> and <code>require_active</code> are stored as columns in the embedding table and are resolved entirely inside the primary backend, with no CDM round-trip at query time.</p>
+<h2 id="cdmconceptfilter">CDMConceptFilter</h2>
+<p><code>CDMConceptFilter</code> (<code>omop_alchemy.cdm.query.ConceptFilter</code>, re-exported from <code>omop_emb.utils.embedding_utils</code>) is the filter type for CDM-only queries. Difference to <code>EmbeddingConceptFilter</code>: it carries <code>limit</code>, which caps the number of CDM rows returned.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.utils.embedding_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">CDMConceptFilter</span>
+
+<span class="n">concept_filter</span> <span class="o">=</span> <span class="n">CDMConceptFilter</span><span class="p">(</span>
+    <span class="n">domains</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;Condition&quot;</span><span class="p">,</span> <span class="s2">&quot;Observation&quot;</span><span class="p">),</span>
+    <span class="n">vocabularies</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;SNOMED&quot;</span><span class="p">,</span> <span class="s2">&quot;ICD10CM&quot;</span><span class="p">),</span>
+    <span class="n">require_standard</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">limit</span><span class="o">=</span><span class="mi">1000</span><span class="p">,</span>   <span class="c1"># cap on CDM rows returned</span>
+<span class="p">)</span>
+
+<span class="n">n_missing</span> <span class="o">=</span> <span class="n">writer</span><span class="o">.</span><span class="n">count_concepts_without_embedding</span><span class="p">(</span>
+    <span class="n">omop_cdm_engine</span><span class="o">=</span><span class="n">cdm_engine</span><span class="p">,</span>
+    <span class="n">concept_filter</span><span class="o">=</span><span class="n">concept_filter</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
 <hr />
-<h2 id="embeddingclient-and-providers">EmbeddingClient and providers</h2>
-<p><code>EmbeddingClient</code> wraps any OpenAI-compatible endpoint. It canonicalises the
-model name at construction time and exposes <code>canonical_model_name</code> as the stable
-identifier used in the registry. Two providers are supported: <code>OllamaProvider</code>
-for self-hosted models served via Ollama, and <code>OpenAIProvider</code> for OpenAI-hosted
-models (or any OpenAI-compatible API reachable with an API key, without an
-Ollama compatibility layer in front of it).</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddingClient</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProviderType</span>
+<h2 id="model-backends-and-providers">Model backends and providers</h2>
+<p>Model calling (construction, canonicalization, dimension discovery, batched embedding calls, role-prefix application) is entirely <code>omop_llm.ModelBackend</code>'s job. <code>omop-emb</code> never talks to a provider endpoint directly; <code>EmbeddingWriterInterface</code> builds one internally via <code>omop_llm.build_model_backend_from_resolved(resolved_model)</code> (see "Creating the interface" above). Any caller that needs to embed text without a full writer interface (e.g. on-the-fly query embedding, or a quick standalone script) can build a <code>ModelBackend</code> directly with plain keyword arguments instead:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_llm</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_model_backend</span>
 
-<span class="c1"># Ollama — provider specified explicitly (works with any hostname or IP)</span>
-<span class="n">client</span> <span class="o">=</span> <span class="n">EmbeddingClient</span><span class="p">(</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;nomic-embed-text:v1.5&quot;</span><span class="p">,</span>
-    <span class="n">api_base</span><span class="o">=</span><span class="s2">&quot;http://host.docker.internal:11434/v1&quot;</span><span class="p">,</span>
-    <span class="n">provider_type</span><span class="o">=</span><span class="n">ProviderType</span><span class="o">.</span><span class="n">OLLAMA</span><span class="p">,</span>
+<span class="c1"># Ollama: provider specified explicitly (works with any hostname or IP)</span>
+<span class="n">model_backend</span> <span class="o">=</span> <span class="n">build_model_backend</span><span class="p">(</span>
+    <span class="s2">&quot;ollama&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;nomic-embed-text:v1.5&quot;</span><span class="p">,</span>
+    <span class="n">base_url</span><span class="o">=</span><span class="s2">&quot;http://host.docker.internal:11434&quot;</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="n">client</span><span class="o">.</span><span class="n">canonical_model_name</span><span class="p">)</span>  <span class="c1"># &quot;nomic-embed-text:v1.5&quot;</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">client</span><span class="o">.</span><span class="n">embedding_dim</span><span class="p">)</span>         <span class="c1"># auto-discovered via Ollama /api/show</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">model_backend</span><span class="o">.</span><span class="n">model</span><span class="p">)</span>  <span class="c1"># &quot;nomic-embed-text:v1.5&quot;</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">model_backend</span><span class="o">.</span><span class="n">dimensions</span><span class="p">())</span>  <span class="c1"># auto-discovered via Ollama /api/show</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><span class="c1"># OpenAI — hosted model, authenticated via API key</span>
-<span class="n">client</span> <span class="o">=</span> <span class="n">EmbeddingClient</span><span class="p">(</span>
-    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;text-embedding-3-large&quot;</span><span class="p">,</span>
-    <span class="n">api_base</span><span class="o">=</span><span class="s2">&quot;https://api.openai.com/v1&quot;</span><span class="p">,</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># OpenAI: hosted model, authenticated via API key</span>
+<span class="n">model_backend</span> <span class="o">=</span> <span class="n">build_model_backend</span><span class="p">(</span>
+    <span class="s2">&quot;openai&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;text-embedding-3-large&quot;</span><span class="p">,</span>
+    <span class="n">base_url</span><span class="o">=</span><span class="s2">&quot;https://api.openai.com/v1&quot;</span><span class="p">,</span>
     <span class="n">api_key</span><span class="o">=</span><span class="s2">&quot;sk-...&quot;</span><span class="p">,</span>
-    <span class="n">provider_type</span><span class="o">=</span><span class="n">ProviderType</span><span class="o">.</span><span class="n">OPENAI</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="n">client</span><span class="o">.</span><span class="n">canonical_model_name</span><span class="p">)</span>  <span class="c1"># &quot;text-embedding-3-large&quot;</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">client</span><span class="o">.</span><span class="n">embedding_dim</span><span class="p">)</span>         <span class="c1"># discovered via a live probe call (no discovery endpoint)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">model_backend</span><span class="o">.</span><span class="n">model</span><span class="p">)</span>  <span class="c1"># &quot;text-embedding-3-large&quot;</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">model_backend</span><span class="o">.</span><span class="n">dimensions</span><span class="p">())</span>  <span class="c1"># discovered via a live probe call (no discovery endpoint)</span>
 </code></pre></div>
+<p>See <code>omop_llm.providers.supported_providers()</code> for the full list of provider keys, and <code>omop-llm</code>'s own <code>docs/providers.md</code> for the capability matrix per provider.</p>
 <hr />
 <h2 id="model-name-validation">Model name validation</h2>
 <h3 id="valid-names">Valid names</h3>
@@ -1326,31 +1410,25 @@ Ollama compatibility layer in front of it).</p>
 <p><strong>OpenAI:</strong></p>
 <ul>
 <li>✅ <code>text-embedding-3-large</code></li>
-<li>Any name — no tag normalisation is required or applied</li>
+<li>Any name; no tag normalisation is required or applied</li>
 </ul>
 <h3 id="invalid-names-raise-valueerror">Invalid names (raise <code>ValueError</code>)</h3>
 <p><strong>Ollama:</strong></p>
 <ul>
-<li>❌ <code>llama3</code> — "must include an explicit tag"</li>
-<li>❌ <code>llama3:latest</code> — "uses the mutable ':latest' tag"</li>
+<li>❌ <code>llama3</code>: "must include an explicit tag"</li>
+<li>❌ <code>llama3:latest</code>: "uses the mutable ':latest' tag"</li>
 </ul>
 <div class="admonition info">
 <p class="admonition-title">Info</p>
-<p><strong>Why the strictness?</strong> In long-term healthcare data storage, <code>:latest</code> is a
-moving target. Running <code>ollama pull llama3</code> silently changes which model
-version <code>:latest</code> points to, breaking consistency between stored embeddings
-and new query embeddings. OpenAI-hosted model identifiers do not have this
-problem: a given name (e.g. <code>text-embedding-3-large</code>) refers to a fixed
-model version, so no equivalent tag requirement applies.</p>
+<p><strong>Why the strictness?</strong> In long-term healthcare data storage, <code>:latest</code> is a moving target. Running <code>ollama pull llama3</code> silently changes which model version <code>:latest</code> points to, breaking consistency between stored embeddings and new query embeddings. OpenAI-hosted model identifiers do not have this problem: a given name (e.g. <code>text-embedding-3-large</code>) refers to a fixed model version, so no equivalent tag requirement applies.</p>
 </div>
 <hr />
 <h2 id="utility-functions">Utility functions</h2>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb</span><span class="w"> </span><span class="kn">import</span> <span class="n">list_registered_models</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProviderType</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddingReaderInterface</span>
 
-<span class="n">models</span> <span class="o">=</span> <span class="n">list_registered_models</span><span class="p">(</span>
+<span class="n">models</span> <span class="o">=</span> <span class="n">EmbeddingReaderInterface</span><span class="o">.</span><span class="n">list_registered_models</span><span class="p">(</span>
     <span class="n">backend</span><span class="o">=</span><span class="n">backend</span><span class="p">,</span>
-    <span class="n">provider_type</span><span class="o">=</span><span class="n">ProviderType</span><span class="o">.</span><span class="n">OLLAMA</span><span class="p">,</span>  <span class="c1"># optional filter</span>
+    <span class="n">provider_type</span><span class="o">=</span><span class="s2">&quot;ollama&quot;</span><span class="p">,</span>  <span class="c1"># optional filter</span>
 <span class="p">)</span>
 <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">models</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="n">m</span><span class="o">.</span><span class="n">model_name</span><span class="p">,</span> <span class="n">m</span><span class="o">.</span><span class="n">provider_type</span><span class="p">,</span> <span class="n">m</span><span class="o">.</span><span class="n">dimensions</span><span class="p">,</span> <span class="n">m</span><span class="o">.</span><span class="n">index_type</span><span class="p">)</span>
@@ -1372,8 +1450,8 @@ model version, so no equivalent tag requirement applies.</p>
         │                          │
         ▼                          │
 ┌───────────────────┐              │
-│  EmbeddingClient  │              │
-│  + Provider       │              │
+│  omop_llm         │              │
+│  ModelBackend     │              │
 └───────────────────┘              │
         │                          │
         └──────────┬───────────────┘
@@ -1389,17 +1467,16 @@ model version, so no equivalent tag requirement applies.</p>
           │  (read-only)    │
           └─────────────────┘
 </code></pre></div>
-<p><code>EmbeddingWriterInterface</code> inherits from <code>EmbeddingReaderInterface</code> — all reader
-methods are available on the writer too.</p>
+<p><code>EmbeddingWriterInterface</code> inherits from <code>EmbeddingReaderInterface</code>; all reader methods are available on the writer too.</p>
 <hr />
 <h2 id="best-practices">Best practices</h2>
 <ol>
-<li><strong>Use the interfaces</strong>, not backends directly — they enforce canonical naming.</li>
+<li><strong>Use the interfaces</strong>, not backends directly: they enforce canonical naming.</li>
 <li><strong><code>EmbeddingWriterInterface</code> for write flows</strong>, <code>EmbeddingReaderInterface</code> for query-only services.</li>
-<li><strong>Use <code>embedding_client.canonical_model_name</code></strong> when constructing a matching reader — it is guaranteed to be canonical.</li>
+<li><strong>Use <code>writer.canonical_model_name</code></strong> when constructing a matching reader: it is guaranteed to be canonical.</li>
 <li><strong>Always register with <code>FlatIndexConfig</code></strong> first. Run <code>rebuild_index</code> or <code>omop-emb maintenance rebuild-index</code> after ingestion to build HNSW.</li>
-<li><strong>CDM enrichment is optional</strong> — omit <code>omop_cdm_engine</code> when <code>concept_name</code> is not needed to avoid the CDM round-trip.</li>
-<li><strong>FAISS is a read-acceleration sidecar, never the source of truth</strong> — build it directly from the backend with <code>omop-emb maintenance build-faiss-cache</code> and supply <code>faiss_cache_dir</code> to <code>EmbeddingReaderInterface</code> for faster approximate search.</li>
+<li><strong>CDM enrichment is optional</strong>: omit <code>omop_cdm_engine</code> when <code>concept_name</code> is not needed to avoid the CDM round-trip.</li>
+<li><strong>FAISS is a read-acceleration sidecar, never the source of truth</strong>: build it directly from the backend with <code>omop-emb maintenance build-faiss-cache</code> and supply <code>faiss_cache_dir</code> to <code>EmbeddingReaderInterface</code> for faster approximate search.</li>
 </ol>
 
 

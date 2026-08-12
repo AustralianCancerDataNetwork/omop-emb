@@ -331,63 +331,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#environment-variables" class="md-nav__link">
+  <a href="#configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Environment Variables
+        Configuration
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Environment Variables">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#backend-selector" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Backend selector
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#sqlite-vec-connection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        sqlite-vec connection
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pgvector-connection-individual-components" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pgvector connection (individual components)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#embedding-api-cli-concept-ingestion" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Embedding API (CLI concept ingestion)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -705,63 +655,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#environment-variables" class="md-nav__link">
+  <a href="#configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Environment Variables
+        Configuration
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Environment Variables">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#backend-selector" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Backend selector
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#sqlite-vec-connection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        sqlite-vec connection
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pgvector-connection-individual-components" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pgvector connection (individual components)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#embedding-api-cli-concept-ingestion" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Embedding API (CLI concept ingestion)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -805,15 +705,13 @@
 
 
 <h1 id="omop-embeddings">OMOP Embeddings</h1>
-<p><code>omop-emb</code> generates and retrieves vector embeddings for OMOP CDM concepts. It
-works standalone out of the box (sqlite-vec, no external database required) and
-optionally scales to PostgreSQL via the pgvector extension.</p>
+<p><code>omop-emb</code> generates and retrieves vector embeddings for OMOP CDM concepts. It works standalone out of the box (sqlite-vec, no external database required) and optionally scales to PostgreSQL via the pgvector extension.</p>
 <p>The package supports:</p>
 <ul>
-<li>dynamic embedding model registration — multiple models per backend, tracked in the embedding database</li>
+<li>dynamic embedding model registration: multiple models per backend, tracked in the embedding database</li>
 <li>embedding and lookup for OMOP concepts across configurable storage backends</li>
 <li><ins><strong>Two storage backends</strong></ins>:<ul>
-<li><strong><code>sqlite-vec</code></strong> (default): zero-config, file-based or in-memory — no external service required</li>
+<li><strong><code>sqlite-vec</code></strong> (default): zero-config, file-based or in-memory; no external service required</li>
 <li><strong><code>pgvector</code></strong>: PostgreSQL with the pgvector extension (FLAT sequential scan or HNSW SQL index)</li>
 </ul>
 </li>
@@ -827,118 +725,44 @@ pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot
 pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;omop-emb[faiss-cpu]&quot;</span><span class="w">          </span><span class="c1"># adds FAISS sidecar support</span>
 pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;omop-emb[pgvector,faiss-cpu]&quot;</span><span class="w"> </span><span class="c1"># everything</span>
 </code></pre></div>
-<h2 id="environment-variables">Environment Variables</h2>
-<h3 id="backend-selector">Backend selector</h3>
+<h2 id="configuration">Configuration</h2>
+<p><code>omop-emb</code> is configured entirely through <a href="https://AustralianCancerDataNetwork.github.io/oa-configurator/">oa-configurator</a> (<code>~/.config/omop/config.toml</code>); there are no <code>OMOP_EMB_*</code> environment variables. <code>OmopEmbConfig</code> (<code>[tools.omop_emb]</code>) has three fields:</p>
 <table>
 <thead>
 <tr>
-<th>Variable</th>
-<th>Default</th>
+<th>Field</th>
+<th>References</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>OMOP_EMB_BACKEND</code></td>
-<td><code>sqlitevec</code></td>
-<td>Backend to use: <code>sqlitevec</code> or <code>pgvector</code>.</td>
+<td><code>cdm_db</code></td>
+<td>a <code>[databases.*]</code> entry, <code>kind = "cdm"</code></td>
+<td>The OMOP CDM database, for concept enrichment during ingestion/search</td>
+</tr>
+<tr>
+<td><code>embedding_model_name</code></td>
+<td>a <code>[models.*]</code> entry</td>
+<td>Which model generates embeddings</td>
+</tr>
+<tr>
+<td><code>vector_store_name</code></td>
+<td>a <code>[vector_stores.*]</code> entry</td>
+<td>Which storage backend (sqlite-vec or pgvector) holds them</td>
 </tr>
 </tbody>
 </table>
-<h3 id="sqlite-vec-connection">sqlite-vec connection</h3>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>OMOP_EMB_SQLITE_PATH</code></td>
-<td>Path to the sqlite-vec database file. Use <code>:memory:</code> for an in-memory database.</td>
-</tr>
-</tbody>
-</table>
-<h3 id="pgvector-connection-individual-components">pgvector connection (individual components)</h3>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>OMOP_EMB_DB_HOST</code></td>
-<td>—</td>
-<td>PostgreSQL host.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_PORT</code></td>
-<td><code>5432</code></td>
-<td>PostgreSQL port.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_USER</code></td>
-<td>—</td>
-<td>PostgreSQL user.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_PASSWORD</code></td>
-<td>—</td>
-<td>PostgreSQL password.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_NAME</code></td>
-<td>—</td>
-<td>PostgreSQL database name.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_DRIVER</code></td>
-<td><code>postgresql+psycopg</code></td>
-<td>SQLAlchemy driver string. Override to use e.g. <code>psycopg2</code>.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_URL</code></td>
-<td>—</td>
-<td>Full SQLAlchemy connection URL. Overrides all individual components above when set.</td>
-</tr>
-</tbody>
-</table>
-<h3 id="embedding-api-cli-concept-ingestion">Embedding API (CLI concept ingestion)</h3>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>OMOP_CDM_DB_URL</code></td>
-<td>SQLAlchemy URL for the OMOP CDM database. Required only for concept ingestion commands.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DOCUMENT_EMBEDDING_PREFIX</code></td>
-<td>Task prefix prepended to concept texts at index time.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_QUERY_EMBEDDING_PREFIX</code></td>
-<td>Task prefix prepended to search queries at query time.</td>
-</tr>
-</tbody>
-</table>
-<p>The prefix variables are optional and default to <code>""</code>. They are only needed for
-asymmetric embedding models (e.g. nomic-embed-text, E5, BGE) that require
-different task prefixes for indexing versus querying.</p>
+<p>See <a href="getting-started/configuration/">Getting Started: Configuration</a> for the full setup walkthrough, and <a href="usage/configuration/">Configuration reference</a> for every field.</p>
+<p>Document/query embedding prefixes for asymmetric models (nomic-embed-text, E5, BGE, ...) live on the <code>[models.*]</code> entry itself (<code>document_prefix</code>/<code>query_prefix</code>), not on <code>omop-emb</code>'s own config; see <a href="usage/asymmetric-embeddings/">Asymmetric Embeddings</a>.</p>
 <h2 id="documentation-overview">Documentation overview</h2>
 <ul>
+<li><a href="getting-started/configuration/">Getting Started: Configuration</a></li>
 <li><a href="usage/installation/">Installation</a></li>
 <li><a href="usage/backend-selection/">Embedding storage backends</a></li>
 <li><a href="usage/cli/">CLI Reference</a></li>
 <li><a href="usage/asymmetric-embeddings/">Asymmetric Embeddings</a></li>
+<li><a href="usage/interface-guide/">Interface guide</a></li>
 </ul>
 
 

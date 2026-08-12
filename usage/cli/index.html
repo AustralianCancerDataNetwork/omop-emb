@@ -580,78 +580,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#environment-variables" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Environment Variables
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Environment Variables">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#backend" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Backend
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#sqlite-vec" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        sqlite-vec
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pgvector-individual-components" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pgvector (individual components)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#ingestion-cdm-access" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Ingestion (CDM access)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#faiss-sidecar" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        FAISS sidecar
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#embeddings-group" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -834,34 +762,6 @@
     <span class="md-ellipsis">
       
         health-check
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#legacy-group" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        legacy group
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="legacy group">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#import-legacy-faiss-cache" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        import-legacy-faiss-cache
       
     </span>
   </a>
@@ -927,78 +827,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#environment-variables" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Environment Variables
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Environment Variables">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#backend" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Backend
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#sqlite-vec" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        sqlite-vec
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pgvector-individual-components" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pgvector (individual components)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#ingestion-cdm-access" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Ingestion (CDM access)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#faiss-sidecar" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        FAISS sidecar
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#embeddings-group" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1181,34 +1009,6 @@
     <span class="md-ellipsis">
       
         health-check
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#legacy-group" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        legacy group
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="legacy group">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#import-legacy-faiss-cache" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        import-legacy-faiss-cache
       
     </span>
   </a>
@@ -1289,10 +1089,8 @@
 
 
 <h1 id="cli-reference">CLI Reference</h1>
-<p><code>omop-emb</code> provides a CLI for concept ingestion, similarity search, index
-management, and diagnostics. All commands load a <code>.env</code> file from the working
-directory automatically.</p>
-<p>Commands are organised into four subcommand groups:</p>
+<p><code>omop-emb</code> provides a CLI for concept ingestion, similarity search, index management, and diagnostics. Configuration is read from <code>~/.config/omop/config.toml</code> via <a href="https://AustralianCancerDataNetwork.github.io/oa-configurator/">oa-configurator</a>; there is no <code>.env</code> file.</p>
+<p>Commands are organised into three subcommand groups:</p>
 <table>
 <thead>
 <tr>
@@ -1313,17 +1111,12 @@ directory automatically.</p>
 <td><code>diagnostics</code></td>
 <td>Health checks</td>
 </tr>
-<tr>
-<td><code>legacy</code></td>
-<td>Import pre-built embeddings from HDF5 files</td>
-</tr>
 </tbody>
 </table>
 <p>Run <code>omop-emb &lt;group&gt; --help</code> to list commands within a group.</p>
 <div class="admonition note">
 <p class="admonition-title">Verbosity flag placement</p>
-<p>The <code>--verbose</code> / <code>-v</code> flag is a <strong>global option</strong> and must appear <strong>before</strong> the
-subcommand name, not after it:</p>
+<p>The <code>--verbose</code> / <code>-v</code> flag is a <strong>global option</strong> and must appear <strong>before</strong> the subcommand name, not after it:</p>
 <div class="highlight"><pre><span></span><code>omop-emb -v embeddings add-embeddings   # ✓ correct
 omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 </code></pre></div>
@@ -1333,131 +1126,15 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 <ul>
 <li><strong>Backend installed</strong>: <code>pip install omop-emb</code> (sqlite-vec) or
   <code>pip install "omop-emb[pgvector]"</code>.</li>
-<li><strong>Backend configured</strong>: set <code>OMOP_EMB_BACKEND</code> and the matching connection
-  variables (see <a href="../installation/">Installation</a>).</li>
-<li><strong>Embedding API</strong>: an OpenAI-compatible embeddings endpoint. Required for ingestion and search commands.</li>
-<li><strong>OMOP CDM</strong> (<code>OMOP_CDM_DB_URL</code>): required only for concept ingestion
-  (<code>add-embeddings</code>, <code>add-embeddings-with-index</code>). Not required for search,
-  <code>list-models</code>, <code>rebuild-index</code>, <code>delete-model</code>, or diagnostics.</li>
+<li><strong>Configured via oa-configurator</strong>: <code>omop-config configure omop_emb</code> (see <a href="../../getting-started/configuration/">Getting Started: Configuration</a>). Resolves <code>cdm_db</code>, <code>embedding_model_name</code>, and <code>vector_store_name</code>.</li>
+<li><strong>OMOP CDM</strong> (<code>cdm_db</code>): required only for concept ingestion
+  (<code>add-embeddings</code>, <code>add-embeddings-with-index</code>) and for enriching <code>search</code> results with concept names. Not required for <code>list-models</code>, <code>rebuild-index</code>, <code>delete-model</code>, or diagnostics.</li>
 </ul>
-<hr />
-<h2 id="environment-variables">Environment Variables</h2>
-<h3 id="backend">Backend</h3>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>OMOP_EMB_BACKEND</code></td>
-<td><code>sqlitevec</code></td>
-<td>Backend selector: <code>sqlitevec</code>, <code>pgvector</code>.</td>
-</tr>
-</tbody>
-</table>
-<h3 id="sqlite-vec">sqlite-vec</h3>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>OMOP_EMB_SQLITE_PATH</code></td>
-<td>Path to the sqlite-vec database file (or <code>:memory:</code>).</td>
-</tr>
-</tbody>
-</table>
-<h3 id="pgvector-individual-components">pgvector (individual components)</h3>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>OMOP_EMB_DB_HOST</code></td>
-<td>—</td>
-<td>PostgreSQL host.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_PORT</code></td>
-<td><code>5432</code></td>
-<td>PostgreSQL port.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_USER</code></td>
-<td>—</td>
-<td>PostgreSQL user.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_PASSWORD</code></td>
-<td>—</td>
-<td>PostgreSQL password.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_NAME</code></td>
-<td>—</td>
-<td>PostgreSQL database name.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_DRIVER</code></td>
-<td><code>postgresql+psycopg</code></td>
-<td>SQLAlchemy driver string.</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_URL</code></td>
-<td>—</td>
-<td>Full connection URL. Overrides individual components.</td>
-</tr>
-</tbody>
-</table>
-<h3 id="ingestion-cdm-access">Ingestion (CDM access)</h3>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>OMOP_CDM_DB_URL</code></td>
-<td>SQLAlchemy URL for the OMOP CDM database.</td>
-</tr>
-</tbody>
-</table>
-<h3 id="faiss-sidecar">FAISS sidecar</h3>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>OMOP_EMB_FAISS_CACHE_DIR</code></td>
-<td>Default FAISS cache directory. Used by <code>EmbeddingReaderInterface</code> when <code>faiss_cache_dir</code> is not passed explicitly. Equivalent to the <code>--faiss-cache-dir</code> CLI option.</td>
-</tr>
-</tbody>
-</table>
 <hr />
 <h2 id="embeddings-group"><code>embeddings</code> group</h2>
 <h3 id="add-embeddings"><code>add-embeddings</code></h3>
-<p>Bulk-generate and store embeddings for OMOP concepts that do not yet have
-embeddings. Models are registered with a FLAT index; use
-<code>maintenance rebuild-index</code> afterwards to build an HNSW index.</p>
-<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>add-embeddings<span class="w"> </span>--api-base<span class="w"> </span>&lt;URL&gt;<span class="w"> </span>--provider<span class="w"> </span>&lt;TYPE&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+<p>Bulk-generate and store embeddings for OMOP concepts that do not yet have embeddings. Models are registered with a FLAT index; use <code>maintenance rebuild-index</code> afterwards to build an HNSW index.</p>
+<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>add-embeddings<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
 <p><strong>Embedding API Options</strong></p>
 <table>
@@ -1471,28 +1148,10 @@ embeddings. Models are registered with a FLAT index; use
 </thead>
 <tbody>
 <tr>
-<td><code>--api-base</code></td>
-<td></td>
-<td><strong>required</strong></td>
-<td>Base URL of the embedding API.</td>
-</tr>
-<tr>
-<td><code>--api-key</code></td>
-<td></td>
-<td><code>ollama</code></td>
-<td>API key for the embedding API.</td>
-</tr>
-<tr>
-<td><code>--provider</code></td>
-<td></td>
-<td>from config (default <code>ollama</code>)</td>
-<td>Embedding provider type (<code>ollama</code> or <code>openai</code>).</td>
-</tr>
-<tr>
-<td><code>--model</code></td>
+<td><code>--model-name</code></td>
 <td><code>-m</code></td>
-<td><code>text-embedding-3-small</code></td>
-<td>Embedding model name.</td>
+<td>value configured via omop-config</td>
+<td>Name of a <code>[models.*]</code> entry (see <code>omop-config models add/list</code>).</td>
 </tr>
 <tr>
 <td><code>--batch-size</code></td>
@@ -1539,23 +1198,6 @@ embeddings. Models are registered with a FLAT index; use
 </tr>
 </tbody>
 </table>
-<p><strong>CDM Fetch Options</strong></p>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>--cdm-batch-size</code></td>
-<td><code>50000</code></td>
-<td>Batch size for fetching concept metadata from the CDM.</td>
-</tr>
-</tbody>
-</table>
 <table>
 <thead>
 <tr>
@@ -1574,9 +1216,8 @@ embeddings. Models are registered with a FLAT index; use
 </table>
 <hr />
 <h3 id="add-embeddings-with-index"><code>add-embeddings-with-index</code></h3>
-<p>Ingest embeddings and immediately build an index in one step. Equivalent to
-running <code>add-embeddings</code> followed by <code>create-index</code>.</p>
-<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>add-embeddings-with-index<span class="w"> </span>--api-base<span class="w"> </span>&lt;URL&gt;<span class="w"> </span>--provider<span class="w"> </span>&lt;TYPE&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+<p>Ingest embeddings and immediately build an index in one step. Equivalent to running <code>add-embeddings</code> followed by <code>create-index</code>.</p>
+<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>add-embeddings-with-index<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
 <p>Accepts all options from <code>add-embeddings</code>, plus:</p>
 <p><strong>Index Options</strong></p>
@@ -1618,9 +1259,8 @@ running <code>add-embeddings</code> followed by <code>create-index</code>.</p>
 </table>
 <hr />
 <h3 id="create-index"><code>create-index</code></h3>
-<p>Build or rebuild the index for a model that already has embeddings stored.
-<code>--api-base</code>, <code>--api-key</code>, and <code>--provider</code> are used only to resolve the canonical model name.</p>
-<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>create-index<span class="w"> </span>--api-base<span class="w"> </span>&lt;URL&gt;<span class="w"> </span>--provider<span class="w"> </span>&lt;TYPE&gt;<span class="w"> </span>--model<span class="w"> </span>&lt;NAME&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+<p>Build or rebuild the index for a model that already has embeddings stored.</p>
+<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>create-index<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
 <p><strong>Embedding API Options</strong></p>
 <table>
@@ -1634,28 +1274,10 @@ running <code>add-embeddings</code> followed by <code>create-index</code>.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>--api-base</code></td>
-<td></td>
-<td><strong>required</strong></td>
-<td>Base URL of the embedding API.</td>
-</tr>
-<tr>
-<td><code>--api-key</code></td>
-<td></td>
-<td><code>ollama</code></td>
-<td>API key.</td>
-</tr>
-<tr>
-<td><code>--provider</code></td>
-<td></td>
-<td>from config (default <code>ollama</code>)</td>
-<td>Embedding provider type (<code>ollama</code> or <code>openai</code>).</td>
-</tr>
-<tr>
-<td><code>--model</code></td>
+<td><code>--model-name</code></td>
 <td><code>-m</code></td>
-<td><code>text-embedding-3-small</code></td>
-<td>Embedding model name.</td>
+<td>value configured via omop-config</td>
+<td>Name of a <code>[models.*]</code> entry to build the index for.</td>
 </tr>
 </tbody>
 </table>
@@ -1714,11 +1336,9 @@ running <code>add-embeddings</code> followed by <code>create-index</code>.</p>
 </table>
 <hr />
 <h3 id="search"><code>search</code></h3>
-<p>Query stored embeddings for nearest OMOP concepts. Outputs tab-separated rows:
-<code>query_id</code>, <code>query_text</code>, <code>rank</code>, <code>concept_id</code>, <code>similarity</code>, <code>concept_name</code>.</p>
-<p>If <code>OMOP_CDM_DB_URL</code> is set, results are enriched with concept names from the
-CDM. Without it, the <code>concept_name</code> column is left empty.</p>
-<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>search<span class="w"> </span>--api-base<span class="w"> </span>&lt;URL&gt;<span class="w"> </span>--provider<span class="w"> </span>&lt;TYPE&gt;<span class="w"> </span>--query<span class="w"> </span><span class="s2">&quot;hypertension&quot;</span><span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+<p>Query stored embeddings for nearest OMOP concepts. Outputs tab-separated rows: <code>query_id</code>, <code>query_text</code>, <code>rank</code>, <code>concept_id</code>, <code>similarity</code>, <code>concept_name</code>.</p>
+<p>If <code>cdm_db</code> is configured, results are enriched with concept names from the CDM. Without it, the <code>concept_name</code> column is left empty (a <code>RuntimeError</code> from CDM resolution is caught and logged, not fatal).</p>
+<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>search<span class="w"> </span>--query<span class="w"> </span><span class="s2">&quot;hypertension&quot;</span><span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
 <p><strong>Embedding API Options</strong></p>
 <table>
@@ -1732,28 +1352,10 @@ CDM. Without it, the <code>concept_name</code> column is left empty.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>--api-base</code></td>
-<td></td>
-<td><strong>required</strong></td>
-<td>Base URL of the embedding API.</td>
-</tr>
-<tr>
-<td><code>--api-key</code></td>
-<td></td>
-<td><code>ollama</code></td>
-<td>API key.</td>
-</tr>
-<tr>
-<td><code>--provider</code></td>
-<td></td>
-<td>from config (default <code>ollama</code>)</td>
-<td>Embedding provider type (<code>ollama</code> or <code>openai</code>).</td>
-</tr>
-<tr>
-<td><code>--model</code></td>
+<td><code>--model-name</code></td>
 <td><code>-m</code></td>
-<td><code>text-embedding-3-small</code></td>
-<td>Embedding model name.</td>
+<td>value configured via omop-config</td>
+<td>Name of a <code>[models.*]</code> entry.</td>
 </tr>
 <tr>
 <td><code>--batch-size</code></td>
@@ -1795,8 +1397,8 @@ CDM. Without it, the <code>concept_name</code> column is left empty.</p>
 </tr>
 <tr>
 <td><code>--faiss-cache-dir</code></td>
-<td><code>None</code></td>
-<td>Use a FAISS sidecar index instead of the primary backend. Requires <code>omop-emb[faiss-cpu]</code>. Also readable from <code>OMOP_EMB_FAISS_CACHE_DIR</code>.</td>
+<td>vector store's configured <code>faiss_cache_dir</code></td>
+<td>Use a FAISS sidecar index instead of the primary backend. Requires <code>omop-emb[faiss-cpu]</code>.</td>
 </tr>
 </tbody>
 </table>
@@ -1881,10 +1483,7 @@ CDM. Without it, the <code>concept_name</code> column is left empty.</p>
 </table>
 <hr />
 <h3 id="rebuild-index"><code>rebuild-index</code></h3>
-<p>Build or rebuild the storage index for an already-registered model. Use this to
-switch between FLAT and HNSW without re-ingesting. The canonical model name is
-passed directly via <code>--model</code>; supply <code>--provider-type</code> to canonicalize a raw
-name if needed.</p>
+<p>Build or rebuild the storage index for an already-registered model. Use this to switch between FLAT and HNSW without re-ingesting. The canonical model name is passed directly via <code>--model</code>; supply <code>--provider-type</code> to canonicalize a raw name if needed.</p>
 <div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index<span class="w"> </span>--model<span class="w"> </span>&lt;CANONICAL_NAME&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
 <table>
@@ -1966,8 +1565,7 @@ name if needed.</p>
 </table>
 <hr />
 <h3 id="delete-model"><code>delete-model</code></h3>
-<p>Permanently delete a registered model and all its stored embeddings. This
-operation is irreversible.</p>
+<p>Permanently delete a registered model and all its stored embeddings. This operation is irreversible.</p>
 <div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>maintenance<span class="w"> </span>delete-model<span class="w"> </span>--model<span class="w"> </span>&lt;NAME&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
 <table>
@@ -2008,19 +1606,8 @@ operation is irreversible.</p>
 </table>
 <hr />
 <h3 id="export"><code>export</code></h3>
-<p>Stream all embeddings for one model from the primary backend into a
-single, self-describing HDF5 bundle (raw vectors, never normalized, plus
-concept metadata). This is the lossless source of truth for backup/restore
-and for migrating raw embeddings to another backend (see <code>import</code>). Peak
-memory stays close to one batch's worth regardless of table size.</p>
-<p>There is no <code>--metric-type</code> flag: the embeddings table has no
-metric-specific columns (metric only ever selects a distance operator at
-<em>query</em> time, which export never does), so it isn't something to choose
-here. The bundle records whatever metric the model's registry entry is
-already locked to (or <code>cosine</code>, if the model is FLAT/unconstrained, the
-only state a freshly registered model can be in) purely as metadata.
-The output filename is derived from the model's storage identifier, not a
-literal path you choose.</p>
+<p>Stream all embeddings for one model from the primary backend into a single, self-describing HDF5 bundle (raw vectors, never normalized, plus concept metadata). This is the lossless source of truth for backup/restore and for migrating raw embeddings to another backend (see <code>import</code>). Peak memory stays close to one batch's worth regardless of table size.</p>
+<p>There is no <code>--metric-type</code> flag: the embeddings table has no metric-specific columns (metric only ever selects a distance operator at <em>query</em> time, which export never does), so it isn't something to choose here. The bundle records whatever metric the model's registry entry is already locked to (or <code>cosine</code>, if the model is FLAT/unconstrained, the only state a freshly registered model can be in) purely as metadata. The output filename is derived from the model's storage identifier, not a literal path you choose.</p>
 <div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>maintenance<span class="w"> </span><span class="nb">export</span><span class="w"> </span>--model<span class="w"> </span>&lt;NAME&gt;<span class="w"> </span>--output-dir<span class="w"> </span>&lt;DIR&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
 <table>
@@ -2077,12 +1664,7 @@ literal path you choose.</p>
 </table>
 <hr />
 <h3 id="build-faiss-cache"><code>build-faiss-cache</code></h3>
-<p>Build (or rebuild) a local FAISS search-acceleration cache directly from
-the backend. FAISS indices are a derived, disposable artifact, never the
-round-trip source of truth. This function streams every embedding for the model
-straight out of the backend in bounded-memory batches; it has no
-dependency on <code>export</code>/<code>import</code> or any bundle file. Requires
-<code>pip install "omop-emb[faiss-cpu]"</code>.</p>
+<p>Build (or rebuild) a local FAISS search-acceleration cache directly from the backend. FAISS indices are a derived, disposable artifact, never the round-trip source of truth. This function streams every embedding for the model straight out of the backend in bounded-memory batches; it has no dependency on <code>export</code>/<code>import</code> or any bundle file. Requires <code>pip install "omop-emb[faiss-cpu]"</code>.</p>
 <div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>maintenance<span class="w"> </span>build-faiss-cache<span class="w"> </span>--model<span class="w"> </span>&lt;NAME&gt;<span class="w"> </span>--faiss-cache-dir<span class="w"> </span>&lt;DIR&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
 <table>
@@ -2166,8 +1748,7 @@ dependency on <code>export</code>/<code>import</code> or any bundle file. Requir
 </table>
 <hr />
 <h3 id="check-faiss-cache"><code>check-faiss-cache</code></h3>
-<p>Check whether the FAISS index on disk is fresh relative to the primary backend.
-Exits with code <code>0</code> if fresh, <code>1</code> if stale or missing.</p>
+<p>Check whether the FAISS index on disk is fresh relative to the primary backend. Exits with code <code>0</code> if fresh, <code>1</code> if stale or missing.</p>
 <div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>maintenance<span class="w"> </span>check-faiss-cache<span class="w"> </span>--model<span class="w"> </span>&lt;NAME&gt;<span class="w"> </span>--cache-dir<span class="w"> </span>&lt;DIR&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
 <table>
@@ -2240,14 +1821,7 @@ Exits with code <code>0</code> if fresh, <code>1</code> if stale or missing.</p>
 </table>
 <hr />
 <h3 id="import"><code>import</code></h3>
-<p>Import embeddings from an export bundle into the primary backend. 
-Reads raw vectors straight from the bundle's <code>embeddings</code> dataset 
-so magnitudes are preserved exactly regardless of metric. 
-Registers the model from the bundle's own metadata if
-it isn't already registered. A brand-new registration is backdated to the
-bundle's own <code>exported_at</code> (the source data's snapshot time) rather than
-"now" (see "Reusing a FAISS cache across machines" below for why this
-matters).</p>
+<p>Import embeddings from an export bundle into the primary backend. Reads raw vectors straight from the bundle's <code>embeddings</code> dataset so magnitudes are preserved exactly regardless of metric. Registers the model from the bundle's own metadata if it isn't already registered. A brand-new registration is backdated to the bundle's own <code>exported_at</code> (the source data's snapshot time) rather than "now" (see "Reusing a FAISS cache across machines" below for why this matters).</p>
 <div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>maintenance<span class="w"> </span>import<span class="w"> </span>--bundle-file<span class="w"> </span>&lt;FILE.h5&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
 <table>
@@ -2304,100 +1878,17 @@ matters).</p>
 </table>
 <hr />
 <h3 id="reusing-a-faiss-cache-across-machines">Reusing a FAISS cache across machines</h3>
-<p>A FAISS cache built on one machine can be shipped alongside its export
-bundle and reused directly on another, without rebuilding it. The
-build order matters: run <code>export</code> <em>then</em> <code>build-faiss-cache</code> from the same
-backend, so the cache's <code>exported_at</code> is later than the bundle's. Ship both
-the <code>.h5</code> bundle and the FAISS cache directory together. On the target
-machine:</p>
+<p>A FAISS cache built on one machine can be shipped alongside its export bundle and reused directly on another, without rebuilding it. The build order matters: run <code>export</code> <em>then</em> <code>build-faiss-cache</code> from the same backend, so the cache's <code>exported_at</code> is later than the bundle's. Ship both the <code>.h5</code> bundle and the FAISS cache directory together. On the target machine:</p>
 <div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>maintenance<span class="w"> </span>import<span class="w"> </span>--bundle-file<span class="w"> </span>model.h5
 </code></pre></div>
-<p>Point <code>faiss_cache_dir</code> (or <code>--cache-dir</code>) at the copied cache directory —
-<code>check-faiss-cache</code> now reports it as fresh, since the freshly-registered
-model is backdated to the bundle's <code>exported_at</code>, which the shipped cache's
-own <code>exported_at</code> is newer than.</p>
-<p><strong>Caveat</strong>: passing <code>--rebuild-index</code> (or running <code>rebuild-index</code> at any
-point afterward) bumps the registry's <code>updated_at</code> back to "now" and
-invalidates any cache shipped this way. Run <code>build-faiss-cache</code> again in
-that case. This only matters when the bundle's <code>index_config</code> is HNSW
-(registration always starts as FLAT); for FLAT bundles, skip
-<code>--rebuild-index</code> and the shipped cache stays valid.</p>
+<p>Point <code>faiss_cache_dir</code> (or <code>--cache-dir</code>) at the copied cache directory: <code>check-faiss-cache</code> now reports it as fresh, since the freshly-registered model is backdated to the bundle's <code>exported_at</code>, which the shipped cache's own <code>exported_at</code> is newer than.</p>
+<p><strong>Caveat</strong>: passing <code>--rebuild-index</code> (or running <code>rebuild-index</code> at any point afterward) bumps the registry's <code>updated_at</code> back to "now" and invalidates any cache shipped this way. Run <code>build-faiss-cache</code> again in that case. This only matters when the bundle's <code>index_config</code> is HNSW (registration always starts as FLAT); for FLAT bundles, skip <code>--rebuild-index</code> and the shipped cache stays valid.</p>
 <hr />
 <h2 id="diagnostics-group"><code>diagnostics</code> group</h2>
 <h3 id="health-check"><code>health-check</code></h3>
 <p>Verify backend connectivity and list registered models with embedding counts.</p>
 <div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>diagnostics<span class="w"> </span>health-check<span class="w"> </span><span class="o">[</span>--verbose<span class="o">]</span>
 </code></pre></div>
-<hr />
-<h2 id="legacy-group"><code>legacy</code> group</h2>
-<h3 id="import-legacy-faiss-cache"><code>import-legacy-faiss-cache</code></h3>
-<p><strong>Deprecated</strong> migration path for FAISS caches built by an old version of
-<code>export-faiss-cache</code>, before the bundle format existed. Reconstructs vectors
-directly from the <code>.faiss</code> file. For <code>metric=cosine</code> caches, the
-reconstructed vectors are L2-normalized. As a result, they are <strong>not</strong> the original raw
-embeddings, and that magnitude cannot be recovered. New exports should use
-<code>maintenance export</code> / <code>maintenance import</code>, which round-trip losslessly via
-a bundle. Requires <code>pip install "omop-emb[faiss-cpu]"</code>.</p>
-<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>legacy<span class="w"> </span>import-legacy-faiss-cache<span class="w"> </span>--model<span class="w"> </span>&lt;NAME&gt;<span class="w"> </span>--cache-dir<span class="w"> </span>&lt;DIR&gt;<span class="w"> </span>--provider-type<span class="w"> </span>&lt;TYPE&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
-</code></pre></div>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Short</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>--model</code></td>
-<td><code>-m</code></td>
-<td><strong>required</strong></td>
-<td>Canonical model name the FAISS cache was built for.</td>
-</tr>
-<tr>
-<td><code>--cache-dir</code></td>
-<td></td>
-<td><strong>required</strong></td>
-<td>Root cache directory containing the FAISS index files.</td>
-</tr>
-<tr>
-<td><code>--provider-type</code></td>
-<td></td>
-<td><strong>required</strong></td>
-<td>Embedding provider. Used to register the model if not already present.</td>
-</tr>
-<tr>
-<td><code>--force</code></td>
-<td></td>
-<td><code>False</code></td>
-<td>Overwrite existing embeddings without prompting.</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Index Options</strong></p>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>--metric-type</code></td>
-<td><code>cosine</code></td>
-<td>Metric of the cache to import from.</td>
-</tr>
-<tr>
-<td><code>--index-type</code></td>
-<td><code>flat</code></td>
-<td>Index type to import from (<code>flat</code> or <code>hnsw</code>).</td>
-</tr>
-</tbody>
-</table>
 <table>
 <thead>
 <tr>

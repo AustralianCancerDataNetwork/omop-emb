@@ -498,10 +498,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#runtime-selection" class="md-nav__link">
+  <a href="#selecting-a-backend" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Runtime selection
+        Selecting a backend
       
     </span>
   </a>
@@ -696,10 +696,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#runtime-selection" class="md-nav__link">
+  <a href="#selecting-a-backend" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Runtime selection
+        Selecting a backend
       
     </span>
   </a>
@@ -825,14 +825,13 @@
 
 
 <h1 id="embedding-storage-backends">Embedding Storage Backends</h1>
-<p><code>omop-emb</code> selects the storage backend at runtime via the <code>OMOP_EMB_BACKEND</code>
-environment variable (default: <code>sqlitevec</code>).</p>
+<p><code>omop-emb</code> selects the storage backend via a <code>[vector_stores.*]</code> entry's <code>backend_type</code>, configured through <a href="https://AustralianCancerDataNetwork.github.io/oa-configurator/">oa-configurator</a>.</p>
 <h2 id="supported-backends">Supported backends</h2>
 <table>
 <thead>
 <tr>
 <th>Backend</th>
-<th>Value</th>
+<th><code>backend_type</code></th>
 <th>Requires</th>
 <th>Notes</th>
 </tr>
@@ -842,7 +841,7 @@ environment variable (default: <code>sqlitevec</code>).</p>
 <td><strong>sqlite-vec</strong></td>
 <td><code>sqlitevec</code></td>
 <td>nothing extra</td>
-<td>Default. File or in-memory.</td>
+<td>File or in-memory (<code>database_name = ":memory:"</code> on the underlying connection).</td>
 </tr>
 <tr>
 <td><strong>pgvector</strong></td>
@@ -854,39 +853,29 @@ environment variable (default: <code>sqlitevec</code>).</p>
 </table>
 <div class="admonition note">
 <p class="admonition-title">FAISS is a sidecar, not a backend</p>
-<p>FAISS (<code>omop-emb[faiss-cpu]</code>) is a read-acceleration layer that sits on top
-of sqlite-vec or pgvector.  It is not a primary backend and cannot be
-selected via <code>OMOP_EMB_BACKEND</code>.  See the <a href="../cli/#faiss-sidecar">CLI reference</a>
-for how to export and use FAISS indices.</p>
+<p>FAISS (<code>omop-emb[faiss-cpu]</code>) is a read-acceleration layer that sits on top of sqlite-vec or pgvector. It is not a primary backend and has no <code>backend_type</code> of its own. See the <a href="../cli/#faiss-sidecar">CLI reference</a> for how to export and use FAISS indices.</p>
 </div>
-<h2 id="runtime-selection">Runtime selection</h2>
-<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">OMOP_EMB_BACKEND</span><span class="o">=</span>sqlitevec<span class="w">   </span><span class="c1"># default — set OMOP_EMB_SQLITE_PATH</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">OMOP_EMB_BACKEND</span><span class="o">=</span>pgvector<span class="w">    </span><span class="c1"># set OMOP_EMB_DB_* vars or OMOP_EMB_DB_URL</span>
+<h2 id="selecting-a-backend">Selecting a backend</h2>
+<div class="highlight"><pre><span></span><code><span class="k">[vector_stores.vector_store]</span>
+<span class="n">backend_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;pgvector&quot;</span><span class="w">    </span><span class="c1"># or &quot;sqlitevec&quot;</span>
+<span class="n">database</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;emb_db&quot;</span>
 </code></pre></div>
-<p>See <a href="../installation/">Installation</a> for the full list of connection variables
-for each backend.</p>
+<p>See <a href="../configuration/">Configuration Reference</a> for the full field list, both backends' setup.</p>
 <h2 id="index-types">Index types</h2>
 <p>Each primary backend supports index types controlled by an <code>IndexConfig</code> object.</p>
 <div class="admonition important">
 <p class="admonition-title">Registration always uses FLAT</p>
-<p>Models must always be registered with a <code>FlatIndexConfig</code>. After data has
-been ingested, call <code>rebuild_index</code> (or the <code>rebuild-index</code> CLI command) to
-switch to an HNSW index. Registering directly with <code>HNSWIndexConfig</code> raises
-a <code>ValueError</code>.</p>
+<p>Models must always be registered with a <code>FlatIndexConfig</code>. After data has been ingested, call <code>rebuild_index</code> (or the <code>rebuild-index</code> CLI command) to switch to an HNSW index. Registering directly with <code>HNSWIndexConfig</code> raises a <code>ValueError</code>.</p>
 </div>
 <h3 id="flat">FLAT</h3>
-<p>Sequential scan — no index structure is built. Every query compares the query
-vector against all stored embeddings. Always correct, requires no build step.</p>
+<p>Sequential scan: no index structure is built. Every query compares the query vector against all stored embeddings. Always correct, requires no build step.</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.backends.index_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">FlatIndexConfig</span>
 
 <span class="n">FlatIndexConfig</span><span class="p">()</span>  <span class="c1"># no parameters</span>
 </code></pre></div>
-<p>Use FLAT when the corpus is small (tens of thousands of concepts) or when exact
-results are required.</p>
+<p>Use FLAT when the corpus is small (tens of thousands of concepts) or when exact results are required.</p>
 <h3 id="hnsw">HNSW</h3>
-<p>Hierarchical Navigable Small World graph. Approximate nearest-neighbour search
-with sub-linear query time. Supported by pgvector only; <strong>not</strong> supported by
-sqlite-vec.</p>
+<p>Hierarchical Navigable Small World graph. Approximate nearest-neighbour search with sub-linear query time. Supported by pgvector only; <strong>not</strong> supported by sqlite-vec.</p>
 <table>
 <thead>
 <tr>
@@ -924,7 +913,7 @@ sqlite-vec.</p>
 <span class="p">)</span>
 </code></pre></div>
 <p>The HNSW workflow is always: <strong>register (FLAT) → ingest → rebuild index</strong>:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># 1. Register with FLAT — always</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># 1. Register with FLAT (always)</span>
 <span class="n">backend</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span><span class="n">model_name</span><span class="o">=...</span><span class="p">,</span> <span class="n">provider_type</span><span class="o">=...</span><span class="p">,</span>
                         <span class="n">index_config</span><span class="o">=</span><span class="n">FlatIndexConfig</span><span class="p">(),</span> <span class="n">dimensions</span><span class="o">=</span><span class="mi">768</span><span class="p">)</span>
 
@@ -936,21 +925,16 @@ sqlite-vec.</p>
                        <span class="n">index_config</span><span class="o">=</span><span class="n">HNSWIndexConfig</span><span class="p">(</span><span class="n">metric_type</span><span class="o">=</span><span class="n">MetricType</span><span class="o">.</span><span class="n">COSINE</span><span class="p">))</span>
 </code></pre></div>
 <p>Or via the CLI:</p>
-<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>add-embeddings<span class="w"> </span>--api-base<span class="w"> </span>...<span class="w"> </span>--api-key<span class="w"> </span>...<span class="w"> </span>--model<span class="w"> </span>nomic-embed-text
-omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index<span class="w"> </span>--model<span class="w"> </span>nomic-embed-text<span class="w"> </span>--index-type<span class="w"> </span>hnsw<span class="w"> </span>--metric-type<span class="w"> </span>cosine
+<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>add-embeddings
+omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index<span class="w"> </span>--model-name<span class="w"> </span>embedding-model<span class="w"> </span>--index-type<span class="w"> </span>hnsw<span class="w"> </span>--metric-type<span class="w"> </span>cosine
 </code></pre></div>
 <div class="admonition info">
 <p class="admonition-title">pgvector HNSW</p>
-<p>HNSW is a SQL <code>CREATE INDEX USING hnsw</code> object built by <code>rebuild_index</code>.
-Without it, pgvector falls back to a sequential scan automatically.
-<code>ef_search</code> is applied per session at query time.</p>
+<p>HNSW is a SQL <code>CREATE INDEX USING hnsw</code> object built by <code>rebuild_index</code>. Without it, pgvector falls back to a sequential scan automatically. <code>ef_search</code> is applied per session at query time.</p>
 </div>
 <div class="admonition warning">
 <p class="admonition-title">pgvector dimension limit</p>
-<p>The pgvector <code>vector</code> column type supports <strong>at most 2,000 dimensions</strong>.
-Models with more than 2,000 dimensions automatically use the <code>halfvec</code>
-column type (up to 4,000 dimensions). Registering above 4,000 dimensions
-raises a <code>ValueError</code>.</p>
+<p>The pgvector <code>vector</code> column type supports <strong>at most 2,000 dimensions</strong>. Models with more than 2,000 dimensions automatically use the <code>halfvec</code> column type (up to 4,000 dimensions). Registering above 4,000 dimensions raises a <code>ValueError</code>.</p>
 </div>
 <h2 id="metrics">Metrics</h2>
 <p>Each backend supports a subset of distance metrics:</p>
@@ -966,7 +950,7 @@ raises a <code>ValueError</code>.</p>
 <tr>
 <td>sqlite-vec</td>
 <td>L2, Cosine, L1</td>
-<td>—</td>
+<td>none</td>
 </tr>
 <tr>
 <td>pgvector</td>
@@ -980,9 +964,7 @@ raises a <code>ValueError</code>.</p>
 </tr>
 </tbody>
 </table>
-<p>For FLAT models, the metric is supplied by the caller at query time. For HNSW
-models, the metric is locked in at <code>rebuild_index</code> time and must be supplied
-consistently at every query.</p>
+<p>For FLAT models, the metric is supplied by the caller at query time. For HNSW models, the metric is locked in at <code>rebuild_index</code> time and must be supplied consistently at every query.</p>
 
 
 

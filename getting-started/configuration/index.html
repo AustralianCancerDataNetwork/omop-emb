@@ -464,34 +464,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#docker-compose" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Docker Compose
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Docker Compose">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#overriding-default-values" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Overriding default values
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#multiple-instances" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -729,34 +701,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#docker-compose" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Docker Compose
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Docker Compose">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#overriding-default-values" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Overriding default values
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#multiple-instances" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -847,106 +791,38 @@
 
 
 <h1 id="configuration">Configuration</h1>
-<p>omop-emb reads all database connection and schema settings from
-<a href="https://github.com/AustralianCancerDataNetwork/oa-configurator">oa-configurator</a>.
-No environment variables are needed for the Python package itself.</p>
+<p>omop-emb reads all database, model, and vector-store settings from <a href="https://github.com/AustralianCancerDataNetwork/oa-configurator">oa-configurator</a>. No environment variables are needed for the Python package itself.</p>
 <h2 id="quick-start">Quick start</h2>
-<p>omop-emb owns the embedding database and requires the CDM database configured by
-omop-alchemy. Configure both:</p>
+<p>omop-emb requires the CDM database configured by omop-alchemy, an embedding model, and a vector store. Configure the CDM database first, then omop-emb:</p>
 <div class="highlight"><pre><span></span><code>omop-config<span class="w"> </span>init<span class="w">          </span><span class="c1"># creates ~/.config/omop/config.toml if absent</span>
 omop-config<span class="w"> </span>configure<span class="w"> </span>omop_alchemy
 omop-config<span class="w"> </span>configure<span class="w"> </span>omop_emb
 </code></pre></div>
+<p><code>omop-config configure omop_emb</code> interactively resolves or creates whatever <code>[models.*]</code>/<code>[vector_stores.*]</code> entries it needs, recursing into <code>[providers.*]</code>/<code>[databases.*]</code>/<code>[connections.*]</code> as required.</p>
 <h2 id="what-gets-configured">What gets configured</h2>
-<p>omop-emb owns the <code>emb_db</code> resource (pgvector embedding database). It requires the
-<code>cdm_db</code> resource configured by omop-alchemy for concept ingestion.</p>
-<p>Package-specific settings (backend, embedding prefixes) are stored under
-<code>[tools.omop_emb]</code> in <code>config.toml</code>.</p>
+<p><code>OmopEmbConfig</code> (<code>[tools.omop_emb]</code>) has three fields:</p>
+<ul>
+<li><code>cdm_db</code>: names a <code>[databases.*]</code> entry of kind <code>"cdm"</code>, shared by naming convention with omop-alchemy's own <code>cdm_db</code> field</li>
+<li><code>embedding_model_name</code>: names a <code>[models.*]</code> entry</li>
+<li><code>vector_store_name</code>: names a <code>[vector_stores.*]</code> entry (which itself names a <code>[databases.*]</code> entry of kind <code>"generic"</code> for the embedding table storage)</li>
+</ul>
 <h2 id="verify">Verify</h2>
 <div class="highlight"><pre><span></span><code>omop-config<span class="w"> </span>verify
+omop-emb<span class="w"> </span>diagnostics<span class="w"> </span>health-check
 </code></pre></div>
-<h2 id="docker-compose">Docker Compose</h2>
-<p>The included <code>docker-compose.yaml</code> spins up both a CDM PostgreSQL database and a
-pgvector embedding database, plus a <code>python-emb</code> container. Default credentials work
-out of the box:</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>up
-</code></pre></div>
-<p>The <code>python-emb</code> container runs <code>omop-config configure</code> for <code>omop_alchemy</code> and
-<code>omop_emb</code> at startup. Your <code>~/.config/omop/config.toml</code> on the host is written on
-safe to re-run on subsequent starts: connection flags always apply, and any values already stored in <code>config.toml</code> are preserved for fields not explicitly provided.</p>
-<p>To also start Ollama (for local model inference), use the <code>standalone</code> profile:</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>standalone<span class="w"> </span>up
-</code></pre></div>
-<h3 id="overriding-default-values">Overriding default values</h3>
-<p>The compose file uses built-in defaults for all database credentials. To use different
-values, create a <code>.env</code> file in this directory with any of the following variables:</p>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>OMOP_CDM_DB_USER</code></td>
-<td><code>omop</code></td>
-<td>CDM database username</td>
-</tr>
-<tr>
-<td><code>OMOP_CDM_DB_PASSWORD</code></td>
-<td><code>omop</code></td>
-<td>CDM database password</td>
-</tr>
-<tr>
-<td><code>OMOP_CDM_DB_NAME</code></td>
-<td><code>omop_cdm</code></td>
-<td>CDM database name</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_USER</code></td>
-<td><code>omop_emb</code></td>
-<td>Embedding database username</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_PASSWORD</code></td>
-<td><code>omop_emb</code></td>
-<td>Embedding database password</td>
-</tr>
-<tr>
-<td><code>OMOP_EMB_DB_NAME</code></td>
-<td><code>omop_emb</code></td>
-<td>Embedding database name</td>
-</tr>
-</tbody>
-</table>
-<p>Copy the example and edit as needed:</p>
-<div class="highlight"><pre><span></span><code>cp<span class="w"> </span>.env.example<span class="w"> </span>.env
-<span class="c1"># edit .env</span>
-docker<span class="w"> </span>compose<span class="w"> </span>up
-</code></pre></div>
-<p>The <code>.env</code> file is only read by Docker Compose for variable substitution — it is not
-loaded by omop-emb at runtime.</p>
 <h2 id="multiple-instances">Multiple instances</h2>
-<p>To configure a second embedding database (e.g. for production), use <code>--resource-name</code>:</p>
-<div class="highlight"><pre><span></span><code>omop-config<span class="w"> </span>configure<span class="w"> </span>omop_emb<span class="w"> </span>--resource-name<span class="w"> </span>emb_db_prod
+<p>To configure a second vector store (e.g. for production), create it under its own name and point the field's own flag at it:</p>
+<div class="highlight"><pre><span></span><code>omop-config<span class="w"> </span>vector-stores<span class="w"> </span>add<span class="w"> </span>vector_store_prod<span class="w"> </span>--backend-type<span class="w"> </span>pgvector<span class="w"> </span>--database<span class="w"> </span>emb_db_prod
+omop-config<span class="w"> </span>configure<span class="w"> </span>omop_emb<span class="w"> </span>--vector-store-name<span class="w"> </span>vector_store_prod
 </code></pre></div>
-<p>This creates <code>emb_db_prod</code> without touching the existing <code>emb_db</code>. Because two
-resources now exist, configure automatically prompts you to choose the default at
-the end of the same run — no second invocation needed.</p>
-<p>To use a second CDM database instead, configure omop-alchemy the same way:</p>
-<div class="highlight"><pre><span></span><code>omop-config<span class="w"> </span>configure<span class="w"> </span>omop_alchemy<span class="w"> </span>--resource-name<span class="w"> </span>cdm_db_prod
+<p>This creates <code>vector_store_prod</code> without touching the existing <code>vector_store</code>. To use a second CDM database instead, configure omop-alchemy the same way:</p>
+<div class="highlight"><pre><span></span><code>omop-config<span class="w"> </span>configure<span class="w"> </span>omop_alchemy<span class="w"> </span>--cdm-db<span class="w"> </span>cdm_db_prod
 </code></pre></div>
-<p>To change the default later, set <code>default_resource</code> directly in <code>config.toml</code>:</p>
-<div class="highlight"><pre><span></span><code><span class="k">[tools.omop_emb]</span>
-<span class="n">default_resource</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;emb_db_prod&quot;</span>
-</code></pre></div>
-<p>See the <a href="https://AustralianCancerDataNetwork.github.io/oa-configurator/integration/#multiple-environments">oa-configurator integration guide</a> for the full multi-environment guide.</p>
+<p>There is no "default" toggle to flip afterward; each deployment's <code>configure</code> call names the entry it wants directly. See the <a href="https://AustralianCancerDataNetwork.github.io/oa-configurator/integration/#multiple-environments">oa-configurator integration guide</a> for the full multi-environment pattern.</p>
 <h2 id="further-reading">Further reading</h2>
 <ul>
-<li><a href="https://AustralianCancerDataNetwork.github.io/oa-configurator/integration/">oa-configurator integration guide</a> — full config reference, profiles, multi-package setups</li>
-<li><a href="../../usage/backend-selection/">Backend selection</a> — choosing between pgvector and sqlite-vec</li>
+<li><a href="https://AustralianCancerDataNetwork.github.io/oa-configurator/integration/">oa-configurator integration guide</a>: full config reference, multi-package setups</li>
+<li><a href="../../usage/backend-selection/">Backend selection</a>: choosing between pgvector and sqlite-vec</li>
 </ul>
 
 

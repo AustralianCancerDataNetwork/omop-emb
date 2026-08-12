@@ -447,52 +447,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuring-the-backend-at-runtime" class="md-nav__link">
+  <a href="#configuring-the-backend" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Configuring the backend at runtime
+        Configuring the backend
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Configuring the backend at runtime">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#sqlite-vec-connection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        sqlite-vec connection
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pgvector-connection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pgvector connection
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#docker-compose" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Docker Compose
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -751,52 +712,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuring-the-backend-at-runtime" class="md-nav__link">
+  <a href="#configuring-the-backend" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Configuring the backend at runtime
+        Configuring the backend
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Configuring the backend at runtime">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#sqlite-vec-connection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        sqlite-vec connection
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pgvector-connection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pgvector connection
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#docker-compose" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Docker Compose
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -869,70 +791,32 @@
 
 
 <h1 id="installation">Installation</h1>
-<p><code>omop-emb</code> supports backend-specific optional dependencies so you can install
-only what you need.</p>
+<p><code>omop-emb</code> supports backend-specific optional dependencies so you can install only what you need.</p>
 <h2 id="sqlite-vec-default-no-extras-required">sqlite-vec (default, no extras required)</h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>omop-emb
 </code></pre></div>
-<p>The default backend is sqlite-vec — a file-based or in-memory vector store that
-requires no external database server. This is ready to use immediately after
-install.</p>
+<p>The default backend is sqlite-vec: a file-based or in-memory vector store that requires no external database server. This is ready to use immediately after install.</p>
 <h2 id="pgvector-backend">pgvector backend</h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;omop-emb[pgvector]&quot;</span>
 </code></pre></div>
-<p>Adds <code>psycopg</code> and the <code>pgvector</code> SQLAlchemy type adapter. Requires a running
-PostgreSQL instance with the pgvector extension installed (e.g.
-<a href="https://hub.docker.com/r/pgvector/pgvector"><code>pgvector/pgvector</code></a> Docker image).</p>
+<p>Adds <code>psycopg</code> and the <code>pgvector</code> SQLAlchemy type adapter. Requires a running PostgreSQL instance with the pgvector extension installed (e.g. <a href="https://hub.docker.com/r/pgvector/pgvector"><code>pgvector/pgvector</code></a> Docker image).</p>
 <h2 id="faiss-sidecar">FAISS sidecar</h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;omop-emb[faiss-cpu]&quot;</span>
 </code></pre></div>
-<p>Adds <code>faiss-cpu</code>. FAISS is a read-acceleration sidecar that layers on top of
-any primary backend — it does not replace sqlite-vec or pgvector.  The primary
-backend remains the source of truth; FAISS indices are exported from it and used
-for faster in-memory approximate-nearest-neighbour search.</p>
+<p>Adds <code>faiss-cpu</code>. FAISS is a read-acceleration sidecar that layers on top of any primary backend; it does not replace sqlite-vec or pgvector. The primary backend remains the source of truth; FAISS indices are exported from it and used for faster in-memory approximate-nearest-neighbour search.</p>
 <h2 id="everything">Everything</h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;omop-emb[pgvector,faiss-cpu]&quot;</span>
 </code></pre></div>
-<p>Installs all optional dependencies. Recommended for development and mixed
-environments.</p>
+<p>Installs all optional dependencies. Recommended for development and mixed environments.</p>
 <hr />
-<h2 id="configuring-the-backend-at-runtime">Configuring the backend at runtime</h2>
-<p>Set <code>OMOP_EMB_BACKEND</code> to select the backend (default: <code>sqlitevec</code>):</p>
-<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">OMOP_EMB_BACKEND</span><span class="o">=</span>sqlitevec<span class="w">   </span><span class="c1"># default — no external service needed</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">OMOP_EMB_BACKEND</span><span class="o">=</span>pgvector<span class="w">    </span><span class="c1"># requires PostgreSQL + pgvector</span>
+<h2 id="configuring-the-backend">Configuring the backend</h2>
+<p>The backend (sqlite-vec or pgvector) is selected by a <code>[vector_stores.*]</code> entry's <code>backend_type</code>, configured via <a href="https://AustralianCancerDataNetwork.github.io/oa-configurator/">oa-configurator</a>, not environment variables:</p>
+<div class="highlight"><pre><span></span><code>omop-config<span class="w"> </span>connections<span class="w"> </span>add<span class="w"> </span>emb<span class="w"> </span>--dialect<span class="w"> </span>postgresql+psycopg<span class="w"> </span>--host<span class="w"> </span>localhost<span class="w"> </span>--database-name<span class="w"> </span>omop_emb
+omop-config<span class="w"> </span>databases<span class="w"> </span>add<span class="w"> </span>emb_db<span class="w"> </span>--kind<span class="w"> </span>generic<span class="w"> </span>--connection<span class="w"> </span>emb
+omop-config<span class="w"> </span>vector-stores<span class="w"> </span>add<span class="w"> </span>vector_store<span class="w"> </span>--backend-type<span class="w"> </span>pgvector<span class="w"> </span>--database<span class="w"> </span>emb_db
+omop-config<span class="w"> </span>configure<span class="w"> </span>omop_emb<span class="w"> </span>--vector-store-name<span class="w"> </span>vector_store
 </code></pre></div>
-<h3 id="sqlite-vec-connection">sqlite-vec connection</h3>
-<p>Point to a database file (or use <code>:memory:</code> for a transient in-memory store):</p>
-<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">OMOP_EMB_SQLITE_PATH</span><span class="o">=</span>/data/omop_emb.db
-<span class="c1"># or, for a transient in-memory database:</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">OMOP_EMB_SQLITE_PATH</span><span class="o">=</span>:memory:
-</code></pre></div>
-<h3 id="pgvector-connection">pgvector connection</h3>
-<p>Supply individual connection components (recommended, matches <code>.env</code> and
-Docker Compose patterns):</p>
-<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">OMOP_EMB_DB_HOST</span><span class="o">=</span>localhost
-<span class="nb">export</span><span class="w"> </span><span class="nv">OMOP_EMB_DB_PORT</span><span class="o">=</span><span class="m">5432</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">OMOP_EMB_DB_USER</span><span class="o">=</span>omop_emb
-<span class="nb">export</span><span class="w"> </span><span class="nv">OMOP_EMB_DB_PASSWORD</span><span class="o">=</span>omop_emb
-<span class="nb">export</span><span class="w"> </span><span class="nv">OMOP_EMB_DB_NAME</span><span class="o">=</span>omop_emb
-</code></pre></div>
-<p>Or supply a full SQLAlchemy URL (overrides all individual components):</p>
-<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">OMOP_EMB_DB_URL</span><span class="o">=</span>postgresql+psycopg://omop_emb:omop_emb@localhost:5432/omop_emb
-</code></pre></div>
-<p>The default driver string is <code>postgresql+psycopg</code> (psycopg3). Override via
-<code>OMOP_EMB_DB_DRIVER</code> if you need a different driver (e.g. <code>postgresql+psycopg2</code>).</p>
-<h3 id="docker-compose">Docker Compose</h3>
-<p>A reference <code>docker-compose.yaml</code> for the pgvector service ships with the
-package. Create a <code>.env</code> file alongside it:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">OMOP_EMB_DB_USER</span><span class="o">=</span>omop_emb
-<span class="nv">OMOP_EMB_DB_PASSWORD</span><span class="o">=</span>omop_emb
-<span class="nv">OMOP_EMB_DB_NAME</span><span class="o">=</span>omop_emb
-<span class="nv">OMOP_EMB_DB_HOST</span><span class="o">=</span>omop-emb-db
-<span class="nv">OMOP_EMB_DB_PORT</span><span class="o">=</span><span class="m">5432</span>
-</code></pre></div>
-<p>Then start the service:</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>omop-emb-db
-</code></pre></div>
+<p>See <a href="../configuration/">Configuration Reference</a> for the full field list (both backends, plus <code>faiss_cache_dir</code>), and <a href="../../getting-started/configuration/">Getting Started: Configuration</a> for the end-to-end walkthrough.</p>
 
 
 

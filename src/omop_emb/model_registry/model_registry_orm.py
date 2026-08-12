@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from sqlalchemy import DateTime, Engine, Integer, JSON, String, Enum, func
+from sqlalchemy import (
+    DateTime,
+    Engine,
+    Enum,
+    Integer,
+    JSON,
+    String,
+    func,
+    inspect,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, mapped_column, validates, Mapped
 
 from omop_llm import supported_providers
@@ -166,7 +176,7 @@ class ModelRegistry(ModelRegistryBase):
 
 
 def ensure_registry_schema(engine: Engine) -> None:
-    """Create the model registry table if it does not exist.
+    """Create or upgrade the model registry table.
 
     Parameters
     ----------
@@ -174,3 +184,44 @@ def ensure_registry_schema(engine: Engine) -> None:
         SQLAlchemy engine connected to the registry database.
     """
     ModelRegistryBase.metadata.create_all(engine, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
+    _migrate_legacy_provider_type_column(engine)
+
+
+def _migrate_legacy_provider_type_column(engine: Engine) -> None:
+    """Upgrade the pre-omop-llm provider column without rebuilding embeddings.
+
+    Older registries used ``Enum(ProviderType, native_enum=False)``, which
+    stored enum member names such as ``OLLAMA`` in a ``VARCHAR(6)`` column.
+    SQLite does not enforce that length, but PostgreSQL does, preventing newer
+    provider keys such as ``anthropic`` from being inserted. Widen the
+    PostgreSQL column and normalize legacy names in place on both backends.
+
+    The migration is deliberately idempotent so normal backend construction
+    can safely run it for both existing and newly-created registries.
+    """
+    columns = inspect(engine).get_columns(ModelRegistry.__tablename__)
+    provider_column = next(
+        (column for column in columns if column["name"] == "provider_type"),
+        None,
+    )
+    if provider_column is None:
+        return
+
+    legacy_length = getattr(provider_column["type"], "length", None)
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql" and legacy_length is not None:
+            connection.execute(
+                text(
+                    "ALTER TABLE model_registry "
+                    "ALTER COLUMN provider_type TYPE VARCHAR "
+                    "USING provider_type::text"
+                )
+            )
+        connection.execute(
+            text(
+                "UPDATE model_registry "
+                "SET provider_type = lower(provider_type) "
+                "WHERE provider_type IS NOT NULL "
+                "AND provider_type <> lower(provider_type)"
+            )
+        )

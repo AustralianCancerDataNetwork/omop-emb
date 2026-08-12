@@ -1016,8 +1016,8 @@ def resolve_backend(
     A pure resolver: takes an already-resolved database and never reads
     oa-configurator config itself. Callers that want the backend configured
     via a ``[vector_stores.*]`` entry should call
-    ``resolve_backend_from_resolved()`` instead, from a CLI/entry-point
-    boundary.
+    ``resolve_backend_from_resolved_vector_store()`` instead, from a
+    CLI/entry-point boundary.
 
     Every backend, including an in-memory sqlite-vec store, is backed by a
     real database entry: the ``sqlite:///:memory:`` case is still a

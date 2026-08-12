@@ -1,12 +1,13 @@
-"""Unit tests for RegistryManager using in-memory SQLite."""
+"""Tests for RegistryManager and registry schema upgrades."""
 
 from __future__ import annotations
 
 import pytest
+import sqlalchemy as sa
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.config import IndexType, MetricType
-from omop_emb.model_registry import RegistryManager
+from omop_emb.model_registry import RegistryManager, ensure_registry_schema
 from omop_emb.utils.errors import ModelRegistrationConflictError
 
 from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE
@@ -221,3 +222,57 @@ class TestProviderTypeValidation:
                 dimensions=EMBEDDING_DIM,
             )
             assert record.provider_type == provider
+
+
+@pytest.mark.unit
+def test_legacy_provider_name_is_normalized_in_sqlite(svec_engine):
+    with svec_engine.begin() as connection:
+        connection.execute(
+            sa.text("CREATE TABLE model_registry (provider_type VARCHAR(6))")
+        )
+        connection.execute(
+            sa.text("INSERT INTO model_registry (provider_type) VALUES ('OLLAMA')")
+        )
+
+    RegistryManager(svec_engine)
+
+    with svec_engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT provider_type FROM model_registry")
+        ) == "ollama"
+
+
+@pytest.mark.requires_database("test_emb_db")
+@pytest.mark.pgvector
+@pytest.mark.integration
+def test_legacy_provider_column_is_widened_in_postgres(pg_engine):
+    try:
+        with pg_engine.begin() as connection:
+            connection.execute(sa.text("DROP TABLE IF EXISTS model_registry CASCADE"))
+            connection.execute(
+                sa.text("CREATE TABLE model_registry (provider_type VARCHAR(6))")
+            )
+            connection.execute(
+                sa.text("INSERT INTO model_registry (provider_type) VALUES ('OLLAMA')")
+            )
+
+        RegistryManager(pg_engine)
+
+        provider_column = next(
+            column
+            for column in sa.inspect(pg_engine).get_columns("model_registry")
+            if column["name"] == "provider_type"
+        )
+        assert getattr(provider_column["type"], "length", None) is None
+
+        with pg_engine.begin() as connection:
+            assert connection.scalar(
+                sa.text("SELECT provider_type FROM model_registry")
+            ) == "ollama"
+            connection.execute(
+                sa.text("INSERT INTO model_registry (provider_type) VALUES ('anthropic')")
+            )
+    finally:
+        with pg_engine.begin() as connection:
+            connection.execute(sa.text("DROP TABLE IF EXISTS model_registry CASCADE"))
+        ensure_registry_schema(pg_engine)

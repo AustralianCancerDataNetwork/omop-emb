@@ -33,6 +33,15 @@ class TestResolveK:
     def test_falls_back_to_default(self):
         assert _resolve_k(None, default=1) == 1
 
+    @pytest.mark.parametrize("k", [0, -1])
+    def test_rejects_non_positive_explicit_k(self, k: int):
+        with pytest.raises(ValueError, match="greater than zero"):
+            _resolve_k(k, default=1)
+
+    def test_rejects_non_positive_default(self):
+        with pytest.raises(ValueError, match="greater than zero"):
+            _resolve_k(None, default=0)
+
 
 @pytest.mark.unit
 class TestGetJointEmbedding:

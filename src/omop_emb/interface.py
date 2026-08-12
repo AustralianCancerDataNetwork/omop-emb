@@ -71,9 +71,13 @@ logger = logging.getLogger(__name__)
 def _resolve_k(k: Optional[int], default: int) -> int:
     """Resolve the number of nearest neighbours to request.
 
-    *k* wins when given; falls back to *default*.
+    *k* wins when given; falls back to *default*. The resolved value must be
+    positive.
     """
-    return k or default
+    resolved = default if k is None else k
+    if resolved <= 0:
+        raise ValueError("k must be greater than zero.")
+    return resolved
 
 
 # ---------------------------------------------------------------------------

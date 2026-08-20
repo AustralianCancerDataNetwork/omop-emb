@@ -127,7 +127,7 @@ def add_embeddings(
         bool,
         typer.Option(
             "--standard-only",
-            help="Only embed OMOP standard concepts (standard_concept = 'S').",
+            help="Only embed OMOP standard concepts (standard_concept in 'S' or 'C').",
             rich_help_panel="Concept Filters",
         ),
     ] = False,
@@ -189,18 +189,18 @@ def add_embeddings(
             domains=tuple(domains) if domains else None,
             vocabularies=tuple(vocabularies) if vocabularies else None,
         )
-        n_missing = embedding_writer.count_concepts_without_embedding(
+        n_pending = embedding_writer.count_concepts_requiring_embedding(
             omop_cdm_engine=omop_cdm_engine,
             concept_filter=concept_filter,
         )
         n_total = (
-            min(n_missing, num_embeddings) if num_embeddings is not None else n_missing
+            min(n_pending, num_embeddings) if num_embeddings is not None else n_pending
         )
         typer.echo(f"Total concepts to process: {n_total:,}")
 
         n_processed = 0
         with tqdm(total=n_total, desc="Processing", unit="concept") as pbar:
-            for batch_dict in embedding_writer.get_concepts_without_embedding_batched(
+            for batch_dict in embedding_writer.get_concepts_requiring_embedding_batched(
                 omop_cdm_engine=omop_cdm_engine,
                 concept_filter=concept_filter,
                 batch_size=batch_size,
@@ -353,7 +353,7 @@ def add_embeddings_with_index(
         bool,
         typer.Option(
             "--standard-only",
-            help="Only embed OMOP standard concepts (standard_concept = 'S').",
+            help="Only embed OMOP standard concepts (standard_concept in 'S' or 'C').",
             rich_help_panel="Concept Filters",
         ),
     ] = False,
@@ -486,7 +486,7 @@ def search(
         bool,
         typer.Option(
             "--standard-only",
-            help="Only return standard OMOP concepts (standard_concept = 'S').",
+            help="Only return standard OMOP concepts (standard_concept in 'S' or 'C').",
             rich_help_panel="Concept Filters",
         ),
     ] = False,

@@ -6,7 +6,7 @@ import logging
 from contextlib import contextmanager
 from typing import Generator, Iterator, Optional
 
-from sqlalchemy import Engine, Row, select
+from sqlalchemy import Engine, Row, Select, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -14,6 +14,21 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_emb.utils.embedding_utils import CDMConceptFilter
 
 logger = logging.getLogger(__name__)
+
+
+def concept_embedding_projection() -> Select:
+    """Select CDM fields and canonical derived flags used for embeddings."""
+
+    return select(
+        Concept.concept_id,
+        Concept.concept_name,
+        Concept.domain_id,
+        Concept.vocabulary_id,
+        Concept.standard_concept,
+        Concept.invalid_reason,
+        Concept.is_standard_expr().label("is_standard"),
+        Concept.is_valid_expr().label("is_valid"),
+    )
 
 
 @contextmanager
@@ -50,17 +65,10 @@ def fetch_cdm_concepts_for_filter(
     """Return CDM rows matching *concept_filter*, keyed by concept_id.
 
     Selects all columns needed for both concept name lookup and embedding
-    metadata (domain_id, vocabulary_id, standard_concept, invalid_reason),
-    so callers do not need a second CDM round-trip.
+    metadata (domain_id, vocabulary_id, canonical is_standard/is_valid flags),
+    while retaining the underlying OMOP flag columns for existing callers.
     """
-    query = select(
-        Concept.concept_id,
-        Concept.concept_name,
-        Concept.domain_id,
-        Concept.vocabulary_id,
-        Concept.standard_concept,
-        Concept.invalid_reason,
-    )
+    query = concept_embedding_projection()
     if concept_filter is not None:
         query = concept_filter.apply(query)
     with cdm_session(cdm_engine) as session:
@@ -78,14 +86,7 @@ def iter_cdm_concepts_for_filter(
     time instead of buffering the full result set.  The session is held open
     for the lifetime of the generator.
     """
-    query = select(
-        Concept.concept_id,
-        Concept.concept_name,
-        Concept.domain_id,
-        Concept.vocabulary_id,
-        Concept.standard_concept,
-        Concept.invalid_reason,
-    )
+    query = concept_embedding_projection()
     if concept_filter is not None:
         query = concept_filter.apply(query)
     with cdm_session(cdm_engine) as session:

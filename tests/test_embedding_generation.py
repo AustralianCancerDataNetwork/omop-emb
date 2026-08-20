@@ -10,12 +10,15 @@ role-prefix application) is ``omop_llm``'s own tested responsibility:
 
 from __future__ import annotations
 
+from datetime import date
 from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
 from oa_configurator.resolver import ResolvedModel, ResolvedProvider
+from sqlalchemy import create_engine, insert
 
+from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_emb.config import MetricType
 from omop_emb.interface import (
     EmbeddingRole,
@@ -221,3 +224,59 @@ class TestEmbeddingWriterInterfaceEmbedTexts:
         iface = self._make_interface(model_backend)
         iface.embed_texts(["a"], role=EmbeddingRole.DOCUMENT, batch_size=4)
         model_backend.embed_texts.assert_called_once_with(["a"], role=EmbeddingRole.DOCUMENT, batch_size=4)
+
+
+def test_population_batches_include_missing_and_metadata_changed_concepts():
+    cdm_engine = create_engine("sqlite:///:memory:")
+    Concept.__table__.create(cdm_engine)
+    base = {
+        "concept_name": "Concept",
+        "domain_id": "Condition",
+        "vocabulary_id": "SNOMED",
+        "concept_class_id": "Clinical Finding",
+        "standard_concept": "S",
+        "concept_code": "code",
+        "valid_start_date": date(2020, 1, 1),
+        "valid_end_date": date(2099, 12, 31),
+        "invalid_reason": None,
+    }
+    with cdm_engine.begin() as connection:
+        connection.execute(
+            insert(Concept),
+            [dict(base, concept_id=concept_id) for concept_id in (1, 2, 3)],
+        )
+
+    storage = _mock_storage_backend()
+    storage.get_concept_filter_metadata.side_effect = (
+        {
+            1: {
+                "domain_id": "Condition",
+                "vocabulary_id": "SNOMED",
+                "is_standard": True,
+                "is_valid": True,
+            },
+            2: {
+                "domain_id": "Measurement",
+                "vocabulary_id": "SNOMED",
+                "is_standard": True,
+                "is_valid": True,
+            },
+        },
+        {},
+    )
+    with patch("omop_emb.interface.build_model_backend_from_resolved") as mock_build:
+        mock_build.return_value = _mock_model_backend(dim=3)
+        writer = EmbeddingWriterInterface(
+            backend=storage,
+            metric_type=MetricType.COSINE,
+            resolved_model=_make_resolved_model(),
+        )
+
+    batches = tuple(
+        writer.get_concepts_requiring_embedding_batched(
+            cdm_engine,
+            batch_size=2,
+        )
+    )
+
+    assert tuple(tuple(batch) for batch in batches) == ((2, 3),)

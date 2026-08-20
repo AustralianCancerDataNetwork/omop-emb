@@ -43,11 +43,11 @@ class EmbeddingConceptFilter:
     vocabularies : tuple[str, ...], optional
         Restrict results to concepts from these vocabularies.
     require_standard : bool
-        When ``True``, only standard concepts (``standard_concept`` in
-        ``('S', 'C')``) are returned. Default ``False``.
+        When ``True``, only concepts satisfying omop-alchemy's canonical
+        ``Concept.is_standard`` rule are returned. Default ``False``.
     require_active : bool
-        When ``True``, only active concepts (``invalid_reason`` not in
-        ``('D', 'U')``) are returned. Default ``False``.
+        When ``True``, only concepts satisfying omop-alchemy's canonical
+        ``Concept.is_valid`` rule are returned. Default ``False``.
     """
 
     concept_ids: Optional[tuple[int, ...]] = None

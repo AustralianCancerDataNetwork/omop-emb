@@ -68,6 +68,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _stored_metadata_matches(
+    row: Row,
+    stored: Mapping[str, object] | None,
+) -> bool:
+    if stored is None:
+        return False
+    return (
+        str(row.domain_id) == str(stored["domain_id"])
+        and str(row.vocabulary_id) == str(stored["vocabulary_id"])
+        and bool(row.is_standard) == bool(stored["is_standard"])
+        and bool(row.is_valid) == bool(stored["is_valid"])
+    )
+
+
 def _resolve_k(k: Optional[int], default: int) -> int:
     """Resolve the number of nearest neighbours to request.
 
@@ -558,9 +572,8 @@ class EmbeddingReaderInterface:
     ) -> Mapping[int, Row]:
         """Return CDM rows for concepts lacking embeddings, keyed by concept_id.
 
-        Each row contains concept_name, domain_id, vocabulary_id,
-        standard_concept, and invalid_reason, all columns needed for both
-        text lookup and embedding-record metadata.
+        Each row contains concept name and filter metadata, including canonical
+        standardness and validity derived by omop-alchemy.
         """
         all_concepts = fetch_cdm_concepts_for_filter(
             concept_filter=concept_filter,
@@ -623,6 +636,89 @@ class EmbeddingReaderInterface:
                     yield trimmed
             else:
                 yield batch
+
+    def count_concepts_requiring_embedding(
+        self,
+        omop_cdm_engine: Engine,
+        *,
+        concept_filter: Optional[CDMConceptFilter] = None,
+        batch_size: int = 10_000,
+    ) -> int:
+        """Count missing concepts and concepts with changed filter metadata."""
+
+        return sum(
+            len(batch)
+            for batch in self.get_concepts_requiring_embedding_batched(
+                omop_cdm_engine,
+                concept_filter=concept_filter,
+                batch_size=batch_size,
+            )
+        )
+
+    def get_concepts_requiring_embedding_batched(
+        self,
+        omop_cdm_engine: Engine,
+        *,
+        batch_size: int,
+        concept_filter: Optional[CDMConceptFilter] = None,
+        limit: Optional[int] = None,
+    ) -> Iterable[Mapping[int, Row]]:
+        """Yield concepts whose embedding is missing or has stale metadata.
+
+        CDM rows are streamed and stored metadata is fetched in bounded
+        batches. Existing embeddings are reprocessed only when their domain,
+        vocabulary, standardness, or validity differs from the CDM.
+        """
+
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than zero.")
+        if limit is not None and limit <= 0:
+            raise ValueError("limit must be greater than zero.")
+
+        candidate_batch: dict[int, Row] = {}
+        pending_batch: dict[int, Row] = {}
+        yielded = 0
+
+        def pending_candidates() -> dict[int, Row]:
+            concept_ids = tuple(candidate_batch)
+            stored = self._backend.get_concept_filter_metadata(
+                model_name=self.canonical_model_name,
+                metric_type=self._metric_type,
+                concept_ids=concept_ids,
+            )
+            return {
+                concept_id: row
+                for concept_id, row in candidate_batch.items()
+                if not _stored_metadata_matches(row, stored.get(concept_id))
+            }
+
+        for row in iter_cdm_concepts_for_filter(concept_filter, omop_cdm_engine):
+            candidate_batch[int(row.concept_id)] = row
+            if len(candidate_batch) < batch_size:
+                continue
+            pending_batch.update(pending_candidates())
+            candidate_batch = {}
+            while len(pending_batch) >= batch_size:
+                output = dict(list(pending_batch.items())[:batch_size])
+                if limit is not None:
+                    output = dict(list(output.items())[: limit - yielded])
+                if not output:
+                    return
+                yield output
+                yielded += len(output)
+                for concept_id in output:
+                    pending_batch.pop(concept_id)
+                if limit is not None and yielded >= limit:
+                    return
+
+        if candidate_batch:
+            pending_batch.update(pending_candidates())
+        if pending_batch:
+            output = pending_batch
+            if limit is not None:
+                output = dict(list(output.items())[: limit - yielded])
+            if output:
+                yield output
 
     # ------------------------------------------------------------------
     # CDM enrichment (internal)
@@ -876,10 +972,10 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
                 vocabulary_id=concept_meta[cid].vocabulary_id
                 if cid in concept_meta
                 else "",
-                is_standard=concept_meta[cid].standard_concept in ("S", "C")
+                is_standard=bool(concept_meta[cid].is_standard)
                 if cid in concept_meta
                 else False,
-                is_valid=concept_meta[cid].invalid_reason not in ("D", "U")
+                is_valid=bool(concept_meta[cid].is_valid)
                 if cid in concept_meta
                 else True,
             )

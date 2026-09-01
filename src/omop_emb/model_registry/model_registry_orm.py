@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any, Optional
 
+from oa_configurator import qualified, schema_inspect
 from sqlalchemy import (
     DateTime,
     Engine,
@@ -10,7 +12,6 @@ from sqlalchemy import (
     JSON,
     String,
     func,
-    inspect,
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, mapped_column, validates, Mapped
@@ -199,7 +200,7 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
     The migration is deliberately idempotent so normal backend construction
     can safely run it for both existing and newly-created registries.
     """
-    columns = inspect(engine).get_columns(ModelRegistry.__tablename__)
+    columns = schema_inspect(engine).get_columns(ModelRegistry.__tablename__)
     provider_column = next(
         (column for column in columns if column["name"] == "provider_type"),
         None,
@@ -210,16 +211,26 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
     legacy_length = getattr(provider_column["type"], "length", None)
     with engine.begin() as connection:
         if engine.dialect.name == "postgresql" and legacy_length is not None:
+            warnings.warn(
+                "Widening a legacy fixed-length provider_type column. This "
+                "migration path is deprecated and will be removed once no "
+                "pre-omop-llm registry remains.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
             connection.execute(
                 text(
-                    "ALTER TABLE model_registry "
+                    f"ALTER TABLE {qualified(connection, ModelRegistry.__tablename__)} "
                     "ALTER COLUMN provider_type TYPE VARCHAR "
                     "USING provider_type::text"
                 )
             )
+        # Raw text(), not update(): update() against the full mapped table
+        # would pull in updated_at's onupdate=func.now() default, which the
+        # legacy partial table (provider_type only) doesn't have.
         connection.execute(
             text(
-                "UPDATE model_registry "
+                f"UPDATE {qualified(connection, ModelRegistry.__tablename__)} "
                 "SET provider_type = lower(provider_type) "
                 "WHERE provider_type IS NOT NULL "
                 "AND provider_type <> lower(provider_type)"

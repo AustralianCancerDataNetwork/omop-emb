@@ -1037,16 +1037,15 @@ def resolve_backend(
     dialect = make_url(database.connection.url).get_backend_name()
 
     if resolved_backend == BackendType.SQLITEVEC:
-        from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+        from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
 
         if dialect != "sqlite":
             raise RuntimeError(
                 f"sqlitevec backend requires a sqlite-dialect database, got dialect: {dialect!r}."
             )
-        db_path = make_url(database.connection.url).database
-        assert db_path is not None, "ConnectionConfig.build_url() always sets a database segment for sqlite"
-        logger.info(f"Using SQLiteVec backend with database file: {db_path}")
-        return SQLiteVecEmbeddingBackend.from_path(db_path)
+        emb_engine = create_sqlitevec_engine(database.create_engine())
+        logger.info(f"Using SQLiteVec backend with engine: {emb_engine.url}")
+        return SQLiteVecEmbeddingBackend(emb_engine=emb_engine)
 
     if resolved_backend == BackendType.PGVECTOR:
         if dialect != "postgresql":

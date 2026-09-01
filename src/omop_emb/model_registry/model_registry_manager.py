@@ -5,7 +5,8 @@ import re
 from datetime import datetime, timezone
 from typing import Mapping, Optional
 
-from sqlalchemy import Engine, inspect, select, update
+from oa_configurator import schema_inspect
+from sqlalchemy import Engine, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from omop_emb.backends.index_config import (
@@ -39,7 +40,7 @@ class RegistryManager:
         self._embedding_engine = embedding_engine
         self._embedding_sessionmaker = sessionmaker(self._embedding_engine)
         self._read_only = not initialize
-        self._registry_available = inspect(embedding_engine).has_table(
+        self._registry_available = schema_inspect(embedding_engine).has_table(
             ModelRegistry.__tablename__
         )
         if initialize:

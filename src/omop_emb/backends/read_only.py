@@ -22,6 +22,7 @@ from omop_emb.backends.base_backend import (
 from omop_emb.backends.embedding_table import concept_metadata_table_descriptor
 from omop_emb.config import BackendType, parse_backend_type
 from omop_emb.model_registry import EmbeddingModelRecord, RegistryManager
+from omop_emb.utils.cdm import streamed
 
 
 @dataclass(frozen=True)
@@ -103,13 +104,16 @@ class ReadOnlyEmbeddingStore:
             record.storage_identifier,
             schema=schema,
         )
-        statement = select(
-            table.c.concept_id,
-            table.c.domain_id,
-            table.c.vocabulary_id,
-            table.c.is_standard,
-            table.c.is_valid,
-        ).execution_options(stream_results=True, yield_per=batch_size)
+        statement = streamed(
+            select(
+                table.c.concept_id,
+                table.c.domain_id,
+                table.c.vocabulary_id,
+                table.c.is_standard,
+                table.c.is_valid,
+            ),
+            batch_size,
+        )
         with self._engine.connect() as connection:
             rows = connection.execute(statement).mappings()
             for row in rows:

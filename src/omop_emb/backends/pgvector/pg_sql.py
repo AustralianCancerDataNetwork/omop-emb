@@ -15,6 +15,7 @@ import logging
 from typing import List, Optional, Sequence, Union
 
 from numpy import ndarray
+from oa_configurator import qualified, schema_inspect
 from sqlalchemy import Engine, Integer, Row, Select, func, inspect as sa_inspect, literal, select, text, TextClause
 from sqlalchemy.sql import cast, column, values
 from sqlalchemy.sql.elements import ColumnElement
@@ -31,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 
 def table_exists(engine: Engine, table_name: str) -> bool:
-    """Return ``True`` if *table_name* exists in the current Postgres schema."""
-    return sa_inspect(engine).has_table(table_name)
+    """Return ``True`` if *table_name* exists in the engine's configured schema."""
+    return schema_inspect(engine).has_table(table_name)
 
 def create_pg_embedding_table(
     engine: Engine, model_record: EmbeddingModelRecord
@@ -71,7 +72,7 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
     """
     tablename = model_record.storage_identifier
     with engine.begin() as conn:
-        conn.execute(text(f'DROP TABLE IF EXISTS "{tablename}"'))
+        conn.execute(text(f"DROP TABLE IF EXISTS {qualified(conn, tablename)}"))
     logger.info(f"Dropped embedding table '{tablename}'.")
 
 

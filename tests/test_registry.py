@@ -242,7 +242,6 @@ def test_legacy_provider_name_is_normalized_in_sqlite(svec_engine):
         ) == "ollama"
 
 
-@pytest.mark.requires_database("test_emb_db")
 @pytest.mark.pgvector
 @pytest.mark.integration
 def test_legacy_provider_column_is_widened_in_postgres(pg_engine):

@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
-from sqlalchemy import Engine, select, text, create_engine
+from sqlalchemy import Engine, select, text
 
 try:
     from pgvector.sqlalchemy import Vector  # noqa: F401
@@ -81,22 +81,6 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     def __init__(self, emb_engine: Engine) -> None:
         self._index_managers: dict[str, PGVectorBaseIndexManager] = {}
         super().__init__(emb_engine=emb_engine)
-
-    @classmethod
-    def from_db_url(cls, db_url: str) -> PGVectorEmbeddingBackend:
-        """Create a pgvector embedding backend from a database URL.
-
-        Parameters
-        ----------
-        db_url : str
-            Database URL in SQLAlchemy format, e.g. ``postgresql://user:pass@host:port/dbname``.
-
-        Returns
-        -------
-        PGVectorEmbeddingBackend
-        """
-        engine = create_engine(db_url, echo=False)
-        return cls(emb_engine=engine)
 
     # ------------------------------------------------------------------
     # Backend identity

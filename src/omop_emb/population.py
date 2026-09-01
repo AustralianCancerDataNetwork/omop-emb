@@ -14,6 +14,7 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_alchemy.cdm.query import ConceptFilter
 
 from omop_emb.backends.read_only import ReadOnlyEmbeddingStore, StoredEmbedding
+from omop_emb.utils.cdm import streamed
 
 
 @dataclass(frozen=True)
@@ -190,10 +191,9 @@ def _iter_current_concepts(
                 Concept.is_valid_expr().label("is_valid"),
             )
         )
-        .execution_options(stream_results=True, yield_per=batch_size)
     )
     with Session(cdm_engine) as session:
-        yield from session.execute(statement)
+        yield from session.execute(streamed(statement, batch_size))
 
 
 def _iter_stored_embeddings(

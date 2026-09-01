@@ -11,13 +11,11 @@ from datetime import datetime
 import h5py
 import numpy as np
 import pytest
+from sqlalchemy import create_engine
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
-from omop_emb.backends.sqlitevec import (
-    SQLiteVecEmbeddingBackend,
-    create_sqlitevec_engine,
-)
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
 from omop_emb.config import MetricType
 from omop_emb.storage import embedding_bundle
 
@@ -28,7 +26,7 @@ _PROVIDER = "ollama"
 
 
 def _make_backend() -> SQLiteVecEmbeddingBackend:
-    engine = create_sqlitevec_engine(":memory:")
+    engine = create_sqlitevec_engine(create_engine("sqlite:///:memory:"))
     return SQLiteVecEmbeddingBackend(emb_engine=engine)
 
 

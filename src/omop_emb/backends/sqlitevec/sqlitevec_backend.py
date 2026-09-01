@@ -11,7 +11,7 @@ from typing import Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from numpy import ndarray
-from sqlalchemy import Engine, MetaData, Table, create_engine, event, text
+from sqlalchemy import Engine, MetaData, Table, event, text
 
 try:
     import sqlite_vec
@@ -50,20 +50,22 @@ from omop_emb.utils.embedding_utils import (
 logger = logging.getLogger(__name__)
 
 
-def create_sqlitevec_engine(db_path: str) -> Engine:
-    """Create a SQLAlchemy engine for sqlite-vec with the extension pre-loaded.
+def create_sqlitevec_engine(engine: Engine) -> Engine:
+    """Attach the sqlite-vec extension-loading connect listener to *engine*.
 
     Parameters
     ----------
-    db_path : str
-        File path to the SQLite database, or ``':memory:'`` for an in-memory
-        database.
+    engine : Engine
+        An already-built SQLite engine (e.g. ``database.create_engine()``
+        from an oa-configurator ``ResolvedDatabase``, so it carries whatever
+        ``schema_translate_map``/pool settings the resolver configured,
+        rather than a bare path reconstructed from its URL).
 
     Returns
     -------
     Engine
+        The same *engine*, with the extension listener attached.
     """
-    engine = create_engine(f"sqlite:///{db_path}", echo=False)
 
     @event.listens_for(engine, "connect")
     def _load_sqlite_vec(dbapi_conn, _connection_record):
@@ -93,21 +95,6 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     def __init__(self, emb_engine: Engine) -> None:
         self._sqlite_vec_metadata = MetaData()
         super().__init__(emb_engine=emb_engine)
-
-    @classmethod
-    def from_path(cls, db_path: str) -> "SQLiteVecEmbeddingBackend":
-        """Construct a backend from a database file path.
-
-        Parameters
-        ----------
-        db_path : str
-            File path to the SQLite database, or ``':memory:'`` for testing.
-
-        Returns
-        -------
-        SQLiteVecEmbeddingBackend
-        """
-        return cls(emb_engine=create_sqlitevec_engine(db_path))
 
     # ------------------------------------------------------------------
     # Backend identity

@@ -6,6 +6,8 @@ on:
 jobs:
   label-gate:
     uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/label-gate.yml@main
+  build-test-sqlite:
+    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test.yml@main
   build-test:
     uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-postgres.yml@main
     with:
@@ -15,12 +17,12 @@ jobs:
       postgres-db: postgres
       setup-commands: |
         uv run omop-config configure omop_emb \
-          --set test_emb_db.kind=generic \
-          --set test_emb_db.connection.dialect=postgresql+psycopg \
-          --set test_emb_db.connection.host=localhost \
-          --set test_emb_db.connection.port=5432 \
-          --set test_emb_db.connection.user=test \
-          --set test_emb_db.connection.password=test \
-          --set test_emb_db.connection.database_name=test_omop_emb \
-          --set test_emb_db.connection.test_only=true \
-          --set test_emb_db.schema_name=public
+          --set test_emb_db_pg.kind=generic \
+          --set test_emb_db_pg.connection.dialect=postgresql+psycopg \
+          --set test_emb_db_pg.connection.host=localhost \
+          --set test_emb_db_pg.connection.port=5432 \
+          --set test_emb_db_pg.connection.user=test \
+          --set test_emb_db_pg.connection.password=test \
+          --set test_emb_db_pg.connection.database_name=test_omop_emb \
+          --set test_emb_db_pg.connection.test_only=true \
+          --set test_emb_db_pg.schema_name=public

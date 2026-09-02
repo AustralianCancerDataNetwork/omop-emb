@@ -33,6 +33,8 @@ class StoredEmbedding:
     vocabulary_id: str
     is_standard: bool
     is_valid: bool
+    #: Raw flag ``'C'``, derived from ``Concept.is_classification_expr()``.
+    is_classification: bool = False
 
 
 class ReadOnlyEmbeddingStore:
@@ -108,6 +110,7 @@ class ReadOnlyEmbeddingStore:
             table.c.domain_id,
             table.c.vocabulary_id,
             table.c.is_standard,
+            table.c.is_classification,
             table.c.is_valid,
         ).execution_options(stream_results=True, yield_per=batch_size)
         with self._engine.connect() as connection:
@@ -118,6 +121,7 @@ class ReadOnlyEmbeddingStore:
                     domain_id=str(row["domain_id"]),
                     vocabulary_id=str(row["vocabulary_id"]),
                     is_standard=bool(row["is_standard"]),
+                    is_classification=bool(row["is_classification"]),
                     is_valid=bool(row["is_valid"]),
                 )
 

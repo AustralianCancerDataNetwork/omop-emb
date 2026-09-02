@@ -33,6 +33,7 @@ CONCEPT_METADATA_COLUMNS: tuple[EmbeddingColumnSpec, ...] = (
     EmbeddingColumnSpec("domain_id", String, "TEXT METADATA"),
     EmbeddingColumnSpec("vocabulary_id", String, "TEXT METADATA"),
     EmbeddingColumnSpec("is_standard", Boolean, "BOOLEAN METADATA"),
+    EmbeddingColumnSpec("is_classification", Boolean, "BOOLEAN METADATA DEFAULT 0"),
     EmbeddingColumnSpec("is_valid", Boolean, "BOOLEAN METADATA DEFAULT 1"),
 )
 
@@ -101,7 +102,10 @@ class ConceptEmbeddingRecord:
     vocabulary_id : str
         Source vocabulary (e.g. ``'SNOMED'``, ``'RxNorm'``).
     is_standard : bool
-        Value derived from ``Concept.is_standard_expr()``.
+        Value derived from ``Concept.is_standard_expr()`` — raw flag ``'S'``.
+    is_classification : bool
+        Value derived from ``Concept.is_classification_expr()`` — raw flag
+        ``'C'``
     is_valid : bool
         Value derived from ``Concept.is_valid_expr()``.
     """
@@ -111,6 +115,7 @@ class ConceptEmbeddingRecord:
     vocabulary_id: str
     is_standard: bool
     is_valid: bool
+    is_classification: bool = False
 
 
 class EmbeddingTableBase(DeclarativeBase):
@@ -137,13 +142,17 @@ class ConceptEmbeddingMixin:
     vocabulary_id : str
         Source vocabulary (e.g. ``'SNOMED'``, ``'RxNorm'``).
     is_standard : bool
-        Value derived from ``Concept.is_standard_expr()``.
+        Value derived from ``Concept.is_standard_expr()`` — raw flag ``'S'``.
+    is_classification : bool
+        Value derived from ``Concept.is_classification_expr()`` — raw flag
+        ``'C'``. 
     """
 
     concept_id = mapped_column(Integer, primary_key=True)
     domain_id = mapped_column(String, nullable=False)
     vocabulary_id = mapped_column(String, nullable=False)
     is_standard = mapped_column(Boolean, nullable=False)
+    is_classification = mapped_column(Boolean, nullable=False, server_default="false")
     is_valid = mapped_column(Boolean, nullable=False, server_default="true")
 
 

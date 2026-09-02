@@ -33,7 +33,7 @@ classifiers = [
 
 dependencies = [
     "numpy>=1.26",
-    "omop-alchemy>=1.0.0,<2.0.0",
+    "omop-alchemy>=1.1.0,<2.0.0",
     "oa-configurator>=1.0.0,<2.0.0",
     "typing-extensions>=4.15.0",
     "sqlite-vec>=0.1.9",

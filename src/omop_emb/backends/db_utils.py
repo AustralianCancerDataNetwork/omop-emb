@@ -3,7 +3,7 @@
 from contextlib import contextmanager
 from typing import Any, Iterator, Sequence
 
-from sqlalchemy import Column, Select, text
+from sqlalchemy import Column, Select, or_, text
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.base import ColumnCollection
 
@@ -48,7 +48,15 @@ def apply_concept_filter_where(
     if concept_filter.vocabularies is not None:
         stmt = stmt.where(text(f'vocabulary_id IN (SELECT id FROM "{KNN_VOCS_TABLE}")'))
     if concept_filter.require_standard:
-        stmt = stmt.where(columns.is_standard == True)  # noqa: E712
+        if concept_filter.include_classification:
+            stmt = stmt.where(
+                or_(
+                    columns.is_standard == True,  # noqa: E712
+                    columns.is_classification == True,  # noqa: E712
+                )
+            )
+        else:
+            stmt = stmt.where(columns.is_standard == True)  # noqa: E712
     if concept_filter.require_active:
         stmt = stmt.where(columns.is_valid == True)  # noqa: E712
     return stmt

@@ -3,7 +3,8 @@
 The embedding table carries filter columns alongside the vector:
   - ``domain_id``     TEXT    (OMOP domain)
   - ``vocabulary_id`` TEXT    (OMOP vocabulary)
-  - ``is_standard``   BOOLEAN (standard_concept in ('S','C') → True)
+  - ``is_standard``       BOOLEAN (raw standard_concept 'S')
+  - ``is_classification`` BOOLEAN (raw standard_concept 'C')
 
 These are populated at upsert time by the caller and enable efficient
 pre-filtering during KNN without re-querying the OMOP CDM.
@@ -109,6 +110,7 @@ def q_upsert_embeddings(
             "domain_id": rec.domain_id,
             "vocabulary_id": rec.vocabulary_id,
             "is_standard": rec.is_standard,
+            "is_classification": rec.is_classification,
             "is_valid": rec.is_valid,
             EMBEDDING_COLUMN_NAME: emb.tolist(),
         }
@@ -121,6 +123,7 @@ def q_upsert_embeddings(
             "domain_id": stmt.excluded.domain_id,
             "vocabulary_id": stmt.excluded.vocabulary_id,
             "is_standard": stmt.excluded.is_standard,
+            "is_classification": stmt.excluded.is_classification,
             "is_valid": stmt.excluded.is_valid,
             EMBEDDING_COLUMN_NAME: getattr(stmt.excluded, EMBEDDING_COLUMN_NAME),
         },
@@ -229,6 +232,8 @@ def query_nearest_concept_ids(
             embedding_table.domain_id,
             embedding_table.vocabulary_id,
             embedding_table.is_standard,
+        embedding_table.is_classification,
+            embedding_table.is_classification,
             embedding_table.is_valid,
             distance.label("distance"),
         )
@@ -291,6 +296,7 @@ def query_concept_filter_metadata(
         embedding_table.domain_id,
         embedding_table.vocabulary_id,
         embedding_table.is_standard,
+        embedding_table.is_classification,
         embedding_table.is_valid,
     )
     stmt = apply_concept_filter_where(stmt, sa_inspect(embedding_table).columns, concept_filter)

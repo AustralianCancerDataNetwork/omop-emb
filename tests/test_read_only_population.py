@@ -78,6 +78,7 @@ def test_stored_embeddings_use_read_only_core_query() -> None:
                     "domain_id": "Condition",
                     "vocabulary_id": "SNOMED",
                     "is_standard": True,
+                    "is_classification": False,
                     "is_valid": True,
                 }
             ],
@@ -96,7 +97,14 @@ def test_stored_embeddings_use_read_only_core_query() -> None:
             schema="main",
         ) as store:
             assert store.stored_embeddings("test-model") == (
-                StoredEmbedding(7, "Condition", "SNOMED", True, True),
+                StoredEmbedding(
+                    concept_id=7,
+                    domain_id="Condition",
+                    vocabulary_id="SNOMED",
+                    is_standard=True,
+                    is_valid=True,
+                    is_classification=False,
+                ),
             )
     finally:
         event.remove(engine, "before_cursor_execute", capture)
@@ -181,16 +189,27 @@ def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:
             assert batch_size == 2
             return iter(())
 
-    plan = plan_population(
-        engine,
-        EmptyStore(),
-        model_name="test-model",
-        scope=PopulationScope(standard_only=True, valid_only=True),
-        batch_size=2,
-    )
+    def _plan(**scope_kwargs):
+        return plan_population(
+            engine,
+            EmptyStore(),
+            model_name="test-model",
+            scope=PopulationScope(standard_only=True, valid_only=True, **scope_kwargs),
+            batch_size=2,
+        )
 
-    assert plan.eligible_ids == frozenset({1, 2})
-    assert plan.missing_ids == frozenset({1, 2})
+    # omop-alchemy >= 1.1: require_standard means raw 'S' only, so the
+    # classification concept (2) is no longer in scope by default. Concept 2
+    # also pins that a blank invalid_reason still reads as valid.
+    strict = _plan()
+    assert strict.eligible_ids == frozenset({1})
+    assert strict.missing_ids == frozenset({1})
+
+    # Opting in restores the pre-1.1 union, so a site can embed classification
+    # concepts deliberately rather than by inheriting the old default.
+    widened = _plan(include_classification=True)
+    assert widened.eligible_ids == frozenset({1, 2})
+    assert widened.missing_ids == frozenset({1, 2})
 
 
 def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:

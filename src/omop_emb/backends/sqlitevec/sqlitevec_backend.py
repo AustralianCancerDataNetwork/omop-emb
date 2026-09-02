@@ -241,6 +241,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                     domain_id=row.domain_id,
                     vocabulary_id=row.vocabulary_id,
                     is_standard=bool(row.is_standard),
+                    is_classification=bool(row.is_classification),
                     is_active=bool(row.is_valid),
                 )
                 for row in rows
@@ -283,11 +284,14 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 dialect=self.dialect,
             )
         return {
-            int(row[0]): {
-                "domain_id": row[1] or "",
-                "vocabulary_id": row[2] or "",
-                "is_standard": bool(row[3]),
-                "is_valid": bool(row[4]),
+            int(row.concept_id): {
+                # Keyed by name, not position: this projection gained a
+                # column and positional reads silently reassigned every field.
+                "domain_id": row.domain_id or "",
+                "vocabulary_id": row.vocabulary_id or "",
+                "is_standard": bool(row.is_standard),
+                "is_classification": bool(row.is_classification),
+                "is_valid": bool(row.is_valid),
             }
             for row in rows
         }

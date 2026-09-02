@@ -975,6 +975,11 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
                 is_standard=bool(concept_meta[cid].is_standard)
                 if cid in concept_meta
                 else False,
+                is_classification=(
+                    bool(concept_meta[cid].is_classification)
+                    if cid in concept_meta
+                    else False
+                ),
                 is_valid=bool(concept_meta[cid].is_valid)
                 if cid in concept_meta
                 else True,

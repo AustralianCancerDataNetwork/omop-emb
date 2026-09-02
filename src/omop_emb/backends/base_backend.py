@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Callable, Generic, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 from numpy import ndarray
 from oa_configurator import ResolvedDatabase, ResolvedVectorStore
-from sqlalchemy import Engine
+from sqlalchemy import Engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 

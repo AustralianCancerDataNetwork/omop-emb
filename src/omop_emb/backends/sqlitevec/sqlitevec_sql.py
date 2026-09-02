@@ -195,6 +195,7 @@ def dml_upsert_rows(
                 "domain_id": rec.domain_id,
                 "vocabulary_id": rec.vocabulary_id,
                 "is_standard": rec.is_standard,
+            "is_classification": rec.is_classification,
                 "is_valid": rec.is_valid,
                 EMBEDDING_COLUMN_NAME: _embedding_to_blob(emb),
             }
@@ -230,6 +231,7 @@ def _build_knn_stmt(
             table.c.domain_id,
             table.c.vocabulary_id,
             table.c.is_standard,
+            table.c.is_classification,
             table.c.is_valid,
         )
         .order_by(distance)
@@ -434,6 +436,7 @@ def query_concept_filter_metadata(
             table.c.domain_id,
             table.c.vocabulary_id,
             table.c.is_standard,
+            table.c.is_classification,
             table.c.is_valid,
         ),
         table.c,

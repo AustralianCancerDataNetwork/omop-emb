@@ -28,11 +28,13 @@ class EmbeddingConceptFilter:
     Notes
     -----
     Mirrors OMOP grounding needs without importing ``omop_graph`` or its
-    search-constraint types into ``omop_emb``. Field shape duplicates
-    ``omop_graph.graph.constraints.SearchConstraintConcept`` for the same
-    reason; tracked at
-    https://github.com/AustralianCancerDataNetwork/OMOP_Alchemy/issues/11,
-    remove the duplication once that's resolved.
+    search-constraint types into ``omop_emb``. The field shape deliberately
+    tracks ``omop_alchemy.cdm.query.ConceptFilter``, but the two are not
+    interchangeable: ``ConceptFilter.apply()`` targets the CDM ``concept``
+    table, while this filter constrains the embedding sidecar, whose flags are
+    materialised boolean columns. omop-graph's equivalent type was retired in
+    favour of ``ConceptFilter`` under OMOP_Alchemy#11; this one survives for
+    that reason.
 
     Attributes
     ----------
@@ -44,7 +46,12 @@ class EmbeddingConceptFilter:
         Restrict results to concepts from these vocabularies.
     require_standard : bool
         When ``True``, only concepts satisfying omop-alchemy's canonical
-        ``Concept.is_standard`` rule are returned. Default ``False``.
+        ``Concept.is_standard`` rule — raw flag ``'S'`` — are returned.
+        Default ``False``.
+    include_classification : bool
+        Widens ``require_standard`` to also admit classification (``'C'``)
+        concepts, matching ``ConceptFilter.include_classification``. Only
+        meaningful with ``require_standard``. Default ``False``.
     require_active : bool
         When ``True``, only concepts satisfying omop-alchemy's canonical
         ``Concept.is_valid`` rule are returned. Default ``False``.
@@ -54,6 +61,7 @@ class EmbeddingConceptFilter:
     domains: Optional[tuple[str, ...]] = None
     vocabularies: Optional[tuple[str, ...]] = None
     require_standard: bool = False
+    include_classification: bool = False
     require_active: bool = False
 
     def is_empty(self) -> bool:
@@ -93,6 +101,9 @@ class NearestConceptMatch:
     vocabulary_id : str, optional
         Source vocabulary (e.g. ``'SNOMED'``, ``'RxNorm'``), taken from the
         embedding table. ``None`` only if the backend could not resolve it.
+    is_classification : bool, optional
+        Whether the concept is a classification ('C') concept — a hierarchy
+        node, not a valid mapping target.
     is_standard : bool, optional
         ``True`` if ``standard_concept`` is ``'S'`` or ``'C'``, taken from
         the embedding table. ``None`` only if the backend could not resolve
@@ -109,6 +120,7 @@ class NearestConceptMatch:
     domain_id: Optional[str] = None
     vocabulary_id: Optional[str] = None
     is_standard: Optional[bool] = None
+    is_classification: Optional[bool] = None
     is_active: Optional[bool] = None
 
     def to_dict(self) -> dict:

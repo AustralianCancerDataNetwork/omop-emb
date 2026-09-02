@@ -21,6 +21,7 @@ class PopulationScope:
     """The exact CDM predicate used by a population plan."""
 
     standard_only: bool = False
+    include_classification: bool = False
     valid_only: bool = False
     vocabularies: tuple[str, ...] = ()
     domains: tuple[str, ...] = ()
@@ -32,6 +33,7 @@ class PopulationScope:
             domains=self.domains or None,
             vocabularies=self.vocabularies or None,
             require_standard=self.standard_only,
+            include_classification=self.include_classification,
             require_active=self.valid_only,
         )
 
@@ -213,7 +215,11 @@ def _stored_matches_scope(item: StoredEmbedding, scope: PopulationScope) -> bool
     return (
         (not scope.vocabularies or item.vocabulary_id in scope.vocabularies)
         and (not scope.domains or item.domain_id in scope.domains)
-        and (not scope.standard_only or item.is_standard)
+        and (
+            not scope.standard_only
+            or item.is_standard
+            or (scope.include_classification and bool(item.is_classification))
+        )
         and (not scope.valid_only or item.is_valid)
     )
 

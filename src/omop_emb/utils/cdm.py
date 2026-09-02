@@ -27,6 +27,7 @@ def concept_embedding_projection() -> Select:
         Concept.standard_concept,
         Concept.invalid_reason,
         Concept.is_standard_expr().label("is_standard"),
+        Concept.is_classification_expr().label("is_classification"),
         Concept.is_valid_expr().label("is_valid"),
     )
 

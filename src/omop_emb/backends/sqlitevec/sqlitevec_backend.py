@@ -11,6 +11,7 @@ from typing import Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from numpy import ndarray
+from oa_configurator import ResolvedDatabase
 from sqlalchemy import Engine, MetaData, Table, event, text
 
 try:
@@ -92,9 +93,14 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
       ``CREATE VIRTUAL TABLE``.
     """
 
-    def __init__(self, emb_engine: Engine) -> None:
+    def __init__(
+        self,
+        emb_engine: Engine,
+        *,
+        resolved: ResolvedDatabase | None = None,
+    ) -> None:
         self._sqlite_vec_metadata = MetaData()
-        super().__init__(emb_engine=emb_engine)
+        super().__init__(emb_engine=emb_engine, resolved=resolved)
 
     # ------------------------------------------------------------------
     # Backend identity

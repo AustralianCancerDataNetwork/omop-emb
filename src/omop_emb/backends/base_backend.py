@@ -6,12 +6,13 @@ import logging
 from datetime import datetime
 from typing import Any, Callable, Generic, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 from numpy import ndarray
-from oa_configurator import ResolvedDatabase, ResolvedVectorStore
+from oa_configurator import ResolvedDatabase, ResolvedVectorStore, supports_schemas
 from sqlalchemy import Engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from omop_emb.config import (
+    MODEL_REGISTRY_SCHEMA,
     BackendType,
     MetricType,
     IndexType,
@@ -168,7 +169,12 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
 
     DEFAULT_K_NEAREST = 10
 
-    def __init__(self, emb_engine: Engine) -> None:
+    def __init__(
+        self,
+        emb_engine: Engine,
+        *,
+        resolved: ResolvedDatabase | None = None,
+    ) -> None:
         actual_dialect = emb_engine.dialect.name
         if actual_dialect != self.dialect:
             raise ValueError(
@@ -176,7 +182,8 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
                 f"got '{actual_dialect}'."
             )
         super().__init__()
-        self._registry = RegistryManager(emb_engine)
+        self._resolved = resolved
+        self._registry = RegistryManager(emb_engine, resolved=resolved)
         self._table_cache: dict[str, TEmbeddingTable] = {}
         self._initialise_store()
 
@@ -1036,6 +1043,13 @@ def resolve_backend(
 
     dialect = make_url(database.connection.url).get_backend_name()
 
+    # The model registry lives in its own reserved schema (MODEL_REGISTRY_SCHEMA),
+    # independent of database's own schema -- added on top of database's own
+    # translate map, not passed as a bare override, since create_engine()'s
+    # execution_options replaces the whole map rather than merging it.
+    registry_schema = MODEL_REGISTRY_SCHEMA if supports_schemas(database.connection.dialect_name) else None
+    schema_translate_map = {**database.schema_translate_map(), "registry": registry_schema}
+
     if resolved_backend == BackendType.SQLITEVEC:
         from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
 
@@ -1043,9 +1057,11 @@ def resolve_backend(
             raise RuntimeError(
                 f"sqlitevec backend requires a sqlite-dialect database, got dialect: {dialect!r}."
             )
-        emb_engine = create_sqlitevec_engine(database.create_engine())
+        emb_engine = create_sqlitevec_engine(
+            database.create_engine(execution_options={"schema_translate_map": schema_translate_map})
+        )
         logger.info(f"Using SQLiteVec backend with engine: {emb_engine.url}")
-        return SQLiteVecEmbeddingBackend(emb_engine=emb_engine)
+        return SQLiteVecEmbeddingBackend(emb_engine=emb_engine, resolved=database)
 
     if resolved_backend == BackendType.PGVECTOR:
         if dialect != "postgresql":
@@ -1060,9 +1076,9 @@ def resolve_backend(
                 "pgvector backend is not installed. "
                 "Install it with: pip install omop-emb[pgvector]"
             ) from exc
-        emb_engine = database.create_engine()
+        emb_engine = database.create_engine(execution_options={"schema_translate_map": schema_translate_map})
         logger.info(f"Using pgvector backend with engine: {emb_engine.url}")
-        return PGVectorEmbeddingBackend(emb_engine=emb_engine)
+        return PGVectorEmbeddingBackend(emb_engine=emb_engine, resolved=database)
 
     raise RuntimeError(f"Implementation for {resolved_backend.value} is not available.")
 

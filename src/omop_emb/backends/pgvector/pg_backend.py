@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
+from oa_configurator import ResolvedDatabase
 from sqlalchemy import Engine, select, text
 
 try:
@@ -78,9 +79,14 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     ``__init__``.
     """
 
-    def __init__(self, emb_engine: Engine) -> None:
+    def __init__(
+        self,
+        emb_engine: Engine,
+        *,
+        resolved: ResolvedDatabase | None = None,
+    ) -> None:
         self._index_managers: dict[str, PGVectorBaseIndexManager] = {}
-        super().__init__(emb_engine=emb_engine)
+        super().__init__(emb_engine=emb_engine, resolved=resolved)
 
     # ------------------------------------------------------------------
     # Backend identity
@@ -119,7 +125,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         self, model_record: EmbeddingModelRecord
     ) -> type[PGEmbeddingTable]:
         return create_pg_embedding_table(
-            engine=self.emb_engine, model_record=model_record
+            engine=self.emb_engine,
+            model_record=model_record,
+            resolved=self._resolved,
         )
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:

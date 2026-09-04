@@ -15,7 +15,7 @@ import logging
 from typing import List, Optional, Sequence, Union
 
 from numpy import ndarray
-from oa_configurator import qualified, schema_inspect
+from oa_configurator import ResolvedDatabase, Role, guard_schema_provenance, qualified, schema_inspect
 from sqlalchemy import Engine, Integer, Row, Select, func, inspect as sa_inspect, literal, select, text, TextClause
 from sqlalchemy.sql import cast, column, values
 from sqlalchemy.sql.elements import ColumnElement
@@ -36,7 +36,10 @@ def table_exists(engine: Engine, table_name: str) -> bool:
     return schema_inspect(engine).has_table(table_name)
 
 def create_pg_embedding_table(
-    engine: Engine, model_record: EmbeddingModelRecord
+    engine: Engine,
+    model_record: EmbeddingModelRecord,
+    *,
+    resolved: ResolvedDatabase | None = None,
 ) -> type[PGEmbeddingTable]:
     """Create a pgvector embedding table and return its ORM class.
 
@@ -45,6 +48,10 @@ def create_pg_embedding_table(
     engine : Engine
         SQLAlchemy engine for the pgvector database.
     model_record : EmbeddingModelRecord
+    resolved : ResolvedDatabase, optional
+        Enables the schema-provenance guard around the ``create_all()``
+        call. Omitted by callers with no resolved config behind their
+        engine, in which case the guard no-ops.
 
     Returns
     -------
@@ -58,7 +65,9 @@ def create_pg_embedding_table(
     base class; this function always issues DDL.
     """
     table_cls = pg_embedding_table_descriptor(model_record)
-    EmbeddingTableBase.metadata.create_all(engine, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
+    with engine.begin() as connection:
+        with guard_schema_provenance(connection, resolved, role=Role.PRIMARY):
+            EmbeddingTableBase.metadata.create_all(connection, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
     return table_cls
 
 

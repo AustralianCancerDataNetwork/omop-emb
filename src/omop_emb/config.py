@@ -16,7 +16,13 @@ from oa_configurator import (
     Resolver,
     ResolvedVectorStore,
     VectorStoreConfig,
+    register_reserved_schema,
 )
+
+# Guaranteed to be imported and registered if there is a config
+MODEL_REGISTRY_SCHEMA: str = "omop_emb_registry"
+
+register_reserved_schema(MODEL_REGISTRY_SCHEMA, owner="omop_emb")
 
 
 class OmopEmbConfig(PackageConfigBase):

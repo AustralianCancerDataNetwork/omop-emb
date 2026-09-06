@@ -203,7 +203,7 @@ class TestPGVectorNonDefaultSchema:
         backend.delete_model(model_name=MODEL_NAME)
         assert backend._storage_table_exists(record) is False
 
-    def test_model_registry_lookup_stays_in_the_configured_schema(
+    def test_model_registry_lives_in_its_own_reserved_schema(
         self, scoped_backend, pg_engine
     ):
         backend, schema = scoped_backend
@@ -219,13 +219,12 @@ class TestPGVectorNonDefaultSchema:
         assert registry.registry_available is True
         assert len(registry.get_registered_models(model_name=MODEL_NAME)) == 1
 
-        # A registry pointed at "public" must not see it: proves the lookup is
-        # genuinely schema-scoped, not incidentally finding it via search_path.
+        # A registry built with a completely different None-key schema sees
+        # the exact same row: the registry is decoupled from it entirely.
         public_engine = pg_engine.execution_options(schema_translate_map={None: "public"})
         public_registry = RegistryManager.read_only(public_engine)
-        found_in_public = (
-            public_registry.get_registered_models(model_name=MODEL_NAME)
-            if public_registry.registry_available
-            else ()
-        )
-        assert found_in_public == ()
+        assert public_registry.registry_available is True
+        assert len(public_registry.get_registered_models(model_name=MODEL_NAME)) == 1
+
+        # And genuinely never created under the storage schema's own name.
+        assert schema_inspect(pg_engine, schema=schema).has_table("model_registry") is False

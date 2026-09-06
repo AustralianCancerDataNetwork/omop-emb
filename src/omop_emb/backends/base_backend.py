@@ -23,7 +23,7 @@ from omop_emb.config import (
 
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig
-from omop_emb.model_registry import EmbeddingModelRecord, RegistryManager
+from omop_emb.model_registry import EmbeddingModelRecord, REGISTRY_SCHEMA_KEY, RegistryManager
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,
@@ -1048,7 +1048,7 @@ def resolve_backend(
     # translate map, not passed as a bare override, since create_engine()'s
     # execution_options replaces the whole map rather than merging it.
     registry_schema = MODEL_REGISTRY_SCHEMA if supports_schemas(database.connection.dialect_name) else None
-    schema_translate_map = {**database.schema_translate_map(), "registry": registry_schema}
+    schema_translate_map = {**database.schema_translate_map(), REGISTRY_SCHEMA_KEY: registry_schema}
 
     if resolved_backend == BackendType.SQLITEVEC:
         from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine

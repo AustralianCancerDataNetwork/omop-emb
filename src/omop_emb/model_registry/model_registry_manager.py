@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timezone
 from typing import Mapping, Optional
 
-from oa_configurator import schema_inspect
+from oa_configurator import ResolvedDatabase, schema_inspect
 from sqlalchemy import Engine, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -15,8 +15,10 @@ from omop_emb.backends.index_config import (
     index_config_from_orm_row,
 )
 from omop_emb.model_registry.model_registry_orm import (
+    REGISTRY_SCHEMA_KEY,
     ModelRegistry,
-    ensure_registry_schema,
+    _registry_schema,
+    ensure_registry_table,
 )
 from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
 from omop_emb.utils.errors import ModelRegistrationConflictError
@@ -34,17 +36,34 @@ class RegistryManager:
     ----------
     embedding_engine : Engine
         SQLAlchemy embedding engine connected to the embedding store.
+
+    Notes
+    -----
+    The registry table is created in a schema named ``registry`` for dialects
+    supporting schema registration. Allows schema-independent access to the registry table
+    from any schema in the same database.
     """
 
-    def __init__(self, embedding_engine: Engine, *, initialize: bool = True) -> None:
-        self._embedding_engine = embedding_engine
+    def __init__(
+        self,
+        embedding_engine: Engine,
+        *,
+        initialize: bool = True,
+        resolved: ResolvedDatabase | None = None,
+    ) -> None:
+        self._embedding_engine = embedding_engine.execution_options(
+            schema_translate_map={
+                **(embedding_engine.get_execution_options().get("schema_translate_map") or {}),
+                REGISTRY_SCHEMA_KEY: _registry_schema(embedding_engine),
+            }
+        )
         self._embedding_sessionmaker = sessionmaker(self._embedding_engine)
         self._read_only = not initialize
-        self._registry_available = schema_inspect(embedding_engine).has_table(
-            ModelRegistry.__tablename__
-        )
+        self._registry_available = schema_inspect(
+            self._embedding_engine, schema=_registry_schema(self._embedding_engine)
+        ).has_table(ModelRegistry.__tablename__)
         if initialize:
-            ensure_registry_schema(embedding_engine)
+            ensure_registry_table(self._embedding_engine, resolved=resolved)
             self._registry_available = True
 
     @classmethod

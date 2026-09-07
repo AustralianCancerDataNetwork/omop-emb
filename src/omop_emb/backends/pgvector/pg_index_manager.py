@@ -17,7 +17,8 @@ import abc
 import logging
 from typing import Generic, TypeVar
 
-from sqlalchemy import Engine, inspect, text
+from oa_configurator import qualified, schema_inspect
+from sqlalchemy import Engine, text
 
 from omop_emb.config import IndexType, MetricType, VectorColumnType
 from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig, HNSWIndexConfig
@@ -77,7 +78,7 @@ class PGVectorBaseIndexManager(BaseIndexManager[C], Generic[C]):
     def has_index(self, metric_type: MetricType) -> bool:
         with self._engine.connect() as conn:
             existing = {
-                idx["name"] for idx in inspect(conn).get_indexes(self._tablename)
+                idx["name"] for idx in schema_inspect(conn).get_indexes(self._tablename)
             }
         return self._index_name(metric_type) in existing
 
@@ -101,7 +102,7 @@ class PGVectorBaseIndexManager(BaseIndexManager[C], Generic[C]):
         name = self._index_name(metric_type)
         existed = self.has_index(metric_type)
         with self._engine.begin() as conn:
-            conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
+            conn.execute(text(f"DROP INDEX IF EXISTS {qualified(conn, name)}"))
         if existed:
             logger.info(f"Dropped pgvector index '{name}'.")
 
@@ -190,9 +191,13 @@ class PGVectorHNSWIndexManager(PGVectorBaseIndexManager[HNSWIndexConfig]):
     def _create_index_ddl(self, metric_type: MetricType) -> str:
         ops = self._ops_for_metric(metric_type)
         cfg = self.index_config
+        # self._engine is None only in pure-DDL-string unit tests that never
+        # open a connection; qualified() needs a real bindable for its
+        # schema, so fall back to the bare name in that case only.
+        table_ref = qualified(self._engine, self._tablename) if self._engine is not None else self._tablename
         return (
             f"CREATE INDEX {self._index_name(metric_type)} "
-            f"ON {self._tablename} "
+            f"ON {table_ref} "
             f"USING hnsw ({self._embedding_column} {ops}) "
             f"WITH (m = {cfg.num_neighbors}, ef_construction = {cfg.ef_construction})"
         )

@@ -9,7 +9,7 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_emb.backends import ReadOnlyEmbeddingStore, StoredEmbedding
 from omop_emb.backends.embedding_table import concept_metadata_table_descriptor
 from omop_emb.backends.index_config import FlatIndexConfig
-from omop_emb.model_registry import RegistryManager, ensure_registry_schema
+from omop_emb.model_registry import RegistryManager, ensure_registry_table
 from omop_emb.population import PopulationScope, plan_population
 
 
@@ -46,7 +46,7 @@ def test_read_only_registry_does_not_create_schema() -> None:
 
 def test_explicit_registry_initialization_is_visible_to_read_only_store() -> None:
     engine = create_engine("sqlite:///:memory:")
-    ensure_registry_schema(engine)
+    ensure_registry_table(engine)
     store = ReadOnlyEmbeddingStore(
         engine,
         backend_type="sqlitevec",
@@ -112,7 +112,7 @@ def test_stored_embeddings_use_read_only_core_query() -> None:
 
 def test_read_only_registry_rejects_mutation() -> None:
     engine = create_engine("sqlite:///:memory:")
-    ensure_registry_schema(engine)
+    ensure_registry_table(engine)
     registry = RegistryManager.read_only(engine)
 
     with pytest.raises(RuntimeError, match="opened read-only"):

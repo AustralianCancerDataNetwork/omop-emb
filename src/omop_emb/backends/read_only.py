@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from oa_configurator import ResolvedVectorStore
+from oa_configurator import Dialect, ResolvedVectorStore
 from sqlalchemy import Engine, event, inspect, select
 
 from omop_emb.backends.base_backend import (
@@ -22,6 +22,7 @@ from omop_emb.backends.base_backend import (
 from omop_emb.backends.embedding_table import concept_metadata_table_descriptor
 from omop_emb.config import BackendType, parse_backend_type
 from omop_emb.model_registry import EmbeddingModelRecord, RegistryManager
+from omop_emb.utils.cdm import streamed
 
 
 @dataclass(frozen=True)
@@ -96,20 +97,23 @@ class ReadOnlyEmbeddingStore:
             return
         schema = (
             None
-            if self._engine.dialect.name == "sqlite" and self.schema == "main"
+            if self._engine.dialect.name == Dialect.SQLITE and self.schema == "main"
             else self.schema
         )
         table = concept_metadata_table_descriptor(
             record.storage_identifier,
             schema=schema,
         )
-        statement = select(
-            table.c.concept_id,
-            table.c.domain_id,
-            table.c.vocabulary_id,
-            table.c.is_standard,
-            table.c.is_valid,
-        ).execution_options(stream_results=True, yield_per=batch_size)
+        statement = streamed(
+            select(
+                table.c.concept_id,
+                table.c.domain_id,
+                table.c.vocabulary_id,
+                table.c.is_standard,
+                table.c.is_valid,
+            ),
+            batch_size,
+        )
         with self._engine.connect() as connection:
             rows = connection.execute(statement).mappings()
             for row in rows:
@@ -124,7 +128,7 @@ class ReadOnlyEmbeddingStore:
     def physical_indexes(self, model_name: str) -> tuple[str, ...]:
         """Return existing PostgreSQL indexes without creating or changing them."""
 
-        if self._engine.dialect.name != "postgresql":
+        if self._engine.dialect.name != Dialect.POSTGRESQL:
             return ()
         record = self.model(model_name)
         if record is None:
@@ -166,7 +170,7 @@ def inspect_resolved_vector_store(
     """
 
     engine = resolved.database.create_engine()
-    if resolved.backend_type == "sqlitevec":
+    if resolved.backend_type == BackendType.SQLITEVEC:
         try:
             import sqlite_vec
         except ImportError as exc:  # pragma: no cover - optional extra

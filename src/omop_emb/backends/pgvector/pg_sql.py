@@ -15,6 +15,7 @@ import logging
 from typing import List, Optional, Sequence, Union
 
 from numpy import ndarray
+from oa_configurator import Dialect, ResolvedDatabase, Role, guard_schema_provenance, qualified, schema_inspect
 from sqlalchemy import Engine, Integer, Row, Select, func, inspect as sa_inspect, literal, select, text, TextClause
 from sqlalchemy.sql import cast, column, values
 from sqlalchemy.sql.elements import ColumnElement
@@ -31,11 +32,14 @@ logger = logging.getLogger(__name__)
 
 
 def table_exists(engine: Engine, table_name: str) -> bool:
-    """Return ``True`` if *table_name* exists in the current Postgres schema."""
-    return sa_inspect(engine).has_table(table_name)
+    """Return ``True`` if *table_name* exists in the engine's configured schema."""
+    return schema_inspect(engine).has_table(table_name)
 
 def create_pg_embedding_table(
-    engine: Engine, model_record: EmbeddingModelRecord
+    engine: Engine,
+    model_record: EmbeddingModelRecord,
+    *,
+    resolved: ResolvedDatabase | None = None,
 ) -> type[PGEmbeddingTable]:
     """Create a pgvector embedding table and return its ORM class.
 
@@ -44,6 +48,10 @@ def create_pg_embedding_table(
     engine : Engine
         SQLAlchemy engine for the pgvector database.
     model_record : EmbeddingModelRecord
+    resolved : ResolvedDatabase, optional
+        Enables the schema-provenance guard around the ``create_all()``
+        call. Omitted by callers with no resolved config behind their
+        engine, in which case the guard no-ops.
 
     Returns
     -------
@@ -57,7 +65,9 @@ def create_pg_embedding_table(
     base class; this function always issues DDL.
     """
     table_cls = pg_embedding_table_descriptor(model_record)
-    EmbeddingTableBase.metadata.create_all(engine, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
+    with engine.begin() as connection:
+        with guard_schema_provenance(connection, resolved, role=Role.PRIMARY):
+            EmbeddingTableBase.metadata.create_all(connection, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
     return table_cls
 
 
@@ -71,7 +81,7 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
     """
     tablename = model_record.storage_identifier
     with engine.begin() as conn:
-        conn.execute(text(f'DROP TABLE IF EXISTS "{tablename}"'))
+        conn.execute(text(f"DROP TABLE IF EXISTS {qualified(conn, tablename)}"))
     logger.info(f"Dropped embedding table '{tablename}'.")
 
 
@@ -175,7 +185,7 @@ def query_nearest_concept_ids(
     metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
-    dialect: str = "postgresql",
+    dialect: str = Dialect.POSTGRESQL,
 ) -> Sequence[Row]:
     """Run a pgvector ANN query returning the nearest concept IDs per query.
 
@@ -263,7 +273,7 @@ def query_concept_ids_matching_filter(
     session: Session,
     embedding_table: type[PGEmbeddingTable],
     concept_filter: EmbeddingConceptFilter,
-    dialect: str = "postgresql",
+    dialect: str = Dialect.POSTGRESQL,
 ) -> set[int]:
     """Return every ``concept_id`` satisfying *concept_filter*."""
     setup_concept_filter_temps(session, concept_filter, dialect)
@@ -277,7 +287,7 @@ def query_concept_filter_metadata(
     session: Session,
     embedding_table: type[PGEmbeddingTable],
     concept_filter: EmbeddingConceptFilter,
-    dialect: str = "postgresql",
+    dialect: str = Dialect.POSTGRESQL,
 ) -> Sequence[Row]:
     """Return filter metadata columns (raw rows) for every concept ID
     satisfying concept_filter.

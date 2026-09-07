@@ -1,7 +1,19 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any, Optional
 
+from oa_configurator import (
+    SCHEMA_TRANSLATE_MAP_KEY,
+    Dialect,
+    ResolvedDatabase,
+    Role,
+    ensure_schema,
+    guard_schema_provenance,
+    qualified,
+    schema_inspect,
+    supports_schemas,
+)
 from sqlalchemy import (
     DateTime,
     Engine,
@@ -10,7 +22,6 @@ from sqlalchemy import (
     JSON,
     String,
     func,
-    inspect,
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, mapped_column, validates, Mapped
@@ -18,10 +29,16 @@ from sqlalchemy.orm import DeclarativeBase, mapped_column, validates, Mapped
 from omop_llm import supported_providers
 
 from omop_emb.config import (
+    MODEL_REGISTRY_SCHEMA,
     IndexType,
     MetricType,
 )
 from omop_emb.backends.index_config import IndexConfig
+
+# Schema name for the model registry table. Dialects with schema support
+# store the registry table in a dedicated schema to allow schema-independent 
+# access to the registry table from any schema in the same database.
+REGISTRY_SCHEMA_KEY = "registry"
 
 
 class ModelRegistryBase(DeclarativeBase):
@@ -78,6 +95,7 @@ class ModelRegistry(ModelRegistryBase):
     """
 
     __tablename__ = "model_registry"
+    __table_args__ = {"schema": REGISTRY_SCHEMA_KEY}
 
     model_name = mapped_column(String, primary_key=True)
 
@@ -175,15 +193,34 @@ class ModelRegistry(ModelRegistryBase):
         return index_config.to_dict()
 
 
-def ensure_registry_schema(engine: Engine) -> None:
-    """Create or upgrade the model registry table.
+def _registry_schema(bindable) -> str | None:
+    """MODEL_REGISTRY_SCHEMA on a dialect with real schema support, else None."""
+    return MODEL_REGISTRY_SCHEMA if supports_schemas(bindable) else None
+
+
+def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None = None) -> None:
+    """Create or upgrade the model registry table, in its own reserved schema.
 
     Parameters
     ----------
     engine : Engine
-        SQLAlchemy engine connected to the registry database.
+        SQLAlchemy engine connected to the registry database. Not required
+        to already carry a REGISTRY_SCHEMA_KEY entry in its schema_translate_map.
+    resolved : ResolvedDatabase, optional
+        Enables the schema-provenance guard around the ``create_all()``
+        call. Omitted by callers with no resolved config behind their
+        engine, in which case the guard no-ops.
     """
-    ModelRegistryBase.metadata.create_all(engine, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
+    with engine.begin() as connection:
+        connection = connection.execution_options(
+            schema_translate_map={
+                **(connection.get_execution_options().get(SCHEMA_TRANSLATE_MAP_KEY) or {}),
+                REGISTRY_SCHEMA_KEY: _registry_schema(connection),
+            }
+        )
+        ensure_schema(connection, MODEL_REGISTRY_SCHEMA)
+        with guard_schema_provenance(connection, resolved, role=Role.PRIMARY):
+            ModelRegistryBase.metadata.create_all(connection, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
     _migrate_legacy_provider_type_column(engine)
 
 
@@ -199,7 +236,7 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
     The migration is deliberately idempotent so normal backend construction
     can safely run it for both existing and newly-created registries.
     """
-    columns = inspect(engine).get_columns(ModelRegistry.__tablename__)
+    columns = schema_inspect(engine, schema=_registry_schema(engine)).get_columns(ModelRegistry.__tablename__)
     provider_column = next(
         (column for column in columns if column["name"] == "provider_type"),
         None,
@@ -209,17 +246,28 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
 
     legacy_length = getattr(provider_column["type"], "length", None)
     with engine.begin() as connection:
-        if engine.dialect.name == "postgresql" and legacy_length is not None:
+        registry_schema = _registry_schema(connection)
+        if engine.dialect.name == Dialect.POSTGRESQL and legacy_length is not None:
+            warnings.warn(
+                "Widening a legacy fixed-length provider_type column. This "
+                "migration path is deprecated and will be removed once no "
+                "pre-omop-llm registry remains.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
             connection.execute(
                 text(
-                    "ALTER TABLE model_registry "
+                    f"ALTER TABLE {qualified(connection, ModelRegistry.__tablename__, schema=registry_schema)} "
                     "ALTER COLUMN provider_type TYPE VARCHAR "
                     "USING provider_type::text"
                 )
             )
+        # Raw text(), not update(): update() against the full mapped table
+        # would pull in updated_at's onupdate=func.now() default, which the
+        # legacy partial table (provider_type only) doesn't have.
         connection.execute(
             text(
-                "UPDATE model_registry "
+                f"UPDATE {qualified(connection, ModelRegistry.__tablename__, schema=registry_schema)} "
                 "SET provider_type = lower(provider_type) "
                 "WHERE provider_type IS NOT NULL "
                 "AND provider_type <> lower(provider_type)"

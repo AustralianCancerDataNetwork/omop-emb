@@ -7,6 +7,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 from numpy import ndarray
+from oa_configurator import Dialect
 from sqlalchemy import (
     Column,
     Engine,
@@ -158,7 +159,7 @@ def dml_upsert_rows(
     table: Table,
     records: Sequence[ConceptEmbeddingRecord],
     embeddings: ndarray,
-    dialect: str = "sqlite",
+    dialect: str = Dialect.SQLITE,
 ) -> None:
     """Upsert embedding rows into a vec0 table.
 
@@ -249,7 +250,7 @@ def query_knn_batch(
     metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
-    dialect: str = "sqlite",
+    dialect: str = Dialect.SQLITE,
 ) -> list[Sequence[Row]]:
     """Run KNN queries against a vec0 table, one per vector in *query_vectors*.
 
@@ -303,7 +304,7 @@ def query_concept_ids_matching_filter(
     session: Session,
     table: Table,
     concept_filter: EmbeddingConceptFilter,
-    dialect: str = "sqlite",
+    dialect: str = Dialect.SQLITE,
 ) -> set[int]:
     """Return every ``concept_id`` in `table` satisfying `concept_filter`.
     Used to build an exact FAISS pre-filter set, not for ranking.
@@ -356,7 +357,7 @@ def query_embeddings_by_ids(
     session: Session,
     table: Table,
     concept_ids: Sequence[int],
-    dialect: str = "sqlite",
+    dialect: str = Dialect.SQLITE,
 ) -> dict[int, list[float]]:
     """Fetch embedding vectors for a set of concept IDs.
 
@@ -419,7 +420,7 @@ def query_concept_filter_metadata(
     session: Session,
     table: Table,
     concept_filter: EmbeddingConceptFilter,
-    dialect: str = "sqlite",
+    dialect: str = Dialect.SQLITE,
 ) -> Sequence[Row]:
     """Return filter metadata columns (raw rows) for every concept ID
     satisfying concept_filter.

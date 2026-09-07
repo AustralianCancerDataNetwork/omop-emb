@@ -31,7 +31,7 @@ DEFAULT_HNSW_CONFIG = HNSWIndexConfig(
 )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def hnsw_table(pg_engine):
     with pg_engine.begin() as conn:
         conn.execute(
@@ -252,7 +252,6 @@ class TestMetricSupportGuards:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.requires_database("test_emb_db")
 @pytest.mark.pgvector
 @pytest.mark.integration
 class TestPGVectorHNSWIndexManagerIntegration:

@@ -28,14 +28,19 @@ backend = resolve_backend_from_resolved_vector_store(resolved)
 Or construct one directly:
 
 ```python
-from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+from sqlalchemy import create_engine
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 
 # sqlite-vec
-backend = SQLiteVecEmbeddingBackend.from_path(db_path="/data/omop_emb.db")
+backend = SQLiteVecEmbeddingBackend(
+    emb_engine=create_sqlitevec_engine(create_engine("sqlite:///data/omop_emb.db"))
+)
 
 # pgvector
-backend = PGVectorEmbeddingBackend.from_db_url(db_url="postgresql+psycopg://user:pass@host:5432/db")
+backend = PGVectorEmbeddingBackend(
+    emb_engine=create_engine("postgresql+psycopg://user:pass@host:5432/db")
+)
 ```
 
 ---

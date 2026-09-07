@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
-from sqlalchemy import Engine, select, text, create_engine
+from oa_configurator import Dialect, ResolvedDatabase
+from sqlalchemy import Engine, select, text
 
 try:
     from pgvector.sqlalchemy import Vector  # noqa: F401
@@ -78,25 +79,14 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     ``__init__``.
     """
 
-    def __init__(self, emb_engine: Engine) -> None:
+    def __init__(
+        self,
+        emb_engine: Engine,
+        *,
+        resolved: ResolvedDatabase | None = None,
+    ) -> None:
         self._index_managers: dict[str, PGVectorBaseIndexManager] = {}
-        super().__init__(emb_engine=emb_engine)
-
-    @classmethod
-    def from_db_url(cls, db_url: str) -> PGVectorEmbeddingBackend:
-        """Create a pgvector embedding backend from a database URL.
-
-        Parameters
-        ----------
-        db_url : str
-            Database URL in SQLAlchemy format, e.g. ``postgresql://user:pass@host:port/dbname``.
-
-        Returns
-        -------
-        PGVectorEmbeddingBackend
-        """
-        engine = create_engine(db_url, echo=False)
-        return cls(emb_engine=engine)
+        super().__init__(emb_engine=emb_engine, resolved=resolved)
 
     # ------------------------------------------------------------------
     # Backend identity
@@ -108,7 +98,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
 
     @property
     def dialect(self) -> str:
-        return "postgresql"
+        return Dialect.POSTGRESQL
 
     # ------------------------------------------------------------------
     # Store lifecycle
@@ -135,7 +125,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         self, model_record: EmbeddingModelRecord
     ) -> type[PGEmbeddingTable]:
         return create_pg_embedding_table(
-            engine=self.emb_engine, model_record=model_record
+            engine=self.emb_engine,
+            model_record=model_record,
+            resolved=self._resolved,
         )
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:

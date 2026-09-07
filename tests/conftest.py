@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Iterator
-
 import numpy as np
 import pytest
 import sqlalchemy as sa
@@ -58,7 +56,7 @@ QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
 # ---------------------------------------------------------------------------
 # PostgreSQL config (integration tests only)
 #
-# Resolved via OA_Configurator resource 'test_emb_db' in ~/.config/omop/config.toml.
+# Resolved via OA_Configurator resource 'test_emb_db_pg' in ~/.config/omop/config.toml.
 # Run: omop-config configure omop_emb (answer Y when asked to configure test database).
 # ---------------------------------------------------------------------------
 
@@ -69,11 +67,16 @@ QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
 
 
 @pytest.fixture
-def svec_engine():
-    """In-memory SQLiteVec engine, fresh per test."""
-    engine = create_sqlitevec_engine(":memory:")
-    yield engine
-    engine.dispose()
+def svec_engine(request):
+    """Fresh SQLiteVec engine per test, via oa-configurator's canonical
+    dialect-agnostic test-database entrypoint rather than a hand-built
+    ``sa.create_engine()``."""
+    from oa_configurator.testing import isolated_test_database
+
+    with isolated_test_database(
+        OmopEmbConfig, "test_emb_db_sqlite", dialect="sqlite", request=request
+    ) as db:
+        yield create_sqlitevec_engine(db.connection.engine)
 
 
 @pytest.fixture
@@ -87,29 +90,26 @@ def svec_backend(svec_engine) -> SQLiteVecEmbeddingBackend:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
-def pg_engine() -> Iterator[sa.Engine]:
-    """Session-scoped PostgreSQL engine. Skipped when test_emb_db is not configured."""
-    from oa_configurator.pytest_plugin import (
-        create_fresh_test_db,
-        drop_test_db,
-        ensure_test_user_exists,
-        require_pg_extension,
-        resolve_test_database,
-    )
+@pytest.fixture
+def pg_db(request):
+    """Canonical isolated PostgreSQL test database (Phase 0 of the
+    schema_translate_map fix)."""
+    from oa_configurator.testing import isolated_test_database
 
-    raw_url = resolve_test_database(OmopEmbConfig, "test_emb_db")
-    ensure_test_user_exists(raw_url)
-    url = create_fresh_test_db(raw_url, extensions=["vector"])
-    require_pg_extension(url, "vector")  # defensive: verify installation succeeded
-    engine = sa.create_engine(url, echo=False, future=True)
-    try:
-        with engine.connect() as conn:
-            conn.execute(sa.text("SELECT 1"))
-        yield engine
-    finally:
-        engine.dispose()
-        drop_test_db(raw_url)
+    with isolated_test_database(
+        OmopEmbConfig, "test_emb_db_pg", extensions=["vector"], request=request
+    ) as db:
+        yield db
+
+
+@pytest.fixture
+def pg_engine(pg_db) -> sa.Engine:
+    """Real, committing engine for ``PGVectorEmbeddingBackend`` (needs
+    ``.begin()``/``.connect()`` semantics a bare ``Connection`` can't give).
+    A thin shim over ``pg_db.connection.engine``; isolation comes from
+    ``pg_backend``'s teardown (drops each model's table), not a rollback.
+    """
+    return pg_db.committing_engine
 
 
 @pytest.fixture

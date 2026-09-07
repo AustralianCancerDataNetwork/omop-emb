@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from sqlalchemy import create_engine
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
-from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
 from omop_emb.config import MetricType
 
 from .conftest import (
@@ -129,9 +130,11 @@ class TestSQLiteVecSpecific:
         assert r1.storage_identifier == r2.storage_identifier
         assert len(svec_backend.get_registered_models(model_name=MODEL_NAME)) == 1
 
-    def test_from_path_constructor(self, tmp_path):
+    def test_file_backed_engine_constructor(self, tmp_path):
+        """A real file-backed (not just in-memory) engine works end to end."""
         db_file = str(tmp_path / "test.db")
-        backend = SQLiteVecEmbeddingBackend.from_path(db_file)
+        engine = create_sqlitevec_engine(create_engine(f"sqlite:///{db_file}"))
+        backend = SQLiteVecEmbeddingBackend(emb_engine=engine)
         record = backend.register_model(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,

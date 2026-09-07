@@ -16,7 +16,13 @@ from oa_configurator import (
     Resolver,
     ResolvedVectorStore,
     VectorStoreConfig,
+    register_reserved_schema,
 )
+
+# Guaranteed to be imported and registered if there is a config
+MODEL_REGISTRY_SCHEMA: str = "omop_emb_registry"
+
+register_reserved_schema(MODEL_REGISTRY_SCHEMA, owner="omop_emb")
 
 
 class OmopEmbConfig(PackageConfigBase):
@@ -37,7 +43,18 @@ class OmopEmbConfig(PackageConfigBase):
     extra_logging_namespaces: ClassVar[tuple[str, ...]] = ("orm_loader", "omop_alchemy")
 
     cdm_db: Annotated[str, RefTo(CDMDatabaseConfig)] = "cdm_db"
-    test_emb_db: Annotated[str | None, RefTo(GenericDatabaseConfig, is_test=True)] = None
+    test_emb_db_pg: Annotated[str | None, RefTo(GenericDatabaseConfig, is_test=True)] = Field(
+        default=None,
+        description="Real PostgreSQL test database, for Postgres-only integration testing.",
+    )
+    test_emb_db_sqlite: Annotated[str | None, RefTo(GenericDatabaseConfig, is_test=True)] = Field(
+        default=None,
+        description=(
+            "Disposable SQLite test database; left unconfigured by design "
+            "since isolated_test_database(..., dialect='sqlite') provisions "
+            "one without needing a config entry."
+        ),
+    )
     embedding_model_name: Annotated[str, RefTo(ModelConfig)] = Field(
         default="embedding-model",
         description=(

@@ -11,7 +11,7 @@ from typing import Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from numpy import ndarray
-from oa_configurator import ResolvedDatabase
+from oa_configurator import Dialect, ResolvedDatabase
 from sqlalchemy import Engine, MetaData, Table, event, text
 
 try:
@@ -112,7 +112,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
 
     @property
     def dialect(self) -> str:
-        return "sqlite"
+        return Dialect.SQLITE
 
     # ------------------------------------------------------------------
     # Storage table management

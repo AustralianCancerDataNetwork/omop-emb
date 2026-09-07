@@ -6,7 +6,13 @@ import logging
 from datetime import datetime
 from typing import Any, Callable, Generic, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 from numpy import ndarray
-from oa_configurator import ResolvedDatabase, ResolvedVectorStore, supports_schemas
+from oa_configurator import (
+    SCHEMA_TRANSLATE_MAP_KEY,
+    Dialect,
+    ResolvedDatabase,
+    ResolvedVectorStore,
+    supports_schemas,
+)
 from sqlalchemy import Engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
@@ -1044,27 +1050,28 @@ def resolve_backend(
     dialect = make_url(database.connection.url).get_backend_name()
 
     # The model registry lives in its own reserved schema (MODEL_REGISTRY_SCHEMA),
-    # independent of database's own schema -- added on top of database's own
-    # translate map, not passed as a bare override, since create_engine()'s
-    # execution_options replaces the whole map rather than merging it.
+    # independent of database's own schema. create_engine() merges this extra
+    # key onto its own configured map rather than replacing it.
     registry_schema = MODEL_REGISTRY_SCHEMA if supports_schemas(database.connection.dialect_name) else None
-    schema_translate_map = {**database.schema_translate_map(), REGISTRY_SCHEMA_KEY: registry_schema}
+    registry_schema_translate_map = {REGISTRY_SCHEMA_KEY: registry_schema}
 
     if resolved_backend == BackendType.SQLITEVEC:
         from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
 
-        if dialect != "sqlite":
+        if dialect != Dialect.SQLITE:
             raise RuntimeError(
                 f"sqlitevec backend requires a sqlite-dialect database, got dialect: {dialect!r}."
             )
         emb_engine = create_sqlitevec_engine(
-            database.create_engine(execution_options={"schema_translate_map": schema_translate_map})
+            database.create_engine(
+                execution_options={SCHEMA_TRANSLATE_MAP_KEY: registry_schema_translate_map}
+            )
         )
         logger.info(f"Using SQLiteVec backend with engine: {emb_engine.url}")
         return SQLiteVecEmbeddingBackend(emb_engine=emb_engine, resolved=database)
 
     if resolved_backend == BackendType.PGVECTOR:
-        if dialect != "postgresql":
+        if dialect != Dialect.POSTGRESQL:
             raise RuntimeError(
                 "The resolved URL must point to a PostgreSQL database "
                 f"(pgvector extension required), got dialect: {dialect!r}."
@@ -1076,7 +1083,9 @@ def resolve_backend(
                 "pgvector backend is not installed. "
                 "Install it with: pip install omop-emb[pgvector]"
             ) from exc
-        emb_engine = database.create_engine(execution_options={"schema_translate_map": schema_translate_map})
+        emb_engine = database.create_engine(
+            execution_options={SCHEMA_TRANSLATE_MAP_KEY: registry_schema_translate_map}
+        )
         logger.info(f"Using pgvector backend with engine: {emb_engine.url}")
         return PGVectorEmbeddingBackend(emb_engine=emb_engine, resolved=database)
 

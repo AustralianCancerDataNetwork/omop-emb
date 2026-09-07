@@ -15,7 +15,7 @@ import logging
 from typing import List, Optional, Sequence, Union
 
 from numpy import ndarray
-from oa_configurator import ResolvedDatabase, Role, guard_schema_provenance, qualified, schema_inspect
+from oa_configurator import Dialect, ResolvedDatabase, Role, guard_schema_provenance, qualified, schema_inspect
 from sqlalchemy import Engine, Integer, Row, Select, func, inspect as sa_inspect, literal, select, text, TextClause
 from sqlalchemy.sql import cast, column, values
 from sqlalchemy.sql.elements import ColumnElement
@@ -185,7 +185,7 @@ def query_nearest_concept_ids(
     metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
-    dialect: str = "postgresql",
+    dialect: str = Dialect.POSTGRESQL,
 ) -> Sequence[Row]:
     """Run a pgvector ANN query returning the nearest concept IDs per query.
 
@@ -273,7 +273,7 @@ def query_concept_ids_matching_filter(
     session: Session,
     embedding_table: type[PGEmbeddingTable],
     concept_filter: EmbeddingConceptFilter,
-    dialect: str = "postgresql",
+    dialect: str = Dialect.POSTGRESQL,
 ) -> set[int]:
     """Return every ``concept_id`` satisfying *concept_filter*."""
     setup_concept_filter_temps(session, concept_filter, dialect)
@@ -287,7 +287,7 @@ def query_concept_filter_metadata(
     session: Session,
     embedding_table: type[PGEmbeddingTable],
     concept_filter: EmbeddingConceptFilter,
-    dialect: str = "postgresql",
+    dialect: str = Dialect.POSTGRESQL,
 ) -> Sequence[Row]:
     """Return filter metadata columns (raw rows) for every concept ID
     satisfying concept_filter.

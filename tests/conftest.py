@@ -109,7 +109,7 @@ def pg_engine(pg_db) -> sa.Engine:
     A thin shim over ``pg_db.connection.engine``; isolation comes from
     ``pg_backend``'s teardown (drops each model's table), not a rollback.
     """
-    return pg_db.connection.engine
+    return pg_db.committing_engine
 
 
 @pytest.fixture

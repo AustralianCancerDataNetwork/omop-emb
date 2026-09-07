@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
-from oa_configurator import ResolvedDatabase
+from oa_configurator import Dialect, ResolvedDatabase
 from sqlalchemy import Engine, select, text
 
 try:
@@ -98,7 +98,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
 
     @property
     def dialect(self) -> str:
-        return "postgresql"
+        return Dialect.POSTGRESQL
 
     # ------------------------------------------------------------------
     # Store lifecycle

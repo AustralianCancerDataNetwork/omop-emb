@@ -4,6 +4,8 @@ import warnings
 from typing import Any, Optional
 
 from oa_configurator import (
+    SCHEMA_TRANSLATE_MAP_KEY,
+    Dialect,
     ResolvedDatabase,
     Role,
     ensure_schema,
@@ -212,7 +214,7 @@ def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None =
     with engine.begin() as connection:
         connection = connection.execution_options(
             schema_translate_map={
-                **(connection.get_execution_options().get("schema_translate_map") or {}),
+                **(connection.get_execution_options().get(SCHEMA_TRANSLATE_MAP_KEY) or {}),
                 REGISTRY_SCHEMA_KEY: _registry_schema(connection),
             }
         )
@@ -245,7 +247,7 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
     legacy_length = getattr(provider_column["type"], "length", None)
     with engine.begin() as connection:
         registry_schema = _registry_schema(connection)
-        if engine.dialect.name == "postgresql" and legacy_length is not None:
+        if engine.dialect.name == Dialect.POSTGRESQL and legacy_length is not None:
             warnings.warn(
                 "Widening a legacy fixed-length provider_type column. This "
                 "migration path is deprecated and will be removed once no "

@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timezone
 from typing import Mapping, Optional
 
-from oa_configurator import ResolvedDatabase, schema_inspect
+from oa_configurator import SCHEMA_TRANSLATE_MAP_KEY, ResolvedDatabase, schema_inspect
 from sqlalchemy import Engine, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -53,7 +53,7 @@ class RegistryManager:
     ) -> None:
         self._embedding_engine = embedding_engine.execution_options(
             schema_translate_map={
-                **(embedding_engine.get_execution_options().get("schema_translate_map") or {}),
+                **(embedding_engine.get_execution_options().get(SCHEMA_TRANSLATE_MAP_KEY) or {}),
                 REGISTRY_SCHEMA_KEY: _registry_schema(embedding_engine),
             }
         )

@@ -26,6 +26,8 @@ from oa_configurator.testing import delete_rows_on_cleanup, isolated_test_schema
 from omop_emb.backends.pgvector.pg_backend import PGVectorEmbeddingBackend
 from omop_emb.config import MODEL_REGISTRY_SCHEMA
 
+from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE
+
 pytestmark = [pytest.mark.postgresql, pytest.mark.db_dialect]
 
 
@@ -113,3 +115,35 @@ def test_registry_schema_guard_fires_on_genuine_registry_drift(pg_db, pg_engine,
     engine = pg_engine.execution_options(schema_translate_map={"primary": "unrelated_primary_schema"})
     with pytest.raises(SchemaDriftError):
         PGVectorEmbeddingBackend(emb_engine=engine, resolved=resolved)
+
+
+def test_primary_schema_guard_fires_on_genuine_primary_drift(pg_db, pg_engine, cleanup_after_test):
+    """Tests embedding storage table's own guard. Only triggered
+    once a model is actually registered, not at backend construction time.
+    Restores the PRIMARY-role drift coverage a prior rewrite replaced instead
+    of adding alongside"""
+    _establish_registry_baseline(pg_db, pg_engine, cleanup_after_test)
+    table = _schema_provenance_table(SCHEMA_PROVENANCE_SCHEMA)
+    database_name = f"emb_guard_db_{uuid.uuid4().hex[:8]}"
+    delete_rows_on_cleanup(
+        cleanup_after_test, pg_engine, table, table.c.database_name == database_name
+    )
+
+    with (
+        isolated_test_schema(pg_engine, prefix="emb_guard_primary_a") as schema_a,
+        isolated_test_schema(pg_engine, prefix="emb_guard_primary_b") as schema_b,
+    ):
+        resolved_a = _resolved(pg_db, database_name=database_name, schema=schema_a)
+        engine_a = pg_engine.execution_options(schema_translate_map={"primary": schema_a})
+        backend_a = PGVectorEmbeddingBackend(emb_engine=engine_a, resolved=resolved_a)
+        backend_a.register_model(
+            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, dimensions=EMBEDDING_DIM
+        )
+
+        resolved_b = _resolved(pg_db, database_name=database_name, schema=schema_b)
+        engine_b = pg_engine.execution_options(schema_translate_map={"primary": schema_b})
+        # Constructing backend_b already reloads the model registered above
+        # (shared registry schema, same database_name) and tries to load its
+        # storage table under the new schema, which is where the guard fires
+        with pytest.raises(SchemaDriftError):
+            PGVectorEmbeddingBackend(emb_engine=engine_b, resolved=resolved_b)

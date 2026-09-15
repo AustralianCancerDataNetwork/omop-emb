@@ -193,7 +193,7 @@ class ModelRegistry(ModelRegistryBase):
         return index_config.to_dict()
 
 
-def _registry_schema(bindable) -> str | None:
+def resolve_registry_schema(bindable) -> str | None:
     """MODEL_REGISTRY_SCHEMA on a dialect with real schema support, else None."""
     return MODEL_REGISTRY_SCHEMA if supports_schemas(bindable) else None
 
@@ -225,11 +225,11 @@ def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None =
         connection = connection.execution_options(
             schema_translate_map={
                 **(connection.get_execution_options().get(SCHEMA_TRANSLATE_MAP_KEY) or {}),
-                REGISTRY_SCHEMA_KEY: _registry_schema(connection),
+                REGISTRY_SCHEMA_KEY: resolve_registry_schema(connection),
             }
         )
         ensure_schema(connection, MODEL_REGISTRY_SCHEMA)
-        registry_schema = _registry_schema(connection)
+        registry_schema = resolve_registry_schema(connection)
         guard = (
             guard_schema_provenance(
                 connection, resolved, role=registry_schema, shared_as=MODEL_REGISTRY_SCHEMA
@@ -254,7 +254,7 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
     The migration is deliberately idempotent so normal backend construction
     can safely run it for both existing and newly-created registries.
     """
-    columns = schema_inspect(engine, schema=_registry_schema(engine)).get_columns(ModelRegistry.__tablename__)
+    columns = schema_inspect(engine, schema=resolve_registry_schema(engine)).get_columns(ModelRegistry.__tablename__)
     provider_column = next(
         (column for column in columns if column["name"] == "provider_type"),
         None,
@@ -264,7 +264,7 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
 
     legacy_length = getattr(provider_column["type"], "length", None)
     with engine.begin() as connection:
-        registry_schema = _registry_schema(connection)
+        registry_schema = resolve_registry_schema(connection)
         if engine.dialect.name == Dialect.POSTGRESQL and legacy_length is not None:
             warnings.warn(
                 "Widening a legacy fixed-length provider_type column. This "

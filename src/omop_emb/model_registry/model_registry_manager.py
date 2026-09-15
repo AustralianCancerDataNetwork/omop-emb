@@ -17,8 +17,8 @@ from omop_emb.backends.index_config import (
 from omop_emb.model_registry.model_registry_orm import (
     REGISTRY_SCHEMA_KEY,
     ModelRegistry,
-    _registry_schema,
     ensure_registry_table,
+    resolve_registry_schema,
 )
 from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
 from omop_emb.utils.errors import ModelRegistrationConflictError
@@ -54,13 +54,13 @@ class RegistryManager:
         self._embedding_engine = embedding_engine.execution_options(
             schema_translate_map={
                 **(embedding_engine.get_execution_options().get(SCHEMA_TRANSLATE_MAP_KEY) or {}),
-                REGISTRY_SCHEMA_KEY: _registry_schema(embedding_engine),
+                REGISTRY_SCHEMA_KEY: resolve_registry_schema(embedding_engine),
             }
         )
         self._embedding_sessionmaker = sessionmaker(self._embedding_engine)
         self._read_only = not initialize
         self._registry_available = schema_inspect(
-            self._embedding_engine, schema=_registry_schema(self._embedding_engine)
+            self._embedding_engine, schema=resolve_registry_schema(self._embedding_engine)
         ).has_table(ModelRegistry.__tablename__)
         if initialize:
             ensure_registry_table(self._embedding_engine, resolved=resolved)

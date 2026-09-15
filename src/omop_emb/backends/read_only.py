@@ -12,8 +12,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from oa_configurator import Dialect, ResolvedVectorStore
-from sqlalchemy import Engine, event, inspect, select
+from oa_configurator import Dialect, ResolvedVectorStore, qualified, schema_inspect
+from sqlalchemy import Engine, event, select
 
 from omop_emb.backends.base_backend import (
     EmbeddingBackend,
@@ -92,8 +92,8 @@ class ReadOnlyEmbeddingStore:
         record = self.model(model_name)
         if record is None:
             return
-        inspector = inspect(self._engine)
-        if not inspector.has_table(record.storage_identifier, schema=self.schema):
+        inspector = schema_inspect(self._engine, schema=self.schema)
+        if not inspector.has_table(record.storage_identifier):
             return
         schema = (
             None
@@ -136,9 +136,8 @@ class ReadOnlyEmbeddingStore:
         expected_prefix = f"idx_{record.storage_identifier}_"
         return tuple(
             str(item["name"])
-            for item in inspect(self._engine).get_indexes(
+            for item in schema_inspect(self._engine, schema=self.schema).get_indexes(
                 record.storage_identifier,
-                schema=self.schema,
             )
             if str(item["name"]).startswith(expected_prefix)
         )
@@ -146,10 +145,8 @@ class ReadOnlyEmbeddingStore:
     def drop_index_sql(self, model_name: str) -> tuple[str, ...]:
         """Return reviewed index-removal statements without executing them."""
 
-        quote = self._engine.dialect.identifier_preparer.quote
-        schema_prefix = f"{quote(self.schema)}." if self.schema else ""
         return tuple(
-            f"DROP INDEX IF EXISTS {schema_prefix}{quote(name)};"
+            f"DROP INDEX IF EXISTS {qualified(self._engine, name, schema=self.schema)};"
             for name in self.physical_indexes(model_name)
         )
 

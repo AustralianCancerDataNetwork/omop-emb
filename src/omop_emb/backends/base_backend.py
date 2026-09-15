@@ -11,14 +11,12 @@ from oa_configurator import (
     Dialect,
     ResolvedDatabase,
     ResolvedVectorStore,
-    supports_schemas,
 )
 from sqlalchemy import Engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from omop_emb.config import (
-    MODEL_REGISTRY_SCHEMA,
     BackendType,
     MetricType,
     IndexType,
@@ -30,6 +28,7 @@ from omop_emb.config import (
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig
 from omop_emb.model_registry import EmbeddingModelRecord, REGISTRY_SCHEMA_KEY, RegistryManager
+from omop_emb.model_registry.model_registry_orm import _registry_schema
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,
@@ -1052,7 +1051,7 @@ def resolve_backend(
     # The model registry lives in its own reserved schema (MODEL_REGISTRY_SCHEMA),
     # independent of database's own schema. create_engine() merges this extra
     # key onto its own configured map rather than replacing it.
-    registry_schema = MODEL_REGISTRY_SCHEMA if supports_schemas(database.connection.dialect_name) else None
+    registry_schema = _registry_schema(database.connection.dialect_name)
     registry_schema_translate_map = {REGISTRY_SCHEMA_KEY: registry_schema}
 
     if resolved_backend == BackendType.SQLITEVEC:

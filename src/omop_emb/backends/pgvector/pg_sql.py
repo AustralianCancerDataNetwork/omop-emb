@@ -15,7 +15,16 @@ import logging
 from typing import List, Optional, Sequence, Union
 
 from numpy import ndarray
-from oa_configurator import Dialect, ResolvedDatabase, Role, guard_schema_provenance, qualified, schema_inspect
+from oa_configurator import (
+    Dialect,
+    ResolvedDatabase,
+    Role,
+    ensure_schema,
+    guard_schema_provenance,
+    qualified,
+    schema_inspect,
+    schema_of,
+)
 from sqlalchemy import Engine, Integer, Row, Select, func, inspect as sa_inspect, literal, select, text, TextClause
 from sqlalchemy.sql import cast, column, values
 from sqlalchemy.sql.elements import ColumnElement
@@ -66,6 +75,8 @@ def create_pg_embedding_table(
     """
     table_cls = pg_embedding_table_descriptor(model_record)
     with engine.begin() as connection:
+        # Ensure that the schema exists before creating the table
+        ensure_schema(connection, schema_of(connection, role=Role.PRIMARY))
         with guard_schema_provenance(connection, resolved, role=Role.PRIMARY):
             EmbeddingTableBase.metadata.create_all(connection, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
     return table_cls
@@ -383,7 +394,7 @@ def pg_embedding_table_descriptor(model_record: EmbeddingModelRecord) -> type[PG
         (PGEmbeddingTable,),
         {
             "__tablename__": tablename,
-            "__table_args__": {"extend_existing": True},
+            "__table_args__": {"schema": Role.PRIMARY.value, "extend_existing": True},
             "__module__": __name__,
             EMBEDDING_COLUMN_NAME: emb_col,
         },

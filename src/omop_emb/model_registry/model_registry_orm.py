@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import warnings
+from contextlib import nullcontext
 from typing import Any, Optional
 
 from oa_configurator import (
     SCHEMA_TRANSLATE_MAP_KEY,
     Dialect,
     ResolvedDatabase,
-    Role,
     ensure_schema,
     guard_schema_provenance,
     qualified,
@@ -200,6 +200,16 @@ def _registry_schema(bindable) -> str | None:
 
 def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None = None) -> None:
     """Create or upgrade the model registry table, in its own reserved schema.
+    
+
+    Notes
+    -----
+    The registry table is shared across all resolved databases that share the same connection 
+    (e.g. a single Postgres instance with CDM and Vector Store). Without specifying 
+    `shared_as=MODEL_REGISTRY_SCHEMA`, each entry's own resolved.name would be tracked as a 
+    separate identity yet the schema already exists in the database. A second configured 
+    database with the same connection would raise a false-positive finding of "already populated".
+    
 
     Parameters
     ----------
@@ -219,7 +229,15 @@ def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None =
             }
         )
         ensure_schema(connection, MODEL_REGISTRY_SCHEMA)
-        with guard_schema_provenance(connection, resolved, role=Role.PRIMARY):
+        registry_schema = _registry_schema(connection)
+        guard = (
+            guard_schema_provenance(
+                connection, resolved, role=registry_schema, shared_as=MODEL_REGISTRY_SCHEMA
+            )
+            if registry_schema is not None
+            else nullcontext()
+        )
+        with guard:
             ModelRegistryBase.metadata.create_all(connection, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
     _migrate_legacy_provider_type_column(engine)
 

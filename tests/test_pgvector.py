@@ -13,7 +13,7 @@ pytest.importorskip(
     "pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests"
 )
 
-from oa_configurator import schema_inspect
+from oa_configurator import Role, schema_inspect
 from oa_configurator.testing import isolated_test_schema
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
@@ -146,7 +146,8 @@ class TestPGVectorHNSWBackend:
 class TestPGVectorNonDefaultSchema:
     """Every method here defaulted to the public schema in existing coverage,
     so a bug that silently ignored schema_translate_map would still pass
-    every other test in this file. This is what actually catches that."""
+    every other test in this file. This is what actually catches that.
+    """
 
     HNSW_CONFIG = HNSWIndexConfig(
         metric_type=MetricType.L2, num_neighbors=4, ef_search=8, ef_construction=16
@@ -156,7 +157,7 @@ class TestPGVectorNonDefaultSchema:
     def scoped_backend(self, pg_engine):
         with isolated_test_schema(pg_engine, prefix="emb_schema") as schema:
             scoped_engine = pg_engine.execution_options(
-                schema_translate_map={None: schema}
+                schema_translate_map={Role.PRIMARY.value: schema}
             )
             backend = PGVectorEmbeddingBackend(emb_engine=scoped_engine)
             yield backend, schema
@@ -214,14 +215,18 @@ class TestPGVectorNonDefaultSchema:
             dimensions=EMBEDDING_DIM,
         )
 
-        scoped_engine = pg_engine.execution_options(schema_translate_map={None: schema})
+        scoped_engine = pg_engine.execution_options(
+            schema_translate_map={Role.PRIMARY.value: schema}
+        )
         registry = RegistryManager.read_only(scoped_engine)
         assert registry.registry_available is True
         assert len(registry.get_registered_models(model_name=MODEL_NAME)) == 1
 
-        # A registry built with a completely different None-key schema sees
-        # the exact same row: the registry is decoupled from it entirely.
-        public_engine = pg_engine.execution_options(schema_translate_map={None: "public"})
+        # A registry built with a completely different primary-role schema
+        # sees the exact same row: the registry is decoupled from it entirely.
+        public_engine = pg_engine.execution_options(
+            schema_translate_map={Role.PRIMARY.value: "public"}
+        )
         public_registry = RegistryManager.read_only(public_engine)
         assert public_registry.registry_available is True
         assert len(public_registry.get_registered_models(model_name=MODEL_NAME)) == 1

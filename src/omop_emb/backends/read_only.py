@@ -49,11 +49,11 @@ class ReadOnlyEmbeddingStore:
         engine: Engine,
         *,
         backend_type: str | BackendType,
-        schema: str | None,
+        physical_schema: str | None,
     ) -> None:
         self._engine = engine
         self.backend_type = parse_backend_type(backend_type)
-        self.schema = schema
+        self.physical_schema = physical_schema
         self._registry = RegistryManager.read_only(engine)
 
     def __enter__(self) -> ReadOnlyEmbeddingStore:
@@ -98,12 +98,12 @@ class ReadOnlyEmbeddingStore:
         if record is None:
             return
         inspector = inspect(self._engine)
-        if not inspector.has_table(record.storage_identifier, schema=self.schema):
+        if not inspector.has_table(record.storage_identifier, schema=self.physical_schema):
             return
-        schema = schema_if_supported(self.schema, self._engine)
+        physical_schema = schema_if_supported(self.physical_schema, self._engine)
         table = concept_metadata_table_descriptor(
             record.storage_identifier,
-            schema=schema,
+            schema=physical_schema,
         )
         statement = streamed(
             select(
@@ -138,7 +138,7 @@ class ReadOnlyEmbeddingStore:
         return tuple(
             str(item["name"])
             for item in inspect(self._engine).get_indexes(
-                record.storage_identifier, schema=self.schema,
+                record.storage_identifier, schema=self.physical_schema,
             )
             if str(item["name"]).startswith(expected_prefix)
         )
@@ -147,7 +147,7 @@ class ReadOnlyEmbeddingStore:
         """Return reviewed index-removal statements without executing them."""
 
         return tuple(
-            f"DROP INDEX IF EXISTS {qualified(self._engine, name, physical_schema=self.schema)};"
+            f"DROP INDEX IF EXISTS {qualified(self._engine, name, physical_schema=self.physical_schema)};"
             for name in self.physical_indexes(model_name)
         )
 
@@ -187,7 +187,7 @@ def inspect_resolved_vector_store(
         return ReadOnlyEmbeddingStore(
             engine,
             backend_type=resolved.backend_type,
-            schema=resolved.database.schema_name,
+            physical_schema=resolved.database.schema_name,
         )
     except Exception:
         engine.dispose()

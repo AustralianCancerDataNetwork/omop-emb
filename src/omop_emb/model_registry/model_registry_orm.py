@@ -189,7 +189,7 @@ class ModelRegistry(ModelRegistryBase):
         return index_config.to_dict()
 
 
-def resolve_registry_schema(bindable) -> str | None:
+def resolve_registry_physical_schema(bindable) -> str | None:
     """MODEL_REGISTRY_SCHEMA on a dialect with real schema support, else None."""
     return MODEL_REGISTRY_SCHEMA if supports_schemas(bindable) else None
 
@@ -217,11 +217,11 @@ def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None =
         connection = connection.execution_options(
             schema_translate_map={
                 **(connection.get_execution_options().get(SCHEMA_TRANSLATE_MAP_KEY) or {}),
-                REGISTRY_SCHEMA_KEY: resolve_registry_schema(connection),
+                REGISTRY_SCHEMA_KEY: resolve_registry_physical_schema(connection),
             }
         )
         ensure_schema(connection, MODEL_REGISTRY_SCHEMA)
-        registry_schema = resolve_registry_schema(connection)
+        registry_schema = resolve_registry_physical_schema(connection)
         guard = (
             guard_schema_provenance(
                 connection,
@@ -252,7 +252,7 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
     can safely run it for both existing and newly-created registries.
     """
     columns = inspect(engine).get_columns(
-        ModelRegistry.__tablename__, schema=resolve_registry_schema(engine)
+        ModelRegistry.__tablename__, schema=resolve_registry_physical_schema(engine)
     )
     provider_column = next(
         (column for column in columns if column["name"] == "provider_type"),
@@ -263,7 +263,7 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
 
     legacy_length = getattr(provider_column["type"], "length", None)
     with engine.begin() as connection:
-        registry_schema = resolve_registry_schema(connection)
+        registry_schema = resolve_registry_physical_schema(connection)
         if engine.dialect.name == Dialect.POSTGRESQL and legacy_length is not None:
             warnings.warn(
                 "Widening a legacy fixed-length provider_type column. This "

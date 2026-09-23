@@ -4,7 +4,7 @@ from omop_emb.model_registry.model_registry_orm import (
     REGISTRY_SCHEMA_KEY,
     ModelRegistry,
     ensure_registry_table,
-    resolve_registry_schema,
+    resolve_registry_physical_schema,
 )
 
 __all__ = [
@@ -13,5 +13,5 @@ __all__ = [
     "ModelRegistry",
     "ensure_registry_table",
     "REGISTRY_SCHEMA_KEY",
-    "resolve_registry_schema",
+    "resolve_registry_physical_schema",
 ]

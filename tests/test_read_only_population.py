@@ -35,7 +35,7 @@ def test_read_only_registry_does_not_create_schema() -> None:
     store = ReadOnlyEmbeddingStore(
         engine,
         backend_type="sqlitevec",
-        schema="main",
+        physical_schema="main",
     )
 
     assert store.initialized is False
@@ -50,7 +50,7 @@ def test_explicit_registry_initialization_is_visible_to_read_only_store() -> Non
     store = ReadOnlyEmbeddingStore(
         engine,
         backend_type="sqlitevec",
-        schema="main",
+        physical_schema="main",
     )
 
     assert store.initialized is True
@@ -93,7 +93,7 @@ def test_stored_embeddings_use_read_only_core_query() -> None:
         with ReadOnlyEmbeddingStore(
             engine,
             backend_type="sqlitevec",
-            schema="main",
+            physical_schema="main",
         ) as store:
             assert store.stored_embeddings("test-model") == (
                 StoredEmbedding(7, "Condition", "SNOMED", True, True),

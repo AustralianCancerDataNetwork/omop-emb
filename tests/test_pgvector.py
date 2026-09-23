@@ -13,7 +13,8 @@ pytest.importorskip(
     "pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests"
 )
 
-from oa_configurator import Role, schema_inspect
+import sqlalchemy as sa
+from oa_configurator import Role
 from oa_configurator.testing import isolated_test_schema
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
@@ -182,8 +183,8 @@ class TestPGVectorNonDefaultSchema:
         # table_exists() sees it in the configured schema...
         assert backend._storage_table_exists(record) is True
         # ...and a bare inspector scoped to "public" doesn't.
-        assert schema_inspect(pg_engine, schema="public").has_table(
-            record.storage_identifier
+        assert sa.inspect(pg_engine).has_table(
+            record.storage_identifier, schema="public"
         ) is False
 
         # get_indexes()/drop_index(): rebuild to HNSW, confirm the index lands
@@ -191,8 +192,8 @@ class TestPGVectorNonDefaultSchema:
         backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
         manager = backend.get_index_manager(record.storage_identifier)
         assert manager.has_index(MetricType.L2) is True
-        indexes_in_schema = schema_inspect(pg_engine, schema=schema).get_indexes(
-            record.storage_identifier
+        indexes_in_schema = sa.inspect(pg_engine).get_indexes(
+            record.storage_identifier, schema=schema
         )
         assert any(
             idx["name"] == manager._index_name(MetricType.L2) for idx in indexes_in_schema
@@ -222,7 +223,7 @@ class TestPGVectorNonDefaultSchema:
         assert registry.registry_available is True
         assert len(registry.get_registered_models(model_name=MODEL_NAME)) == 1
 
-        # A registry built with a completely different primary-role schema
+        # A registry built with a completely different primary-tagged schema
         # sees the exact same row: the registry is decoupled from it entirely.
         public_engine = pg_engine.execution_options(
             schema_translate_map={Role.PRIMARY.value: "public"}
@@ -232,4 +233,4 @@ class TestPGVectorNonDefaultSchema:
         assert len(public_registry.get_registered_models(model_name=MODEL_NAME)) == 1
 
         # And genuinely never created under the storage schema's own name.
-        assert schema_inspect(pg_engine, schema=schema).has_table("model_registry") is False
+        assert sa.inspect(pg_engine).has_table("model_registry", schema=schema) is False

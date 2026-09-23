@@ -25,6 +25,7 @@ from oa_configurator.testing import delete_rows_on_cleanup, isolated_test_schema
 
 from omop_emb.backends.pgvector.pg_backend import PGVectorEmbeddingBackend
 from omop_emb.config import MODEL_REGISTRY_SCHEMA
+from omop_emb.model_registry import REGISTRY_SCHEMA_KEY
 
 from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE
 
@@ -45,9 +46,9 @@ def _resolved(pg_db, *, database_name: str, schema: str):
 
 
 def _establish_registry_baseline(pg_db, pg_engine, cleanup_after_test) -> None:
-    """The registry's own provenance row is keyed by shared_as=MODEL_REGISTRY_SCHEMA
+    """The registry's own provenance row is keyed by database_name=MODEL_REGISTRY_SCHEMA
     The phyical registry tables outlives any single test run, so a delete-only reset
-    leaves "table already has rows, but no provenance record". 
+    leaves "table already has rows, but no provenance record".
     Overwrite it with a known-correct baseline instead, via record_schema_provenance
     (which always overwrites, no "already populated" check), then register cleanup.
     """
@@ -55,11 +56,10 @@ def _establish_registry_baseline(pg_db, pg_engine, cleanup_after_test) -> None:
     with pg_engine.begin() as connection:
         record_schema_provenance(
             connection,
-            pg_db.resolved,
-            role=MODEL_REGISTRY_SCHEMA,
-            new_schema=MODEL_REGISTRY_SCHEMA,
+            database_name=MODEL_REGISTRY_SCHEMA,
+            schema_tag=REGISTRY_SCHEMA_KEY,
+            new_physical_schema=MODEL_REGISTRY_SCHEMA,
             reason="test setup: establish a known-correct baseline",
-            shared_as=MODEL_REGISTRY_SCHEMA,
         )
     delete_rows_on_cleanup(
         cleanup_after_test, pg_engine, table, table.c.database_name == MODEL_REGISTRY_SCHEMA
@@ -105,11 +105,10 @@ def test_registry_schema_guard_fires_on_genuine_registry_drift(pg_db, pg_engine,
     with pg_engine.begin() as connection:
         record_schema_provenance(
             connection,
-            resolved,
-            role=MODEL_REGISTRY_SCHEMA,
-            new_schema="a_previous_registry_schema_that_is_not_current",
+            database_name=MODEL_REGISTRY_SCHEMA,
+            schema_tag=REGISTRY_SCHEMA_KEY,
+            new_physical_schema="a_previous_registry_schema_that_is_not_current",
             reason="test: force a stale baseline",
-            shared_as=MODEL_REGISTRY_SCHEMA,
         )
 
     engine = pg_engine.execution_options(schema_translate_map={"primary": "unrelated_primary_schema"})
@@ -120,7 +119,7 @@ def test_registry_schema_guard_fires_on_genuine_registry_drift(pg_db, pg_engine,
 def test_primary_schema_guard_fires_on_genuine_primary_drift(pg_db, pg_engine, cleanup_after_test):
     """Tests embedding storage table's own guard. Only triggered
     once a model is actually registered, not at backend construction time.
-    Restores the PRIMARY-role drift coverage a prior rewrite replaced instead
+    Restores the PRIMARY schema-tag drift coverage a prior rewrite replaced instead
     of adding alongside"""
     _establish_registry_baseline(pg_db, pg_engine, cleanup_after_test)
     table = _schema_provenance_table(SCHEMA_PROVENANCE_SCHEMA)

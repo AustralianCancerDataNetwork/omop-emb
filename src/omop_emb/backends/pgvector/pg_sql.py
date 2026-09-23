@@ -20,9 +20,8 @@ from oa_configurator import (
     ResolvedDatabase,
     Role,
     ensure_schema,
-    guard_schema_provenance,
+    guard_schema_provenance_for,
     qualified,
-    schema_inspect,
     schema_of,
 )
 from sqlalchemy import Engine, Integer, Row, Select, func, inspect as sa_inspect, literal, select, text, TextClause
@@ -42,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 def table_exists(engine: Engine, table_name: str) -> bool:
     """Return ``True`` if *table_name* exists in the engine's configured schema."""
-    return schema_inspect(engine).has_table(table_name)
+    return sa_inspect(engine).has_table(table_name, schema=schema_of(engine))
 
 def create_pg_embedding_table(
     engine: Engine,
@@ -76,8 +75,12 @@ def create_pg_embedding_table(
     table_cls = pg_embedding_table_descriptor(model_record)
     with engine.begin() as connection:
         # Ensure that the schema exists before creating the table
-        ensure_schema(connection, schema_of(connection, role=Role.PRIMARY))
-        with guard_schema_provenance(connection, resolved, role=Role.PRIMARY):
+        physical_schema = schema_of(connection, schema_tag=Role.PRIMARY)
+        ensure_schema(connection, physical_schema)
+        guard = guard_schema_provenance_for(
+            connection, resolved, role=Role.PRIMARY, tables=[table_cls.__table__]  # ty: ignore[invalid-argument-type]
+        )
+        with guard:
             EmbeddingTableBase.metadata.create_all(connection, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
     return table_cls
 
@@ -92,7 +95,9 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
     """
     tablename = model_record.storage_identifier
     with engine.begin() as conn:
-        conn.execute(text(f"DROP TABLE IF EXISTS {qualified(conn, tablename)}"))
+        conn.execute(
+            text(f"DROP TABLE IF EXISTS {qualified(conn, tablename, physical_schema=schema_of(conn))}")
+        )
     logger.info(f"Dropped embedding table '{tablename}'.")
 
 

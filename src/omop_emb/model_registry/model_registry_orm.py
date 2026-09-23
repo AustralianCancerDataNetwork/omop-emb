@@ -11,7 +11,6 @@ from oa_configurator import (
     ensure_schema,
     guard_schema_provenance,
     qualified,
-    schema_inspect,
     supports_schemas,
 )
 from sqlalchemy import (
@@ -22,6 +21,7 @@ from sqlalchemy import (
     JSON,
     String,
     func,
+    inspect,
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, mapped_column, validates, Mapped
@@ -200,16 +200,12 @@ def resolve_registry_schema(bindable) -> str | None:
 
 def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None = None) -> None:
     """Create or upgrade the model registry table, in its own reserved schema.
-    
 
     Notes
     -----
-    The registry table is shared across all resolved databases that share the same connection 
-    (e.g. a single Postgres instance with CDM and Vector Store). Without specifying 
-    `shared_as=MODEL_REGISTRY_SCHEMA`, each entry's own resolved.name would be tracked as a 
-    separate identity yet the schema already exists in the database. A second configured 
-    database with the same connection would raise a false-positive finding of "already populated".
-    
+    Shared across every resolved database on the same connection; `database_name=
+    MODEL_REGISTRY_SCHEMA` (not `resolved.name`) keeps them tracked as one identity,
+    avoiding a false "already populated" on the second one.
 
     Parameters
     ----------
@@ -232,9 +228,14 @@ def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None =
         registry_schema = resolve_registry_schema(connection)
         guard = (
             guard_schema_provenance(
-                connection, resolved, role=registry_schema, shared_as=MODEL_REGISTRY_SCHEMA
+                connection,
+                database_name=MODEL_REGISTRY_SCHEMA,
+                test_only=resolved.connection.test_only,
+                schema_tag=REGISTRY_SCHEMA_KEY,
+                physical_schema=registry_schema,
+                tables=[ModelRegistry.__table__],  # ty: ignore[invalid-argument-type]
             )
-            if registry_schema is not None
+            if resolved is not None and registry_schema is not None
             else nullcontext()
         )
         with guard:
@@ -254,7 +255,9 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
     The migration is deliberately idempotent so normal backend construction
     can safely run it for both existing and newly-created registries.
     """
-    columns = schema_inspect(engine, schema=resolve_registry_schema(engine)).get_columns(ModelRegistry.__tablename__)
+    columns = inspect(engine).get_columns(
+        ModelRegistry.__tablename__, schema=resolve_registry_schema(engine)
+    )
     provider_column = next(
         (column for column in columns if column["name"] == "provider_type"),
         None,
@@ -275,7 +278,7 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
             )
             connection.execute(
                 text(
-                    f"ALTER TABLE {qualified(connection, ModelRegistry.__tablename__, schema=registry_schema)} "
+                    f"ALTER TABLE {qualified(connection, ModelRegistry.__tablename__, physical_schema=registry_schema)} "
                     "ALTER COLUMN provider_type TYPE VARCHAR "
                     "USING provider_type::text"
                 )
@@ -285,7 +288,7 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
         # legacy partial table (provider_type only) doesn't have.
         connection.execute(
             text(
-                f"UPDATE {qualified(connection, ModelRegistry.__tablename__, schema=registry_schema)} "
+                f"UPDATE {qualified(connection, ModelRegistry.__tablename__, physical_schema=registry_schema)} "
                 "SET provider_type = lower(provider_type) "
                 "WHERE provider_type IS NOT NULL "
                 "AND provider_type <> lower(provider_type)"

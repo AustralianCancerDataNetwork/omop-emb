@@ -30,15 +30,11 @@ from omop_llm import supported_providers
 
 from omop_emb.config import (
     MODEL_REGISTRY_SCHEMA,
+    REGISTRY_SCHEMA_KEY,
     IndexType,
     MetricType,
 )
 from omop_emb.backends.index_config import IndexConfig
-
-# Schema name for the model registry table. Dialects with schema support
-# store the registry table in a dedicated schema to allow schema-independent 
-# access to the registry table from any schema in the same database.
-REGISTRY_SCHEMA_KEY = "registry"
 
 
 class ModelRegistryBase(DeclarativeBase):

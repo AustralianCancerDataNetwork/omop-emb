@@ -21,8 +21,10 @@ from oa_configurator import (
 
 # Guaranteed to be imported and registered if there is a config
 MODEL_REGISTRY_SCHEMA: str = "omop_emb_registry"
+REGISTRY_SCHEMA_KEY: str = "registry"
 
 register_reserved_schema(MODEL_REGISTRY_SCHEMA, owner="omop_emb")
+register_reserved_schema(REGISTRY_SCHEMA_KEY, owner="omop_emb")
 
 
 class OmopEmbConfig(PackageConfigBase):

@@ -12,7 +12,12 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from oa_configurator import Dialect, ResolvedVectorStore, qualified
+from oa_configurator import (
+    Dialect, 
+    ResolvedVectorStore, 
+    qualified, 
+    schema_if_supported
+)
 from sqlalchemy import Engine, event, inspect, select
 
 from omop_emb.backends.base_backend import (
@@ -95,11 +100,7 @@ class ReadOnlyEmbeddingStore:
         inspector = inspect(self._engine)
         if not inspector.has_table(record.storage_identifier, schema=self.schema):
             return
-        schema = (
-            None
-            if self._engine.dialect.name == Dialect.SQLITE and self.schema == "main"
-            else self.schema
-        )
+        schema = schema_if_supported(self.schema, self._engine)
         table = concept_metadata_table_descriptor(
             record.storage_identifier,
             schema=schema,

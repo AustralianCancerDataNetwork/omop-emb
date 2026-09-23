@@ -51,12 +51,18 @@ class RegistryManager:
         initialize: bool = True,
         resolved: ResolvedDatabase | None = None,
     ) -> None:
-        self._embedding_engine = embedding_engine.execution_options(
-            schema_translate_map={
-                **(embedding_engine.get_execution_options().get(SCHEMA_TRANSLATE_MAP_KEY) or {}),
-                REGISTRY_SCHEMA_KEY: resolve_registry_schema(embedding_engine),
-            }
-        )
+        # A caller building through base_backend.py's own factory already injected
+        # REGISTRY_SCHEMA_KEY at engine-construction time
+        existing_schema_translate_map = embedding_engine.get_execution_options().get(SCHEMA_TRANSLATE_MAP_KEY) or {}
+        if REGISTRY_SCHEMA_KEY in existing_schema_translate_map:
+            self._embedding_engine = embedding_engine
+        else:
+            self._embedding_engine = embedding_engine.execution_options(
+                schema_translate_map={
+                    **existing_schema_translate_map,
+                    REGISTRY_SCHEMA_KEY: resolve_registry_schema(embedding_engine),
+                }
+            )
         self._embedding_sessionmaker = sessionmaker(self._embedding_engine)
         self._read_only = not initialize
         self._registry_available = inspect(self._embedding_engine).has_table(

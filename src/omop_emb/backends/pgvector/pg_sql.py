@@ -78,7 +78,7 @@ def create_pg_embedding_table(
         physical_schema = schema_of(connection, schema_tag=Role.PRIMARY)
         ensure_schema(connection, physical_schema)
         guard = guard_schema_provenance_for(
-            connection, resolved, role=Role.PRIMARY, tables=[table_cls.__table__]  # ty: ignore[invalid-argument-type]
+            connection, resolved, schema_tag=Role.PRIMARY, tables=[table_cls.__table__]  # ty: ignore[invalid-argument-type]
         )
         with guard:
             EmbeddingTableBase.metadata.create_all(connection, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]

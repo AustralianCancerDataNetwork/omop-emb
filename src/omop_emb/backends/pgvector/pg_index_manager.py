@@ -17,6 +17,7 @@ import abc
 import logging
 from typing import Generic, TypeVar
 
+from oa_configurator import qualified, physical_schema_of
 from sqlalchemy import Engine, inspect, text
 
 from omop_emb.config import IndexType, MetricType, VectorColumnType
@@ -77,7 +78,10 @@ class PGVectorBaseIndexManager(BaseIndexManager[C], Generic[C]):
     def has_index(self, metric_type: MetricType) -> bool:
         with self._engine.connect() as conn:
             existing = {
-                idx["name"] for idx in inspect(conn).get_indexes(self._tablename)
+                idx["name"]
+                for idx in inspect(conn).get_indexes(
+                    self._tablename, schema=physical_schema_of(conn)
+                )
             }
         return self._index_name(metric_type) in existing
 
@@ -101,7 +105,9 @@ class PGVectorBaseIndexManager(BaseIndexManager[C], Generic[C]):
         name = self._index_name(metric_type)
         existed = self.has_index(metric_type)
         with self._engine.begin() as conn:
-            conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
+            conn.execute(
+                text(f"DROP INDEX IF EXISTS {qualified(conn, name, physical_schema=physical_schema_of(conn))}")
+            )
         if existed:
             logger.info(f"Dropped pgvector index '{name}'.")
 
@@ -190,9 +196,10 @@ class PGVectorHNSWIndexManager(PGVectorBaseIndexManager[HNSWIndexConfig]):
     def _create_index_ddl(self, metric_type: MetricType) -> str:
         ops = self._ops_for_metric(metric_type)
         cfg = self.index_config
+        table_ref = qualified(self._engine, self._tablename, physical_schema=physical_schema_of(self._engine))
         return (
             f"CREATE INDEX {self._index_name(metric_type)} "
-            f"ON {self._tablename} "
+            f"ON {table_ref} "
             f"USING hnsw ({self._embedding_column} {ops}) "
             f"WITH (m = {cfg.num_neighbors}, ef_construction = {cfg.ef_construction})"
         )

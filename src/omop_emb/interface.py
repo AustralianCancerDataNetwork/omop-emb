@@ -115,7 +115,8 @@ class EmbeddingReaderInterface:
         ``is_standard``, and ``is_active`` are populated directly from the
         embedding table by the backend.
     model : str
-        Model name in canonical form.
+        Model name that is expected to be canonicalized by the constructor. 
+        A possibly-canonical name is accepted as we cannot know if canonical or not.
     provider_type : str, optional
         omop-llm provider key. Defaults to ``'ollama'``.
     k : int

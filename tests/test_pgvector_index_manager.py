@@ -31,7 +31,19 @@ DEFAULT_HNSW_CONFIG = HNSWIndexConfig(
 )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
+def unconnected_pg_engine() -> sa.Engine:
+    """A real Engine, never connect()ed or begin()'d.
+
+    For tests that only build DDL strings or exercise no-op methods and
+    never actually touch a database: sa.create_engine() never touches the
+    network on its own, but still gives qualified() a real Postgres
+    dialect to quote against, unlike passing None.
+    """
+    return sa.create_engine("postgresql+psycopg://unused:unused@localhost/unused")
+
+
+@pytest.fixture
 def hnsw_table(pg_engine):
     with pg_engine.begin() as conn:
         conn.execute(
@@ -71,9 +83,9 @@ class TestPGVectorFlatIndexManagerUnit:
         mgr._index_config = FlatIndexConfig()
         assert mgr.supported_index_type == IndexType.FLAT
 
-    def test_has_index_always_true(self):
+    def test_has_index_always_true(self, unconnected_pg_engine):
         mgr = PGVectorFlatIndexManager(
-            emb_engine=None,
+            emb_engine=unconnected_pg_engine,
             tablename="t",
             embedding_column="e",  # type: ignore[arg-type]
             index_config=FlatIndexConfig(),
@@ -82,9 +94,9 @@ class TestPGVectorFlatIndexManagerUnit:
         assert mgr.has_index(MetricType.L2) is True
         assert mgr.has_index(MetricType.COSINE) is True
 
-    def test_create_index_noop(self):
+    def test_create_index_noop(self, unconnected_pg_engine):
         mgr = PGVectorFlatIndexManager(
-            emb_engine=None,
+            emb_engine=unconnected_pg_engine,
             tablename="t",
             embedding_column="e",  # type: ignore[arg-type]
             index_config=FlatIndexConfig(),
@@ -92,9 +104,9 @@ class TestPGVectorFlatIndexManagerUnit:
         )
         mgr.create_index(MetricType.L2)
 
-    def test_drop_index_noop(self):
+    def test_drop_index_noop(self, unconnected_pg_engine):
         mgr = PGVectorFlatIndexManager(
-            emb_engine=None,
+            emb_engine=unconnected_pg_engine,
             tablename="t",
             embedding_column="e",  # type: ignore[arg-type]
             index_config=FlatIndexConfig(),
@@ -102,9 +114,9 @@ class TestPGVectorFlatIndexManagerUnit:
         )
         mgr.drop_index(MetricType.L2)
 
-    def test_create_index_ddl_returns_none(self):
+    def test_create_index_ddl_returns_none(self, unconnected_pg_engine):
         mgr = PGVectorFlatIndexManager(
-            emb_engine=None,
+            emb_engine=unconnected_pg_engine,
             tablename="t",
             embedding_column="e",  # type: ignore[arg-type]
             index_config=FlatIndexConfig(),
@@ -112,10 +124,10 @@ class TestPGVectorFlatIndexManagerUnit:
         )
         assert mgr._create_index_ddl(MetricType.L2) is None
 
-    def test_wrong_index_config_raises(self):
+    def test_wrong_index_config_raises(self, unconnected_pg_engine):
         with pytest.raises(ValueError, match="index_type"):
             PGVectorFlatIndexManager(
-                emb_engine=None,  # type: ignore
+                emb_engine=unconnected_pg_engine,
                 tablename="t",
                 embedding_column="e",
                 index_config=HNSWIndexConfig(metric_type=MetricType.L2),  # type: ignore
@@ -131,9 +143,9 @@ class TestPGVectorFlatIndexManagerUnit:
 @pytest.mark.unit
 class TestPGVectorHNSWIndexManagerDDL:
     @pytest.fixture
-    def mgr(self) -> PGVectorHNSWIndexManager:
+    def mgr(self, unconnected_pg_engine) -> PGVectorHNSWIndexManager:
         m = PGVectorHNSWIndexManager.__new__(PGVectorHNSWIndexManager)
-        m._engine = None  # type: ignore
+        m._engine = unconnected_pg_engine
         m._tablename = "my_table"
         m._embedding_column = "embedding"
         m._index_config = HNSWIndexConfig(
@@ -172,19 +184,19 @@ class TestPGVectorHNSWIndexManagerDDL:
     def test_supported_index_type(self, mgr):
         assert mgr.supported_index_type == IndexType.HNSW
 
-    def test_wrong_config_type_raises(self):
+    def test_wrong_config_type_raises(self, unconnected_pg_engine):
         with pytest.raises(ValueError, match="index_type"):
             PGVectorHNSWIndexManager(
-                emb_engine=None,  # type: ignore
+                emb_engine=unconnected_pg_engine,
                 tablename="t",
                 embedding_column="e",
                 index_config=FlatIndexConfig(),  # type: ignore
                 dimensions=4,
             )
 
-    def test_halfvec_ddl_uses_halfvec_ops(self):
+    def test_halfvec_ddl_uses_halfvec_ops(self, unconnected_pg_engine):
         m = PGVectorHNSWIndexManager.__new__(PGVectorHNSWIndexManager)
-        m._engine = None  # type: ignore
+        m._engine = unconnected_pg_engine
         m._tablename = "my_table"
         m._embedding_column = "embedding"
         m._index_config = HNSWIndexConfig(
@@ -252,7 +264,6 @@ class TestMetricSupportGuards:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.requires_database("test_emb_db")
 @pytest.mark.pgvector
 @pytest.mark.integration
 class TestPGVectorHNSWIndexManagerIntegration:

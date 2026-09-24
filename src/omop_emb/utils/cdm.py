@@ -16,6 +16,12 @@ from omop_emb.utils.embedding_utils import CDMConceptFilter
 logger = logging.getLogger(__name__)
 
 
+def streamed(stmt: Select, batch_size: int) -> Select:
+    """Return *stmt* with server-side cursor streaming enabled.
+    """
+    return stmt.execution_options(stream_results=True, yield_per=batch_size)
+
+
 def concept_embedding_projection() -> Select:
     """Select CDM fields and canonical derived flags used for embeddings."""
 
@@ -90,9 +96,7 @@ def iter_cdm_concepts_for_filter(
     if concept_filter is not None:
         query = concept_filter.apply(query)
     with cdm_session(cdm_engine) as session:
-        yield from session.execute(
-            query.execution_options(stream_results=True, yield_per=chunk_size)
-        )
+        yield from session.execute(streamed(query, chunk_size))
 
 
 def count_missing_concepts(
@@ -111,9 +115,7 @@ def count_missing_concepts(
         query = concept_filter.apply(query)
     count = 0
     with cdm_session(cdm_engine) as session:
-        for row in session.execute(
-            query.execution_options(stream_results=True, yield_per=chunk_size)
-        ):
+        for row in session.execute(streamed(query, chunk_size)):
             if row.concept_id not in embedded_ids:
                 count += 1
     return count

@@ -28,14 +28,19 @@ backend = resolve_backend_from_resolved_vector_store(resolved)
 Or construct one directly:
 
 ```python
-from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+from sqlalchemy import create_engine
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 
 # sqlite-vec
-backend = SQLiteVecEmbeddingBackend.from_path(db_path="/data/omop_emb.db")
+backend = SQLiteVecEmbeddingBackend(
+    emb_engine=create_sqlitevec_engine(create_engine("sqlite:///data/omop_emb.db"))
+)
 
 # pgvector
-backend = PGVectorEmbeddingBackend.from_db_url(db_url="postgresql+psycopg://user:pass@host:5432/db")
+backend = PGVectorEmbeddingBackend(
+    emb_engine=create_engine("postgresql+psycopg://user:pass@host:5432/db")
+)
 ```
 
 ---
@@ -186,9 +191,14 @@ results = reader.get_nearest_concepts(query_embedding=joint_vec[None, :], k=10)
 `get_nearest_concepts_from_query_texts` takes a `ModelBackend` directly: build one with `omop_llm.build_model_backend` (the reader has no default backend of its own to embed with):
 
 ```python
-from omop_llm import build_model_backend
+from omop_llm import Capabilities, build_model_backend
 
-model_backend = build_model_backend("ollama", "nomic-embed-text:v1.5", base_url="http://localhost:11434")
+model_backend = build_model_backend(
+    "ollama",
+    "nomic-embed-text:v1.5",
+    model_capabilities=Capabilities(embeddings=True),
+    base_url="http://localhost:11434",
+)
 
 results = reader.get_nearest_concepts_from_query_texts(
     query_texts=("high blood pressure", "type 2 diabetes"),
@@ -267,6 +277,7 @@ from omop_llm import build_model_backend
 model_backend = build_model_backend(
     "ollama",
     "nomic-embed-text:v1.5",
+    model_capabilities=Capabilities(embeddings=True),
     base_url="http://host.docker.internal:11434",
 )
 
@@ -279,6 +290,7 @@ print(model_backend.dimensions())  # auto-discovered via Ollama /api/show
 model_backend = build_model_backend(
     "openai",
     "text-embedding-3-large",
+    model_capabilities=Capabilities(embeddings=True),
     base_url="https://api.openai.com/v1",
     api_key="sk-...",
 )

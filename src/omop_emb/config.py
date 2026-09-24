@@ -16,7 +16,16 @@ from oa_configurator import (
     Resolver,
     ResolvedVectorStore,
     VectorStoreConfig,
+    register_reserved_schema,
+    register_reserved_schema_tag,
 )
+
+# Guaranteed to be imported and registered if there is a config
+MODEL_REGISTRY_SCHEMA: str = "omop_emb_registry"
+REGISTRY_SCHEMA_KEY: str = "registry"
+
+register_reserved_schema(MODEL_REGISTRY_SCHEMA, owner="omop_emb")
+register_reserved_schema_tag(REGISTRY_SCHEMA_KEY, owner="omop_emb")
 
 
 class OmopEmbConfig(PackageConfigBase):
@@ -37,7 +46,18 @@ class OmopEmbConfig(PackageConfigBase):
     extra_logging_namespaces: ClassVar[tuple[str, ...]] = ("orm_loader", "omop_alchemy")
 
     cdm_db: Annotated[str, RefTo(CDMDatabaseConfig)] = "cdm_db"
-    test_emb_db: Annotated[str | None, RefTo(GenericDatabaseConfig, is_test=True)] = None
+    test_emb_db_pg: Annotated[str | None, RefTo(GenericDatabaseConfig, is_test=True)] = Field(
+        default=None,
+        description="Real PostgreSQL test database, for Postgres-only integration testing.",
+    )
+    test_emb_db_sqlite: Annotated[str | None, RefTo(GenericDatabaseConfig, is_test=True)] = Field(
+        default=None,
+        description=(
+            "Disposable SQLite test database; left unconfigured by design "
+            "since isolated_test_database(..., dialect='sqlite') provisions "
+            "one without needing a config entry."
+        ),
+    )
     embedding_model_name: Annotated[str, RefTo(ModelConfig)] = Field(
         default="embedding-model",
         description=(
@@ -254,6 +274,31 @@ SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[
 }
 
 
+def _supported_indices(backend: BackendType) -> Dict[IndexType, Tuple[MetricType, ...]]:
+    """The index/metric support map for *backend*.
+
+    Parameters
+    ----------
+    backend : BackendType
+
+    Returns
+    -------
+    Dict[IndexType, Tuple[MetricType, ...]]
+
+    Raises
+    ------
+    ValueError
+        If *backend* isn't registered in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.
+    """
+    try:
+        return SUPPORTED_INDICES_AND_METRICS_PER_BACKEND[backend]
+    except KeyError:
+        raise ValueError(
+            f"Unsupported backend {backend!r}. Supported: "
+            f"{sorted(b.value for b in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND)}."
+        ) from None
+
+
 def is_supported_index_metric_combination_for_backend(
     backend: BackendType, index: IndexType, metric: MetricType
 ) -> bool:
@@ -269,8 +314,7 @@ def is_supported_index_metric_combination_for_backend(
     -------
     bool
     """
-    supported = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
-    return metric in supported.get(index, ())
+    return metric in _supported_indices(backend).get(index, ())
 
 
 def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) -> bool:
@@ -285,7 +329,7 @@ def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) 
     -------
     bool
     """
-    return index in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
+    return index in _supported_indices(backend)
 
 
 def get_supported_index_types_for_backend(
@@ -301,7 +345,7 @@ def get_supported_index_types_for_backend(
     -------
     tuple[IndexType, ...]
     """
-    return tuple(SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {}).keys())
+    return tuple(_supported_indices(backend).keys())
 
 
 def get_supported_metrics_for_backend(backend: BackendType) -> Tuple[MetricType, ...]:
@@ -316,6 +360,6 @@ def get_supported_metrics_for_backend(backend: BackendType) -> Tuple[MetricType,
     tuple[MetricType, ...]
     """
     seen: set[MetricType] = set()
-    for metrics in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {}).values():
+    for metrics in _supported_indices(backend).values():
         seen.update(metrics)
     return tuple(seen)

@@ -10,7 +10,7 @@
 | **pgvector** | `pgvector` | `omop-emb[pgvector]` + PostgreSQL | Scales to large corpora. HNSW indexing and `halfvec` storage. |
 
 !!! note "FAISS is a sidecar, not a backend"
-    FAISS (`omop-emb[faiss-cpu]`) is a read-acceleration layer that sits on top of sqlite-vec or pgvector. It is not a primary backend and has no `backend_type` of its own. See the [CLI reference](cli.md#faiss-sidecar) for how to export and use FAISS indices.
+    FAISS (`omop-emb[faiss-cpu]`) is a read-acceleration layer that sits on top of sqlite-vec or pgvector. It is not a primary backend and has no `backend_type` of its own. See the [CLI reference](cli.md#build-faiss-cache) for how to export and use FAISS indices.
 
 ## Selecting a backend
 

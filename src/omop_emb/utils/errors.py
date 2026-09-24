@@ -6,15 +6,25 @@ class EmbeddingBackendError(RuntimeError):
 
 
 class UnknownEmbeddingBackendError(EmbeddingBackendError):
-    """Raised when a requested backend name is not recognized."""
+    """Error type for an unrecognized backend name.
+
+    Not currently raised anywhere in this package: ``resolve_backend()``
+    raises a plain ``RuntimeError`` for an unknown backend name instead.
+    """
 
 
 class EmbeddingBackendDependencyError(EmbeddingBackendError, ImportError):
-    """Raised when a backend was requested but its optional dependencies are missing."""
+    """Error type for a backend requested without its optional dependencies installed.
+
+    Not currently raised anywhere in this package.
+    """
 
 
 class EmbeddingBackendConfigurationError(EmbeddingBackendError):
-    """Raised when backend selection or configuration is internally inconsistent."""
+    """Error type for an internally inconsistent backend selection or configuration.
+
+    Not currently raised anywhere in this package.
+    """
 
 
 class ModelRegistrationConflictError(Exception):

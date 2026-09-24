@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from typing import Any, Iterator, Sequence
 
+from oa_configurator import Dialect
 from sqlalchemy import Column, Select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.base import ColumnCollection
@@ -100,13 +101,13 @@ def temp_filter_table(
     connections safely.  The table is truncated before each use and cleaned up
     when the connection is returned to the pool.
     """
-    if dialect == "postgresql":
+    if dialect == Dialect.POSTGRESQL:
         session.execute(
             text(
                 f'CREATE TEMPORARY TABLE "{table_name}" (id {col_type}) ON COMMIT DROP'
             )
         )
-    elif dialect == "sqlite":
+    elif dialect == Dialect.SQLITE:
         session.execute(
             text(f'CREATE TEMPORARY TABLE IF NOT EXISTS "{table_name}" (id {col_type})')
         )

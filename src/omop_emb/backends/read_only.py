@@ -12,7 +12,12 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from oa_configurator import ResolvedVectorStore
+from oa_configurator import (
+    Dialect, 
+    ResolvedVectorStore, 
+    qualified, 
+    schema_if_supported
+)
 from sqlalchemy import Engine, event, inspect, select
 
 from omop_emb.backends.base_backend import (
@@ -22,6 +27,7 @@ from omop_emb.backends.base_backend import (
 from omop_emb.backends.embedding_table import concept_metadata_table_descriptor
 from omop_emb.config import BackendType, parse_backend_type
 from omop_emb.model_registry import EmbeddingModelRecord, RegistryManager
+from omop_emb.utils.cdm import streamed
 
 
 @dataclass(frozen=True)
@@ -43,11 +49,11 @@ class ReadOnlyEmbeddingStore:
         engine: Engine,
         *,
         backend_type: str | BackendType,
-        schema: str | None,
+        physical_schema: str | None,
     ) -> None:
         self._engine = engine
         self.backend_type = parse_backend_type(backend_type)
-        self.schema = schema
+        self.physical_schema = physical_schema
         self._registry = RegistryManager.read_only(engine)
 
     def __enter__(self) -> ReadOnlyEmbeddingStore:
@@ -92,24 +98,23 @@ class ReadOnlyEmbeddingStore:
         if record is None:
             return
         inspector = inspect(self._engine)
-        if not inspector.has_table(record.storage_identifier, schema=self.schema):
+        if not inspector.has_table(record.storage_identifier, schema=self.physical_schema):
             return
-        schema = (
-            None
-            if self._engine.dialect.name == "sqlite" and self.schema == "main"
-            else self.schema
-        )
+        physical_schema = schema_if_supported(self.physical_schema, self._engine)
         table = concept_metadata_table_descriptor(
             record.storage_identifier,
-            schema=schema,
+            schema=physical_schema,
         )
-        statement = select(
-            table.c.concept_id,
-            table.c.domain_id,
-            table.c.vocabulary_id,
-            table.c.is_standard,
-            table.c.is_valid,
-        ).execution_options(stream_results=True, yield_per=batch_size)
+        statement = streamed(
+            select(
+                table.c.concept_id,
+                table.c.domain_id,
+                table.c.vocabulary_id,
+                table.c.is_standard,
+                table.c.is_valid,
+            ),
+            batch_size,
+        )
         with self._engine.connect() as connection:
             rows = connection.execute(statement).mappings()
             for row in rows:
@@ -124,7 +129,7 @@ class ReadOnlyEmbeddingStore:
     def physical_indexes(self, model_name: str) -> tuple[str, ...]:
         """Return existing PostgreSQL indexes without creating or changing them."""
 
-        if self._engine.dialect.name != "postgresql":
+        if self._engine.dialect.name != Dialect.POSTGRESQL:
             return ()
         record = self.model(model_name)
         if record is None:
@@ -133,8 +138,7 @@ class ReadOnlyEmbeddingStore:
         return tuple(
             str(item["name"])
             for item in inspect(self._engine).get_indexes(
-                record.storage_identifier,
-                schema=self.schema,
+                record.storage_identifier, schema=self.physical_schema,
             )
             if str(item["name"]).startswith(expected_prefix)
         )
@@ -142,10 +146,8 @@ class ReadOnlyEmbeddingStore:
     def drop_index_sql(self, model_name: str) -> tuple[str, ...]:
         """Return reviewed index-removal statements without executing them."""
 
-        quote = self._engine.dialect.identifier_preparer.quote
-        schema_prefix = f"{quote(self.schema)}." if self.schema else ""
         return tuple(
-            f"DROP INDEX IF EXISTS {schema_prefix}{quote(name)};"
+            f"DROP INDEX IF EXISTS {qualified(self._engine, name, physical_schema=self.physical_schema)};"
             for name in self.physical_indexes(model_name)
         )
 
@@ -166,7 +168,7 @@ def inspect_resolved_vector_store(
     """
 
     engine = resolved.database.create_engine()
-    if resolved.backend_type == "sqlitevec":
+    if resolved.backend_type == BackendType.SQLITEVEC:
         try:
             import sqlite_vec
         except ImportError as exc:  # pragma: no cover - optional extra
@@ -185,7 +187,7 @@ def inspect_resolved_vector_store(
         return ReadOnlyEmbeddingStore(
             engine,
             backend_type=resolved.backend_type,
-            schema=resolved.database.schema_name,
+            physical_schema=resolved.database.schema_name,
         )
     except Exception:
         engine.dispose()

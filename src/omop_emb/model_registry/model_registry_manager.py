@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timezone
 from typing import Mapping, Optional
 
+from oa_configurator import SCHEMA_TRANSLATE_MAP_KEY, ResolvedDatabase
 from sqlalchemy import Engine, inspect, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -14,8 +15,10 @@ from omop_emb.backends.index_config import (
     index_config_from_orm_row,
 )
 from omop_emb.model_registry.model_registry_orm import (
+    REGISTRY_SCHEMA_KEY,
     ModelRegistry,
-    ensure_registry_schema,
+    ensure_registry_table,
+    resolve_registry_physical_schema,
 )
 from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
 from omop_emb.utils.errors import ModelRegistrationConflictError
@@ -33,17 +36,41 @@ class RegistryManager:
     ----------
     embedding_engine : Engine
         SQLAlchemy embedding engine connected to the embedding store.
+
+    Notes
+    -----
+    The registry table is created under the ``registry`` schema tag (a
+    ``schema_translate_map`` key, resolved to the physical schema named by
+    ``MODEL_REGISTRY_SCHEMA``), independent of whichever schema the embedding
+    store itself resolves to.
     """
 
-    def __init__(self, embedding_engine: Engine, *, initialize: bool = True) -> None:
-        self._embedding_engine = embedding_engine
+    def __init__(
+        self,
+        embedding_engine: Engine,
+        *,
+        initialize: bool = True,
+        resolved: ResolvedDatabase | None = None,
+    ) -> None:
+        # A caller building through base_backend.py's own factory already injected
+        # REGISTRY_SCHEMA_KEY at engine-construction time
+        existing_schema_translate_map = embedding_engine.get_execution_options().get(SCHEMA_TRANSLATE_MAP_KEY) or {}
+        if REGISTRY_SCHEMA_KEY in existing_schema_translate_map:
+            self._embedding_engine = embedding_engine
+        else:
+            self._embedding_engine = embedding_engine.execution_options(
+                schema_translate_map={
+                    **existing_schema_translate_map,
+                    REGISTRY_SCHEMA_KEY: resolve_registry_physical_schema(embedding_engine),
+                }
+            )
         self._embedding_sessionmaker = sessionmaker(self._embedding_engine)
         self._read_only = not initialize
-        self._registry_available = inspect(embedding_engine).has_table(
-            ModelRegistry.__tablename__
+        self._registry_available = inspect(self._embedding_engine).has_table(
+            ModelRegistry.__tablename__, schema=resolve_registry_physical_schema(self._embedding_engine)
         )
         if initialize:
-            ensure_registry_schema(embedding_engine)
+            ensure_registry_table(self._embedding_engine, resolved=resolved)
             self._registry_available = True
 
     @classmethod
@@ -148,6 +175,8 @@ class RegistryManager:
         ------
         ModelRegistrationConflictError
             If the model is already registered with a different configuration.
+        ValueError
+            If ``metadata`` contains a reserved key.
         """
         self._require_writable()
         _validate_metadata_keys(metadata)

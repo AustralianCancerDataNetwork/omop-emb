@@ -137,10 +137,11 @@ class ExportMetadata:
     (the bundle's HDF5 attributes) and :meth:`to_json`/:meth:`from_json`
     (the FAISS cache's per-index JSON sidecar). Each direction populates
     every field even though it only reads back some of them: e.g. the
-    bundle path never reads ``index_config`` back, the FAISS path never
-    reads ``provider_type`` back: both are free to obtain (already on
-    the ``EmbeddingModelRecord`` fetched at write time), so it isn't worth
-    two separate types over.
+    FAISS path never reads ``provider_type`` back (the bundle path does
+    read ``index_config`` back, via ``import_bundle(rebuild_index=True)``);
+    both directions' unused fields are free to obtain (already on the
+    ``EmbeddingModelRecord`` fetched at write time), so it isn't worth two
+    separate types over.
     """
 
     model_name: str

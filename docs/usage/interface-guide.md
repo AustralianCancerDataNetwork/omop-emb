@@ -191,9 +191,14 @@ results = reader.get_nearest_concepts(query_embedding=joint_vec[None, :], k=10)
 `get_nearest_concepts_from_query_texts` takes a `ModelBackend` directly: build one with `omop_llm.build_model_backend` (the reader has no default backend of its own to embed with):
 
 ```python
-from omop_llm import build_model_backend
+from omop_llm import Capabilities, build_model_backend
 
-model_backend = build_model_backend("ollama", "nomic-embed-text:v1.5", base_url="http://localhost:11434")
+model_backend = build_model_backend(
+    "ollama",
+    "nomic-embed-text:v1.5",
+    model_capabilities=Capabilities(embeddings=True),
+    base_url="http://localhost:11434",
+)
 
 results = reader.get_nearest_concepts_from_query_texts(
     query_texts=("high blood pressure", "type 2 diabetes"),
@@ -272,6 +277,7 @@ from omop_llm import build_model_backend
 model_backend = build_model_backend(
     "ollama",
     "nomic-embed-text:v1.5",
+    model_capabilities=Capabilities(embeddings=True),
     base_url="http://host.docker.internal:11434",
 )
 
@@ -284,6 +290,7 @@ print(model_backend.dimensions())  # auto-discovered via Ollama /api/show
 model_backend = build_model_backend(
     "openai",
     "text-embedding-3-large",
+    model_capabilities=Capabilities(embeddings=True),
     base_url="https://api.openai.com/v1",
     api_key="sk-...",
 )

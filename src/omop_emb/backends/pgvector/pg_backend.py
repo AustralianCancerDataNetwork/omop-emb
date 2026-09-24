@@ -173,7 +173,11 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         Raises
         ------
         ValueError
-            If ``dimensions`` exceeds the pgvector halfvec limit of 4 000.
+            If ``dimensions`` exceeds the pgvector halfvec limit of 4 000, or
+            for any reason :meth:`EmbeddingBackend.register_model` raises
+            (a reserved metadata key, or a non-``FlatIndexConfig`` index).
+        ModelRegistrationConflictError
+            If the model is already registered with a different dimensionality.
         """
         vector_column_type_for_dimensions(dimensions)  # validates halfvec limit
         return super().register_model(

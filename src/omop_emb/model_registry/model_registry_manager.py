@@ -39,9 +39,10 @@ class RegistryManager:
 
     Notes
     -----
-    The registry table is created in a schema named ``registry`` for dialects
-    supporting schema registration. Allows schema-independent access to the registry table
-    from any schema in the same database.
+    The registry table is created under the ``registry`` schema tag (a
+    ``schema_translate_map`` key, resolved to the physical schema named by
+    ``MODEL_REGISTRY_SCHEMA``), independent of whichever schema the embedding
+    store itself resolves to.
     """
 
     def __init__(
@@ -174,6 +175,8 @@ class RegistryManager:
         ------
         ModelRegistrationConflictError
             If the model is already registered with a different configuration.
+        ValueError
+            If ``metadata`` contains a reserved key.
         """
         self._require_writable()
         _validate_metadata_keys(metadata)

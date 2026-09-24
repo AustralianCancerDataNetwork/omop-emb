@@ -126,9 +126,7 @@ class IndexConfig(ABC):
         Notes
         -----
         Use this method to reconstruct an ``IndexConfig`` from the ORM
-        ``index_config`` JSON column. It is distinct from
-        :meth:`from_metadata`, which reads from a metadata dict that wraps the
-        config under ``"index_config"`` key.
+        ``index_config`` JSON column.
         """
         if not is_dataclass(cls):
             raise TypeError(f"Must be called on a dataclass, not {cls.__name__}.")

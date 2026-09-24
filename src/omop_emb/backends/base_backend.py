@@ -294,7 +294,9 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         ModelRegistrationConflictError
             If the model is already registered with a different dimensionality.
         ValueError
-            If ``metadata`` contains a reserved key.
+            If ``metadata`` contains a reserved key, or if ``index_config`` is
+            not ``FlatIndexConfig()`` (non-FLAT indexes may only be built
+            after registration, not at registration time).
         """
 
         if index_config is None:

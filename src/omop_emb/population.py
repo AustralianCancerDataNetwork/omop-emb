@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_alchemy.cdm.query import ConceptFilter
 
-from omop_emb.backends.read_only import ReadOnlyEmbeddingStore, StoredEmbedding
+from omop_emb.backends.base_backend import EmbeddingBackend, StoredEmbedding
 from omop_emb.utils.cdm import streamed
 
 
@@ -118,7 +118,7 @@ class _VocabularyAccumulator:
 
 def plan_population(
     cdm_engine: Engine,
-    store: ReadOnlyEmbeddingStore,
+    store: EmbeddingBackend,
     *,
     model_name: str,
     scope: PopulationScope = PopulationScope(),
@@ -197,7 +197,7 @@ def _iter_current_concepts(
 
 
 def _iter_stored_embeddings(
-    store: ReadOnlyEmbeddingStore,
+    store: EmbeddingBackend,
     model_name: str,
     *,
     batch_size: int,

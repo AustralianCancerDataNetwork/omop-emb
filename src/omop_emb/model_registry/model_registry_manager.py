@@ -5,7 +5,6 @@ import re
 from datetime import datetime, timezone
 from typing import Mapping, Optional
 
-from oa_configurator import SCHEMA_TRANSLATE_MAP_KEY, ResolvedDatabase
 from sqlalchemy import Engine, inspect, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -15,9 +14,7 @@ from omop_emb.backends.index_config import (
     index_config_from_orm_row,
 )
 from omop_emb.model_registry.model_registry_orm import (
-    REGISTRY_SCHEMA_KEY,
     ModelRegistry,
-    ensure_registry_table,
     resolve_registry_physical_schema,
 )
 from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
@@ -45,45 +42,22 @@ class RegistryManager:
     store itself resolves to.
     """
 
-    def __init__(
-        self,
-        embedding_engine: Engine,
-        *,
-        initialize: bool = True,
-        resolved: ResolvedDatabase | None = None,
-    ) -> None:
-        # A caller building through base_backend.py's own factory already injected
-        # REGISTRY_SCHEMA_KEY at engine-construction time
-        existing_schema_translate_map = embedding_engine.get_execution_options().get(SCHEMA_TRANSLATE_MAP_KEY) or {}
-        if REGISTRY_SCHEMA_KEY in existing_schema_translate_map:
-            self._embedding_engine = embedding_engine
-        else:
-            self._embedding_engine = embedding_engine.execution_options(
-                schema_translate_map={
-                    **existing_schema_translate_map,
-                    REGISTRY_SCHEMA_KEY: resolve_registry_physical_schema(embedding_engine),
-                }
-            )
+    def __init__(self, embedding_engine: Engine) -> None:
+        self._embedding_engine = embedding_engine
         self._embedding_sessionmaker = sessionmaker(self._embedding_engine)
-        self._read_only = not initialize
-        self._registry_available = inspect(self._embedding_engine).has_table(
-            ModelRegistry.__tablename__, schema=resolve_registry_physical_schema(self._embedding_engine)
-        )
-        if initialize:
-            ensure_registry_table(self._embedding_engine, resolved=resolved)
-            self._registry_available = True
-
-    @classmethod
-    def read_only(cls, embedding_engine: Engine) -> "RegistryManager":
-        """Open the registry without creating or migrating any schema."""
-
-        return cls(embedding_engine, initialize=False)
 
     @property
     def registry_available(self) -> bool:
-        """Whether the registry table already exists in the connected store."""
+        """Whether the registry table currently exists on this engine.
 
-        return self._registry_available
+        True for any writable-bootstrapped engine (``ensure_registry_table``
+        already ran). May be ``False`` for a peek-constructed engine on a
+        store that's never been configured -- callers must not assume this
+        is always True.
+        """
+        return inspect(self._embedding_engine).has_table(
+            ModelRegistry.__tablename__, schema=resolve_registry_physical_schema(self._embedding_engine)
+        )
 
     # ------------------------------------------------------------------
     # Properties
@@ -119,7 +93,7 @@ class RegistryManager:
         -------
         tuple[EmbeddingModelRecord, ...]
         """
-        if not self._registry_available:
+        if not self.registry_available:
             return ()
         stmt = select(ModelRegistry)
         if model_name is not None:
@@ -178,7 +152,6 @@ class RegistryManager:
         ValueError
             If ``metadata`` contains a reserved key.
         """
-        self._require_writable()
         _validate_metadata_keys(metadata)
         safe_model_name = self.safe_model_name(model_name)
         storage_identifier = self.storage_name(safe_model_name)
@@ -223,7 +196,6 @@ class RegistryManager:
         ----------
         model_name : str
         """
-        self._require_writable()
         with self.emb_session_factory() as session:
             row = self._fetch_row(session, model_name)
             if row is not None:
@@ -255,7 +227,6 @@ class RegistryManager:
         ValueError
             If the model is not registered.
         """
-        self._require_writable()
         with self.emb_session_factory(expire_on_commit=False) as session:
             row = self._fetch_row(session, model_name)
             if row is None:
@@ -288,7 +259,6 @@ class RegistryManager:
         ValueError
             If the model is not registered.
         """
-        self._require_writable()
         _validate_metadata_keys(metadata)
         with self.emb_session_factory(expire_on_commit=False) as session:
             row = self._fetch_row(session, model_name)
@@ -313,7 +283,6 @@ class RegistryManager:
         ----------
         model_name : str
         """
-        self._require_writable()
         with self.emb_session_factory.begin() as session:
             session.execute(
                 update(ModelRegistry)
@@ -367,10 +336,6 @@ class RegistryManager:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _require_writable(self) -> None:
-        if self._read_only:
-            raise RuntimeError("RegistryManager was opened read-only.")
 
     @staticmethod
     def _fetch_row(session: Session, model_name: str) -> Optional[ModelRegistry]:

@@ -8,16 +8,19 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from sqlalchemy import create_engine
 
 import faiss
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
-from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.config import MetricType
+from omop_emb.model_registry import bootstrap_registry_engine
 from omop_emb.storage import embedding_bundle
 from omop_emb.storage.faiss.faiss_cache import FAISSCache
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+
+from .conftest import sqlite_resolved_database
 
 pytest.importorskip("faiss", reason="faiss-cpu not installed")
 
@@ -70,7 +73,7 @@ _L2_RECORDS = [
 
 
 def _make_svec_backend(dim: int) -> SQLiteVecEmbeddingBackend:
-    engine = create_sqlitevec_engine(create_engine("sqlite:///:memory:"))
+    engine = bootstrap_registry_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
     return SQLiteVecEmbeddingBackend(emb_engine=engine)
 
 

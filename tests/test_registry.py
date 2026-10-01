@@ -8,11 +8,12 @@ import sqlalchemy as sa
 from oa_configurator import ensure_schema
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
+from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.config import MODEL_REGISTRY_SCHEMA, IndexType, MetricType
-from omop_emb.model_registry import RegistryManager, ensure_registry_table
+from omop_emb.model_registry import RegistryManager, ensure_registry_table, peek_registry_engine
 from omop_emb.utils.errors import ModelRegistrationConflictError
 
-from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE
+from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE, sqlite_resolved_database
 
 
 @pytest.fixture
@@ -227,8 +228,13 @@ class TestProviderTypeValidation:
 
 
 @pytest.mark.unit
-def test_legacy_provider_name_is_normalized_in_sqlite(svec_engine):
-    with svec_engine.begin() as connection:
+def test_legacy_provider_name_is_normalized_in_sqlite():
+    """ensure_registry_table()'s migration runs against a pre-existing legacy
+    table, so this builds its own engine via peek_registry_engine() (schema
+    claim only, no table) rather than the svec_engine fixture, which already
+    creates the current-shape table via bootstrap_registry_engine()."""
+    engine = peek_registry_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
+    with engine.begin() as connection:
         connection.execute(
             sa.text("CREATE TABLE model_registry (provider_type VARCHAR(6))")
         )
@@ -236,9 +242,9 @@ def test_legacy_provider_name_is_normalized_in_sqlite(svec_engine):
             sa.text("INSERT INTO model_registry (provider_type) VALUES ('OLLAMA')")
         )
 
-    RegistryManager(svec_engine)
+    ensure_registry_table(engine)
 
-    with svec_engine.connect() as connection:
+    with engine.connect() as connection:
         assert connection.scalar(
             sa.text("SELECT provider_type FROM model_registry")
         ) == "ollama"

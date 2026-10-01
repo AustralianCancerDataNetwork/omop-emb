@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields, is_dataclass
 from typing import TypeVar
 
-from sqlalchemy import Boolean, Column, Integer, MetaData, String, Table
+from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import DeclarativeBase, MappedColumn, mapped_column
 from sqlalchemy.sql.type_api import TypeEngine
 
@@ -37,34 +37,6 @@ CONCEPT_METADATA_COLUMNS: tuple[EmbeddingColumnSpec, ...] = (
 )
 
 EMBEDDING_COLUMN_NAME = "embedding"
-
-
-def concept_metadata_table_descriptor(
-    table_name: str,
-    *,
-    schema: str | None = None,
-    metadata: MetaData | None = None,
-) -> Table:
-    """Describe the shared metadata columns of an existing embedding table.
-
-    The descriptor is deliberately independent of the vector column, whose
-    type differs by backend. Constructing it issues no SQL and is suitable for
-    read-only Core queries against both sqlite-vec and pgvector tables.
-    """
-
-    return Table(
-        table_name,
-        metadata or MetaData(),
-        *(
-            Column(
-                spec.name,
-                spec.type_,
-                primary_key=spec.name == "concept_id",
-            )
-            for spec in CONCEPT_METADATA_COLUMNS
-        ),
-        schema=schema,
-    )
 
 
 def _check_columns_match_spec(cls: _T) -> _T:

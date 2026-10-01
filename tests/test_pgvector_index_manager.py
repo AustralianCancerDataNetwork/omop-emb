@@ -38,9 +38,13 @@ def unconnected_pg_engine() -> sa.Engine:
     For tests that only build DDL strings or exercise no-op methods and
     never actually touch a database: sa.create_engine() never touches the
     network on its own, but still gives qualified() a real Postgres
-    dialect to quote against, unlike passing None.
+    dialect to quote against, unlike passing None. A schema_translate_map
+    is set directly so physical_schema_of() resolves via that map instead
+    of falling through to its schema_registry check.
     """
-    return sa.create_engine("postgresql+psycopg://unused:unused@localhost/unused")
+    return sa.create_engine("postgresql+psycopg://unused:unused@localhost/unused").execution_options(
+        schema_translate_map={"primary": "public"}
+    )
 
 
 @pytest.fixture

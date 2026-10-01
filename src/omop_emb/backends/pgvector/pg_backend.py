@@ -5,8 +5,8 @@ from datetime import datetime
 from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
-from oa_configurator import Dialect, ResolvedDatabase
-from sqlalchemy import Engine, select, text
+from oa_configurator import Dialect, ResolvedDatabase, physical_schema_of
+from sqlalchemy import Engine, inspect, select, text
 
 try:
     from pgvector.sqlalchemy import Vector  # noqa: F401
@@ -36,7 +36,6 @@ from omop_emb.backends.pgvector.pg_sql import (
     q_all_concept_ids,
     q_embedding_count_by_vocabulary,
     q_upsert_embeddings,
-    q_create_extension_pgvector,
     query_concept_filter_metadata,
     query_concept_ids_matching_filter,
     query_nearest_concept_ids,
@@ -60,6 +59,21 @@ _INDEX_MANAGER_FOR_CONFIG: dict[type[IndexConfig], type[PGVectorBaseIndexManager
 }
 
 
+def _create_vector_extension(dbapi_connection, _connection_record) -> None:
+    """Connect-event callable: ensure the pgvector extension exists on this connection.
+
+    Passed as an ``extensions`` callable to ``ResolvedDatabase.create_engine()``
+    (see its docstring). ``CREATE EXTENSION IF NOT EXISTS`` is atomic and
+    idempotent, so re-running it on every connection is safe and cheap.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS vector CASCADE;")
+        dbapi_connection.commit()
+    finally:
+        cursor.close()
+
+
 class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     """pgvector-backed embedding backend.
 
@@ -70,13 +84,10 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     Parameters
     ----------
     emb_engine : Engine
-        SQLAlchemy engine connected to the pgvector database.
-
-    Notes
-    -----
-    Call :meth:`pre_initialise_store` once to create the ``vector`` extension
-    if it does not already exist. This is called automatically during
-    ``__init__``.
+        SQLAlchemy engine connected to the pgvector database. The ``vector``
+        extension is created on every physical connection via
+        ``_create_vector_extension``, passed as an ``extensions`` callable when
+        the engine was built (see ``resolve_backend()``).
     """
 
     def __init__(
@@ -99,15 +110,6 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     @property
     def dialect(self) -> str:
         return Dialect.POSTGRESQL
-
-    # ------------------------------------------------------------------
-    # Store lifecycle
-    # ------------------------------------------------------------------
-
-    def pre_initialise_store(self) -> None:
-        """Create the pgvector extension if it does not exist."""
-        with self.emb_engine.begin() as conn:
-            conn.execute(q_create_extension_pgvector())
 
     # ------------------------------------------------------------------
     # Storage table management
@@ -228,6 +230,22 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         """
         return self._index_managers.get(storage_identifier)
 
+    def physical_indexes(self, model_name: str) -> tuple[str, ...]:
+        """Return existing indexes for this model's table without creating or
+        changing them."""
+        record = self.get_registered_model(model_name=model_name)
+        if record is None:
+            return ()
+        physical_schema = physical_schema_of(self.emb_engine)
+        expected_prefix = f"idx_{record.storage_identifier}_"
+        return tuple(
+            str(item["name"])
+            for item in inspect(self.emb_engine).get_indexes(
+                record.storage_identifier, schema=physical_schema,
+            )
+            if str(item["name"]).startswith(expected_prefix)
+        )
+
     # ------------------------------------------------------------------
     # Core write operations
     # ------------------------------------------------------------------
@@ -244,7 +262,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             records=records,
             dimensions=model_record.dimensions,
         )
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         stmt = q_upsert_embeddings(
             records=records,
             embeddings=embeddings,
@@ -270,7 +288,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     ) -> Mapping[int, Sequence[float]]:
         if not concept_ids:
             return {}
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory.begin() as session:
             with temp_filter_table(
                 session,
@@ -304,7 +322,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         self.validate_embeddings(query_embeddings, model_record.dimensions)
 
         manager = self._index_managers.get(model_record.storage_identifier)
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
 
         with self.emb_session_factory.begin() as session:
             if isinstance(manager, PGVectorHNSWIndexManager):
@@ -345,7 +363,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     # ------------------------------------------------------------------
 
     def _has_any_embeddings_impl(self, *, model_record: EmbeddingModelRecord) -> bool:
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return (
                 session.execute(select(table.concept_id).limit(1)).first() is not None
@@ -354,7 +372,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     def _get_all_stored_concept_ids_impl(
         self, *, model_record: EmbeddingModelRecord
     ) -> set[int]:
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return {row[0] for row in session.execute(q_all_concept_ids(table))}
 
@@ -366,7 +384,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     ) -> Mapping[int, Mapping[str, object]]:
         if not concept_ids:
             return {}
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         concept_filter = EmbeddingConceptFilter(concept_ids=tuple(concept_ids))
         with self.emb_session_factory.begin() as session:
             rows = query_concept_filter_metadata(
@@ -393,7 +411,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     ) -> set[int]:
         if concept_filter.is_empty():
             return self._get_all_stored_concept_ids_impl(model_record=model_record)
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory.begin() as session:
             return query_concept_ids_matching_filter(
                 session=session,
@@ -405,7 +423,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     def _get_embedding_count_by_vocabulary_impl(
         self, *, model_record: EmbeddingModelRecord
     ) -> Mapping[str, int]:
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             rows = session.execute(q_embedding_count_by_vocabulary(table)).all()
         return {row[0]: int(row[1]) for row in rows}

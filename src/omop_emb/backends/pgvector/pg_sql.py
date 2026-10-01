@@ -24,7 +24,7 @@ from oa_configurator import (
     qualified,
     physical_schema_of,
 )
-from sqlalchemy import Engine, Integer, Row, Select, func, inspect as sa_inspect, literal, select, text, TextClause
+from sqlalchemy import Engine, Integer, Row, Select, func, inspect, literal, select, text
 from sqlalchemy.sql import cast, column, values
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.orm import Session, mapped_column
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 def table_exists(engine: Engine, table_name: str) -> bool:
     """Return ``True`` if *table_name* exists in the engine's configured schema."""
-    return sa_inspect(engine).has_table(table_name, schema=physical_schema_of(engine))
+    return inspect(engine).has_table(table_name, schema=physical_schema_of(engine))
 
 def create_pg_embedding_table(
     engine: Engine,
@@ -183,11 +183,6 @@ def q_embedding_count_by_vocabulary(embedding_table: type[PGEmbeddingTable]) -> 
     ).group_by(embedding_table.vocabulary_id)
 
 
-def q_create_extension_pgvector() -> TextClause:
-    """Return a SQL statement to create the pgvector extension if it doesn't exist."""
-    return text("CREATE EXTENSION IF NOT EXISTS vector CASCADE;")
-
-
 # ---------------------------------------------------------------------------
 # ANN query
 # ---------------------------------------------------------------------------
@@ -263,7 +258,7 @@ def query_nearest_concept_ids(
 
     if concept_filter is not None:
         inner_stmt = apply_concept_filter_where(
-            inner_stmt, sa_inspect(embedding_table).columns, concept_filter
+            inner_stmt, inspect(embedding_table).columns, concept_filter
         )
 
     lateral_subq = inner_stmt.lateral("top_k")
@@ -293,7 +288,7 @@ def query_concept_ids_matching_filter(
     """Return every ``concept_id`` satisfying *concept_filter*."""
     setup_concept_filter_temps(session, concept_filter, dialect)
     stmt = select(embedding_table.concept_id)
-    stmt = apply_concept_filter_where(stmt, sa_inspect(embedding_table).columns, concept_filter)
+    stmt = apply_concept_filter_where(stmt, inspect(embedding_table).columns, concept_filter)
     rows = session.execute(stmt).all()
     return {int(row[0]) for row in rows}
 
@@ -318,7 +313,7 @@ def query_concept_filter_metadata(
         embedding_table.is_standard,
         embedding_table.is_valid,
     )
-    stmt = apply_concept_filter_where(stmt, sa_inspect(embedding_table).columns, concept_filter)
+    stmt = apply_concept_filter_where(stmt, inspect(embedding_table).columns, concept_filter)
     return session.execute(stmt).all()
 
 

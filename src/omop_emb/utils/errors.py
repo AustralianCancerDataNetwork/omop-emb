@@ -31,3 +31,12 @@ class ModelRegistrationConflictError(Exception):
     def __init__(self, message: str, conflict_field: str):
         super().__init__(message)
         self.conflict_field = conflict_field
+
+
+class MissingStorageTableError(EmbeddingBackendError):
+    """A model is registered but its physical storage table does not exist.
+
+    Signals a divergence between the registry and the physical store that needs
+    manual investigation. The store never silently recreates a table it did not
+    just create itself via register_model.
+    """

@@ -3,14 +3,23 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-from sqlalchemy import create_engine, event, insert, inspect
+from sqlalchemy import event, insert, inspect, text
 
 from omop_alchemy.cdm.model.vocabulary import Concept
-from omop_emb.backends import ReadOnlyEmbeddingStore, StoredEmbedding
-from omop_emb.backends.embedding_table import concept_metadata_table_descriptor
+from omop_emb.backends.base_backend import StoredEmbedding
 from omop_emb.backends.index_config import FlatIndexConfig
-from omop_emb.model_registry import RegistryManager, ensure_registry_table
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
+from omop_emb.config import MetricType
+from omop_emb.model_registry import (
+    ModelRegistry,
+    bootstrap_registry_engine,
+    peek_registry_engine,
+)
 from omop_emb.population import PopulationScope, plan_population
+from omop_emb.utils.errors import MissingStorageTableError
+
+from .conftest import sqlite_resolved_database
 
 
 def _concept(concept_id: int, **overrides):
@@ -30,58 +39,58 @@ def _concept(concept_id: int, **overrides):
     return values
 
 
-def test_read_only_registry_does_not_create_schema() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    store = ReadOnlyEmbeddingStore(
-        engine,
-        backend_type="sqlitevec",
-        physical_schema="main",
+def test_peek_before_any_write_does_not_create_the_registry(tmp_path) -> None:
+    """peek_registry_engine() claims the registry schema tag but never runs
+    ensure_registry_table(), so a store that's never been bootstrapped is
+    reported as such instead of being silently set up just by being looked at."""
+    resolved = sqlite_resolved_database(str(tmp_path / "test.db"))
+    engine = peek_registry_engine(resolved, extensions=[_load_sqlite_vec])
+    backend = SQLiteVecEmbeddingBackend(emb_engine=engine)
+
+    assert backend.initialized is False
+    assert backend.registered_models() == ()
+    assert inspect(engine).has_table(ModelRegistry.__tablename__) is False
+    backend.close()
+
+
+def test_peek_after_bootstrap_sees_the_registry(tmp_path) -> None:
+    """A peek-constructed backend against the same physical file a writable
+    backend already bootstrapped sees the real, now-existing registry."""
+    db_path = str(tmp_path / "test.db")
+    bootstrap_registry_engine(
+        sqlite_resolved_database(db_path), extensions=[_load_sqlite_vec]
+    ).dispose()
+
+    engine = peek_registry_engine(
+        sqlite_resolved_database(db_path), extensions=[_load_sqlite_vec]
     )
+    backend = SQLiteVecEmbeddingBackend(emb_engine=engine)
 
-    assert store.initialized is False
-    assert store.registered_models() == ()
-    assert inspect(engine).has_table("model_registry") is False
-    store.close()
+    assert backend.initialized is True
+    assert backend.registered_models() == ()
+    backend.close()
 
 
-def test_explicit_registry_initialization_is_visible_to_read_only_store() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    ensure_registry_table(engine)
-    store = ReadOnlyEmbeddingStore(
-        engine,
-        backend_type="sqlitevec",
-        physical_schema="main",
+def test_peek_sees_registered_models_and_stored_embeddings_without_mutating(tmp_path) -> None:
+    """A model registered and populated through the writable path is fully
+    visible through a peek-only backend against the same file, and reading it
+    issues no mutating SQL."""
+    db_path = str(tmp_path / "test.db")
+    write_engine = bootstrap_registry_engine(
+        sqlite_resolved_database(db_path), extensions=[_load_sqlite_vec]
     )
-
-    assert store.initialized is True
-    assert store.registered_models() == ()
-    store.close()
-
-
-def test_stored_embeddings_use_read_only_core_query() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    registry = RegistryManager(engine)
-    record = registry.register_model(
+    write_backend = SQLiteVecEmbeddingBackend(emb_engine=write_engine)
+    write_backend.register_model(
         model_name="test-model",
         provider_type="ollama",
         index_config=FlatIndexConfig(),
-        dimensions=3,
+        dimensions=1,
     )
-    table = concept_metadata_table_descriptor(record.storage_identifier)
-    table.create(engine)
-    with engine.begin() as connection:
-        connection.execute(
-            insert(table),
-            [
-                {
-                    "concept_id": 7,
-                    "domain_id": "Condition",
-                    "vocabulary_id": "SNOMED",
-                    "is_standard": True,
-                    "is_valid": True,
-                }
-            ],
-        )
+    write_backend.close()
+
+    engine = peek_registry_engine(
+        sqlite_resolved_database(db_path), extensions=[_load_sqlite_vec]
+    )
 
     statements: list[str] = []
 
@@ -90,14 +99,10 @@ def test_stored_embeddings_use_read_only_core_query() -> None:
 
     event.listen(engine, "before_cursor_execute", capture)
     try:
-        with ReadOnlyEmbeddingStore(
-            engine,
-            backend_type="sqlitevec",
-            physical_schema="main",
-        ) as store:
-            assert store.stored_embeddings("test-model") == (
-                StoredEmbedding(7, "Condition", "SNOMED", True, True),
-            )
+        with SQLiteVecEmbeddingBackend(emb_engine=engine) as backend:
+            assert backend.initialized is True
+            assert [m.model_name for m in backend.registered_models()] == ["test-model"]
+            assert backend.stored_embeddings("test-model") == ()
     finally:
         event.remove(engine, "before_cursor_execute", capture)
 
@@ -110,22 +115,37 @@ def test_stored_embeddings_use_read_only_core_query() -> None:
     )
 
 
-def test_read_only_registry_rejects_mutation() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    ensure_registry_table(engine)
-    registry = RegistryManager.read_only(engine)
+def test_dropped_storage_table_raises_instead_of_being_recreated(tmp_path) -> None:
+    """A model registered but whose physical table was dropped out from under
+    it raises MissingStorageTableError for a fresh backend instance (an empty
+    in-process table-descriptor cache, like a new peek), instead of the old
+    behavior of silently recreating an empty table."""
+    db_path = str(tmp_path / "test.db")
+    write_engine = bootstrap_registry_engine(
+        sqlite_resolved_database(db_path), extensions=[_load_sqlite_vec]
+    )
+    write_backend = SQLiteVecEmbeddingBackend(emb_engine=write_engine)
+    record = write_backend.register_model(
+        model_name="test-model",
+        provider_type="ollama",
+        index_config=FlatIndexConfig(),
+        dimensions=1,
+    )
+    with write_engine.begin() as connection:
+        connection.execute(text(f"DROP TABLE {record.storage_identifier}"))
+    write_backend.close()
 
-    with pytest.raises(RuntimeError, match="opened read-only"):
-        registry.register_model(
-            model_name="test-model",
-            provider_type="ollama",
-            index_config=FlatIndexConfig(),
-            dimensions=3,
-        )
+    engine = peek_registry_engine(
+        sqlite_resolved_database(db_path), extensions=[_load_sqlite_vec]
+    )
+    backend = SQLiteVecEmbeddingBackend(emb_engine=engine)
+    with pytest.raises(MissingStorageTableError):
+        backend.has_any_embeddings(model_name="test-model", metric_type=MetricType.L2)
+    backend.close()
 
 
 def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
-    engine = create_engine("sqlite:///:memory:")
+    engine = sqlite_resolved_database().create_engine()
     Concept.__table__.create(engine)
     with engine.begin() as connection:
         connection.execute(
@@ -161,7 +181,12 @@ def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
 
 
 def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:
-    engine = create_engine("sqlite:///:memory:")
+    """Only concept 1 is both standard (``'S'``) and valid (no invalid_reason,
+    confirmed directly against omop_alchemy's own ``ConceptFilter``): concept 2
+    is a classification concept (``'C'``, not standard) despite its blank
+    invalid_reason normalizing to valid; concept 3 has no standard flag at
+    all; concept 4 is standard but marked deleted."""
+    engine = sqlite_resolved_database().create_engine()
     Concept.__table__.create(engine)
     with engine.begin() as connection:
         connection.execute(
@@ -189,12 +214,12 @@ def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:
         batch_size=2,
     )
 
-    assert plan.eligible_ids == frozenset({1, 2})
-    assert plan.missing_ids == frozenset({1, 2})
+    assert plan.eligible_ids == frozenset({1})
+    assert plan.missing_ids == frozenset({1})
 
 
 def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:
-    engine = create_engine("sqlite:///:memory:")
+    engine = sqlite_resolved_database().create_engine()
     Concept.__table__.create(engine)
     with engine.begin() as connection:
         connection.execute(
@@ -227,7 +252,7 @@ def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:
 
 
 def test_metadata_change_is_pending() -> None:
-    engine = create_engine("sqlite:///:memory:")
+    engine = sqlite_resolved_database().create_engine()
     Concept.__table__.create(engine)
     with engine.begin() as connection:
         connection.execute(insert(Concept), [_concept(1)])

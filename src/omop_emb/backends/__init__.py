@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .base_backend import EmbeddingBackend, resolve_backend, resolve_backend_from_resolved_vector_store
-from .read_only import (
-    ReadOnlyEmbeddingStore,
+from .base_backend import (
+    EmbeddingBackend,
     StoredEmbedding,
     initialize_resolved_vector_store,
     inspect_resolved_vector_store,
+    resolve_backend,
+    resolve_backend_from_resolved_vector_store,
 )
 from .sqlitevec import SQLiteVecEmbeddingBackend
 
@@ -18,7 +19,6 @@ __all__ = [
     "EmbeddingBackend",
     "resolve_backend",
     "resolve_backend_from_resolved_vector_store",
-    "ReadOnlyEmbeddingStore",
     "StoredEmbedding",
     "initialize_resolved_vector_store",
     "inspect_resolved_vector_store",

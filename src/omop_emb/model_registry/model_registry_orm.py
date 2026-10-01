@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable, Sequence
 from typing import Any, Optional
 
 from oa_configurator import (
     Dialect,
     ResolvedDatabase,
+    SchemaClaim,
     ensure_schema,
     guard_schema_provenance_for,
     qualified,
@@ -192,15 +194,59 @@ def resolve_registry_physical_schema(bindable) -> str | None:
     return MODEL_REGISTRY_SCHEMA if supports_schemas(bindable) else None
 
 
+def peek_registry_engine(
+    database: ResolvedDatabase,
+    *,
+    extensions: Sequence[Callable[[Any, Any], None]] = (),
+) -> Engine:
+    """Claim the registry schema only. Does NOT run ensure_registry_table(), so
+    it never creates the schema or table. If they don't exist yet,
+    RegistryManager.registry_available reports that honestly.
+
+    Parameters
+    ----------
+    database : ResolvedDatabase
+        The resolved database to build the engine against.
+    extensions : Sequence[Callable[[Any, Any], None]], optional
+        Connect-event callables forwarded to ``database.create_engine()`` for
+        any database extension the backend needs on every physical connection
+        (see ``ResolvedDatabase.create_engine``).
+    """
+    return database.create_engine(
+        schema_claims=[
+            SchemaClaim(
+                schema_tag=REGISTRY_SCHEMA_KEY,
+                physical_schema=MODEL_REGISTRY_SCHEMA,
+                reserved=True,
+                owner="omop_emb",
+            )
+        ],
+        extensions=extensions,
+    )
+
+
+def bootstrap_registry_engine(
+    database: ResolvedDatabase,
+    *,
+    extensions: Sequence[Callable[[Any, Any], None]] = (),
+) -> Engine:
+    """Claim the registry schema and ensure its table exists. The writable path.
+
+    Call before constructing a RegistryManager/EmbeddingBackend that needs to
+    be able to write. Both classes themselves never claim schemas or run DDL.
+    """
+    engine = peek_registry_engine(database, extensions=extensions)
+    ensure_registry_table(engine, resolved=database)
+    return engine
+
+
 def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None = None) -> None:
     """Create or upgrade the model registry table, in its own reserved schema.
 
-    The registry's schema is claimed once, at create_engine() time (see
-    ``resolve_backend()``), not here: this function only reads the already-
-    resolved REGISTRY_SCHEMA_KEY off *engine*'s own schema_translate_map
-    (``RegistryManager.__init__`` guarantees it's present, falling back to
-    a direct mapping itself for a bare engine with no resolved config
-    behind it) and ensures the physical schema exists.
+    The registry's schema is claimed by bootstrap_registry_engine() at
+    create_engine() time, not here: this function only reads the already-
+    resolved REGISTRY_SCHEMA_KEY off *engine*'s own schema_translate_map and
+    ensures the physical schema exists.
 
     Parameters
     ----------

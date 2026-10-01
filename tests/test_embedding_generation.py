@@ -16,7 +16,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pytest
 from oa_configurator.resolver import ResolvedModel, ResolvedProvider
-from sqlalchemy import create_engine, insert
+from sqlalchemy import insert
 
 from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_emb.config import MetricType
@@ -25,6 +25,8 @@ from omop_emb.interface import (
     EmbeddingReaderInterface,
     EmbeddingWriterInterface,
 )
+
+from .conftest import sqlite_resolved_database
 
 OLLAMA_BASE = "http://localhost:11434"
 OLLAMA_MODEL = "nomic-embed-text:v1.5"
@@ -227,7 +229,7 @@ class TestEmbeddingWriterInterfaceEmbedTexts:
 
 
 def test_population_batches_include_missing_and_metadata_changed_concepts():
-    cdm_engine = create_engine("sqlite:///:memory:")
+    cdm_engine = sqlite_resolved_database().create_engine()
     Concept.__table__.create(cdm_engine)
     base = {
         "concept_name": "Concept",

@@ -6,12 +6,33 @@ import numpy as np
 import pytest
 import sqlalchemy as sa
 
-from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.sqlitevec import (
-    SQLiteVecEmbeddingBackend,
-    create_sqlitevec_engine,
+from oa_configurator import (
+    CDMDatabaseConfig,
+    ConnectionConfig,
+    Dialect,
+    Resolver,
+    ResolvedDatabase,
+    SchemaClaim,
+    StackConfig,
 )
-from omop_emb.config import OmopEmbConfig
+
+from omop_emb.backends.base_backend import ConceptEmbeddingRecord
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
+from omop_emb.config import MODEL_REGISTRY_SCHEMA, OmopEmbConfig, REGISTRY_SCHEMA_KEY
+from omop_emb.model_registry import ensure_registry_table
+
+
+def sqlite_resolved_database(database_name: str = ":memory:") -> ResolvedDatabase:
+    """A plain oa-configurator ``ResolvedDatabase`` for a SQLite target, for
+    test code that needs ``bootstrap_registry_engine()``/``peek_registry_engine()``
+    against a bare SQLite file or ``:memory:`` target with no config file
+    involved."""
+    cfg = StackConfig.for_session(
+        connections={"db": ConnectionConfig(dialect=Dialect.SQLITE, database_name=database_name)},
+        databases={"default": CDMDatabaseConfig(connection="db")},
+    )
+    return Resolver(cfg).resolve_database("default")
 
 
 # ---------------------------------------------------------------------------
@@ -70,13 +91,22 @@ QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
 def svec_engine(request):
     """Fresh SQLiteVec engine per test, via oa-configurator's canonical
     dialect-agnostic test-database entrypoint rather than a hand-built
-    ``sa.create_engine()``."""
+    ``sa.create_engine()``. Claims the registry schema and ensures the
+    registry table exists, matching what ``bootstrap_registry_engine()``
+    does for a real engine built straight off a ``ResolvedDatabase``."""
     from oa_configurator.testing import isolated_test_database
 
     with isolated_test_database(
-        OmopEmbConfig, "test_emb_db_sqlite", dialect="sqlite", request=request
+        OmopEmbConfig, "test_emb_db_sqlite", dialect="sqlite", request=request,
+        schema_claims=[SchemaClaim(
+            schema_tag=REGISTRY_SCHEMA_KEY, physical_schema=MODEL_REGISTRY_SCHEMA,
+            reserved=True, owner="omop_emb",
+        )],
+        extensions=[_load_sqlite_vec],
     ) as db:
-        yield create_sqlitevec_engine(db.connection.engine)
+        engine = db.connection.engine
+        ensure_registry_table(engine)
+        yield engine
 
 
 @pytest.fixture
@@ -94,10 +124,12 @@ def svec_backend(svec_engine) -> SQLiteVecEmbeddingBackend:
 def pg_db(request):
     """Canonical isolated PostgreSQL test database (Phase 0 of the
     schema_translate_map fix)."""
-    from oa_configurator.testing import isolated_test_database
+    from oa_configurator.testing import install_postgres_extension, isolated_test_database
 
     with isolated_test_database(
-        OmopEmbConfig, "test_emb_db_pg", extensions=["vector"], request=request
+        OmopEmbConfig, "test_emb_db_pg",
+        extensions=[install_postgres_extension("vector")],
+        request=request,
     ) as db:
         yield db
 

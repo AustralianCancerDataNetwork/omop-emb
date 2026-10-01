@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from dataclasses import dataclass
 from functools import wraps
 import logging
 from datetime import datetime
@@ -10,16 +12,15 @@ from oa_configurator import (
     Dialect,
     ResolvedDatabase,
     ResolvedVectorStore,
-    SchemaClaim,
+    physical_schema_of,
+    qualified,
 )
-from sqlalchemy import Engine
+from sqlalchemy import Engine, inspect, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from omop_emb.config import (
     BackendType,
-    MODEL_REGISTRY_SCHEMA,
-    REGISTRY_SCHEMA_KEY,
     MetricType,
     IndexType,
     get_supported_index_types_for_backend,
@@ -32,11 +33,15 @@ from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig
 from omop_emb.model_registry import (
     EmbeddingModelRecord,
     RegistryManager,
+    bootstrap_registry_engine,
+    peek_registry_engine,
 )
+from omop_emb.utils.cdm import streamed
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,
 )
+from omop_emb.utils.errors import MissingStorageTableError
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +151,17 @@ def require_registered_model(func: Callable) -> Callable:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class StoredEmbedding:
+    """Identity and filter metadata for one stored concept vector."""
+
+    concept_id: int
+    domain_id: str
+    vocabulary_id: str
+    is_standard: bool
+    is_valid: bool
+
+
 class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     """Abstract base class for embedding storage and retrieval backends.
 
@@ -192,9 +208,8 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             )
         super().__init__()
         self._resolved = resolved
-        self._registry = RegistryManager(emb_engine, resolved=resolved)
+        self._registry = RegistryManager(emb_engine)
         self._table_cache: dict[str, TEmbeddingTable] = {}
-        self._initialise_store()
 
     # ------------------------------------------------------------------
     # Backend identity
@@ -225,30 +240,110 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         """Session factory bound to ``emb_engine``."""
         return self._registry.emb_session_factory
 
+    def model(self, model_name: str) -> Optional[EmbeddingModelRecord]:
+        """Return one registered model, or ``None`` if not registered."""
+        return self.get_registered_model(model_name=model_name)
+
+    def registered_models(self) -> tuple[EmbeddingModelRecord, ...]:
+        """Return all registered models."""
+        return self.get_registered_models()
+
+    @property
+    def initialized(self) -> bool:
+        """Whether the model registry table exists."""
+        return self._registry.registry_available
+
+    def close(self) -> None:
+        """Dispose the underlying engine."""
+        self.emb_engine.dispose()
+
+    def __enter__(self) -> "EmbeddingBackend":
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
+
+    def stored_embeddings(self, model_name: str) -> tuple[StoredEmbedding, ...]:
+        """Read concept metadata from one existing model table."""
+        return tuple(self.iter_stored_embeddings(model_name))
+
+    def iter_stored_embeddings(
+        self,
+        model_name: str,
+        *,
+        batch_size: int = 10_000,
+    ) -> Iterator[StoredEmbedding]:
+        """Stream concept metadata from one existing model table."""
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than zero.")
+        record = self.get_registered_model(model_name=model_name)
+        if record is None:
+            return
+        if not self._storage_table_exists(record):
+            return
+        table = self._get_storage_table_descriptor(record)
+        columns = inspect(table).columns  # ty: ignore[unresolved-attribute]
+        statement = streamed(
+            select(
+                columns.concept_id,
+                columns.domain_id,
+                columns.vocabulary_id,
+                columns.is_standard,
+                columns.is_valid,
+            ),
+            batch_size,
+        )
+        with self.emb_engine.connect() as connection:
+            rows = connection.execute(statement).mappings()
+            for row in rows:
+                yield StoredEmbedding(
+                    concept_id=int(row["concept_id"]),
+                    domain_id=str(row["domain_id"]),
+                    vocabulary_id=str(row["vocabulary_id"]),
+                    is_standard=bool(row["is_standard"]),
+                    is_valid=bool(row["is_valid"]),
+                )
+
+    @abstractmethod
+    def physical_indexes(self, model_name: str) -> tuple[str, ...]:
+        """Return existing physical indexes for this model's table, without
+        creating or changing them."""
+        ...
+
+    def drop_index_sql(self, model_name: str) -> tuple[str, ...]:
+        """Return reviewed index-removal statements without executing them."""
+        physical_schema = physical_schema_of(self.emb_engine)
+        return tuple(
+            f"DROP INDEX IF EXISTS {qualified(self.emb_engine, name, physical_schema=physical_schema)};"
+            for name in self.physical_indexes(model_name)
+        )
+
     # ------------------------------------------------------------------
     # Store lifecycle
     # ------------------------------------------------------------------
 
-    def _initialise_store(self) -> None:
-        self.pre_initialise_store()
-        for record in self._registry.get_registered_models():
-            if record.storage_identifier not in self._table_cache:
-                self._table_cache[record.storage_identifier] = self._load_storage_table(
-                    record
-                )
-
-    def pre_initialise_store(self) -> None:
-        """Hook for backend-specific setup before the registry is queried.
-
-        Override to run DDL such as ``CREATE EXTENSION`` before tables are
-        created. The default implementation is a no-op.
-        """
-
     def _ensure_storage_table(self, model_record: EmbeddingModelRecord) -> TEmbeddingTable:
+        """Create-if-new. Used by register_model's write path only."""
         if model_record.storage_identifier not in self._table_cache:
             table = self._create_storage_table(model_record)
             self._table_cache[model_record.storage_identifier] = table
         return self._table_cache[model_record.storage_identifier]
+
+    def _storage_table(self, model_record: EmbeddingModelRecord) -> TEmbeddingTable:
+        """Lazy lookup for an already-registered model. Raises
+        MissingStorageTableError if genuinely absent -- never recreates it."""
+        cached = self._table_cache.get(model_record.storage_identifier)
+        if cached is not None:
+            return cached
+        if not self._storage_table_exists(model_record):
+            raise MissingStorageTableError(
+                f"Model '{model_record.model_name}' is registered with storage_identifier "
+                f"'{model_record.storage_identifier}', but no such table exists in the "
+                f"'{self.backend_name}' store."
+            )
+        table = self._get_storage_table_descriptor(model_record)
+        self._table_cache[model_record.storage_identifier] = table
+        return table
 
     # ------------------------------------------------------------------
     # Model registration / deletion / index management
@@ -353,8 +448,8 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         If the DDL step fails the registry entry remains intact and the call
         is re-runnable. If the DDL succeeds but the registry delete fails the
         only failure mode is a registry entry pointing at a table that no
-        longer exists. The next ``_initialise_store`` will
-        recreate an empty table.
+        longer exists -- the next read or write against that model raises
+        ``MissingStorageTableError`` instead of silently recreating it.
         """
         record = self.get_registered_model(model_name=model_name)
         if record is None:
@@ -545,17 +640,6 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     # ------------------------------------------------------------------
     # Storage table management (backend-specific)
     # ------------------------------------------------------------------
-
-    def _load_storage_table(self, model_record: EmbeddingModelRecord) -> TEmbeddingTable:
-        """Return the table descriptor for a registered model, recovering if missing
-        by recreating the table as needed."""
-        if not self._storage_table_exists(model_record):
-            logger.warning(
-                f"Embedding table '{model_record.storage_identifier}' is registered but missing from the database. "
-                "Recreating table but expect missing records."
-            )
-            return self._create_storage_table(model_record)
-        return self._get_storage_table_descriptor(model_record)
 
     @abstractmethod
     def _storage_table_exists(self, model_record: EmbeddingModelRecord) -> bool:
@@ -1024,6 +1108,50 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             )
 
 
+def _extensions_for(backend_type: BackendType) -> Sequence[Callable[[Any, Any], None]]:
+    """The connect-event callables a given backend needs on every physical
+    connection, forwarded to ``ResolvedDatabase.create_engine()``."""
+    if backend_type == BackendType.SQLITEVEC:
+        from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
+
+        return [_load_sqlite_vec]
+    elif backend_type == BackendType.PGVECTOR:
+        from omop_emb.backends.pgvector.pg_backend import _create_vector_extension
+
+        return [_create_vector_extension]
+    else:
+        raise ValueError(f"Unknown backend type {backend_type!r}.")
+
+
+def _backend_class_for(backend_type: BackendType, *, dialect: str) -> type[EmbeddingBackend]:
+    """Validate the dialect for *backend_type* and return its concrete class."""
+    if backend_type == BackendType.SQLITEVEC:
+        if dialect != Dialect.SQLITE:
+            raise RuntimeError(
+                f"sqlitevec backend requires a sqlite-dialect database, got dialect: {dialect!r}."
+            )
+        from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+
+        return SQLiteVecEmbeddingBackend
+
+    elif backend_type == BackendType.PGVECTOR:
+        if dialect != Dialect.POSTGRESQL:
+            raise RuntimeError(
+                "The resolved URL must point to a PostgreSQL database "
+                f"(pgvector extension required), got dialect: {dialect!r}."
+            )
+        try:
+            from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
+        except ImportError as exc:
+            raise RuntimeError(
+                "pgvector backend is not installed. "
+                "Install it with: pip install omop-emb[pgvector]"
+            ) from exc
+        return PGVectorEmbeddingBackend
+    else:
+        raise ValueError(f"Unknown backend type {backend_type!r}.")
+
+
 def resolve_backend(
     backend_type: Union[str, BackendType],
     *,
@@ -1053,45 +1181,12 @@ def resolve_backend(
         )
 
     dialect = make_url(database.connection.url).get_backend_name()
-
-    # Own schema claim for the registry
-    registry_claim = SchemaClaim(
-        schema_tag=REGISTRY_SCHEMA_KEY,
-        physical_schema=MODEL_REGISTRY_SCHEMA,
-        reserved=True,
-        owner="omop_emb",
+    backend_cls = _backend_class_for(resolved_backend, dialect=dialect)
+    emb_engine = bootstrap_registry_engine(
+        database, extensions=_extensions_for(resolved_backend)
     )
-
-    if resolved_backend == BackendType.SQLITEVEC:
-        from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
-
-        if dialect != Dialect.SQLITE:
-            raise RuntimeError(
-                f"sqlitevec backend requires a sqlite-dialect database, got dialect: {dialect!r}."
-            )
-        emb_engine = create_sqlitevec_engine(
-            database.create_engine(schema_claims=[registry_claim]))
-        logger.info(f"Using SQLiteVec backend with engine: {emb_engine.url}")
-        return SQLiteVecEmbeddingBackend(emb_engine=emb_engine, resolved=database)
-
-    if resolved_backend == BackendType.PGVECTOR:
-        if dialect != Dialect.POSTGRESQL:
-            raise RuntimeError(
-                "The resolved URL must point to a PostgreSQL database "
-                f"(pgvector extension required), got dialect: {dialect!r}."
-            )
-        try:
-            from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
-        except ImportError as exc:
-            raise RuntimeError(
-                "pgvector backend is not installed. "
-                "Install it with: pip install omop-emb[pgvector]"
-            ) from exc
-        emb_engine = database.create_engine(schema_claims=[registry_claim])
-        logger.info(f"Using pgvector backend with engine: {emb_engine.url}")
-        return PGVectorEmbeddingBackend(emb_engine=emb_engine, resolved=database)
-
-    raise RuntimeError(f"Implementation for {resolved_backend.value} is not available.")
+    logger.info(f"Using {resolved_backend.value} backend with engine: {emb_engine.url}")
+    return backend_cls(emb_engine=emb_engine, resolved=database)
 
 
 def resolve_backend_from_resolved_vector_store(resolved: ResolvedVectorStore) -> EmbeddingBackend:
@@ -1105,3 +1200,33 @@ def resolve_backend_from_resolved_vector_store(resolved: ResolvedVectorStore) ->
     reserve this for a CLI/entry-point boundary.
     """
     return resolve_backend(resolved.backend_type, database=resolved.database)
+
+
+def inspect_resolved_vector_store(resolved: ResolvedVectorStore) -> EmbeddingBackend:
+    """Open a resolved vector store for setup inspection, without creating
+    anything that doesn't already exist.
+
+    Claims the registry schema tag via the same create_engine() call the
+    writable path uses (same provenance write -- nothing side-stepped), but
+    skips ``ensure_registry_table()``, so a store that's never been
+    configured is reported as such (empty registry) instead of being
+    silently set up just by being looked at.
+    """
+    database = resolved.database
+    backend_str = resolved.backend_type if isinstance(resolved.backend_type, str) else resolved.backend_type.value
+    try:
+        resolved_backend = BackendType(backend_str.lower())
+    except ValueError:
+        raise RuntimeError(
+            f"Unknown backend {backend_str!r}. "
+            f"Supported: {[b.value for b in BackendType]}."
+        )
+    dialect = make_url(database.connection.url).get_backend_name()
+    backend_cls = _backend_class_for(resolved_backend, dialect=dialect)
+    emb_engine = peek_registry_engine(database, extensions=_extensions_for(resolved_backend))
+    return backend_cls(emb_engine=emb_engine, resolved=database)
+
+
+def initialize_resolved_vector_store(resolved: ResolvedVectorStore) -> EmbeddingBackend:
+    """Explicitly initialize a resolved store and return its writable backend."""
+    return resolve_backend_from_resolved_vector_store(resolved)

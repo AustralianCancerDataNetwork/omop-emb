@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import warnings
-from contextlib import nullcontext
 from typing import Any, Optional
 
 from oa_configurator import (
-    SCHEMA_TRANSLATE_MAP_KEY,
     Dialect,
     ResolvedDatabase,
     ensure_schema,
-    guard_schema_provenance,
+    guard_schema_provenance_for,
     qualified,
     supports_schemas,
 )
@@ -197,44 +195,29 @@ def resolve_registry_physical_schema(bindable) -> str | None:
 def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None = None) -> None:
     """Create or upgrade the model registry table, in its own reserved schema.
 
-    Notes
-    -----
-    Shared across every resolved database on the same connection; `database_name=
-    MODEL_REGISTRY_SCHEMA` (not `resolved.name`) keeps them tracked as one identity,
-    avoiding a false "already populated" on the second one.
+    The registry's schema is claimed once, at create_engine() time (see
+    ``resolve_backend()``), not here: this function only reads the already-
+    resolved REGISTRY_SCHEMA_KEY off *engine*'s own schema_translate_map
+    (``RegistryManager.__init__`` guarantees it's present, falling back to
+    a direct mapping itself for a bare engine with no resolved config
+    behind it) and ensures the physical schema exists.
 
     Parameters
     ----------
     engine : Engine
-        SQLAlchemy engine connected to the registry database. Not required
-        to already carry a REGISTRY_SCHEMA_KEY entry in its schema_translate_map.
+        SQLAlchemy engine connected to the registry database, already
+        carrying a REGISTRY_SCHEMA_KEY entry in its schema_translate_map.
     resolved : ResolvedDatabase, optional
         Enables the schema-provenance guard around the ``create_all()``
-        call. Omitted by callers with no resolved config behind their
-        engine, in which case the guard no-ops.
+        call, tracked under ``resolved.name`` like any other claim.
+        Omitted by callers with no resolved config behind their engine, in
+        which case the guard no-ops.
     """
     with engine.begin() as connection:
-        connection = connection.execution_options(
-            schema_translate_map={
-                **(connection.get_execution_options().get(SCHEMA_TRANSLATE_MAP_KEY) or {}),
-                REGISTRY_SCHEMA_KEY: resolve_registry_physical_schema(connection),
-            }
-        )
-        ensure_schema(connection, MODEL_REGISTRY_SCHEMA)
         registry_schema = resolve_registry_physical_schema(connection)
-        guard = (
-            guard_schema_provenance(
-                connection,
-                database_name=MODEL_REGISTRY_SCHEMA,
-                test_only=resolved.connection.test_only,
-                schema_tag=REGISTRY_SCHEMA_KEY,
-                physical_schema=registry_schema,
-                tables=[ModelRegistry.__table__],  # ty: ignore[invalid-argument-type]
-            )
-            if resolved is not None and registry_schema is not None
-            else nullcontext()
-        )
-        with guard:
+        if registry_schema is not None:
+            ensure_schema(connection, registry_schema)
+        with guard_schema_provenance_for(connection, resolved, schema_tag=REGISTRY_SCHEMA_KEY):
             ModelRegistryBase.metadata.create_all(connection, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
     _migrate_legacy_provider_type_column(engine)
 

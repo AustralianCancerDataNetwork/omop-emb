@@ -7,10 +7,10 @@ from datetime import datetime
 from typing import Any, Callable, Generic, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 from numpy import ndarray
 from oa_configurator import (
-    SCHEMA_TRANSLATE_MAP_KEY,
     Dialect,
     ResolvedDatabase,
     ResolvedVectorStore,
+    SchemaClaim,
 )
 from sqlalchemy import Engine
 from sqlalchemy.engine import make_url
@@ -18,6 +18,8 @@ from sqlalchemy.orm import sessionmaker
 
 from omop_emb.config import (
     BackendType,
+    MODEL_REGISTRY_SCHEMA,
+    REGISTRY_SCHEMA_KEY,
     MetricType,
     IndexType,
     get_supported_index_types_for_backend,
@@ -29,9 +31,7 @@ from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig
 from omop_emb.model_registry import (
     EmbeddingModelRecord,
-    REGISTRY_SCHEMA_KEY,
     RegistryManager,
-    resolve_registry_physical_schema,
 )
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
@@ -1054,11 +1054,13 @@ def resolve_backend(
 
     dialect = make_url(database.connection.url).get_backend_name()
 
-    # The model registry lives in its own reserved schema (MODEL_REGISTRY_SCHEMA),
-    # independent of database's own schema. create_engine() merges this extra
-    # key onto its own configured map rather than replacing it.
-    registry_schema = resolve_registry_physical_schema(database.connection.dialect_name)
-    registry_schema_translate_map = {REGISTRY_SCHEMA_KEY: registry_schema}
+    # Own schema claim for the registry
+    registry_claim = SchemaClaim(
+        schema_tag=REGISTRY_SCHEMA_KEY,
+        physical_schema=MODEL_REGISTRY_SCHEMA,
+        reserved=True,
+        owner="omop_emb",
+    )
 
     if resolved_backend == BackendType.SQLITEVEC:
         from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
@@ -1068,10 +1070,7 @@ def resolve_backend(
                 f"sqlitevec backend requires a sqlite-dialect database, got dialect: {dialect!r}."
             )
         emb_engine = create_sqlitevec_engine(
-            database.create_engine(
-                execution_options={SCHEMA_TRANSLATE_MAP_KEY: registry_schema_translate_map}
-            )
-        )
+            database.create_engine(schema_claims=[registry_claim]))
         logger.info(f"Using SQLiteVec backend with engine: {emb_engine.url}")
         return SQLiteVecEmbeddingBackend(emb_engine=emb_engine, resolved=database)
 
@@ -1088,9 +1087,7 @@ def resolve_backend(
                 "pgvector backend is not installed. "
                 "Install it with: pip install omop-emb[pgvector]"
             ) from exc
-        emb_engine = database.create_engine(
-            execution_options={SCHEMA_TRANSLATE_MAP_KEY: registry_schema_translate_map}
-        )
+        emb_engine = database.create_engine(schema_claims=[registry_claim])
         logger.info(f"Using pgvector backend with engine: {emb_engine.url}")
         return PGVectorEmbeddingBackend(emb_engine=emb_engine, resolved=database)
 

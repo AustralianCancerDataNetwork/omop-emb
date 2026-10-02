@@ -40,7 +40,7 @@ def _concept(concept_id: int, **overrides):
 
 
 def test_peek_before_any_write_does_not_create_the_registry(tmp_path) -> None:
-    """peek_registry_engine() claims the registry schema tag but never runs
+    """peek_registry_engine() maps the registry schema tag but never runs
     ensure_registry_table(), so a store that's never been bootstrapped is
     reported as such instead of being silently set up just by being looked at."""
     resolved = sqlite_resolved_database(str(tmp_path / "test.db"))

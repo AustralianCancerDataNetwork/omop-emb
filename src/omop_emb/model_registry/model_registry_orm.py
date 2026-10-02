@@ -9,11 +9,13 @@ from oa_configurator import (
     ResolvedDatabase,
     SchemaClaim,
     ensure_schema,
+    find_table_in_other_schemas,
     guard_schema_provenance_for,
     qualified,
     supports_schemas,
 )
 from sqlalchemy import (
+    Connection,
     DateTime,
     Engine,
     Enum,
@@ -35,6 +37,7 @@ from omop_emb.config import (
     MetricType,
 )
 from omop_emb.backends.index_config import IndexConfig
+from omop_emb.utils.errors import MisplacedRegistryError
 
 
 class ModelRegistryBase(DeclarativeBase):
@@ -194,15 +197,13 @@ def resolve_registry_physical_schema(bindable) -> str | None:
     return MODEL_REGISTRY_SCHEMA if supports_schemas(bindable) else None
 
 
-def peek_registry_engine(
+def _registry_engine(
     database: ResolvedDatabase,
     *,
-    extensions: Sequence[Callable[[Any, Any], None]] = (),
+    extensions: Sequence[Callable[[Any, Any], None]],
+    register_claims: bool,
 ) -> Engine:
-    """Claim the registry schema only. Does NOT run ensure_registry_table(), so
-    it never creates the schema or table. If they don't exist yet,
-    RegistryManager.registry_available reports that honestly.
-
+    """Engine carrying the registry's reserved schema claim, registered or only checked.
     Parameters
     ----------
     database : ResolvedDatabase
@@ -211,6 +212,9 @@ def peek_registry_engine(
         Connect-event callables forwarded to ``database.create_engine()`` for
         any database extension the backend needs on every physical connection
         (see ``ResolvedDatabase.create_engine``).
+    register_claims : bool, optional
+        Forwarded to ``database.create_engine()``. False checks the registry
+        claim without writing it.
     """
     return database.create_engine(
         schema_claims=[
@@ -222,7 +226,29 @@ def peek_registry_engine(
             )
         ],
         extensions=extensions,
+        register_claims=register_claims,
     )
+
+
+def peek_registry_engine(
+    database: ResolvedDatabase,
+    *,
+    extensions: Sequence[Callable[[Any, Any], None]] = (),
+) -> Engine:
+    """Map the registry schema without registering its claim or creating
+    anything. If the schema or table doesn't exist yet,
+    RegistryManager.registry_available reports that honestly.
+
+    Parameters
+    ----------
+    database : ResolvedDatabase
+        The resolved database to build the engine against.
+    extensions : Sequence[Callable[[Any, Any], None]], optional
+        Connect-event callables forwarded to ``database.create_engine()`` for
+        any database extension the backend needs on every physical connection
+        (see ``ResolvedDatabase.create_engine``).
+    """
+    return _registry_engine(database, extensions=extensions, register_claims=False)
 
 
 def bootstrap_registry_engine(
@@ -235,7 +261,7 @@ def bootstrap_registry_engine(
     Call before constructing a RegistryManager/EmbeddingBackend that needs to
     be able to write. Both classes themselves never claim schemas or run DDL.
     """
-    engine = peek_registry_engine(database, extensions=extensions)
+    engine = _registry_engine(database, extensions=extensions, register_claims=True)
     ensure_registry_table(engine, resolved=database)
     return engine
 
@@ -255,17 +281,53 @@ def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None =
         carrying a REGISTRY_SCHEMA_KEY entry in its schema_translate_map.
     resolved : ResolvedDatabase, optional
         Enables the schema-provenance guard around the ``create_all()``
-        call, tracked under ``resolved.name`` like any other claim.
-        Omitted by callers with no resolved config behind their engine, in
+        call. Omitted by callers with no resolved config behind their engine, in
         which case the guard no-ops.
+
+    Raises
+    ------
+    MisplacedRegistryError
+        If the registry schema has no registry table but another schema does.
     """
     with engine.begin() as connection:
         registry_schema = resolve_registry_physical_schema(connection)
         if registry_schema is not None:
+            _reject_misplaced_registry(connection, registry_schema=registry_schema)
             ensure_schema(connection, registry_schema)
         with guard_schema_provenance_for(connection, resolved, schema_tag=REGISTRY_SCHEMA_KEY):
             ModelRegistryBase.metadata.create_all(connection, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
     _migrate_legacy_provider_type_column(engine)
+
+
+def _reject_misplaced_registry(connection: Connection, *, registry_schema: str) -> None:
+    """Refuse to create an empty registry while a registry table exists in another schema.
+
+    Parameters
+    ----------
+    connection : sqlalchemy.Connection
+        Connection the registry is created on.
+    registry_schema : str
+        Physical schema the registry belongs in.
+
+    Raises
+    ------
+    MisplacedRegistryError
+        If *registry_schema* has no registry table but another schema does.
+    """
+    table_name = ModelRegistry.__tablename__
+    if inspect(connection).has_table(table_name, schema=registry_schema):
+        return
+    found = find_table_in_other_schemas(connection, table_name, physical_schema=registry_schema)
+    if not found:
+        return
+    quoted_registry_schema = connection.dialect.identifier_preparer.quote_schema(registry_schema)
+    raise MisplacedRegistryError(
+        f"Found the model registry in schema(s) {list(found)}, but omop-emb keeps it in "
+        f"{registry_schema!r}. Move it before continuing:\n"
+        f"  CREATE SCHEMA IF NOT EXISTS {quoted_registry_schema};\n"
+        f"  ALTER TABLE {qualified(connection, table_name, physical_schema=found[0])} "
+        f"SET SCHEMA {quoted_registry_schema};"
+    )
 
 
 def _migrate_legacy_provider_type_column(engine: Engine) -> None:

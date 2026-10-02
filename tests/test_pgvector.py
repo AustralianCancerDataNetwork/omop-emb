@@ -15,12 +15,13 @@ pytest.importorskip(
 
 import sqlalchemy as sa
 from oa_configurator import Role
-from oa_configurator.testing import isolated_test_schema
+from oa_configurator.testing import resolve_with_role_schemas, scoped_test_schema
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 from omop_emb.config import IndexType, MetricType
-from omop_emb.model_registry import RegistryManager
+from omop_emb.backends import resolve_backend
+from omop_emb.model_registry import RegistryManager, peek_registry_engine
 
 from .conftest import (
     CONCEPT_EMBEDDINGS,
@@ -155,17 +156,18 @@ class TestPGVectorNonDefaultSchema:
     )
 
     @pytest.fixture
-    def scoped_backend(self, pg_engine):
-        with isolated_test_schema(pg_engine, prefix="emb_schema") as schema:
-            scoped_engine = pg_engine.execution_options(
-                schema_translate_map={Role.PRIMARY.value: schema}
-            )
-            backend = PGVectorEmbeddingBackend(emb_engine=scoped_engine)
-            yield backend, schema
+    def scoped_backend(self, pg_db):
+        with scoped_test_schema(pg_db.resolved, prefix="emb_schema") as scoped:
+            backend = resolve_backend("pgvector", database=scoped.resolved)
+            try:
+                yield backend, scoped.schemas[Role.PRIMARY]
+            finally:
+                backend.emb_engine.dispose()
 
     def test_table_and_index_lifecycle_stays_in_the_configured_schema(
-        self, scoped_backend, pg_engine
+        self, scoped_backend, pg_db
     ):
+        pg_engine = pg_db.committing_engine
         backend, schema = scoped_backend
         record = backend.register_model(
             model_name=MODEL_NAME,
@@ -206,8 +208,9 @@ class TestPGVectorNonDefaultSchema:
         assert backend._storage_table_exists(record) is False
 
     def test_model_registry_lives_in_its_own_reserved_schema(
-        self, scoped_backend, pg_engine
+        self, scoped_backend, pg_db
     ):
+        pg_engine = pg_db.committing_engine
         backend, schema = scoped_backend
         backend.register_model(
             model_name=MODEL_NAME,
@@ -216,21 +219,22 @@ class TestPGVectorNonDefaultSchema:
             dimensions=EMBEDDING_DIM,
         )
 
-        scoped_engine = pg_engine.execution_options(
-            schema_translate_map={Role.PRIMARY.value: schema}
-        )
-        registry = RegistryManager.read_only(scoped_engine)
+        registry = RegistryManager(backend.emb_engine)
         assert registry.registry_available is True
         assert len(registry.get_registered_models(model_name=MODEL_NAME)) == 1
 
         # A registry built with a completely different primary-tagged schema
         # sees the exact same row: the registry is decoupled from it entirely.
-        public_engine = pg_engine.execution_options(
-            schema_translate_map={Role.PRIMARY.value: "public"}
+        public_resolved = resolve_with_role_schemas(
+            pg_db.resolved, {role: "public" for role in pg_db.resolved.schema_tags()}
         )
-        public_registry = RegistryManager.read_only(public_engine)
-        assert public_registry.registry_available is True
-        assert len(public_registry.get_registered_models(model_name=MODEL_NAME)) == 1
+        public_engine = peek_registry_engine(public_resolved)
+        try:
+            public_registry = RegistryManager(public_engine)
+            assert public_registry.registry_available is True
+            assert len(public_registry.get_registered_models(model_name=MODEL_NAME)) == 1
+        finally:
+            public_engine.dispose()
 
         # And genuinely never created under the storage schema's own name.
         assert sa.inspect(pg_engine).has_table("model_registry", schema=schema) is False

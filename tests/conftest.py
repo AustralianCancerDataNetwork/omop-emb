@@ -135,22 +135,14 @@ def pg_db(request):
 
 
 @pytest.fixture
-def pg_engine(pg_db) -> sa.Engine:
-    """Real, committing engine for ``PGVectorEmbeddingBackend`` (needs
-    ``.begin()``/``.connect()`` semantics a bare ``Connection`` can't give).
-    A thin shim over ``pg_db.connection.engine``; isolation comes from
-    ``pg_backend``'s teardown (drops each model's table), not a rollback.
-    """
-    return pg_db.committing_engine
-
-
-@pytest.fixture
-def pg_backend(pg_engine: sa.Engine):
-    """Function-scoped PGVectorEmbeddingBackend with a clean registry per test."""
-    from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
+def pg_backend(pg_db):
+    """Function-scoped PGVectorEmbeddingBackend with a clean registry per test,
+    built through ``resolve_backend()`` so its engine claims the registry
+    schema and installs pgvector exactly as production does."""
+    from omop_emb.backends import resolve_backend
     from omop_emb.backends.embedding_table import EmbeddingTableBase
 
-    backend = PGVectorEmbeddingBackend(emb_engine=pg_engine)
+    backend = resolve_backend("pgvector", database=pg_db.resolved)
 
     yield backend
 
@@ -164,3 +156,11 @@ def pg_backend(pg_engine: sa.Engine):
     # Remove the tables from the ORM cache
     EmbeddingTableBase.metadata.clear()
     EmbeddingTableBase.registry._class_registry.clear()
+    backend.emb_engine.dispose()
+
+
+@pytest.fixture
+def pg_engine(pg_backend) -> sa.Engine:
+    """``pg_backend``'s own committing engine: registry schema claimed and
+    pgvector installed. Isolation comes from ``pg_backend``'s teardown."""
+    return pg_backend.emb_engine

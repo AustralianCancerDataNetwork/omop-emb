@@ -1204,13 +1204,16 @@ def resolve_backend_from_resolved_vector_store(resolved: ResolvedVectorStore) ->
 
 def inspect_resolved_vector_store(resolved: ResolvedVectorStore) -> EmbeddingBackend:
     """Open a resolved vector store for setup inspection, without creating
-    anything that doesn't already exist.
+    or registering anything.
 
-    Claims the registry schema tag via the same create_engine() call the
-    writable path uses (same provenance write -- nothing side-stepped), but
-    skips ``ensure_registry_table()``, so a store that's never been
-    configured is reported as such (empty registry) instead of being
-    silently set up just by being looked at.
+    Builds its engine via ``peek_registry_engine()``, so a store that's never
+    been configured is reported as such (empty registry) instead of being
+    set up just by being looked at.
+
+    Parameters
+    ----------
+    resolved : ResolvedVectorStore
+        The vector store to inspect.
     """
     database = resolved.database
     backend_str = resolved.backend_type if isinstance(resolved.backend_type, str) else resolved.backend_type.value

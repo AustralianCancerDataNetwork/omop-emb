@@ -10,7 +10,12 @@ from oa_configurator import ensure_schema
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.config import MODEL_REGISTRY_SCHEMA, IndexType, MetricType
-from omop_emb.model_registry import RegistryManager, ensure_registry_table, peek_registry_engine
+from omop_emb.model_registry import (
+    REGISTRY_SCHEMA_KEY,
+    RegistryManager,
+    ensure_registry_table,
+    peek_registry_engine,
+)
 from omop_emb.utils.errors import ModelRegistrationConflictError
 
 from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE, sqlite_resolved_database
@@ -231,7 +236,7 @@ class TestProviderTypeValidation:
 def test_legacy_provider_name_is_normalized_in_sqlite():
     """ensure_registry_table()'s migration runs against a pre-existing legacy
     table, so this builds its own engine via peek_registry_engine() (schema
-    claim only, no table) rather than the svec_engine fixture, which already
+    mapping only, no table) rather than the svec_engine fixture, which already
     creates the current-shape table via bootstrap_registry_engine()."""
     engine = peek_registry_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
     with engine.begin() as connection:
@@ -263,7 +268,7 @@ def test_legacy_provider_column_is_widened_in_postgres(pg_engine):
             sa.text(f"INSERT INTO {MODEL_REGISTRY_SCHEMA}.model_registry (provider_type) VALUES ('OLLAMA')")
         )
     try:
-        RegistryManager(pg_engine)
+        ensure_registry_table(pg_engine)
 
         provider_column = next(
             column
@@ -287,3 +292,14 @@ def test_legacy_provider_column_is_widened_in_postgres(pg_engine):
         with pg_engine.begin() as connection:
             connection.execute(sa.text(f"DROP TABLE IF EXISTS {MODEL_REGISTRY_SCHEMA}.model_registry CASCADE"))
         ensure_registry_table(pg_engine)
+
+
+@pytest.mark.pgvector
+@pytest.mark.integration
+def test_peek_registry_engine_maps_the_registry_schema(pg_db):
+    engine = peek_registry_engine(pg_db.resolved)
+    try:
+        translate_map = engine.get_execution_options()["schema_translate_map"]
+        assert translate_map[REGISTRY_SCHEMA_KEY] == MODEL_REGISTRY_SCHEMA
+    finally:
+        engine.dispose()

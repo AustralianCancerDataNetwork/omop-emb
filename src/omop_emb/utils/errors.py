@@ -27,6 +27,10 @@ class EmbeddingBackendConfigurationError(EmbeddingBackendError):
     """
 
 
+class MisplacedRegistryError(EmbeddingBackendError):
+    """A model registry table exists outside the registry schema, where it would be ignored."""
+
+
 class ModelRegistrationConflictError(Exception):
     def __init__(self, message: str, conflict_field: str):
         super().__init__(message)

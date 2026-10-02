@@ -28,9 +28,9 @@ from omop_emb.utils.embedding_utils import (
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.base_backend import (
     EmbeddingBackend,
-    StoredEmbedding,
-    initialize_resolved_vector_store,
-    inspect_resolved_vector_store,
+    EmbeddingStoreReader,
+    open_vector_store_reader,
+    open_vector_store_writer,
 )
 from omop_emb.backends.sqlitevec import (
     SQLiteVecEmbeddingBackend,
@@ -62,9 +62,9 @@ __all__ = [
     "NearestConceptMatch",
     "ConceptEmbeddingRecord",
     "EmbeddingBackend",
-    "StoredEmbedding",
-    "initialize_resolved_vector_store",
-    "inspect_resolved_vector_store",
+    "EmbeddingStoreReader",
+    "open_vector_store_reader",
+    "open_vector_store_writer",
     "EmbeddingPopulationPlan",
     "PopulationScope",
     "VocabularyPopulationPlan",

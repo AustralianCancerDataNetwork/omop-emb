@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from dataclasses import dataclass
 from functools import wraps
 import logging
 from datetime import datetime
-from typing import Any, Callable, Generic, Iterable, Mapping, Optional, Sequence, Tuple, TypeVar, Union
+from typing import Any, Callable, Concatenate, Generic, Iterable, Mapping, Optional, Protocol, Sequence, Tuple, TypeVar, Union
 from numpy import ndarray
 from oa_configurator import (
     Dialect,
@@ -22,10 +21,10 @@ from sqlalchemy.orm import sessionmaker
 from omop_emb.config import (
     BackendType,
     MetricType,
-    IndexType,
     get_supported_index_types_for_backend,
     is_supported_index_metric_combination_for_backend,
     is_index_type_supported_for_backend,
+    parse_backend_type,
 )
 
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
@@ -33,15 +32,21 @@ from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig
 from omop_emb.model_registry import (
     EmbeddingModelRecord,
     RegistryManager,
-    bootstrap_registry_engine,
-    peek_registry_engine,
+    registry_reader_engine,
+    registry_writer_engine,
 )
 from omop_emb.utils.cdm import streamed
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,
 )
-from omop_emb.utils.errors import MissingStorageTableError
+from omop_emb.utils.errors import (
+    EmbeddingBackendConfigurationError,
+    EmbeddingBackendDependencyError,
+    MissingStorageTableError,
+    ReadOnlyStoreError,
+    UnknownEmbeddingBackendError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,100 +54,23 @@ TEmbeddingTable = TypeVar("TEmbeddingTable")
 
 
 # ---------------------------------------------------------------------------
-# Decorator
+# Write marker
 # ---------------------------------------------------------------------------
 
 
-def require_registered_model(func: Callable) -> Callable:
-    """Resolve and validate a registry record before the wrapped method runs.
+def writes[B: EmbeddingBackend, **P, R](method: Callable[Concatenate[B, P], R]) -> Callable[Concatenate[B, P], R]:
+    """Mark an EmbeddingBackend method as a write: raises ReadOnlyStoreError on a reader."""
 
-    Looks up the model by ``model_name`` using the backend's own
-    ``backend_type``, then validates the caller-supplied ``metric_type``
-    against the registry:
-
-    - FLAT index (registry ``metric_type`` is ``None``): any metric supported
-      by the backend is accepted.
-    - HNSW index (registry ``metric_type`` is set): the caller must supply
-      exactly that metric.
-
-    The resolved record is injected as ``_model_record`` into the wrapped
-    function's keyword arguments.
-
-    Parameters
-    ----------
-    func : Callable
-        Backend method that accepts ``model_name``, ``metric_type``, and
-        ``_model_record`` as keyword arguments.
-
-    Returns
-    -------
-    Callable
-        Wrapped function with registry lookup and metric validation.
-
-    Raises
-    ------
-    ValueError
-        If the model is not registered, the caller-supplied metric is
-        incompatible with the registered index, or the metric is not
-        supported by the backend.
-    """
-
-    @wraps(func)
-    def wrapper(
-        self: "EmbeddingBackend",
-        *,
-        model_name: str,
-        metric_type: MetricType,
-        **kwargs: Any,
-    ) -> Any:
-        record = self.get_registered_model(model_name=model_name)
-        if record is None:
-            raise ValueError(
-                f"Embedding model '{model_name}' "
-                f"is not registered in backend '{self.backend_type.value}'."
+    @wraps(method)
+    def wrapper(self: B, *args: P.args, **kwargs: P.kwargs) -> R:
+        if not self._writable:
+            raise ReadOnlyStoreError(
+                f"This '{self.backend_name}' store was opened with open_vector_store_reader(); "
+                "use open_vector_store_writer() to write."
             )
+        return method(self, *args, **kwargs)
 
-        registry_metric = record.metric_type
-        registry_index = record.index_type
-        if registry_metric is not None:
-            # Non-FLAT index: caller must supply the exact locked metric.
-            if record.index_type == IndexType.FLAT:
-                raise ValueError(
-                    f"Model '{model_name}' is registered with a metric "
-                    f"('{registry_metric.value}'), which indicates a non-FLAT index. This model is registered with {registry_index.value}, indicating a faulty registry state."
-                )
-            if metric_type != registry_metric:
-                raise ValueError(
-                    f"Model '{model_name}' is indexed with metric "
-                    f"'{registry_metric.value}' but caller requested "
-                    f"'{metric_type.value}'. Rebuild the index with the desired "
-                    "metric or query with the registered one."
-                )
-        else:
-            # FLAT index: any backend-supported metric is valid.
-            if record.index_type != IndexType.FLAT:
-                raise ValueError(
-                    f"Model '{model_name}' is registered without any metric, which indicates a FLAT index. This model is registered with {registry_index.value}, indicating a faulty registry state."
-                )
-            if not is_supported_index_metric_combination_for_backend(
-                backend=self.backend_type,
-                index=record.index_type,
-                metric=metric_type,
-            ):
-                raise ValueError(
-                    f"Metric '{metric_type.value}' is not supported by backend "
-                    f"'{self.backend_type.value}' with index type "
-                    f"'{record.index_type.value}'."
-                )
-
-        kwargs["_model_record"] = record
-        return func(
-            self,
-            model_name=model_name,
-            metric_type=metric_type,
-            **kwargs,
-        )
-
+    wrapper.__omop_emb_writes__ = True  # ty: ignore[unresolved-attribute]
     return wrapper
 
 
@@ -151,19 +79,66 @@ def require_registered_model(func: Callable) -> Callable:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class StoredEmbedding:
-    """Identity and filter metadata for one stored concept vector."""
+class EmbeddingStoreReader(Protocol):
+    """Read-only view of an embedding store, as returned by open_vector_store_reader()."""
 
-    concept_id: int
-    domain_id: str
-    vocabulary_id: str
-    is_standard: bool
-    is_valid: bool
+    @property
+    def backend_type(self) -> BackendType: ...
+
+    @property
+    def initialized(self) -> bool: ...
+
+    def get_registered_model(self, *, model_name: str) -> EmbeddingModelRecord | None: ...
+
+    def get_registered_models(
+        self, *, model_name: str | None = None, provider_type: str | None = None
+    ) -> tuple[EmbeddingModelRecord, ...]: ...
+
+    def iter_stored_embeddings(
+        self, model_name: str, *, batch_size: int = 10_000
+    ) -> Iterator[ConceptEmbeddingRecord]: ...
+
+    def has_any_embeddings(self, *, model_name: str) -> bool: ...
+
+    def get_stored_concept_ids(
+        self, *, model_name: str, concept_filter: EmbeddingConceptFilter | None = None
+    ) -> set[int]: ...
+
+    def get_embeddings_by_concept_ids(
+        self, *, model_name: str, concept_ids: Sequence[int]
+    ) -> Mapping[int, Sequence[float]]: ...
+
+    def get_concept_filter_metadata(
+        self, *, model_name: str, concept_ids: Sequence[int]
+    ) -> Mapping[int, ConceptEmbeddingRecord]: ...
+
+    def get_embedding_count(self, *, model_name: str) -> int: ...
+
+    def get_embedding_count_by_vocabulary(self, *, model_name: str) -> Mapping[str, int]: ...
+
+    def get_nearest_concepts(
+        self,
+        *,
+        model_name: str,
+        metric_type: MetricType,
+        query_embeddings: ndarray,
+        concept_filter: EmbeddingConceptFilter | None = None,
+        k: int = ...,
+    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]: ...
+
+    def physical_indexes(self, model_name: str) -> tuple[str, ...]: ...
+
+    def drop_index_sql(self, model_name: str) -> tuple[str, ...]: ...
+
+    def close(self) -> None: ...
+
+    def __enter__(self) -> EmbeddingStoreReader: ...
+
+    def __exit__(self, *_exc_info: object) -> None: ...
 
 
-class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
-    """Abstract base class for embedding storage and retrieval backends.
+class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
+    """Abstract base class for embedding storage and retrieval backends; implements EmbeddingStoreReader.
 
     Parameters
     ----------
@@ -171,6 +146,11 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         SQLAlchemy engine pointing at the embedding store. For sqlite-vec this
         is the same .db file as the registry; for pgvector it is the same
         Postgres database.
+    resolved : ResolvedDatabase, optional
+        Enables the schema-provenance guard around storage-table DDL.
+    writable : bool, optional
+        False makes every ``@writes`` method raise ``ReadOnlyStoreError``.
+        Set by ``open_vector_store_reader()``.
 
     Properties
     ----------
@@ -199,6 +179,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         emb_engine: Engine,
         *,
         resolved: ResolvedDatabase | None = None,
+        writable: bool = True,
     ) -> None:
         actual_dialect = emb_engine.dialect.name
         if actual_dialect != self.dialect:
@@ -208,6 +189,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             )
         super().__init__()
         self._resolved = resolved
+        self._writable = writable
         self._registry = RegistryManager(emb_engine)
         self._table_cache: dict[str, TEmbeddingTable] = {}
 
@@ -240,14 +222,6 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         """Session factory bound to ``emb_engine``."""
         return self._registry.emb_session_factory
 
-    def model(self, model_name: str) -> Optional[EmbeddingModelRecord]:
-        """Return one registered model, or ``None`` if not registered."""
-        return self.get_registered_model(model_name=model_name)
-
-    def registered_models(self) -> tuple[EmbeddingModelRecord, ...]:
-        """Return all registered models."""
-        return self.get_registered_models()
-
     @property
     def initialized(self) -> bool:
         """Whether the model registry table exists."""
@@ -263,17 +237,13 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     def __exit__(self, *_exc_info: object) -> None:
         self.close()
 
-    def stored_embeddings(self, model_name: str) -> tuple[StoredEmbedding, ...]:
-        """Read concept metadata from one existing model table."""
-        return tuple(self.iter_stored_embeddings(model_name))
-
     def iter_stored_embeddings(
         self,
         model_name: str,
         *,
         batch_size: int = 10_000,
-    ) -> Iterator[StoredEmbedding]:
-        """Stream concept metadata from one existing model table."""
+    ) -> Iterator[ConceptEmbeddingRecord]:
+        """Stream concept metadata from one model table; yields nothing if the model or table is absent."""
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than zero.")
         record = self.get_registered_model(model_name=model_name)
@@ -296,7 +266,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         with self.emb_engine.connect() as connection:
             rows = connection.execute(statement).mappings()
             for row in rows:
-                yield StoredEmbedding(
+                yield ConceptEmbeddingRecord(
                     concept_id=int(row["concept_id"]),
                     domain_id=str(row["domain_id"]),
                     vocabulary_id=str(row["vocabulary_id"]),
@@ -349,6 +319,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     # Model registration / deletion / index management
     # ------------------------------------------------------------------
 
+    @writes
     def register_model(
         self,
         *,
@@ -422,6 +393,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         )
         return record
 
+    @writes
     def delete_model(
         self,
         *,
@@ -451,11 +423,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         longer exists -- the next read or write against that model raises
         ``MissingStorageTableError`` instead of silently recreating it.
         """
-        record = self.get_registered_model(model_name=model_name)
-        if record is None:
-            raise ValueError(
-                f"Model '{model_name}' is not registered in backend '{self.backend_type.value}'."
-            )
+        record = self._registered_record(model_name)
         self._delete_storage_table(model_record=record)
         self._table_cache.pop(record.storage_identifier, None)
         self._registry.delete_model(model_name=model_name)
@@ -463,6 +431,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             f"Deleted model '{model_name}' from backend '{self.backend_type.value}' and dropped storage table."
         )
 
+    @writes
     def rebuild_index(
         self,
         *,
@@ -492,23 +461,16 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         Raises
         ------
         ValueError
-            If the model is not registered.
+            If the model is not registered, or the index type or metric is
+            unsupported by the backend.
 
         Notes
         -----
-        The registry ``metric_type`` is updated to match the new ``index_config``.
-        Any in-flight queries that passed the old metric validation may fail on
-        their next call. This is an administrative operation and the error
-        message will be clear.
-
-        ``require_registered_model`` is not applied here because this method
-        intentionally modifies the state that the decorator validates against.
+        Afterwards the table carries exactly the index ``index_config`` describes:
+        any other physical index on it is dropped. HNSW queries then must use
+        ``index_config.metric_type``.
         """
-        record = self.get_registered_model(model_name=model_name)
-        if record is None:
-            raise ValueError(
-                f"Model '{model_name}' is not registered in backend '{self.backend_type.value}'."
-            )
+        record = self._registered_record(model_name)
         if not is_index_type_supported_for_backend(
             backend=self.backend_type, index=index_config.index_type
         ):
@@ -517,6 +479,13 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
                 f"Index type '{index_config.index_type.value}' is not supported by "
                 f"backend '{self.backend_name}'. "
                 f"Supported: {[idx.value for idx in supported]}."
+            )
+        if index_config.metric_type is not None and not is_supported_index_metric_combination_for_backend(
+            backend=self.backend_type, index=index_config.index_type, metric=index_config.metric_type
+        ):
+            raise ValueError(
+                f"Metric '{index_config.metric_type.value}' is not supported by backend "
+                f"'{self.backend_name}' with index type '{index_config.index_type.value}'."
             )
         self._rebuild_index_impl(model_record=record, index_config=index_config)
         return self._registry.update_index_config(
@@ -576,24 +545,49 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             provider_type=provider_type,
         )
 
-    def is_model_registered(
-        self,
-        *,
-        model_name: str,
-    ) -> bool:
-        """Return ``True`` if the model is present in the registry.
+    def _registered_record(self, model_name: str) -> EmbeddingModelRecord:
+        """Return model_name's registry record.
 
-        Parameters
-        ----------
-        model_name : str
-            Canonical model name including tag.
-
-        Returns
-        -------
-        bool
+        Raises
+        ------
+        ValueError
+            If the model is not registered.
         """
-        return self.get_registered_model(model_name=model_name) is not None
+        record = self.get_registered_model(model_name=model_name)
+        if record is None:
+            raise ValueError(
+                f"Embedding model '{model_name}' is not registered in backend '{self.backend_name}'."
+            )
+        return record
 
+    def _check_query_metric(self, record: EmbeddingModelRecord, metric_type: MetricType) -> None:
+        """Check that a nearest-neighbour query may use metric_type on record's index.
+
+        HNSW accepts only the metric its index was built with; FLAT accepts any
+        metric the backend supports for FLAT.
+
+        Raises
+        ------
+        ValueError
+            If the metric is incompatible with the index or unsupported by the backend.
+        """
+        if record.metric_type is not None:
+            if metric_type != record.metric_type:
+                raise ValueError(
+                    f"Model '{record.model_name}' is indexed with metric "
+                    f"'{record.metric_type.value}' but caller requested "
+                    f"'{metric_type.value}'. Rebuild the index with the desired "
+                    "metric or query with the registered one."
+                )
+        elif not is_supported_index_metric_combination_for_backend(
+            backend=self.backend_type, index=record.index_type, metric=metric_type
+        ):
+            raise ValueError(
+                f"Metric '{metric_type.value}' is not supported by backend "
+                f"'{self.backend_name}' with index type '{record.index_type.value}'."
+            )
+
+    @writes
     def patch_model_metadata(
         self,
         *,
@@ -618,14 +612,11 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             If the model is not registered or ``key`` is a reserved metadata
             key.
         """
-        record = self.get_registered_model(model_name=model_name)
-        if record is None:
-            raise ValueError(
-                f"Model '{model_name}' is not registered in backend '{self.backend_type.value}'."
-            )
+        record = self._registered_record(model_name)
         updated = {**record.metadata, key: value}
         self._registry.update_metadata(model_name=model_name, metadata=updated)
 
+    @writes
     def refresh_model_updated_at_timestamp(self, *, model_name: str) -> None:
         """Bump a registry row's ``updated_at`` to now.
         Required for faiss-cache freshness validation after live upserts.
@@ -676,15 +667,13 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     # Core write operations
     # ------------------------------------------------------------------
 
-    @require_registered_model
+    @writes
     def upsert_embeddings(
         self,
         *,
         model_name: str,
-        metric_type: MetricType,
         records: Sequence[ConceptEmbeddingRecord],
         embeddings: ndarray,
-        _model_record: EmbeddingModelRecord,
     ) -> None:
         """Insert or update embeddings for a set of concepts.
 
@@ -692,10 +681,6 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         ----------
         model_name : str
             Canonical model name including tag.
-        metric_type : MetricType
-            Metric to validate against the registry. For FLAT any
-            backend-supported metric is accepted; for HNSW it must match the
-            registered metric.
         records : Sequence[ConceptEmbeddingRecord]
             Concept metadata rows aligned with ``embeddings``.
         embeddings : ndarray
@@ -703,7 +688,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             ``D`` is the registered dimensionality.
         """
         return self._upsert_embeddings_impl(
-            model_record=_model_record,
+            model_record=self._registered_record(model_name),
             records=records,
             embeddings=embeddings,
         )
@@ -717,11 +702,11 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         embeddings: ndarray,
     ) -> None: ...
 
+    @writes
     def bulk_upsert_embeddings(
         self,
         *,
         model_name: str,
-        metric_type: MetricType,
         batches: Iterable[Tuple[Sequence[ConceptEmbeddingRecord], ndarray]],
         total_n_batches: Optional[int] = None,
     ) -> None:
@@ -731,8 +716,6 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         ----------
         model_name : str
             Canonical model name including tag.
-        metric_type : MetricType
-            Validated once per batch via ``upsert_embeddings``.
         batches : Iterable[tuple[Sequence[ConceptEmbeddingRecord], ndarray]]
             Iterable of ``(records, embeddings)`` pairs.
         total_n_batches : Optional[int]
@@ -742,13 +725,12 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
 
         pbar = tqdm.tqdm(
             batches,
-            desc=f"Upserting embeddings into {model_name} ({metric_type.value})",
+            desc=f"Upserting embeddings into {model_name}",
             total=total_n_batches,
         )
         for records, embeddings in pbar:
             self.upsert_embeddings(
                 model_name=model_name,
-                metric_type=metric_type,
                 records=records,
                 embeddings=embeddings,
             )
@@ -757,14 +739,11 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     # Core read operations
     # ------------------------------------------------------------------
 
-    @require_registered_model
     def get_embeddings_by_concept_ids(
         self,
         *,
         model_name: str,
-        metric_type: MetricType,
         concept_ids: Sequence[int],
-        _model_record: EmbeddingModelRecord,
     ) -> Mapping[int, Sequence[float]]:
         """Retrieve stored embeddings for the given concept IDs.
 
@@ -772,8 +751,6 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         ----------
         model_name : str
             Canonical model name including tag.
-        metric_type : MetricType
-            Validated against the registry.
         concept_ids : Sequence[int]
             OMOP concept IDs to look up.
 
@@ -788,7 +765,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             If any requested concept ID is not found in the table.
         """
         return self._get_embeddings_by_concept_ids_impl(
-            model_record=_model_record,
+            model_record=self._registered_record(model_name),
             concept_ids=concept_ids,
         )
 
@@ -799,7 +776,6 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         concept_ids: Sequence[int],
     ) -> Mapping[int, Sequence[float]]: ...
 
-    @require_registered_model
     def get_nearest_concepts(
         self,
         *,
@@ -808,7 +784,6 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         query_embeddings: ndarray,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = DEFAULT_K_NEAREST,
-        _model_record: EmbeddingModelRecord,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         """Find the nearest stored concepts for one or more query vectors.
 
@@ -817,9 +792,8 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         model_name : str
             Canonical model name including tag.
         metric_type : MetricType
-            Distance metric for the KNN query. Validated against the registry:
-            must match the HNSW metric exactly, or be any backend-supported
-            metric for FLAT.
+            Distance metric for the KNN query. Must match the HNSW metric
+            exactly, or be any backend-supported metric for FLAT.
         query_embeddings : ndarray
             Float32 array of shape ``(Q, D)`` where ``Q`` is the number of
             queries and ``D`` is the registered dimensionality.
@@ -836,8 +810,10 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             inner tuple contains up to ``k`` matches ordered by similarity
             descending.
         """
+        record = self._registered_record(model_name)
+        self._check_query_metric(record, metric_type)
         return self._get_nearest_concepts_impl(
-            model_record=_model_record,
+            model_record=record,
             metric_type=metric_type,
             query_embeddings=query_embeddings,
             concept_filter=concept_filter,
@@ -859,13 +835,10 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
     # Utility / diagnostic queries
     # ------------------------------------------------------------------
 
-    @require_registered_model
     def has_any_embeddings(
         self,
         *,
         model_name: str,
-        metric_type: MetricType,
-        _model_record: EmbeddingModelRecord,
     ) -> bool:
         """Return ``True`` if at least one embedding row exists in the table.
 
@@ -873,118 +846,49 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         ----------
         model_name : str
             Canonical model name including tag.
-        metric_type : MetricType
-            Validated against the registry.
 
         Returns
         -------
         bool
         """
-        return self._has_any_embeddings_impl(model_record=_model_record)
+        return self._has_any_embeddings_impl(model_record=self._registered_record(model_name))
 
     @abstractmethod
     def _has_any_embeddings_impl(
         self, *, model_record: EmbeddingModelRecord
     ) -> bool: ...
 
-    @require_registered_model
-    def get_all_stored_concept_ids(
+    def get_stored_concept_ids(
         self,
         *,
         model_name: str,
-        metric_type: MetricType,
-        _model_record: EmbeddingModelRecord,
+        concept_filter: Optional[EmbeddingConceptFilter] = None,
     ) -> set[int]:
-        """Return all concept IDs stored in the embedding table.
+        """Return the stored concept IDs satisfying concept_filter, or all of them without one.
 
         Parameters
         ----------
         model_name : str
             Canonical model name including tag.
-        metric_type : MetricType
-            Validated against the registry.
-
-        Returns
-        -------
-        set[int]
-        """
-        return self._get_all_stored_concept_ids_impl(model_record=_model_record)
-
-    @abstractmethod
-    def _get_all_stored_concept_ids_impl(
-        self, *, model_record: EmbeddingModelRecord
-    ) -> set[int]: ...
-
-    @require_registered_model
-    def get_concept_filter_metadata(
-        self,
-        *,
-        model_name: str,
-        metric_type: MetricType,
-        concept_ids: Sequence[int],
-        _model_record: EmbeddingModelRecord,
-    ) -> Mapping[int, Mapping[str, object]]:
-        """Fetch filter-relevant metadata columns for the given concept IDs.
-
-        Parameters
-        ----------
-        model_name : str
-            Canonical model name including tag.
-        metric_type : MetricType
-            Validated against the registry.
-        concept_ids : Sequence[int]
-            OMOP concept IDs to look up.
-
-        Returns
-        -------
-        Mapping[int, Mapping[str, object]]
-            ``{concept_id: {"domain_id": str, "vocabulary_id": str,
-            "is_standard": bool, "is_valid": bool}}``
-        """
-        return self._get_concept_filter_metadata_impl(
-            model_record=_model_record,
-            concept_ids=concept_ids,
-        )
-
-    @abstractmethod
-    def _get_concept_filter_metadata_impl(
-        self,
-        *,
-        model_record: EmbeddingModelRecord,
-        concept_ids: Sequence[int],
-    ) -> Mapping[int, Mapping[str, object]]: ...
-
-    @require_registered_model
-    def get_concept_ids_matching_filter(
-        self,
-        *,
-        model_name: str,
-        metric_type: MetricType,
-        concept_filter: EmbeddingConceptFilter,
-        _model_record: EmbeddingModelRecord,
-    ) -> set[int]:
-        """Return every concept ID (for this model) currently satisfying `concept_filter`.
-        Used to build an exact pre-filter for FAISS searches
-        (see :class:`~omop_emb.storage.faiss.faiss_cache.FAISSCache`).
-
-        Parameters
-        ----------
-        model_name : str
-            Canonical model name including tag.
-        metric_type : MetricType
-            Validated against the registry.
-        concept_filter : EmbeddingConceptFilter
+        concept_filter : EmbeddingConceptFilter, optional
             Filter constraints to evaluate.
 
         Returns
         -------
         set[int]
-            Concept IDs satisfying every constraint in *concept_filter*.
         """
+        record = self._registered_record(model_name)
+        if concept_filter is None or concept_filter.is_empty():
+            return self._get_all_stored_concept_ids_impl(model_record=record)
         return self._get_concept_ids_matching_filter_impl(
-            model_record=_model_record,
+            model_record=record,
             concept_filter=concept_filter,
         )
+
+    @abstractmethod
+    def _get_all_stored_concept_ids_impl(
+        self, *, model_record: EmbeddingModelRecord
+    ) -> set[int]: ...
 
     @abstractmethod
     def _get_concept_ids_matching_filter_impl(
@@ -994,11 +898,42 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         concept_filter: EmbeddingConceptFilter,
     ) -> set[int]: ...
 
+    def get_concept_filter_metadata(
+        self,
+        *,
+        model_name: str,
+        concept_ids: Sequence[int],
+    ) -> Mapping[int, ConceptEmbeddingRecord]:
+        """Fetch the stored concept metadata for the given concept IDs.
+
+        Parameters
+        ----------
+        model_name : str
+            Canonical model name including tag.
+        concept_ids : Sequence[int]
+            OMOP concept IDs to look up. IDs that are not stored are omitted.
+
+        Returns
+        -------
+        Mapping[int, ConceptEmbeddingRecord]
+        """
+        return self._get_concept_filter_metadata_impl(
+            model_record=self._registered_record(model_name),
+            concept_ids=concept_ids,
+        )
+
+    @abstractmethod
+    def _get_concept_filter_metadata_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+    ) -> Mapping[int, ConceptEmbeddingRecord]: ...
+
     def get_embedding_count(
         self,
         *,
         model_name: str,
-        metric_type: MetricType,
     ) -> int:
         """Return the number of embeddings stored in the table.
 
@@ -1006,26 +941,17 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         ----------
         model_name : str
             Canonical model name including tag.
-        metric_type : MetricType
 
         Returns
         -------
         int
         """
-        return len(
-            self.get_all_stored_concept_ids(
-                model_name=model_name,
-                metric_type=metric_type,
-            )
-        )
+        return len(self._get_all_stored_concept_ids_impl(model_record=self._registered_record(model_name)))
 
-    @require_registered_model
     def get_embedding_count_by_vocabulary(
         self,
         *,
         model_name: str,
-        metric_type: MetricType,
-        _model_record: EmbeddingModelRecord,
     ) -> Mapping[str, int]:
         """Return the number of stored embeddings, grouped by vocabulary_id.
 
@@ -1033,7 +959,6 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
         ----------
         model_name : str
             Canonical model name including tag.
-        metric_type : MetricType
 
         Returns
         -------
@@ -1041,7 +966,7 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             ``vocabulary_id`` to embedding count, for every vocabulary with at
             least one stored embedding.
         """
-        return self._get_embedding_count_by_vocabulary_impl(model_record=_model_record)
+        return self._get_embedding_count_by_vocabulary_impl(model_record=self._registered_record(model_name))
 
     @abstractmethod
     def _get_embedding_count_by_vocabulary_impl(
@@ -1108,26 +1033,51 @@ class EmbeddingBackend(ABC, Generic[TEmbeddingTable]):
             )
 
 
-def _extensions_for(backend_type: BackendType) -> Sequence[Callable[[Any, Any], None]]:
-    """The connect-event callables a given backend needs on every physical
-    connection, forwarded to ``ResolvedDatabase.create_engine()``."""
+def _extensions_for(backend_type: BackendType, *, writable: bool) -> Sequence[Callable[[Any, Any], None]]:
+    """Connect-event callables for backend_type's engine.
+
+    The writer path may create the pgvector extension. The reader path runs no
+    DDL and makes the database itself reject writes on every connection.
+    """
     if backend_type == BackendType.SQLITEVEC:
-        from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
+        from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec, _set_query_only
 
-        return [_load_sqlite_vec]
+        return [_load_sqlite_vec] if writable else [_load_sqlite_vec, _set_query_only]
     elif backend_type == BackendType.PGVECTOR:
-        from omop_emb.backends.pgvector.pg_backend import _create_vector_extension
+        from omop_emb.backends.pgvector.pg_backend import _create_vector_extension, _set_read_only
 
-        return [_create_vector_extension]
+        return [_create_vector_extension] if writable else [_set_read_only]
     else:
-        raise ValueError(f"Unknown backend type {backend_type!r}.")
+        raise UnknownEmbeddingBackendError(f"Unknown backend type {backend_type!r}.")
+
+
+def _parse_backend_type(backend_type: Union[str, BackendType]) -> BackendType:
+    """parse_backend_type(), case-insensitive for strings.
+
+    Raises
+    ------
+    UnknownEmbeddingBackendError
+        If backend_type names no known backend.
+    """
+    try:
+        return parse_backend_type(backend_type.lower() if isinstance(backend_type, str) else backend_type)
+    except ValueError as exc:
+        raise UnknownEmbeddingBackendError(str(exc)) from exc
 
 
 def _backend_class_for(backend_type: BackendType, *, dialect: str) -> type[EmbeddingBackend]:
-    """Validate the dialect for *backend_type* and return its concrete class."""
+    """Validate the dialect for backend_type and return its concrete class.
+
+    Raises
+    ------
+    EmbeddingBackendConfigurationError
+        If the database dialect does not match the backend.
+    EmbeddingBackendDependencyError
+        If the backend's optional dependencies are not installed.
+    """
     if backend_type == BackendType.SQLITEVEC:
         if dialect != Dialect.SQLITE:
-            raise RuntimeError(
+            raise EmbeddingBackendConfigurationError(
                 f"sqlitevec backend requires a sqlite-dialect database, got dialect: {dialect!r}."
             )
         from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
@@ -1136,100 +1086,64 @@ def _backend_class_for(backend_type: BackendType, *, dialect: str) -> type[Embed
 
     elif backend_type == BackendType.PGVECTOR:
         if dialect != Dialect.POSTGRESQL:
-            raise RuntimeError(
+            raise EmbeddingBackendConfigurationError(
                 "The resolved URL must point to a PostgreSQL database "
                 f"(pgvector extension required), got dialect: {dialect!r}."
             )
         try:
             from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
         except ImportError as exc:
-            raise RuntimeError(
+            raise EmbeddingBackendDependencyError(
                 "pgvector backend is not installed. "
                 "Install it with: pip install omop-emb[pgvector]"
             ) from exc
         return PGVectorEmbeddingBackend
     else:
-        raise ValueError(f"Unknown backend type {backend_type!r}.")
+        raise UnknownEmbeddingBackendError(f"Unknown backend type {backend_type!r}.")
 
 
-def resolve_backend(
+def _open_writer(
     backend_type: Union[str, BackendType],
     *,
     database: ResolvedDatabase,
 ) -> EmbeddingBackend:
-    """Return the embedding backend for an already-resolved backend type.
-
-    A pure resolver: takes an already-resolved database and never reads
-    oa-configurator config itself. Callers that want the backend configured
-    via a ``[vector_stores.*]`` entry should call
-    ``resolve_backend_from_resolved_vector_store()`` instead, from a
-    CLI/entry-point boundary.
+    """Writable backend on database: registry claims registered, registry table ensured.
 
     Every backend, including an in-memory sqlite-vec store, is backed by a
-    real database entry: the ``sqlite:///:memory:`` case is still a
-    ``database`` whose connection has ``dialect='sqlite'`` and no
-    ``database_name``, not a special, database-less path.
+    real database entry: ``sqlite:///:memory:`` is still a ``database`` whose
+    connection has ``dialect='sqlite'``.
     """
-    backend_str = backend_type if isinstance(backend_type, str) else backend_type.value
-
-    try:
-        resolved_backend = BackendType(backend_str.lower())
-    except ValueError:
-        raise RuntimeError(
-            f"Unknown backend {backend_str!r}. "
-            f"Supported: {[b.value for b in BackendType]}."
-        )
-
-    dialect = make_url(database.connection.url).get_backend_name()
-    backend_cls = _backend_class_for(resolved_backend, dialect=dialect)
-    emb_engine = bootstrap_registry_engine(
-        database, extensions=_extensions_for(resolved_backend)
+    resolved_backend = _parse_backend_type(backend_type)
+    backend_cls = _backend_class_for(
+        resolved_backend, dialect=make_url(database.connection.url).get_backend_name()
     )
+    emb_engine = registry_writer_engine(database, extensions=_extensions_for(resolved_backend, writable=True))
     logger.info(f"Using {resolved_backend.value} backend with engine: {emb_engine.url}")
     return backend_cls(emb_engine=emb_engine, resolved=database)
 
 
-def resolve_backend_from_resolved_vector_store(resolved: ResolvedVectorStore) -> EmbeddingBackend:
-    """Build an embedding backend from an oa-configurator ``ResolvedVectorStore``.
+def open_vector_store_writer(resolved: ResolvedVectorStore) -> EmbeddingBackend:
+    """Open a resolved vector store for reading and writing.
 
-    The oa-configurator integration point, mirroring
-    ``omop_llm.build_model_backend_from_resolved(resolved: ResolvedModel)``:
-    a consumer of oa-configurator takes its plain resolved output and does
-    its own construction from it. Callers inside library code should
-    receive an ``EmbeddingBackend`` as a parameter instead of calling this;
-    reserve this for a CLI/entry-point boundary.
+    Registers the registry's schema claim and ensures its table. Reserve this
+    for a CLI/entry-point boundary; library code should receive an
+    ``EmbeddingBackend`` as a parameter instead.
     """
-    return resolve_backend(resolved.backend_type, database=resolved.database)
+    return _open_writer(resolved.backend_type, database=resolved.database)
 
 
-def inspect_resolved_vector_store(resolved: ResolvedVectorStore) -> EmbeddingBackend:
-    """Open a resolved vector store for setup inspection, without creating
-    or registering anything.
+def open_vector_store_reader(resolved: ResolvedVectorStore) -> EmbeddingStoreReader:
+    """Open a resolved vector store read-only: no registration, no DDL, no writes.
 
-    Builds its engine via ``peek_registry_engine()``, so a store that's never
-    been configured is reported as such (empty registry) instead of being
-    set up just by being looked at.
-
-    Parameters
-    ----------
-    resolved : ResolvedVectorStore
-        The vector store to inspect.
+    Writes are refused twice: ``@writes`` methods raise ``ReadOnlyStoreError``,
+    and every connection is read-only at the database level. A store that's
+    never been set up reports an empty registry instead of being created by
+    being looked at.
     """
+    resolved_backend = _parse_backend_type(resolved.backend_type)
     database = resolved.database
-    backend_str = resolved.backend_type if isinstance(resolved.backend_type, str) else resolved.backend_type.value
-    try:
-        resolved_backend = BackendType(backend_str.lower())
-    except ValueError:
-        raise RuntimeError(
-            f"Unknown backend {backend_str!r}. "
-            f"Supported: {[b.value for b in BackendType]}."
-        )
-    dialect = make_url(database.connection.url).get_backend_name()
-    backend_cls = _backend_class_for(resolved_backend, dialect=dialect)
-    emb_engine = peek_registry_engine(database, extensions=_extensions_for(resolved_backend))
-    return backend_cls(emb_engine=emb_engine, resolved=database)
-
-
-def initialize_resolved_vector_store(resolved: ResolvedVectorStore) -> EmbeddingBackend:
-    """Explicitly initialize a resolved store and return its writable backend."""
-    return resolve_backend_from_resolved_vector_store(resolved)
+    backend_cls = _backend_class_for(
+        resolved_backend, dialect=make_url(database.connection.url).get_backend_name()
+    )
+    emb_engine = registry_reader_engine(database, extensions=_extensions_for(resolved_backend, writable=False))
+    return backend_cls(emb_engine=emb_engine, resolved=database, writable=False)

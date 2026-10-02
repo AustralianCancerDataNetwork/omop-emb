@@ -11,7 +11,6 @@ from oa_configurator import Dialect
 from sqlalchemy import (
     Column,
     Engine,
-    Integer,
     MetaData,
     Row,
     Select,
@@ -27,22 +26,12 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.db_utils import (
-    apply_concept_filter_where,
-    setup_concept_filter_temps,
-    temp_filter_table,
-)
+from omop_emb.backends.db_utils import apply_concept_filter_where, in_values
 from omop_emb.backends.embedding_table import CONCEPT_METADATA_COLUMNS, EMBEDDING_COLUMN_NAME
 from omop_emb.config import MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
-
-# Used by ddl_create_vec0 when baking a metric into the column definition.
-_MATCH_METRIC_MAP = {
-    MetricType.L2: "l2",
-    MetricType.COSINE: "cosine",
-}
 
 # Used by q_knn for per-query metric selection via ORDER BY.
 _QUERY_METRIC_FUNC = {
@@ -89,12 +78,11 @@ def sqlite_vec_table_descriptor(table_name: str, metadata: MetaData) -> Table:
     return Table(table_name, metadata, *columns, extend_existing=True)
 
 
-def ddl_create_vec0(
-    table_name: str,
-    dimensions: int,
-    metric_type: Optional[MetricType] = None,
-) -> str:
+def ddl_create_vec0(table_name: str, dimensions: int) -> str:
     """Return DDL to create a vec0 virtual table for the given model.
+
+    The metric is chosen per query via ``vec_distance_*`` functions, so the
+    table carries none.
 
     Parameters
     ----------
@@ -102,35 +90,13 @@ def ddl_create_vec0(
         Physical table name (the registry ``storage_identifier``).
     dimensions : int
         Embedding vector length.
-    metric_type : MetricType, optional
-        When provided, bakes ``distance_metric=<metric>`` into the embedding
-        column definition. This is intended for future ANN index types (e.g.
-        sqlite-vec IVF/HNSW) that use the baked-in metric during index-
-        accelerated scans. For FLAT tables pass ``None`` (default) and supply
-        the metric per-query via ``vec_distance_*`` functions.
 
     Returns
     -------
     str
         ``CREATE VIRTUAL TABLE IF NOT EXISTS ...`` statement.
-
-    Raises
-    ------
-    ValueError
-        If ``metric_type`` is provided but not supported by the
-        ``distance_metric=`` DDL syntax (only L2 and COSINE are accepted).
     """
-    if metric_type is not None:
-        metric_str = _MATCH_METRIC_MAP.get(metric_type)
-        if metric_str is None:
-            raise ValueError(
-                f"sqlite-vec does not support baked-in metric '{metric_type.value}'. "
-                f"Supported values for distance_metric=: {[m.value for m in _MATCH_METRIC_MAP]}"
-            )
-        embedding_col = f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}] distance_metric={metric_str}"
-    else:
-        embedding_col = f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}]"
-
+    embedding_col = f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}]"
     metadata_cols = ", ".join(f"{c.name} {c.vec0_ddl}" for c in CONCEPT_METADATA_COLUMNS)
 
     return (
@@ -159,7 +125,6 @@ def dml_upsert_rows(
     table: Table,
     records: Sequence[ConceptEmbeddingRecord],
     embeddings: ndarray,
-    dialect: str = Dialect.SQLITE,
 ) -> None:
     """Upsert embedding rows into a vec0 table.
 
@@ -179,14 +144,9 @@ def dml_upsert_rows(
     delete-then-insert.
     """
     concept_ids = [r.concept_id for r in records]
-
-    with temp_filter_table(
-        session, concept_ids, "INTEGER", table_name="_tmp_del_cids", dialect=dialect
-    ) as temp_table_name:
-        temp_table = Table(temp_table_name, MetaData(), Column("id", Integer))
-        session.execute(
-            delete(table).where(table.c.concept_id.in_(select(temp_table.c.id)))
-        )
+    session.execute(
+        delete(table).where(in_values(table.c.concept_id, concept_ids, dialect=Dialect.SQLITE))
+    )
 
     session.execute(
         insert(table),
@@ -238,7 +198,7 @@ def _build_knn_stmt(
     )
 
     if concept_filter is not None:
-        stmt = apply_concept_filter_where(stmt, table.c, concept_filter)
+        stmt = apply_concept_filter_where(stmt, table.c, concept_filter, dialect=Dialect.SQLITE)
 
     return stmt
 
@@ -250,7 +210,6 @@ def query_knn_batch(
     metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
-    dialect: str = Dialect.SQLITE,
 ) -> list[Sequence[Row]]:
     """Run KNN queries against a vec0 table, one per vector in *query_vectors*.
 
@@ -266,9 +225,7 @@ def query_knn_batch(
     k : int
         Maximum number of results to return per vector.
     concept_filter : EmbeddingConceptFilter, optional
-        Row-level filters applied in the WHERE clause before ranking. Any
-        required temp-table setup is done once, up front, not per vector.
-    dialect : str
+        Row-level filters applied in the WHERE clause before ranking.
 
     Returns
     -------
@@ -288,11 +245,8 @@ def query_knn_batch(
     vec0 MATCH syntax. For FLAT (full-scan) tables the performance is identical
     and the metric can be chosen freely at call time. sqlite-vec has no
     multi-vector batched form (unlike pgvector's lateral join), so each vector
-    is still its own statement -- only the filter temp-table setup is shared.
+    is its own statement.
     """
-    if concept_filter is not None:
-        setup_concept_filter_temps(session, concept_filter, dialect)
-
     results: list[Sequence[Row]] = []
     for query_vector in query_vectors:
         stmt = _build_knn_stmt(table, query_vector, metric_type, k, concept_filter)
@@ -304,13 +258,11 @@ def query_concept_ids_matching_filter(
     session: Session,
     table: Table,
     concept_filter: EmbeddingConceptFilter,
-    dialect: str = Dialect.SQLITE,
 ) -> set[int]:
     """Return every ``concept_id`` in `table` satisfying `concept_filter`.
     Used to build an exact FAISS pre-filter set, not for ranking.
     """
-    setup_concept_filter_temps(session, concept_filter, dialect)
-    stmt = apply_concept_filter_where(select(table.c.concept_id), table.c, concept_filter)
+    stmt = apply_concept_filter_where(select(table.c.concept_id), table.c, concept_filter, dialect=Dialect.SQLITE)
     rows = session.execute(stmt).all()
     return {int(row[0]) for row in rows}
 
@@ -357,7 +309,6 @@ def query_embeddings_by_ids(
     session: Session,
     table: Table,
     concept_ids: Sequence[int],
-    dialect: str = Dialect.SQLITE,
 ) -> dict[int, list[float]]:
     """Fetch embedding vectors for a set of concept IDs.
 
@@ -372,19 +323,11 @@ def query_embeddings_by_ids(
     dict[int, list[float]]
         Mapping of concept ID to embedding vector.
     """
-    with temp_filter_table(
-        session,
-        list(concept_ids),
-        "INTEGER",
-        table_name="_tmp_emb_cids",
-        dialect=dialect,
-    ) as temp_table_name:
-        temp_table = Table(temp_table_name, MetaData(), Column("id", Integer))
-        rows = session.execute(
-            select(table.c.concept_id, table.c[EMBEDDING_COLUMN_NAME]).where(
-                table.c.concept_id.in_(select(temp_table.c.id))
-            )
-        ).all()
+    rows = session.execute(
+        select(table.c.concept_id, table.c[EMBEDDING_COLUMN_NAME]).where(
+            in_values(table.c.concept_id, concept_ids, dialect=Dialect.SQLITE)
+        )
+    ).all()
     return {int(row[0]): _blob_to_embedding(row[1]) for row in rows}
 
 
@@ -420,7 +363,6 @@ def query_concept_filter_metadata(
     session: Session,
     table: Table,
     concept_filter: EmbeddingConceptFilter,
-    dialect: str = Dialect.SQLITE,
 ) -> Sequence[Row]:
     """Return filter metadata columns (raw rows) for every concept ID
     satisfying concept_filter.
@@ -428,7 +370,6 @@ def query_concept_filter_metadata(
     Columns: ``concept_id``, ``domain_id``, ``vocabulary_id``, ``is_standard``,
     ``is_valid``. Row-to-domain-object conversion is the caller's job.
     """
-    setup_concept_filter_temps(session, concept_filter, dialect)
     stmt = apply_concept_filter_where(
         select(
             table.c.concept_id,
@@ -439,5 +380,6 @@ def query_concept_filter_metadata(
         ),
         table.c,
         concept_filter,
+        dialect=Dialect.SQLITE,
     )
     return session.execute(stmt).all()

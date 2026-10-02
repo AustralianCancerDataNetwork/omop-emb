@@ -14,7 +14,7 @@ from omop_emb.model_registry import (
     REGISTRY_SCHEMA_KEY,
     RegistryManager,
     ensure_registry_table,
-    peek_registry_engine,
+    registry_reader_engine,
 )
 from omop_emb.utils.errors import ModelRegistrationConflictError
 
@@ -235,10 +235,10 @@ class TestProviderTypeValidation:
 @pytest.mark.unit
 def test_legacy_provider_name_is_normalized_in_sqlite():
     """ensure_registry_table()'s migration runs against a pre-existing legacy
-    table, so this builds its own engine via peek_registry_engine() (schema
+    table, so this builds its own engine via registry_reader_engine() (schema
     mapping only, no table) rather than the svec_engine fixture, which already
-    creates the current-shape table via bootstrap_registry_engine()."""
-    engine = peek_registry_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
+    creates the current-shape table via registry_writer_engine()."""
+    engine = registry_reader_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
     with engine.begin() as connection:
         connection.execute(
             sa.text("CREATE TABLE model_registry (provider_type VARCHAR(6))")
@@ -296,8 +296,8 @@ def test_legacy_provider_column_is_widened_in_postgres(pg_engine):
 
 @pytest.mark.pgvector
 @pytest.mark.integration
-def test_peek_registry_engine_maps_the_registry_schema(pg_db):
-    engine = peek_registry_engine(pg_db.resolved)
+def test_registry_reader_engine_maps_the_registry_schema(pg_db):
+    engine = registry_reader_engine(pg_db.resolved)
     try:
         translate_map = engine.get_execution_options()["schema_translate_map"]
         assert translate_map[REGISTRY_SCHEMA_KEY] == MODEL_REGISTRY_SCHEMA

@@ -230,7 +230,7 @@ def _registry_engine(
     )
 
 
-def peek_registry_engine(
+def registry_reader_engine(
     database: ResolvedDatabase,
     *,
     extensions: Sequence[Callable[[Any, Any], None]] = (),
@@ -251,7 +251,7 @@ def peek_registry_engine(
     return _registry_engine(database, extensions=extensions, register_claims=False)
 
 
-def bootstrap_registry_engine(
+def registry_writer_engine(
     database: ResolvedDatabase,
     *,
     extensions: Sequence[Callable[[Any, Any], None]] = (),
@@ -269,7 +269,7 @@ def bootstrap_registry_engine(
 def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None = None) -> None:
     """Create or upgrade the model registry table, in its own reserved schema.
 
-    The registry's schema is claimed by bootstrap_registry_engine() at
+    The registry's schema is claimed by registry_writer_engine() at
     create_engine() time, not here: this function only reads the already-
     resolved REGISTRY_SCHEMA_KEY off *engine*'s own schema_translate_map and
     ensures the physical schema exists.

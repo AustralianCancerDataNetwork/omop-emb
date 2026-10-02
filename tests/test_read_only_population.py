@@ -6,20 +6,14 @@ import pytest
 from sqlalchemy import event, insert, inspect, text
 
 from omop_alchemy.cdm.model.vocabulary import Concept
-from omop_emb.backends.base_backend import StoredEmbedding
+from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
+from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
-from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
-from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
-from omop_emb.config import MetricType
-from omop_emb.model_registry import (
-    ModelRegistry,
-    bootstrap_registry_engine,
-    peek_registry_engine,
-)
+from omop_emb.model_registry import ModelRegistry
 from omop_emb.population import PopulationScope, plan_population
 from omop_emb.utils.errors import MissingStorageTableError
 
-from .conftest import sqlite_resolved_database
+from .conftest import sqlite_resolved_database, sqlite_resolved_vector_store
 
 
 def _concept(concept_id: int, **overrides):
@@ -39,72 +33,50 @@ def _concept(concept_id: int, **overrides):
     return values
 
 
-def test_peek_before_any_write_does_not_create_the_registry(tmp_path) -> None:
-    """peek_registry_engine() maps the registry schema tag but never runs
-    ensure_registry_table(), so a store that's never been bootstrapped is
-    reported as such instead of being silently set up just by being looked at."""
-    resolved = sqlite_resolved_database(str(tmp_path / "test.db"))
-    engine = peek_registry_engine(resolved, extensions=[_load_sqlite_vec])
-    backend = SQLiteVecEmbeddingBackend(emb_engine=engine)
-
-    assert backend.initialized is False
-    assert backend.registered_models() == ()
-    assert inspect(engine).has_table(ModelRegistry.__tablename__) is False
-    backend.close()
+def test_reader_before_any_write_does_not_create_the_registry(tmp_path) -> None:
+    """A store that's never been set up reports an empty registry instead of
+    being set up by being looked at."""
+    with open_vector_store_reader(sqlite_resolved_vector_store(str(tmp_path / "test.db"))) as reader:
+        assert reader.initialized is False
+        assert reader.get_registered_models() == ()
+        assert inspect(reader.emb_engine).has_table(ModelRegistry.__tablename__) is False  # ty: ignore[unresolved-attribute]
 
 
-def test_peek_after_bootstrap_sees_the_registry(tmp_path) -> None:
-    """A peek-constructed backend against the same physical file a writable
-    backend already bootstrapped sees the real, now-existing registry."""
-    db_path = str(tmp_path / "test.db")
-    bootstrap_registry_engine(
-        sqlite_resolved_database(db_path), extensions=[_load_sqlite_vec]
-    ).dispose()
+def test_reader_after_writer_sees_the_registry(tmp_path) -> None:
+    store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
+    open_vector_store_writer(store).close()
 
-    engine = peek_registry_engine(
-        sqlite_resolved_database(db_path), extensions=[_load_sqlite_vec]
-    )
-    backend = SQLiteVecEmbeddingBackend(emb_engine=engine)
-
-    assert backend.initialized is True
-    assert backend.registered_models() == ()
-    backend.close()
+    with open_vector_store_reader(store) as reader:
+        assert reader.initialized is True
+        assert reader.get_registered_models() == ()
 
 
-def test_peek_sees_registered_models_and_stored_embeddings_without_mutating(tmp_path) -> None:
-    """A model registered and populated through the writable path is fully
-    visible through a peek-only backend against the same file, and reading it
-    issues no mutating SQL."""
-    db_path = str(tmp_path / "test.db")
-    write_engine = bootstrap_registry_engine(
-        sqlite_resolved_database(db_path), extensions=[_load_sqlite_vec]
-    )
-    write_backend = SQLiteVecEmbeddingBackend(emb_engine=write_engine)
-    write_backend.register_model(
-        model_name="test-model",
-        provider_type="ollama",
-        index_config=FlatIndexConfig(),
-        dimensions=1,
-    )
-    write_backend.close()
-
-    engine = peek_registry_engine(
-        sqlite_resolved_database(db_path), extensions=[_load_sqlite_vec]
-    )
+def test_reader_sees_registered_models_and_stored_embeddings_without_mutating(tmp_path) -> None:
+    """A model registered through the writer is visible through a reader on
+    the same file, and reading it issues no mutating SQL."""
+    store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
+    with open_vector_store_writer(store) as writer:
+        writer.register_model(
+            model_name="test-model",
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=1,
+        )
 
     statements: list[str] = []
 
     def capture(_connection, _cursor, statement, _parameters, _context, _many):
         statements.append(statement.strip().lower())
 
-    event.listen(engine, "before_cursor_execute", capture)
-    try:
-        with SQLiteVecEmbeddingBackend(emb_engine=engine) as backend:
-            assert backend.initialized is True
-            assert [m.model_name for m in backend.registered_models()] == ["test-model"]
-            assert backend.stored_embeddings("test-model") == ()
-    finally:
-        event.remove(engine, "before_cursor_execute", capture)
+    with open_vector_store_reader(store) as reader:
+        engine = reader.emb_engine  # ty: ignore[unresolved-attribute]
+        event.listen(engine, "before_cursor_execute", capture)
+        try:
+            assert reader.initialized is True
+            assert [m.model_name for m in reader.get_registered_models()] == ["test-model"]
+            assert tuple(reader.iter_stored_embeddings("test-model")) == ()
+        finally:
+            event.remove(engine, "before_cursor_execute", capture)
 
     assert statements
     assert not any(
@@ -118,30 +90,22 @@ def test_peek_sees_registered_models_and_stored_embeddings_without_mutating(tmp_
 def test_dropped_storage_table_raises_instead_of_being_recreated(tmp_path) -> None:
     """A model registered but whose physical table was dropped out from under
     it raises MissingStorageTableError for a fresh backend instance (an empty
-    in-process table-descriptor cache, like a new peek), instead of the old
-    behavior of silently recreating an empty table."""
-    db_path = str(tmp_path / "test.db")
-    write_engine = bootstrap_registry_engine(
-        sqlite_resolved_database(db_path), extensions=[_load_sqlite_vec]
-    )
-    write_backend = SQLiteVecEmbeddingBackend(emb_engine=write_engine)
-    record = write_backend.register_model(
-        model_name="test-model",
-        provider_type="ollama",
-        index_config=FlatIndexConfig(),
-        dimensions=1,
-    )
-    with write_engine.begin() as connection:
-        connection.execute(text(f"DROP TABLE {record.storage_identifier}"))
-    write_backend.close()
+    in-process table-descriptor cache), instead of silently recreating an
+    empty table."""
+    store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
+    with open_vector_store_writer(store) as writer:
+        record = writer.register_model(
+            model_name="test-model",
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=1,
+        )
+        with writer.emb_engine.begin() as connection:
+            connection.execute(text(f"DROP TABLE {record.storage_identifier}"))
 
-    engine = peek_registry_engine(
-        sqlite_resolved_database(db_path), extensions=[_load_sqlite_vec]
-    )
-    backend = SQLiteVecEmbeddingBackend(emb_engine=engine)
-    with pytest.raises(MissingStorageTableError):
-        backend.has_any_embeddings(model_name="test-model", metric_type=MetricType.L2)
-    backend.close()
+    with open_vector_store_reader(store) as reader:
+        with pytest.raises(MissingStorageTableError):
+            reader.has_any_embeddings(model_name="test-model")
 
 
 def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
@@ -159,10 +123,10 @@ def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
     class FakeStore:
         initialized = True
 
-        def stored_embeddings(self, _model_name: str):
+        def iter_stored_embeddings(self, _model_name: str, *, batch_size: int = 10_000):
             return (
-                StoredEmbedding(1, "Condition", "SNOMED", True, True),
-                StoredEmbedding(3, "Condition", "SNOMED", True, True),
+                ConceptEmbeddingRecord(1, "Condition", "SNOMED", True, True),
+                ConceptEmbeddingRecord(3, "Condition", "SNOMED", True, True),
             )
 
     plan = plan_population(
@@ -233,10 +197,10 @@ def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:
     class Store:
         initialized = True
 
-        def stored_embeddings(self, _model_name: str):
+        def iter_stored_embeddings(self, _model_name: str, *, batch_size: int = 10_000):
             return (
-                StoredEmbedding(1, "Condition", "SNOMED", True, True),
-                StoredEmbedding(2, "Drug", "RxNorm", True, True),
+                ConceptEmbeddingRecord(1, "Condition", "SNOMED", True, True),
+                ConceptEmbeddingRecord(2, "Drug", "RxNorm", True, True),
             )
 
     plan = plan_population(
@@ -260,8 +224,8 @@ def test_metadata_change_is_pending() -> None:
     class Store:
         initialized = True
 
-        def stored_embeddings(self, _model_name: str):
-            return (StoredEmbedding(1, "Measurement", "SNOMED", True, True),)
+        def iter_stored_embeddings(self, _model_name: str, *, batch_size: int = 10_000):
+            return (ConceptEmbeddingRecord(1, "Measurement", "SNOMED", True, True),)
 
     plan = plan_population(engine, Store(), model_name="test-model")
 

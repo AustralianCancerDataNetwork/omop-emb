@@ -9,39 +9,31 @@ Both interfaces accept a **pre-constructed** `EmbeddingBackend` (sqlite-vec or p
 
 ---
 
-## Constructing a backend
+## Opening a vector store
 
-Resolve the vector store named in `[tools.omop_emb]` (a `[vector_stores.*]` entry) using `resolve_backend_from_resolved_vector_store`:
+Resolve the vector store named in `[tools.omop_emb]` (a `[vector_stores.*]` entry), then open it for writing or for reading:
 
 ```python
 from oa_configurator import Resolver
-from omop_emb.backends import resolve_backend_from_resolved_vector_store
+from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.config import OmopEmbConfig
 
 cfg = OmopEmbConfig.get_config()
 resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-backend = resolve_backend_from_resolved_vector_store(resolved)
+
+backend = open_vector_store_writer(resolved)  # EmbeddingBackend
+store = open_vector_store_reader(resolved)    # EmbeddingStoreReader
 ```
 
-`resolve_backend(backend_type, *, database)` is the lower-level, pure resolver underneath. It never reads config itself, so call it directly only when you already have an explicit `backend_type`/`database` (an oa-configurator `ResolvedDatabase`) in hand rather than the configured defaults.
+| | `open_vector_store_writer()` | `open_vector_store_reader()` |
+|---|---|---|
+| Returns | `EmbeddingBackend` | `EmbeddingStoreReader` |
+| Registers the registry's schema claim | yes | no |
+| Creates the registry table / pgvector extension | yes | no |
+| Write methods | allowed | raise `ReadOnlyStoreError` |
+| Database connection | read-write | read-only (PostgreSQL `READ ONLY` transactions, SQLite `query_only`) |
 
-Or construct one directly:
-
-```python
-from sqlalchemy import create_engine
-from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, create_sqlitevec_engine
-from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
-
-# sqlite-vec
-backend = SQLiteVecEmbeddingBackend(
-    emb_engine=create_sqlitevec_engine(create_engine("sqlite:///data/omop_emb.db"))
-)
-
-# pgvector
-backend = PGVectorEmbeddingBackend(
-    emb_engine=create_engine("postgresql+psycopg://user:pass@host:5432/db")
-)
-```
+`EmbeddingStoreReader` is a `Protocol` listing every read: registry lookups (`get_registered_model()`, `get_registered_models()`), stored data (`iter_stored_embeddings()`, `has_any_embeddings()`, `get_stored_concept_ids()`, `get_embeddings_by_concept_ids()`, `get_concept_filter_metadata()`, the counts), `get_nearest_concepts()`, and index inspection (`physical_indexes()`, `drop_index_sql()`). Both backends satisfy it, and `EmbeddingReaderInterface`, `export_bundle()` and `FAISSCache.build_from_backend()` accept it. Only `get_nearest_concepts()` takes a `metric_type`; nothing stored depends on one. A store that was never set up reports an empty registry instead of being created by being looked at. On pgvector the `vector` extension must already exist in the database; the writer creates it.
 
 ---
 
@@ -130,7 +122,7 @@ from omop_emb.config import MetricType
 
 reader = EmbeddingReaderInterface(
     model="nomic-embed-text:v1.5",
-    backend=backend,
+    backend=store,
     metric_type=MetricType.COSINE,
     provider_type="ollama",
     omop_cdm_engine=cdm_engine,   # optional; enriches results with concept_name
@@ -214,7 +206,7 @@ Supply `faiss_cache_dir` to route searches through a pre-built FAISS index inste
 ```python
 reader = EmbeddingReaderInterface(
     model="nomic-embed-text:v1.5",
-    backend=backend,
+    backend=store,
     metric_type=MetricType.COSINE,
     provider_type="ollama",
     faiss_cache_dir="/data/faiss_cache",
@@ -333,10 +325,7 @@ See `omop_llm.providers.supported_providers()` for the full list of provider key
 ## Utility functions
 
 ```python
-from omop_emb import EmbeddingReaderInterface
-
-models = EmbeddingReaderInterface.list_registered_models(
-    backend=backend,
+models = store.get_registered_models(
     provider_type="ollama",  # optional filter
 )
 for m in models:

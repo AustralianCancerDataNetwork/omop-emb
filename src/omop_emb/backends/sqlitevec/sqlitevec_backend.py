@@ -63,6 +63,15 @@ def _load_sqlite_vec(dbapi_connection, _connection_record) -> None:
     dbapi_connection.enable_load_extension(False)
 
 
+def _set_query_only(dbapi_connection, _connection_record) -> None:
+    """Connect-event callable: make this connection reject every write.
+
+    Passed as an ``extensions`` callable by ``open_vector_store_reader()``.
+    SQLite then rejects any DDL or write, temporary tables included.
+    """
+    dbapi_connection.execute("PRAGMA query_only = ON")
+
+
 class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     """sqlite-vec embedding backend.
 
@@ -84,9 +93,10 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         emb_engine: Engine,
         *,
         resolved: ResolvedDatabase | None = None,
+        writable: bool = True,
     ) -> None:
         self._sqlite_vec_metadata = MetaData()
-        super().__init__(emb_engine=emb_engine, resolved=resolved)
+        super().__init__(emb_engine=emb_engine, resolved=resolved, writable=writable)
 
     # ------------------------------------------------------------------
     # Backend identity
@@ -114,7 +124,6 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         ddl = ddl_create_vec0(
             table_name=model_record.storage_identifier,
             dimensions=model_record.dimensions,
-            metric_type=model_record.metric_type,
         )
         with self.emb_engine.begin() as conn:
             conn.execute(text(ddl))
@@ -164,7 +173,6 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 table=table,
                 records=records,
                 embeddings=embeddings.astype(np.float32),
-                dialect=self.dialect,
             )
 
     # ------------------------------------------------------------------
@@ -184,7 +192,6 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 session=session,
                 table=table,
                 concept_ids=concept_ids,
-                dialect=self.dialect,
             )
         missing = set(concept_ids) - set(result.keys())
         if missing:
@@ -213,7 +220,6 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 metric_type=metric_type,
                 k=k,
                 concept_filter=concept_filter,
-                dialect=self.dialect,
             )
 
         results = [
@@ -253,7 +259,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         *,
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
-    ) -> Mapping[int, Mapping[str, object]]:
+    ) -> Mapping[int, ConceptEmbeddingRecord]:
         if not concept_ids:
             return {}
         table = self._storage_table(model_record)
@@ -263,15 +269,15 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 session=session,
                 table=table,
                 concept_filter=concept_filter,
-                dialect=self.dialect,
             )
         return {
-            int(row[0]): {
-                "domain_id": row[1] or "",
-                "vocabulary_id": row[2] or "",
-                "is_standard": bool(row[3]),
-                "is_valid": bool(row[4]),
-            }
+            int(row[0]): ConceptEmbeddingRecord(
+                concept_id=int(row[0]),
+                domain_id=row[1] or "",
+                vocabulary_id=row[2] or "",
+                is_standard=bool(row[3]),
+                is_valid=bool(row[4]),
+            )
             for row in rows
         }
 
@@ -281,15 +287,12 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         model_record: EmbeddingModelRecord,
         concept_filter: EmbeddingConceptFilter,
     ) -> set[int]:
-        if concept_filter.is_empty():
-            return self._get_all_stored_concept_ids_impl(model_record=model_record)
         table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return query_concept_ids_matching_filter(
                 session=session,
                 table=table,
                 concept_filter=concept_filter,
-                dialect=self.dialect,
             )
 
     def _get_embedding_count_by_vocabulary_impl(

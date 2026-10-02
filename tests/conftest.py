@@ -12,6 +12,7 @@ from oa_configurator import (
     Dialect,
     Resolver,
     ResolvedDatabase,
+    ResolvedVectorStore,
     SchemaClaim,
     StackConfig,
 )
@@ -25,7 +26,7 @@ from omop_emb.model_registry import ensure_registry_table
 
 def sqlite_resolved_database(database_name: str = ":memory:") -> ResolvedDatabase:
     """A plain oa-configurator ``ResolvedDatabase`` for a SQLite target, for
-    test code that needs ``bootstrap_registry_engine()``/``peek_registry_engine()``
+    test code that needs ``registry_writer_engine()``/``registry_reader_engine()``
     against a bare SQLite file or ``:memory:`` target with no config file
     involved."""
     cfg = StackConfig.for_session(
@@ -33,6 +34,17 @@ def sqlite_resolved_database(database_name: str = ":memory:") -> ResolvedDatabas
         databases={"default": CDMDatabaseConfig(connection="db")},
     )
     return Resolver(cfg).resolve_database("default")
+
+
+def sqlite_resolved_vector_store(database_name: str = ":memory:") -> ResolvedVectorStore:
+    """A sqlite-vec ``ResolvedVectorStore`` on ``sqlite_resolved_database(database_name)``."""
+    return ResolvedVectorStore(
+        name="default",
+        backend_type="sqlitevec",
+        database=sqlite_resolved_database(database_name),
+        faiss_cache_dir=None,
+        configuration={},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +104,7 @@ def svec_engine(request):
     """Fresh SQLiteVec engine per test, via oa-configurator's canonical
     dialect-agnostic test-database entrypoint rather than a hand-built
     ``sa.create_engine()``. Claims the registry schema and ensures the
-    registry table exists, matching what ``bootstrap_registry_engine()``
+    registry table exists, matching what ``registry_writer_engine()``
     does for a real engine built straight off a ``ResolvedDatabase``."""
     from oa_configurator.testing import isolated_test_database
 
@@ -137,12 +149,12 @@ def pg_db(request):
 @pytest.fixture
 def pg_backend(pg_db):
     """Function-scoped PGVectorEmbeddingBackend with a clean registry per test,
-    built through ``resolve_backend()`` so its engine claims the registry
+    built through ``_open_writer()`` so its engine claims the registry
     schema and installs pgvector exactly as production does."""
-    from omop_emb.backends import resolve_backend
+    from omop_emb.backends.base_backend import _open_writer
     from omop_emb.backends.embedding_table import EmbeddingTableBase
 
-    backend = resolve_backend("pgvector", database=pg_db.resolved)
+    backend = _open_writer("pgvector", database=pg_db.resolved)
 
     yield backend
 

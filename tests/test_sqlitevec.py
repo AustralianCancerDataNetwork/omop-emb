@@ -12,7 +12,7 @@ from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.config import MetricType
-from omop_emb.model_registry import bootstrap_registry_engine
+from omop_emb.model_registry import registry_writer_engine
 
 from .conftest import (
     EMBEDDING_DIM,
@@ -97,7 +97,6 @@ class TestSQLiteVecSpecific:
         )
         svec_backend.upsert_embeddings(
             model_name=MODEL_NAME,
-            metric_type=MetricType.COSINE,
             records=nonzero_records,
             embeddings=nonzero_embeddings,
         )
@@ -135,7 +134,7 @@ class TestSQLiteVecSpecific:
     def test_file_backed_engine_constructor(self, tmp_path):
         """A real file-backed (not just in-memory) engine works end to end."""
         db_file = str(tmp_path / "test.db")
-        engine = bootstrap_registry_engine(
+        engine = registry_writer_engine(
             sqlite_resolved_database(db_file), extensions=[_load_sqlite_vec]
         )
         backend = SQLiteVecEmbeddingBackend(emb_engine=engine)

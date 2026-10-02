@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from omop_emb.backends.index_config import (
     RESERVED_METADATA_KEYS,
     IndexConfig,
-    index_config_from_orm_row,
+    index_config_from_dict,
 )
 from omop_emb.model_registry.model_registry_orm import (
     ModelRegistry,
@@ -357,7 +357,7 @@ class RegistryManager:
         - OPENAI -> openai
         """
 
-        index_config = index_config_from_orm_row(row.index_type, row.index_config)
+        index_config = index_config_from_dict(row.index_type, row.index_config)
         provider_type = row.provider_type.lower() if row.provider_type else row.provider_type
         return EmbeddingModelRecord(
             model_name=row.model_name,

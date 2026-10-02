@@ -21,7 +21,7 @@ from oa_configurator.cli import app
 from oa_configurator.testing import isolated_test_schema, reset_schema_registry_rows
 from typer.testing import CliRunner
 
-from omop_emb.backends import resolve_backend
+from omop_emb.backends.base_backend import _open_writer
 from omop_emb.model_registry import REGISTRY_SCHEMA_KEY
 
 from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE
@@ -58,13 +58,13 @@ def test_backend_construction_is_unaffected_by_the_primary_schema_changing(pg_db
         isolated_test_schema(pg_engine, prefix="emb_guard_b") as schema_b,
     ):
         resolved_a = _resolved(pg_db, database_config_name="emb_guard_a", schema=schema_a)
-        backend_a = resolve_backend("pgvector", database=resolved_a)
+        backend_a = _open_writer("pgvector", database=resolved_a)
         assert backend_a is not None
 
         # A different config entry: the registry row belongs to the physical
         # database, so it is shared across entries pointed at it.
         resolved_b = _resolved(pg_db, database_config_name="emb_guard_b", schema=schema_b)
-        backend_b = resolve_backend("pgvector", database=resolved_b)
+        backend_b = _open_writer("pgvector", database=resolved_b)
         assert backend_b is not None
 
 
@@ -86,7 +86,7 @@ def test_registry_schema_guard_fires_on_genuine_registry_drift(pg_db, pg_engine,
     assert result.exit_code == 0, result.output
 
     with pytest.raises(SchemaDriftError):
-        resolve_backend("pgvector", database=resolver.resolve_database("emb_guard"))
+        _open_writer("pgvector", database=resolver.resolve_database("emb_guard"))
 
 
 def test_primary_schema_guard_fires_on_genuine_primary_drift(pg_db, pg_engine):
@@ -97,13 +97,13 @@ def test_primary_schema_guard_fires_on_genuine_primary_drift(pg_db, pg_engine):
         isolated_test_schema(pg_engine, prefix="emb_guard_primary_b") as schema_b,
     ):
         resolved_a = _resolved(pg_db, database_config_name="emb_guard", schema=schema_a)
-        backend_a = resolve_backend("pgvector", database=resolved_a)
+        backend_a = _open_writer("pgvector", database=resolved_a)
         backend_a.register_model(
             model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, dimensions=EMBEDDING_DIM
         )
 
         resolved_b = _resolved(pg_db, database_config_name="emb_guard", schema=schema_b)
-        backend_b = resolve_backend("pgvector", database=resolved_b)
+        backend_b = _open_writer("pgvector", database=resolved_b)
         # The shared registry already holds the model; registering it again
         # creates its storage table under the new schema, where the guard fires.
         with pytest.raises(SchemaDriftError):

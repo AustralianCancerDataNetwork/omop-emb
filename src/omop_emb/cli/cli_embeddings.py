@@ -11,7 +11,7 @@ from omop_llm import build_model_backend_from_resolved
 
 from omop_emb.utils.cdm import check_concept_cdm
 from omop_emb.backends.index_config import index_config_from_index_type
-from omop_emb.backends import resolve_backend_from_resolved_vector_store
+from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.config import (
     IndexType,
     MetricType,
@@ -167,11 +167,10 @@ def add_embeddings(
     resolved_model = _resolve_model(model_name, cfg)
 
     resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-    backend = resolve_backend_from_resolved_vector_store(resolved_vector_store)
+    backend = open_vector_store_writer(resolved_vector_store)
     omop_cdm_engine = resolve_omop_cdm_engine()
 
-    # FLAT registration: metric_type=COSINE is used only for upsert validation;
-    # FLAT accepts any backend-supported metric, so COSINE is always valid here.
+    # Ingestion runs no queries, so the interface's metric is never used here.
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
         metric_type=MetricType.COSINE,
@@ -291,7 +290,7 @@ def create_index(
     resolved_model = _resolve_model(model_name, cfg)
 
     resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-    backend = resolve_backend_from_resolved_vector_store(resolved_vector_store)
+    backend = open_vector_store_writer(resolved_vector_store)
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
         metric_type=metric_type,
@@ -522,7 +521,7 @@ def search(
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
     resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
     resolved_faiss_cache_dir = faiss_cache_dir or resolved_vector_store.faiss_cache_dir
-    backend = resolve_backend_from_resolved_vector_store(resolved_vector_store)
+    store = open_vector_store_reader(resolved_vector_store)
 
     # CDM enrichment is optional for search
     try:
@@ -536,7 +535,7 @@ def search(
     model_backend = build_model_backend_from_resolved(resolved_model)
     embedding_reader = EmbeddingReaderInterface(
         model=model_backend.model,
-        backend=backend,
+        backend=store,
         metric_type=metric_type,
         omop_cdm_engine=omop_cdm_engine,
         provider_type=model_backend.provider,

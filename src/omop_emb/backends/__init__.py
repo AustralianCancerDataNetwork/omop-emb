@@ -4,11 +4,9 @@ from typing import TYPE_CHECKING
 
 from .base_backend import (
     EmbeddingBackend,
-    StoredEmbedding,
-    initialize_resolved_vector_store,
-    inspect_resolved_vector_store,
-    resolve_backend,
-    resolve_backend_from_resolved_vector_store,
+    EmbeddingStoreReader,
+    open_vector_store_reader,
+    open_vector_store_writer,
 )
 from .sqlitevec import SQLiteVecEmbeddingBackend
 
@@ -17,11 +15,9 @@ if TYPE_CHECKING:
 
 __all__ = [
     "EmbeddingBackend",
-    "resolve_backend",
-    "resolve_backend_from_resolved_vector_store",
-    "StoredEmbedding",
-    "initialize_resolved_vector_store",
-    "inspect_resolved_vector_store",
+    "EmbeddingStoreReader",
+    "open_vector_store_reader",
+    "open_vector_store_writer",
     "SQLiteVecEmbeddingBackend",
     "PGVectorEmbeddingBackend",
 ]

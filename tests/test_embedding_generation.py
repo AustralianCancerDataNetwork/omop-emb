@@ -19,6 +19,7 @@ from oa_configurator.resolver import ResolvedModel, ResolvedProvider
 from sqlalchemy import insert
 
 from omop_alchemy.cdm.model.vocabulary import Concept
+from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.config import MetricType
 from omop_emb.interface import (
     EmbeddingRole,
@@ -251,18 +252,8 @@ def test_population_batches_include_missing_and_metadata_changed_concepts():
     storage = _mock_storage_backend()
     storage.get_concept_filter_metadata.side_effect = (
         {
-            1: {
-                "domain_id": "Condition",
-                "vocabulary_id": "SNOMED",
-                "is_standard": True,
-                "is_valid": True,
-            },
-            2: {
-                "domain_id": "Measurement",
-                "vocabulary_id": "SNOMED",
-                "is_standard": True,
-                "is_valid": True,
-            },
+            1: ConceptEmbeddingRecord(1, "Condition", "SNOMED", True, True),
+            2: ConceptEmbeddingRecord(2, "Measurement", "SNOMED", True, True),
         },
         {},
     )

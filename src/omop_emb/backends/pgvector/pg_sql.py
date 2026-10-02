@@ -31,10 +31,11 @@ from sqlalchemy.orm import Session, mapped_column
 
 from omop_emb.config import MetricType
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.db_utils import apply_concept_filter_where, setup_concept_filter_temps
+from omop_emb.backends.index_config import HNSWIndexConfig
+from omop_emb.backends.db_utils import apply_concept_filter_where, in_values
 from omop_emb.backends.embedding_table import EMBEDDING_COLUMN_NAME, EmbeddingTableBase, PGEmbeddingTable
 from omop_emb.model_registry import EmbeddingModelRecord
-from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, vector_column_type_for_dimensions
 
 logger = logging.getLogger(__name__)
 
@@ -100,47 +101,60 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
     logger.info(f"Dropped embedding table '{tablename}'.")
 
 
+def hnsw_index_name(tablename: str, metric_type: MetricType) -> str:
+    """Physical name of tablename's HNSW index for metric_type."""
+    return f"idx_{tablename}_{metric_type.value}"
+
+
+def hnsw_operator_class(metric_type: MetricType, dimensions: int) -> str:
+    """pgvector operator class for metric_type on the column type dimensions selects."""
+    return f"{vector_column_type_for_dimensions(dimensions).value}_{metric_type.value}_ops"
+
+
+def hnsw_index_ddl(engine: Engine, model_record: EmbeddingModelRecord, index_config: HNSWIndexConfig) -> str:
+    """CREATE INDEX statement for model_record's table under index_config."""
+    tablename = model_record.storage_identifier
+    ops = hnsw_operator_class(index_config.metric_type, model_record.dimensions)
+    table_ref = qualified(engine, tablename, physical_schema=physical_schema_of(engine))
+    return (
+        f"CREATE INDEX {hnsw_index_name(tablename, index_config.metric_type)} "
+        f"ON {table_ref} "
+        f"USING hnsw ({EMBEDDING_COLUMN_NAME} {ops}) "
+        f"WITH (m = {index_config.num_neighbors}, ef_construction = {index_config.ef_construction})"
+    )
+
+
 # ---------------------------------------------------------------------------
 # DML helpers
 # ---------------------------------------------------------------------------
 
 
-def q_upsert_embeddings(
+def upsert_embedding_rows(
+    session: Session,
     records: Sequence[ConceptEmbeddingRecord],
     embeddings: ndarray,
     registered_table: type[PGEmbeddingTable],
-):
-    """Build an INSERT ... ON CONFLICT DO UPDATE statement for embedding rows.
+) -> None:
+    """Insert or update embedding rows with INSERT ... ON CONFLICT DO UPDATE.
+
+    Rows are sent as executemany parameter sets, which SQLAlchemy splits into
+    batches below PostgreSQL's bind-parameter limit, so any row count works.
 
     Parameters
     ----------
+    session : Session
+        Active SQLAlchemy session (must be in a transaction).
     records : Sequence[ConceptEmbeddingRecord]
         Concept metadata rows, one per embedding.
     embeddings : ndarray
         Float32 array of shape ``(N, D)``.
     registered_table : type[PGEmbeddingTable]
         ORM class for the target embedding table.
-
-    Returns
-    -------
-    Insert
-        PostgreSQL upsert statement ready for execution.
     """
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    insert_values = [
-        {
-            "concept_id": rec.concept_id,
-            "domain_id": rec.domain_id,
-            "vocabulary_id": rec.vocabulary_id,
-            "is_standard": rec.is_standard,
-            "is_valid": rec.is_valid,
-            EMBEDDING_COLUMN_NAME: emb.tolist(),
-        }
-        for rec, emb in zip(records, embeddings)
-    ]
-    stmt = pg_insert(registered_table).values(insert_values)
-    return stmt.on_conflict_do_update(
+    stmt = pg_insert(registered_table)
+    stmt = stmt.on_conflict_do_update(
         index_elements=["concept_id"],
         set_={
             "domain_id": stmt.excluded.domain_id,
@@ -149,6 +163,20 @@ def q_upsert_embeddings(
             "is_valid": stmt.excluded.is_valid,
             EMBEDDING_COLUMN_NAME: getattr(stmt.excluded, EMBEDDING_COLUMN_NAME),
         },
+    )
+    session.execute(
+        stmt,
+        [
+            {
+                "concept_id": rec.concept_id,
+                "domain_id": rec.domain_id,
+                "vocabulary_id": rec.vocabulary_id,
+                "is_standard": rec.is_standard,
+                "is_valid": rec.is_valid,
+                EMBEDDING_COLUMN_NAME: emb,
+            }
+            for rec, emb in zip(records, embeddings)
+        ],
     )
 
 
@@ -183,6 +211,21 @@ def q_embedding_count_by_vocabulary(embedding_table: type[PGEmbeddingTable]) -> 
     ).group_by(embedding_table.vocabulary_id)
 
 
+def query_embeddings_by_ids(
+    session: Session,
+    embedding_table: type[PGEmbeddingTable],
+    concept_ids: Sequence[int],
+) -> dict[int, list[float]]:
+    """Fetch embedding vectors for concept_ids, keyed by concept ID; absent IDs are omitted."""
+    column = inspect(embedding_table).columns
+    rows = session.execute(
+        select(column.concept_id, column[EMBEDDING_COLUMN_NAME]).where(
+            in_values(column.concept_id, concept_ids, dialect=Dialect.POSTGRESQL)
+        )
+    ).all()
+    return {int(row[0]): list(row[1]) for row in rows}
+
+
 # ---------------------------------------------------------------------------
 # ANN query
 # ---------------------------------------------------------------------------
@@ -195,7 +238,6 @@ def query_nearest_concept_ids(
     metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
-    dialect: str = Dialect.POSTGRESQL,
 ) -> Sequence[Row]:
     """Run a pgvector ANN query returning the nearest concept IDs per query.
 
@@ -210,8 +252,6 @@ def query_nearest_concept_ids(
     k : int
         Maximum number of results per query.
     concept_filter : EmbeddingConceptFilter, optional
-        Any required temp-table setup is done here, not by the caller.
-    dialect : str
 
     Returns
     -------
@@ -229,9 +269,6 @@ def query_nearest_concept_ids(
     Uses a lateral join so all queries are batched in a single round-trip.
     """
     from pgvector.sqlalchemy import Vector  # optional dependency
-
-    if concept_filter is not None:
-        setup_concept_filter_temps(session, concept_filter, dialect)
 
     query_data = [(i, q) for i, q in enumerate(query_embeddings)]
     query_v = values(
@@ -258,7 +295,7 @@ def query_nearest_concept_ids(
 
     if concept_filter is not None:
         inner_stmt = apply_concept_filter_where(
-            inner_stmt, inspect(embedding_table).columns, concept_filter
+            inner_stmt, inspect(embedding_table).columns, concept_filter, dialect=Dialect.POSTGRESQL
         )
 
     lateral_subq = inner_stmt.lateral("top_k")
@@ -283,12 +320,12 @@ def query_concept_ids_matching_filter(
     session: Session,
     embedding_table: type[PGEmbeddingTable],
     concept_filter: EmbeddingConceptFilter,
-    dialect: str = Dialect.POSTGRESQL,
 ) -> set[int]:
     """Return every ``concept_id`` satisfying *concept_filter*."""
-    setup_concept_filter_temps(session, concept_filter, dialect)
     stmt = select(embedding_table.concept_id)
-    stmt = apply_concept_filter_where(stmt, inspect(embedding_table).columns, concept_filter)
+    stmt = apply_concept_filter_where(
+        stmt, inspect(embedding_table).columns, concept_filter, dialect=Dialect.POSTGRESQL
+    )
     rows = session.execute(stmt).all()
     return {int(row[0]) for row in rows}
 
@@ -297,7 +334,6 @@ def query_concept_filter_metadata(
     session: Session,
     embedding_table: type[PGEmbeddingTable],
     concept_filter: EmbeddingConceptFilter,
-    dialect: str = Dialect.POSTGRESQL,
 ) -> Sequence[Row]:
     """Return filter metadata columns (raw rows) for every concept ID
     satisfying concept_filter.
@@ -305,7 +341,6 @@ def query_concept_filter_metadata(
     Columns: ``concept_id``, ``domain_id``, ``vocabulary_id``, ``is_standard``,
     ``is_valid``. Row-to-domain-object conversion is the caller's job.
     """
-    setup_concept_filter_temps(session, concept_filter, dialect)
     stmt = select(
         embedding_table.concept_id,
         embedding_table.domain_id,
@@ -313,7 +348,9 @@ def query_concept_filter_metadata(
         embedding_table.is_standard,
         embedding_table.is_valid,
     )
-    stmt = apply_concept_filter_where(stmt, inspect(embedding_table).columns, concept_filter)
+    stmt = apply_concept_filter_where(
+        stmt, inspect(embedding_table).columns, concept_filter, dialect=Dialect.POSTGRESQL
+    )
     return session.execute(stmt).all()
 
 

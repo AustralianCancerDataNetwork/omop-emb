@@ -5,26 +5,16 @@ class EmbeddingBackendError(RuntimeError):
     """Base class for embedding backend selection and initialization errors."""
 
 
-class UnknownEmbeddingBackendError(EmbeddingBackendError):
-    """Error type for an unrecognized backend name.
-
-    Not currently raised anywhere in this package: ``resolve_backend()``
-    raises a plain ``RuntimeError`` for an unknown backend name instead.
-    """
+class UnknownEmbeddingBackendError(EmbeddingBackendError, ValueError):
+    """An unrecognized backend name."""
 
 
 class EmbeddingBackendDependencyError(EmbeddingBackendError, ImportError):
-    """Error type for a backend requested without its optional dependencies installed.
-
-    Not currently raised anywhere in this package.
-    """
+    """A backend was requested without its optional dependencies installed."""
 
 
 class EmbeddingBackendConfigurationError(EmbeddingBackendError):
-    """Error type for an internally inconsistent backend selection or configuration.
-
-    Not currently raised anywhere in this package.
-    """
+    """A backend was selected for a database it cannot run on."""
 
 
 class MisplacedRegistryError(EmbeddingBackendError):
@@ -44,3 +34,7 @@ class MissingStorageTableError(EmbeddingBackendError):
     manual investigation. The store never silently recreates a table it did not
     just create itself via register_model.
     """
+
+
+class ReadOnlyStoreError(EmbeddingBackendError):
+    """A write was attempted on a store opened with open_vector_store_reader()."""

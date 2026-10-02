@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import DeclarativeBase, MappedColumn, mapped_column
@@ -83,6 +83,25 @@ class ConceptEmbeddingRecord:
     vocabulary_id: str
     is_standard: bool
     is_valid: bool
+
+    def matches_cdm_row(self, row: Any) -> bool:
+        """Whether row's domain, vocabulary, standardness and validity equal this record's.
+
+        Parameters
+        ----------
+        row : Any
+            CDM concept row with ``domain_id``, ``vocabulary_id``, ``is_standard`` and ``is_valid``.
+
+        Returns
+        -------
+        bool
+        """
+        return (
+            str(row.domain_id) == self.domain_id
+            and str(row.vocabulary_id) == self.vocabulary_id
+            and bool(row.is_standard) == self.is_standard
+            and bool(row.is_valid) == self.is_valid
+        )
 
 
 class EmbeddingTableBase(DeclarativeBase):

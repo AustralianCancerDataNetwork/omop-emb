@@ -77,7 +77,7 @@ def resolve_omop_vector_store() -> ResolvedVectorStore:
     """Resolve OmopEmbConfig's own configured vector store via oa-configurator.
 
     Callers that also need an ``EmbeddingBackend`` pass the result to
-    ``omop_emb.backends.resolve_backend_from_resolved``.
+    ``omop_emb.backends.open_vector_store_writer``.
     """
     cfg = OmopEmbConfig.get_config()
     return Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)

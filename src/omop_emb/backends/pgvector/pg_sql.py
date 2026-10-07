@@ -17,9 +17,7 @@ from typing import List, Optional, Sequence, Union
 from numpy import ndarray
 from oa_configurator import (
     Dialect,
-    ResolvedDatabase,
     Role,
-    ensure_schema,
     guard_schema_provenance_for,
     qualified,
     physical_schema_of,
@@ -47,8 +45,6 @@ def table_exists(engine: Engine, table_name: str) -> bool:
 def create_pg_embedding_table(
     engine: Engine,
     model_record: EmbeddingModelRecord,
-    *,
-    resolved: ResolvedDatabase | None = None,
 ) -> type[PGEmbeddingTable]:
     """Create a pgvector embedding table and return its ORM class.
 
@@ -57,10 +53,6 @@ def create_pg_embedding_table(
     engine : Engine
         SQLAlchemy engine for the pgvector database.
     model_record : EmbeddingModelRecord
-    resolved : ResolvedDatabase, optional
-        Enables the schema-provenance guard around the ``create_all()``
-        call. Omitted by callers with no resolved config behind their
-        engine, in which case the guard no-ops.
 
     Returns
     -------
@@ -69,18 +61,18 @@ def create_pg_embedding_table(
 
     Notes
     -----
-    Uses ``halfvec(N)`` for dimensions greater than 2 000 and ``vector(N)``
+    - Uses ``halfvec(N)`` for dimensions greater than 2 000 and ``vector(N)``
     otherwise. Caching is handled by ``_ensure_storage_table`` in the backend
     base class; this function always issues DDL.
+
+    - Requires provenance guard as EmbeddingBackend caches the engine and creates storage
+        tables on it later (in register_model()), after construction-time enforcement has
+        already run once.
+
     """
     table_cls = pg_embedding_table_descriptor(model_record)
     with engine.begin() as connection:
-        # Ensure that the schema exists before creating the table
-        physical_schema = physical_schema_of(connection, schema_tag=Role.PRIMARY)
-        ensure_schema(connection, physical_schema)
-        guard = guard_schema_provenance_for(
-            connection, resolved, schema_tag=Role.PRIMARY)
-        with guard:
+        with guard_schema_provenance_for(connection, schema_tag=Role.PRIMARY):
             EmbeddingTableBase.metadata.create_all(connection, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
     return table_cls
 

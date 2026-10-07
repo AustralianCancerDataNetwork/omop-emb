@@ -11,7 +11,7 @@ from typing import Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from numpy import ndarray
-from oa_configurator import Dialect, ResolvedDatabase
+from oa_configurator import Dialect
 from sqlalchemy import Engine, MetaData, Table, text
 
 try:
@@ -92,11 +92,10 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         self,
         emb_engine: Engine,
         *,
-        resolved: ResolvedDatabase | None = None,
         writable: bool = True,
     ) -> None:
         self._sqlite_vec_metadata = MetaData()
-        super().__init__(emb_engine=emb_engine, resolved=resolved, writable=writable)
+        super().__init__(emb_engine=emb_engine, writable=writable)
 
     # ------------------------------------------------------------------
     # Backend identity

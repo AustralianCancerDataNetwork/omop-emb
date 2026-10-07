@@ -90,8 +90,11 @@ def test_registry_schema_guard_fires_on_genuine_registry_drift(pg_db, pg_engine,
 
 
 def test_primary_schema_guard_fires_on_genuine_primary_drift(pg_db, pg_engine):
-    """Tests the embedding storage table's own guard, triggered when a model
-    is registered, not at backend construction time."""
+    """Drift is now caught at create_engine() construction time (see
+    oa-configurator's architectural note on guard_schema_provenance_for()):
+    reusing one database_config_name ("emb_guard") with a genuinely
+    different primary schema raises while building backend_b itself,
+    before register_model() is even reachable."""
     with (
         isolated_test_schema(pg_engine, prefix="emb_guard_primary_a") as schema_a,
         isolated_test_schema(pg_engine, prefix="emb_guard_primary_b") as schema_b,
@@ -103,10 +106,5 @@ def test_primary_schema_guard_fires_on_genuine_primary_drift(pg_db, pg_engine):
         )
 
         resolved_b = _resolved(pg_db, database_config_name="emb_guard", schema=schema_b)
-        backend_b = _open_writer("pgvector", database=resolved_b)
-        # The shared registry already holds the model; registering it again
-        # creates its storage table under the new schema, where the guard fires.
         with pytest.raises(SchemaDriftError):
-            backend_b.register_model(
-                model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, dimensions=EMBEDDING_DIM
-            )
+            _open_writer("pgvector", database=resolved_b)

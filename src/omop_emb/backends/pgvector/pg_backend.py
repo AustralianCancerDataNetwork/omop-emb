@@ -17,6 +17,7 @@ except ImportError as _e:
 
 from omop_emb.config import BackendType, MetricType
 from omop_emb.backends.base_backend import (
+    writes,
     ConceptEmbeddingRecord,
     EmbeddingBackend,
 )
@@ -91,8 +92,6 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         path, ``_create_vector_extension`` is attached as an ``extensions``
         callable and creates the ``vector`` extension; the reader path runs no
         DDL and relies on it already existing.
-    resolved : ResolvedDatabase, optional
-        Forwarded to ``EmbeddingBackend``.
     writable : bool, optional
         Forwarded to ``EmbeddingBackend``.
     """
@@ -127,7 +126,6 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         return create_pg_embedding_table(
             engine=self.emb_engine,
             model_record=model_record,
-            resolved=self._resolved,
         )
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
@@ -137,6 +135,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     # Model registration override
     # ------------------------------------------------------------------
 
+    @writes
     def register_model(
         self,
         *,

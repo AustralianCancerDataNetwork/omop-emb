@@ -69,6 +69,38 @@ def test_every_public_backend_member_is_classified_exactly_once():
     assert public == reader | writes | _NEITHER
 
 
+def _all_subclasses(cls: type) -> set[type]:
+    direct = set(cls.__subclasses__())
+    return direct | {grandchild for child in direct for grandchild in _all_subclasses(child)}
+
+
+def test_every_concrete_backend_override_of_a_write_method_stays_classified_as_a_write():
+    """A subclass overriding an @writes-decorated base method must re-apply
+    @writes itself: the classification test above only inspects
+    EmbeddingBackend directly, so an override that drops the decorator
+    (while still working correctly through super()) would otherwise be
+    invisible to it."""
+    from omop_emb.backends.pgvector import PGVectorEmbeddingBackend  # noqa: F401
+    from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend  # noqa: F401
+
+    write_names = {
+        name for name in dir(EmbeddingBackend)
+        if not name.startswith("_")
+        and getattr(getattr(EmbeddingBackend, name), "__omop_emb_writes__", False)
+    }
+    subclasses = _all_subclasses(EmbeddingBackend)
+    assert subclasses, "expected at least one concrete EmbeddingBackend subclass to be importable"
+    for subclass in subclasses:
+        for name in write_names:
+            if name not in vars(subclass):
+                continue  # inherited as-is, already classified via the base class
+            overridden = vars(subclass)[name]
+            assert getattr(overridden, "__omop_emb_writes__", False), (
+                f"{subclass.__name__}.{name} overrides a @writes method without "
+                "re-applying @writes"
+            )
+
+
 def test_reader_rejects_every_write(tmp_path):
     store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
     with open_vector_store_writer(store) as writer:

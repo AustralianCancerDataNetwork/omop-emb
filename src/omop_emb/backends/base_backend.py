@@ -178,7 +178,6 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
         self,
         emb_engine: Engine,
         *,
-        resolved: ResolvedDatabase | None = None,
         writable: bool = True,
     ) -> None:
         actual_dialect = emb_engine.dialect.name
@@ -188,7 +187,6 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
                 f"got '{actual_dialect}'."
             )
         super().__init__()
-        self._resolved = resolved
         self._writable = writable
         self._registry = RegistryManager(emb_engine)
         self._table_cache: dict[str, TEmbeddingTable] = {}
@@ -1119,7 +1117,7 @@ def _open_writer(
     )
     emb_engine = registry_writer_engine(database, extensions=_extensions_for(resolved_backend, writable=True))
     logger.info(f"Using {resolved_backend.value} backend with engine: {emb_engine.url}")
-    return backend_cls(emb_engine=emb_engine, resolved=database)
+    return backend_cls(emb_engine=emb_engine)
 
 
 def open_vector_store_writer(resolved: ResolvedVectorStore) -> EmbeddingBackend:
@@ -1146,4 +1144,4 @@ def open_vector_store_reader(resolved: ResolvedVectorStore) -> EmbeddingStoreRea
         resolved_backend, dialect=make_url(database.connection.url).get_backend_name()
     )
     emb_engine = registry_reader_engine(database, extensions=_extensions_for(resolved_backend, writable=False))
-    return backend_cls(emb_engine=emb_engine, resolved=database, writable=False)
+    return backend_cls(emb_engine=emb_engine, writable=False)

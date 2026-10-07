@@ -8,11 +8,9 @@ from oa_configurator import (
     Dialect,
     ResolvedDatabase,
     SchemaClaim,
-    ensure_schema,
     find_table_in_other_schemas,
-    guard_schema_provenance_for,
+    physical_schema_of,
     qualified,
-    supports_schemas,
 )
 from sqlalchemy import (
     Connection,
@@ -193,8 +191,16 @@ class ModelRegistry(ModelRegistryBase):
 
 
 def resolve_registry_physical_schema(bindable) -> str | None:
-    """MODEL_REGISTRY_SCHEMA on a dialect with real schema support, else None."""
-    return MODEL_REGISTRY_SCHEMA if supports_schemas(bindable) else None
+    """REGISTRY_SCHEMA_KEY's physical schema resolved off bindable's own
+    schema_translate_map.
+
+    Raises
+    ------
+    oa_configurator.UnregisteredSchemaTagError
+        If bindable wasn't built with the registry claim (registry_reader_engine()/
+        registry_writer_engine()), on a dialect with real schema support.
+    """
+    return physical_schema_of(bindable, schema_tag=REGISTRY_SCHEMA_KEY)
 
 
 def _registry_engine(
@@ -262,27 +268,29 @@ def registry_writer_engine(
     be able to write. Both classes themselves never claim schemas or run DDL.
     """
     engine = _registry_engine(database, extensions=extensions, register_claims=True)
-    ensure_registry_table(engine, resolved=database)
+    ensure_registry_table(engine)
     return engine
 
 
-def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None = None) -> None:
+def ensure_registry_table(engine: Engine) -> None:
     """Create or upgrade the model registry table, in its own reserved schema.
 
-    The registry's schema is claimed by registry_writer_engine() at
-    create_engine() time, not here: this function only reads the already-
-    resolved REGISTRY_SCHEMA_KEY off *engine*'s own schema_translate_map and
-    ensures the physical schema exists.
+    The registry's schema is claimed and created by registry_writer_engine()
+    at create_engine() time. This function only reads the
+    already-resolved REGISTRY_SCHEMA_KEY off *engine*'s own
+    schema_translate_map. 
+    
+    Notes
+    -----
+    - No provenance guard needed as engine was just built for this one call by
+    registry_writer_engine(), so create_engine()'s own construction-time drift
+    enforcement already covers it.
 
     Parameters
     ----------
     engine : Engine
         SQLAlchemy engine connected to the registry database, already
         carrying a REGISTRY_SCHEMA_KEY entry in its schema_translate_map.
-    resolved : ResolvedDatabase, optional
-        Enables the schema-provenance guard around the ``create_all()``
-        call. Omitted by callers with no resolved config behind their engine, in
-        which case the guard no-ops.
 
     Raises
     ------
@@ -293,9 +301,7 @@ def ensure_registry_table(engine: Engine, *, resolved: ResolvedDatabase | None =
         registry_schema = resolve_registry_physical_schema(connection)
         if registry_schema is not None:
             _reject_misplaced_registry(connection, registry_schema=registry_schema)
-            ensure_schema(connection, registry_schema)
-        with guard_schema_provenance_for(connection, resolved, schema_tag=REGISTRY_SCHEMA_KEY):
-            ModelRegistryBase.metadata.create_all(connection, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
+        ModelRegistryBase.metadata.create_all(connection, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
     _migrate_legacy_provider_type_column(engine)
 
 

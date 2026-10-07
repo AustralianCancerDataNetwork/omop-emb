@@ -11,6 +11,7 @@ pre-filtering during KNN without re-querying the OMOP CDM.
 
 from __future__ import annotations
 
+import functools
 import logging
 from typing import List, Optional, Sequence, Union
 
@@ -87,9 +88,10 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
     """
     tablename = model_record.storage_identifier
     with engine.begin() as conn:
-        conn.execute(
-            text(f"DROP TABLE IF EXISTS {qualified(conn, tablename, physical_schema=physical_schema_of(conn))}")
-        )
+        with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
+            conn.execute(
+                text(f"DROP TABLE IF EXISTS {qualified(conn, tablename, physical_schema=physical_schema_of(conn))}")
+            )
     logger.info(f"Dropped embedding table '{tablename}'.")
 
 
@@ -400,15 +402,24 @@ def get_distance(
 
 
 def pg_embedding_table_descriptor(model_record: EmbeddingModelRecord) -> type[PGEmbeddingTable]:
-    """Return the SQLAlchemy ORM class descriptor for a pgvector embedding table."""
+    """Return the SQLAlchemy ORM class descriptor for a pgvector embedding table.
+
+    Cached by (tablename, dimensions): a repeated call for the same table
+    reuses the one mapped class instead of building another, which
+    ``extend_existing=True`` would otherwise only paper over (SQLAlchemy
+    still warns about multiple mapped classes for one table).
+    """
+    return _cached_pg_embedding_table_descriptor(model_record.storage_identifier, model_record.dimensions)
+
+
+@functools.lru_cache(maxsize=None)
+def _cached_pg_embedding_table_descriptor(tablename: str, dimensions: int) -> type[PGEmbeddingTable]:
     from omop_emb.utils.embedding_utils import (
         VectorColumnType,
         vector_column_type_for_dimensions,
     )
     from pgvector.sqlalchemy import VECTOR, HALFVEC  # optional dependency
 
-    tablename = model_record.storage_identifier
-    dimensions = model_record.dimensions
     col_type = vector_column_type_for_dimensions(dimensions)
     emb_col = mapped_column(
         HALFVEC(dimensions)

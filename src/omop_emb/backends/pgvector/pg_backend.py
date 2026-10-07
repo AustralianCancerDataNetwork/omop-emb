@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
-from oa_configurator import Dialect, physical_schema_of
+from oa_configurator import Dialect, Role, guard_schema_provenance_for, physical_schema_of
 from sqlalchemy import inspect, select, text
 
 try:
@@ -196,10 +196,11 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     ) -> None:
         """Drop every physical index on the table, then create the HNSW index index_config describes."""
         with self.emb_engine.begin() as conn:
-            for statement in self.drop_index_sql(model_record.model_name):
-                conn.execute(text(statement))
-            if isinstance(index_config, HNSWIndexConfig):
-                conn.execute(text(hnsw_index_ddl(self.emb_engine, model_record, index_config)))
+            with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
+                for statement in self.drop_index_sql(model_record.model_name):
+                    conn.execute(text(statement))
+                if isinstance(index_config, HNSWIndexConfig):
+                    conn.execute(text(hnsw_index_ddl(self.emb_engine, model_record, index_config)))
         logger.info(
             f"Rebuilt '{model_record.storage_identifier}' with index type '{index_config.index_type.value}'."
         )

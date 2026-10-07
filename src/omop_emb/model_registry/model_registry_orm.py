@@ -8,6 +8,7 @@ from oa_configurator import (
     Dialect,
     ResolvedDatabase,
     SchemaClaim,
+    database_config_name_of,
     find_table_in_other_schemas,
     physical_schema_of,
     qualified,
@@ -20,6 +21,7 @@ from sqlalchemy import (
     Integer,
     JSON,
     String,
+    UniqueConstraint,
     func,
     inspect,
     text,
@@ -56,6 +58,10 @@ class ModelRegistry(ModelRegistryBase):
 
     Attributes
     ----------
+    database_config_name : str
+        The ``[databases.*]``/vector-store entry this row belongs to.
+        Part of the primary key, so two stores sharing one physical
+        database never see or recreate each other's models.
     model_name : str
         Canonical model name including tag.
     provider_type : str
@@ -64,7 +70,8 @@ class ModelRegistry(ModelRegistryBase):
         key, e.g. ``'ollama'``).
     storage_identifier : str
         Physical table name where the model's embeddings are stored.
-        Must be unique across the registry. Format: ``<backend>_<safe_model>``.
+        Unique within database_config_name (not globally: two stores may
+        independently store a same-named model). Format: ``<backend>_<safe_model>``.
     dimensions : int
         Embedding vector dimensionality.
     index_type : IndexType
@@ -92,12 +99,18 @@ class ModelRegistry(ModelRegistryBase):
     """
 
     __tablename__ = "model_registry"
-    __table_args__ = {"schema": REGISTRY_SCHEMA_KEY}
+    __table_args__ = (
+        UniqueConstraint(
+            "database_config_name", "storage_identifier", name="uq_model_registry_storage_identifier"
+        ),
+        {"schema": REGISTRY_SCHEMA_KEY},
+    )
 
+    database_config_name = mapped_column(String, primary_key=True)
     model_name = mapped_column(String, primary_key=True)
 
     provider_type = mapped_column(String, nullable=False)
-    storage_identifier = mapped_column(String, nullable=False, unique=True)
+    storage_identifier = mapped_column(String, nullable=False)
     dimensions = mapped_column(Integer, nullable=False)
 
     index_type: Mapped[IndexType] = mapped_column(
@@ -241,9 +254,12 @@ def registry_reader_engine(
     *,
     extensions: Sequence[Callable[[Any, Any], None]] = (),
 ) -> Engine:
-    """Map the registry schema without registering its claim or creating
-    anything. If the schema or table doesn't exist yet,
-    RegistryManager.registry_available reports that honestly.
+    """Build a read-only engine mapped to the registry schema.
+
+    Registers nothing and creates nothing. Raises if a registry table
+    exists in a different schema than expected (see
+    ``_reject_misplaced_registry``); otherwise a missing table is left for
+    ``RegistryManager.registry_available`` to report.
 
     Parameters
     ----------
@@ -253,8 +269,18 @@ def registry_reader_engine(
         Connect-event callables forwarded to ``database.create_engine()`` for
         any database extension the backend needs on every physical connection
         (see ``ResolvedDatabase.create_engine``).
+
+    Raises
+    ------
+    MisplacedRegistryError
+        If the registry schema has no registry table but another schema does.
     """
-    return _registry_engine(database, extensions=extensions, register_claims=False)
+    engine = _registry_engine(database, extensions=extensions, register_claims=False)
+    registry_schema = resolve_registry_physical_schema(engine)
+    if registry_schema is not None:
+        with engine.connect() as connection:
+            _reject_misplaced_registry(connection, registry_schema=registry_schema)
+    return engine
 
 
 def registry_writer_engine(
@@ -302,6 +328,7 @@ def ensure_registry_table(engine: Engine) -> None:
         if registry_schema is not None:
             _reject_misplaced_registry(connection, registry_schema=registry_schema)
         ModelRegistryBase.metadata.create_all(connection, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
+    _migrate_legacy_single_tenant_registry_rows(engine)
     _migrate_legacy_provider_type_column(engine)
 
 
@@ -336,6 +363,60 @@ def _reject_misplaced_registry(connection: Connection, *, registry_schema: str) 
     )
 
 
+def _migrate_legacy_single_tenant_registry_rows(engine: Engine) -> None:
+    """Backfill database_config_name on a registry that predates per-store
+    row scoping.
+
+    Every existing row is backfilled with *this* engine's own
+    database_config_name, since only one vector-store entry could ever
+    have written them before this column existed.
+
+    Postgres-only: SQLite registries are per-file already, and the
+    multi-statement ALTER TABLE sequence here isn't expressible through
+    SQLite's ALTER TABLE subset. Idempotent, so normal backend construction
+    can run it unconditionally.
+    """
+    if engine.dialect.name != Dialect.POSTGRESQL:
+        return
+    registry_schema = resolve_registry_physical_schema(engine)
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns(ModelRegistry.__tablename__, schema=registry_schema)
+    }
+    if "database_config_name" in columns:
+        return
+    # Some other partial/non-standard table, not a registry predating this column.
+    if "model_name" not in columns or "storage_identifier" not in columns:
+        return
+    database_config_name = database_config_name_of(engine)
+    if database_config_name is None:
+        return
+    table = qualified(engine, ModelRegistry.__tablename__, physical_schema=registry_schema)
+    with engine.begin() as connection:
+        connection.execute(text(f"ALTER TABLE {table} ADD COLUMN database_config_name VARCHAR"))
+        connection.execute(
+            text(f"UPDATE {table} SET database_config_name = :name WHERE database_config_name IS NULL"),
+            {"name": database_config_name},
+        )
+        connection.execute(text(f"ALTER TABLE {table} ALTER COLUMN database_config_name SET NOT NULL"))
+        connection.execute(text(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS model_registry_pkey"))
+        connection.execute(
+            text(
+                f"ALTER TABLE {table} ADD CONSTRAINT model_registry_pkey "
+                "PRIMARY KEY (database_config_name, model_name)"
+            )
+        )
+        connection.execute(
+            text(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS model_registry_storage_identifier_key")
+        )
+        connection.execute(
+            text(
+                f"ALTER TABLE {table} ADD CONSTRAINT uq_model_registry_storage_identifier "
+                "UNIQUE (database_config_name, storage_identifier)"
+            )
+        )
+
+
 def _migrate_legacy_provider_type_column(engine: Engine) -> None:
     """Upgrade the pre-omop-llm provider column without rebuilding embeddings.
 
@@ -345,12 +426,14 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
     provider keys such as ``anthropic`` from being inserted. Widen the
     PostgreSQL column and normalize legacy names in place on both backends.
 
-    The migration is deliberately idempotent so normal backend construction
-    can safely run it for both existing and newly-created registries.
+    Idempotent, so normal backend construction can run it unconditionally
+    for both existing and newly-created registries. Not cached: a safe
+    cache key would need bindable's genuine physical identity, which isn't
+    derivable here without reaching into oa-configurator's private
+    identity helpers.
     """
-    columns = inspect(engine).get_columns(
-        ModelRegistry.__tablename__, schema=resolve_registry_physical_schema(engine)
-    )
+    registry_schema = resolve_registry_physical_schema(engine)
+    columns = inspect(engine).get_columns(ModelRegistry.__tablename__, schema=registry_schema)
     provider_column = next(
         (column for column in columns if column["name"] == "provider_type"),
         None,
@@ -360,7 +443,6 @@ def _migrate_legacy_provider_type_column(engine: Engine) -> None:
 
     legacy_length = getattr(provider_column["type"], "length", None)
     with engine.begin() as connection:
-        registry_schema = resolve_registry_physical_schema(connection)
         if engine.dialect.name == Dialect.POSTGRESQL and legacy_length is not None:
             warnings.warn(
                 "Widening a legacy fixed-length provider_type column. This "

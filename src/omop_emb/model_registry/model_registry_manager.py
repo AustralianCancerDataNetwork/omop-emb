@@ -13,6 +13,8 @@ from omop_emb.backends.index_config import (
     IndexConfig,
     index_config_from_dict,
 )
+from oa_configurator import database_config_name_of
+
 from omop_emb.model_registry.model_registry_orm import (
     ModelRegistry,
     resolve_registry_physical_schema,
@@ -32,7 +34,9 @@ class RegistryManager:
     Parameters
     ----------
     embedding_engine : Engine
-        SQLAlchemy embedding engine connected to the embedding store.
+        SQLAlchemy embedding engine connected to the embedding store. Must
+        have been built via registry_reader_engine()/registry_writer_engine(),
+        which is checked here to ensure the registry schema claim is present. 
 
     Notes
     -----
@@ -40,11 +44,18 @@ class RegistryManager:
     ``schema_translate_map`` key, resolved to the physical schema named by
     ``MODEL_REGISTRY_SCHEMA``), independent of whichever schema the embedding
     store itself resolves to.
+
+    Raises
+    ------
+    oa_configurator.UnregisteredSchemaTagError
+        If embedding_engine wasn't built with the registry schema claim.
     """
 
     def __init__(self, embedding_engine: Engine) -> None:
         self._embedding_engine = embedding_engine
         self._embedding_sessionmaker = sessionmaker(self._embedding_engine)
+        resolve_registry_physical_schema(embedding_engine)
+        self._database_config_name = database_config_name_of(embedding_engine)
 
     @property
     def registry_available(self) -> bool:
@@ -95,7 +106,7 @@ class RegistryManager:
         """
         if not self.registry_available:
             return ()
-        stmt = select(ModelRegistry)
+        stmt = select(ModelRegistry).where(ModelRegistry.database_config_name == self._database_config_name)
         if model_name is not None:
             stmt = stmt.where(ModelRegistry.model_name == model_name)
         if provider_type is not None:
@@ -174,6 +185,7 @@ class RegistryManager:
                 return self._row_to_record(existing)
 
         new_row = ModelRegistry(
+            database_config_name=self._database_config_name,
             model_name=model_name,
             provider_type=provider_type,
             dimensions=dimensions,
@@ -286,7 +298,10 @@ class RegistryManager:
         with self.emb_session_factory.begin() as session:
             session.execute(
                 update(ModelRegistry)
-                .where(ModelRegistry.model_name == model_name)
+                .where(
+                    ModelRegistry.database_config_name == self._database_config_name,
+                    ModelRegistry.model_name == model_name,
+                )
                 .values(updated_at=datetime.now(timezone.utc))
             )
 
@@ -337,10 +352,12 @@ class RegistryManager:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _fetch_row(session: Session, model_name: str) -> Optional[ModelRegistry]:
+    def _fetch_row(self, session: Session, model_name: str) -> Optional[ModelRegistry]:
         return session.scalar(
-            select(ModelRegistry).where(ModelRegistry.model_name == model_name)
+            select(ModelRegistry).where(
+                ModelRegistry.database_config_name == self._database_config_name,
+                ModelRegistry.model_name == model_name,
+            )
         )
 
     @staticmethod

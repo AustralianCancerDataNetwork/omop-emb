@@ -375,6 +375,7 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
                 "See the CLI documentation for details."
             )
 
+        preexisting = bool(self._registry.get_registered_models(model_name=model_name))
         record = self._registry.register_model(
             model_name=model_name,
             provider_type=provider_type,
@@ -383,7 +384,12 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
             metadata=metadata,
             registered_at=registered_at,
         )
-        self._ensure_storage_table(record)
+        try:
+            self._ensure_storage_table(record)
+        except Exception:
+            if not preexisting:
+                self._registry.delete_model(model_name=model_name)
+            raise
         # Disable for now as we prevent non-FLAT index registration
         # self._rebuild_index_impl(model_record=record, index_config=index_config)
         logger.info(

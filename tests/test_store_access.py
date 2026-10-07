@@ -225,6 +225,65 @@ def test_only_the_writer_attaches_the_vector_extension_hook(pg_db, monkeypatch):
 
 @pytest.mark.postgresql
 @pytest.mark.db_dialect
+def test_two_vector_stores_on_one_physical_database_do_not_share_registry_rows(pg_db):
+    """model_registry rows are scoped by database_config_name. Before
+    that column existed, two stores sharing one physical database (and
+    hence one omop_emb_registry schema) shared one global set of rows. As a result,
+    store B could see and recreate store A's models."""
+    import sqlalchemy as sa
+    from oa_configurator import ConnectionConfig, GenericDatabaseConfig, Resolver, ResolvedVectorStore, StackConfig
+    from oa_configurator.testing import isolated_test_schema
+
+    conn_url = sa.engine.make_url(pg_db.committing_engine.url)
+    shared_connection = ConnectionConfig(
+        dialect=conn_url.drivername, host=conn_url.host, port=conn_url.port,
+        user=conn_url.username, password=conn_url.password, database_name=conn_url.database,
+        test_only=True,
+    )
+
+    with (
+        isolated_test_schema(pg_db.committing_engine, prefix="emb_iso_a") as schema_a,
+        isolated_test_schema(pg_db.committing_engine, prefix="emb_iso_b") as schema_b,
+    ):
+        stack = StackConfig.for_session(
+            connections={"shared": shared_connection},
+            databases={
+                "store_a": GenericDatabaseConfig(connection="shared", schema_name=schema_a),
+                "store_b": GenericDatabaseConfig(connection="shared", schema_name=schema_b),
+            },
+        )
+        resolver = Resolver(stack)
+        store_a = ResolvedVectorStore(
+            name="store_a", backend_type="pgvector", database=resolver.resolve_database("store_a"),
+            faiss_cache_dir=None, configuration={},
+        )
+        store_b = ResolvedVectorStore(
+            name="store_b", backend_type="pgvector", database=resolver.resolve_database("store_b"),
+            faiss_cache_dir=None, configuration={},
+        )
+
+        with open_vector_store_writer(store_a) as writer_a:
+            writer_a.register_model(
+                model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+            )
+        with open_vector_store_writer(store_b) as writer_b:
+            # Same model_name as store_a, on a different physical schema --
+            # must succeed independently, not collide with store_a's row.
+            writer_b.register_model(
+                model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+            )
+
+            assert [r.model_name for r in writer_a.get_registered_models()] == [_MODEL]
+            assert [r.model_name for r in writer_b.get_registered_models()] == [_MODEL]
+
+            writer_a.delete_model(model_name=_MODEL)
+            # store_a's delete must not remove store_b's same-named row.
+            assert writer_b.get_registered_models() != ()
+            writer_b.delete_model(model_name=_MODEL)
+
+
+@pytest.mark.postgresql
+@pytest.mark.db_dialect
 class TestPostgresReader:
     @pytest.fixture
     def store(self, pg_db):

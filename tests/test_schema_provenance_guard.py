@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 from oa_configurator import GenericDatabaseConfig, Resolver, SchemaDriftError
 from oa_configurator.cli import app
-from oa_configurator.testing import isolated_test_schema, reset_schema_registry_rows
+from oa_configurator.testing import guarded_resolver, isolated_test_schema, reset_schema_registry_rows
 from typer.testing import CliRunner
 
 from omop_emb.backends.base_backend import _open_writer
@@ -35,14 +35,20 @@ def _fresh_role_rows(pg_engine, cleanup_after_test):
 
 
 def _resolver(pg_db, *, database_config_name: str, schema: str) -> Resolver:
-    """Resolver with a generic database entry on pg_db's connection with
-    test_only=False, so the guard doesn't no-op against pg_db's own test-only marking.
+    """Resolver with a generic database entry on pg_db's own connection name,
+    test_only flipped to False via guarded_resolver() so the guard doesn't
+    no-op against pg_db's own test-only marking.
+
+    Reuses pg_db's own connection name deliberately as StackConfig rejects
+    a test_only connection that duplicates a non-test_only one's physical identity.
     """
-    resolver = Resolver.from_active_config()
-    connection = resolver.config.connections[pg_db.resolved.connection.name].model_copy(update={"test_only": False})
+    resolver = guarded_resolver(pg_db.resolved)
     return resolver.with_overrides(
-        connections={"emb_guard_conn": connection},
-        databases={database_config_name: GenericDatabaseConfig(connection="emb_guard_conn", schema_name=schema)},
+        databases={
+            database_config_name: GenericDatabaseConfig(
+                connection=pg_db.resolved.connection.name, schema_name=schema
+            )
+        },
     )
 
 

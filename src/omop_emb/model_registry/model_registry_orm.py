@@ -399,10 +399,11 @@ def _reject_incompatible_registry(connection: Connection, *, registry_schema: st
         )
 
     # A dialect without schemas has only the one location, already checked above.
-    elsewhere = (
-        find_table_in_other_schemas(connection, table_name, physical_schema=registry_schema)
-        if registry_schema is not None
-        else ()
+    if registry_schema is None:
+        return
+
+    elsewhere = find_table_in_other_schemas(
+        connection, table_name, physical_schema=registry_schema
     )
     for schema in elsewhere:
         if _is_legacy_layout(columns_of(schema)):

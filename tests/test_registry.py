@@ -16,7 +16,7 @@ from omop_emb.model_registry import (
     ensure_registry_table,
     registry_reader_engine,
 )
-from omop_emb.utils.errors import ModelRegistrationConflictError
+from omop_emb.utils.errors import LegacyRegistryError, ModelRegistrationConflictError
 
 from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE, sqlite_resolved_database
 
@@ -232,66 +232,81 @@ class TestProviderTypeValidation:
             assert record.provider_type == provider
 
 
+def _create_pre_scoping_registry(connection: sa.Connection, *, schema: str | None = None) -> None:
+    """Create a model_registry table in the layout every pre-2.2 release
+    shipped: the three signature columns and no database_config_name.
+
+    The provider_type width reproduces v1.x, where the column was declared
+    Enum(ProviderType, native_enum=False) and so rendered VARCHAR(6) holding
+    uppercase member names. v2.0/v2.1 widened it to an unbounded string, which
+    changes nothing about the detection this exercises.
+    """
+    qualified = "model_registry" if schema is None else f"{schema}.model_registry"
+    connection.execute(sa.text(f"""
+        CREATE TABLE {qualified} (
+            model_name VARCHAR PRIMARY KEY,
+            provider_type VARCHAR(6),
+            storage_identifier VARCHAR NOT NULL UNIQUE,
+            dimensions INTEGER NOT NULL,
+            index_type VARCHAR,
+            metric_type VARCHAR,
+            index_config JSON,
+            details JSON
+        )
+    """))
+    connection.execute(sa.text(
+        f"INSERT INTO {qualified} (model_name, provider_type, storage_identifier, dimensions) "
+        "VALUES ('nomic-embed-text', 'OLLAMA', 'emb_nomic_embed_text', 768)"
+    ))
+
+
 @pytest.mark.unit
-def test_legacy_provider_name_is_normalized_in_sqlite():
-    """ensure_registry_table()'s migration runs against a pre-existing legacy
-    table, so this builds its own engine via registry_reader_engine() (schema
-    mapping only, no table) rather than the svec_engine fixture, which already
-    creates the current-shape table via registry_writer_engine()."""
+def test_pre_scoping_registry_is_rejected_rather_than_migrated():
+    """A registry predating per-store row scoping is refused outright. No
+    reader path upgrades it, so nothing runs DDL against a table a concurrent
+    writer may be using; migrations/to_v2.py does that offline instead.
+    """
     engine = registry_reader_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
     with engine.begin() as connection:
-        connection.execute(
-            sa.text("CREATE TABLE model_registry (provider_type VARCHAR(6))")
-        )
-        connection.execute(
-            sa.text("INSERT INTO model_registry (provider_type) VALUES ('OLLAMA')")
-        )
+        _create_pre_scoping_registry(connection)
 
+    with pytest.raises(LegacyRegistryError, match="database_config_name"):
+        ensure_registry_table(engine)
+
+
+@pytest.mark.unit
+def test_current_registry_layout_is_not_mistaken_for_a_legacy_one():
+    """The rejection keys on the absence of database_config_name, so a
+    registry this version created must survive repeated opens."""
+    engine = registry_reader_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
+    ensure_registry_table(engine)
     ensure_registry_table(engine)
 
     with engine.connect() as connection:
-        assert connection.scalar(
-            sa.text("SELECT provider_type FROM model_registry")
-        ) == "ollama"
+        columns = {c["name"] for c in sa.inspect(connection).get_columns("model_registry")}
+    assert "database_config_name" in columns
 
 
 @pytest.mark.pgvector
 @pytest.mark.integration
-def test_legacy_provider_column_is_widened_in_postgres(pg_engine):
+def test_pre_scoping_registry_in_another_schema_is_rejected(pg_engine):
+    """The staggered-upgrade case: the current registry already exists here,
+    created by another store, while this store's rows are still in their old
+    schema, where they would read back as an empty catalogue rather than an
+    error. Detection must therefore run even when the current registry is
+    present, not only when one is missing.
+    """
+    stale_schema = "legacy_emb_registry"
+    ensure_registry_table(pg_engine)
     with pg_engine.begin() as connection:
-        ensure_schema(connection, MODEL_REGISTRY_SCHEMA)
-        connection.execute(sa.text(f"DROP TABLE IF EXISTS {MODEL_REGISTRY_SCHEMA}.model_registry CASCADE"))
-        connection.execute(
-            sa.text(f"CREATE TABLE {MODEL_REGISTRY_SCHEMA}.model_registry (provider_type VARCHAR(6))")
-        )
-        connection.execute(
-            sa.text(f"INSERT INTO {MODEL_REGISTRY_SCHEMA}.model_registry (provider_type) VALUES ('OLLAMA')")
-        )
+        ensure_schema(connection, stale_schema)
+        _create_pre_scoping_registry(connection, schema=stale_schema)
     try:
-        ensure_registry_table(pg_engine)
-
-        provider_column = next(
-            column
-            for column in sa.inspect(pg_engine).get_columns(
-                "model_registry", schema=MODEL_REGISTRY_SCHEMA
-            )
-            if column["name"] == "provider_type"
-        )
-        assert getattr(provider_column["type"], "length", None) is None
-
-        with pg_engine.begin() as connection:
-            assert connection.scalar(
-                sa.text(f"SELECT provider_type FROM {MODEL_REGISTRY_SCHEMA}.model_registry")
-            ) == "ollama"
-            connection.execute(
-                sa.text(
-                    f"INSERT INTO {MODEL_REGISTRY_SCHEMA}.model_registry (provider_type) VALUES ('anthropic')"
-                )
-            )
+        with pytest.raises(LegacyRegistryError, match=stale_schema):
+            ensure_registry_table(pg_engine)
     finally:
         with pg_engine.begin() as connection:
-            connection.execute(sa.text(f"DROP TABLE IF EXISTS {MODEL_REGISTRY_SCHEMA}.model_registry CASCADE"))
-        ensure_registry_table(pg_engine)
+            connection.execute(sa.text(f"DROP SCHEMA IF EXISTS {stale_schema} CASCADE"))
 
 
 @pytest.mark.pgvector

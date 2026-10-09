@@ -2,6 +2,7 @@
 
 import itertools
 import logging
+from contextlib import ExitStack
 from typing import Annotated, Generator, List, Optional, Sequence, Union
 
 import typer
@@ -9,14 +10,14 @@ from tqdm import tqdm
 from oa_configurator import Resolver, ResolvedModel
 from omop_llm import build_model_backend_from_resolved
 
-from omop_emb.utils.cdm import check_concept_cdm
+from omop_emb.utils.cdm import CDMSessionFactory, check_concept_cdm
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.config import (
     IndexType,
     MetricType,
     OmopEmbConfig,
-    resolve_omop_cdm_engine,
+    open_cdm_sessions,
 )
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
 from omop_emb.utils.embedding_utils import (
@@ -168,16 +169,40 @@ def add_embeddings(
 
     resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
     backend = open_vector_store_writer(resolved_vector_store)
-    omop_cdm_engine = resolve_omop_cdm_engine()
+    with open_cdm_sessions() as cdm_sessions:
+        _add_embeddings(
+            backend=backend,
+            cdm_sessions=cdm_sessions,
+            resolved_model=resolved_model,
+            batch_size=batch_size,
+            standard_only=standard_only,
+            domains=domains,
+            vocabularies=vocabularies,
+            num_embeddings=num_embeddings,
+        )
 
+
+def _add_embeddings(
+    *,
+    backend,
+    cdm_sessions: CDMSessionFactory,
+    resolved_model: ResolvedModel,
+    batch_size: int,
+    standard_only: bool,
+    domains: Optional[list[str]],
+    vocabularies: Optional[list[str]],
+    num_embeddings: Optional[int],
+) -> None:
+    """Embed every concept matching the filters that lacks a current embedding."""
     # Ingestion runs no queries, so the interface's metric is never used here.
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
         metric_type=MetricType.COSINE,
         resolved_model=resolved_model,
         embedding_batch_size=batch_size,
+        cdm_session_factory=cdm_sessions,
     )
-    check_concept_cdm(omop_cdm_engine)
+    check_concept_cdm(cdm_sessions)
 
     try:
         embedding_writer.register_model()
@@ -189,7 +214,6 @@ def add_embeddings(
             vocabularies=tuple(vocabularies) if vocabularies else None,
         )
         n_pending = embedding_writer.count_concepts_requiring_embedding(
-            omop_cdm_engine=omop_cdm_engine,
             concept_filter=concept_filter,
         )
         n_total = (
@@ -200,7 +224,6 @@ def add_embeddings(
         n_processed = 0
         with tqdm(total=n_total, desc="Processing", unit="concept") as pbar:
             for batch_dict in embedding_writer.get_concepts_requiring_embedding_batched(
-                omop_cdm_engine=omop_cdm_engine,
                 concept_filter=concept_filter,
                 batch_size=batch_size,
                 limit=num_embeddings,
@@ -523,23 +546,55 @@ def search(
     resolved_faiss_cache_dir = faiss_cache_dir or resolved_vector_store.faiss_cache_dir
     store = open_vector_store_reader(resolved_vector_store)
 
-    # CDM enrichment is optional for search
-    try:
-        omop_cdm_engine = resolve_omop_cdm_engine()
-    except RuntimeError:
-        omop_cdm_engine = None
-        logger.info(
-            "CDM engine not configured; concept names will not be enriched in results."
+    with ExitStack() as stack:
+        # CDM enrichment is optional for search
+        cdm_sessions: Optional[CDMSessionFactory]
+        try:
+            cdm_sessions = stack.enter_context(open_cdm_sessions())
+        except RuntimeError:
+            cdm_sessions = None
+            logger.info(
+                "CDM not configured; concept names will not be enriched in results."
+            )
+        _search(
+            queries_generator,
+            store=store,
+            cdm_sessions=cdm_sessions,
+            resolved_model=resolved_model,
+            metric_type=metric_type,
+            faiss_cache_dir=resolved_faiss_cache_dir,
+            batch_size=batch_size,
+            k=k,
+            standard_only=standard_only,
+            domains=domains,
+            vocabularies=vocabularies,
         )
+
+
+def _search(
+    queries_generator: Generator[str, None, None],
+    *,
+    store,
+    cdm_sessions: Optional[CDMSessionFactory],
+    resolved_model: ResolvedModel,
+    metric_type: MetricType,
+    faiss_cache_dir: Optional[str],
+    batch_size: int,
+    k: int,
+    standard_only: bool,
+    domains: Optional[list[str]],
+    vocabularies: Optional[list[str]],
+) -> None:
+    """Print the nearest concepts for each query, batch by batch."""
 
     model_backend = build_model_backend_from_resolved(resolved_model)
     embedding_reader = EmbeddingReaderInterface(
         model=model_backend.model,
         backend=store,
         metric_type=metric_type,
-        omop_cdm_engine=omop_cdm_engine,
+        cdm_session_factory=cdm_sessions,
         provider_type=model_backend.provider,
-        faiss_cache_dir=resolved_faiss_cache_dir,
+        faiss_cache_dir=faiss_cache_dir,
     )
 
     concept_filter = EmbeddingConceptFilter(

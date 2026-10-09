@@ -19,7 +19,7 @@ from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.config import MetricType
 from omop_emb.storage.embedding_bundle import export_bundle
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
-from omop_emb.utils.errors import ReadOnlyStoreError
+from omop_emb.utils.errors import ModelRegistrationConflictError, ReadOnlyStoreError
 
 from .conftest import CONCEPT_RECORDS, sqlite_resolved_vector_store
 
@@ -262,24 +262,81 @@ def test_two_vector_stores_on_one_physical_database_do_not_share_registry_rows(p
             faiss_cache_dir=None, configuration={},
         )
 
-        with open_vector_store_writer(store_a) as writer_a:
-            writer_a.register_model(
-                model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
-            )
-        with open_vector_store_writer(store_b) as writer_b:
-            # Same model_name as store_a, on a different physical schema --
-            # must succeed independently, not collide with store_a's row.
-            writer_b.register_model(
-                model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
-            )
+        try:
+            with open_vector_store_writer(store_a) as writer_a:
+                writer_a.register_model(
+                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                )
+            with open_vector_store_writer(store_b) as writer_b:
+                # Same model_name as store_a, on a different physical schema --
+                # must succeed independently, not collide with store_a's row.
+                writer_b.register_model(
+                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                )
 
-            assert [r.model_name for r in writer_a.get_registered_models()] == [_MODEL]
-            assert [r.model_name for r in writer_b.get_registered_models()] == [_MODEL]
+                assert [r.model_name for r in writer_a.get_registered_models()] == [_MODEL]
+                assert [r.model_name for r in writer_b.get_registered_models()] == [_MODEL]
 
-            writer_a.delete_model(model_name=_MODEL)
-            # store_a's delete must not remove store_b's same-named row.
-            assert writer_b.get_registered_models() != ()
-            writer_b.delete_model(model_name=_MODEL)
+                writer_a.delete_model(model_name=_MODEL)
+                # store_a's delete must not remove store_b's same-named row.
+                assert writer_b.get_registered_models() != ()
+                writer_b.delete_model(model_name=_MODEL)
+        finally:
+            for store in (store_a, store_b):
+                with open_vector_store_writer(store) as writer:
+                    if writer.get_registered_model(model_name=_MODEL) is not None:
+                        writer.delete_model(model_name=_MODEL)
+
+
+def test_two_vector_stores_on_one_schema_cannot_share_a_storage_table(pg_db):
+    """Two stores resolving to one schema would both write the same physical
+    table, so the second registration of a same-named model is refused.
+
+    One config refuses two entries sharing a schema, so the stores come from
+    two separate configs, as two deployments sharing one database would."""
+    import sqlalchemy as sa
+    from oa_configurator import ConnectionConfig, GenericDatabaseConfig, Resolver, ResolvedVectorStore, StackConfig
+    from oa_configurator.testing import isolated_test_schema
+
+    conn_url = sa.engine.make_url(pg_db.committing_engine.url)
+    shared_connection = ConnectionConfig(
+        dialect=conn_url.drivername, host=conn_url.host, port=conn_url.port,
+        user=conn_url.username, password=conn_url.password, database_name=conn_url.database,
+        test_only=True,
+    )
+
+    with isolated_test_schema(pg_db.committing_engine, prefix="emb_shared") as schema:
+        store_x, store_y = (
+            ResolvedVectorStore(
+                name=name,
+                backend_type="pgvector",
+                database=Resolver(
+                    StackConfig.for_session(
+                        connections={"shared": shared_connection},
+                        databases={name: GenericDatabaseConfig(connection="shared", schema_name=schema)},
+                    )
+                ).resolve_database(name),
+                faiss_cache_dir=None,
+                configuration={},
+            )
+            for name in ("store_x", "store_y")
+        )
+        try:
+            with open_vector_store_writer(store_x) as writer_x:
+                writer_x.register_model(
+                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                )
+            with open_vector_store_writer(store_y) as writer_y:
+                with pytest.raises(ModelRegistrationConflictError) as exc_info:
+                    writer_y.register_model(
+                        model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                    )
+            assert exc_info.value.conflict_field == "storage_identifier"
+        finally:
+            for store in (store_x, store_y):
+                with open_vector_store_writer(store) as writer:
+                    if writer.get_registered_model(model_name=_MODEL) is not None:
+                        writer.delete_model(model_name=_MODEL)
 
 
 @pytest.mark.postgresql

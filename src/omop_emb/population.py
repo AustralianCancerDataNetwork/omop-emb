@@ -7,15 +7,14 @@ from dataclasses import dataclass, field
 from itertools import chain
 from typing import Literal
 
-from sqlalchemy import Engine, Row, select
-from sqlalchemy.orm import Session
+from sqlalchemy import Row, select
 
 from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_alchemy.cdm.query import ConceptFilter
 
 from omop_emb.backends.base_backend import EmbeddingStoreReader
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
-from omop_emb.utils.cdm import streamed
+from omop_emb.utils.cdm import CDMSessionFactory, streamed
 
 
 @dataclass(frozen=True)
@@ -118,7 +117,7 @@ class _VocabularyAccumulator:
 
 
 def plan_population(
-    cdm_engine: Engine,
+    cdm_session_factory: CDMSessionFactory,
     store: EmbeddingStoreReader,
     *,
     model_name: str,
@@ -142,7 +141,7 @@ def plan_population(
     }
     accumulators: dict[str, _VocabularyAccumulator] = {}
 
-    for row in _iter_current_concepts(cdm_engine, scope, batch_size=batch_size):
+    for row in _iter_current_concepts(cdm_session_factory, scope, batch_size=batch_size):
         concept_id = int(row.concept_id)
         vocabulary = str(row.vocabulary_id)
         accumulator = accumulators.setdefault(vocabulary, _VocabularyAccumulator())
@@ -176,7 +175,7 @@ def plan_population(
 
 
 def _iter_current_concepts(
-    cdm_engine: Engine,
+    cdm_session_factory: CDMSessionFactory,
     scope: PopulationScope,
     *,
     batch_size: int,
@@ -193,7 +192,7 @@ def _iter_current_concepts(
             )
         )
     )
-    with Session(cdm_engine) as session:
+    with cdm_session_factory() as session:
         yield from session.execute(streamed(statement, batch_size))
 
 

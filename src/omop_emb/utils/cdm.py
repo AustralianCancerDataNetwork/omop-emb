@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
-from contextlib import contextmanager
-from typing import Generator, Iterator, Optional
+from typing import Callable, Iterator, Optional
 
-from sqlalchemy import Engine, Row, Select, select
+from sqlalchemy import Row, Select, select
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_emb.utils.embedding_utils import CDMConceptFilter
@@ -37,14 +36,13 @@ def concept_embedding_projection() -> Select:
     )
 
 
-@contextmanager
-def cdm_session(cdm_engine: Engine) -> Generator[Session, None, None]:
-    """Context manager yielding a single CDM session from *cdm_engine*."""
-    with sessionmaker(cdm_engine)() as session:
-        yield session
+CDMSessionFactory = Callable[[], Session]
+"""Zero-argument callable returning a CDM session, e.g. from
+``omop_alchemy.cross_database.cdm_sessionmaker``, which sends vocabulary reads
+to whichever database hosts the vocabulary."""
 
 
-def check_concept_cdm(cdm_engine: Engine) -> None:
+def check_concept_cdm(cdm_session_factory: CDMSessionFactory) -> None:
     """Verify the OMOP CDM Concept table is reachable.
 
     Raises RuntimeError with a human-friendly message when the schema is
@@ -52,7 +50,7 @@ def check_concept_cdm(cdm_engine: Engine) -> None:
     registration).
     """
     try:
-        with cdm_session(cdm_engine) as session:
+        with cdm_session_factory() as session:
             session.execute(select(Concept.concept_id).limit(1))
     except DBAPIError as e:
         error_msg = str(e).lower()
@@ -66,7 +64,7 @@ def check_concept_cdm(cdm_engine: Engine) -> None:
 
 def fetch_cdm_concepts_for_filter(
     concept_filter: Optional[CDMConceptFilter],
-    cdm_engine: Engine,
+    cdm_session_factory: CDMSessionFactory,
 ) -> dict[int, Row]:
     """Return CDM rows matching *concept_filter*, keyed by concept_id.
 
@@ -77,13 +75,13 @@ def fetch_cdm_concepts_for_filter(
     query = concept_embedding_projection()
     if concept_filter is not None:
         query = concept_filter.apply(query)
-    with cdm_session(cdm_engine) as session:
+    with cdm_session_factory() as session:
         return {row.concept_id: row for row in session.execute(query)}
 
 
 def iter_cdm_concepts_for_filter(
     concept_filter: Optional[CDMConceptFilter],
-    cdm_engine: Engine,
+    cdm_session_factory: CDMSessionFactory,
     chunk_size: int = 5_000,
 ) -> Iterator[Row]:
     """Stream CDM concept rows matching *concept_filter*, server-side chunked.
@@ -95,13 +93,13 @@ def iter_cdm_concepts_for_filter(
     query = concept_embedding_projection()
     if concept_filter is not None:
         query = concept_filter.apply(query)
-    with cdm_session(cdm_engine) as session:
+    with cdm_session_factory() as session:
         yield from session.execute(streamed(query, chunk_size))
 
 
 def count_missing_concepts(
     concept_filter: Optional[CDMConceptFilter],
-    cdm_engine: Engine,
+    cdm_session_factory: CDMSessionFactory,
     embedded_ids: set[int],
     chunk_size: int = 10_000,
 ) -> int:
@@ -114,7 +112,7 @@ def count_missing_concepts(
     if concept_filter is not None:
         query = concept_filter.apply(query)
     count = 0
-    with cdm_session(cdm_engine) as session:
+    with cdm_session_factory() as session:
         for row in session.execute(streamed(query, chunk_size)):
             if row.concept_id not in embedded_ids:
                 count += 1

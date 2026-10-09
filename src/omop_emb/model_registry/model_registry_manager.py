@@ -13,7 +13,7 @@ from omop_emb.backends.index_config import (
     IndexConfig,
     index_config_from_dict,
 )
-from oa_configurator import database_config_name_of
+from oa_configurator import database_config_name_of, physical_schema_of
 
 from omop_emb.model_registry.model_registry_orm import (
     ModelRegistry,
@@ -185,7 +185,7 @@ class RegistryManager:
                 return self._row_to_record(existing)
 
             claimed_by = self._storage_identifier_owner(session, storage_identifier)
-            if claimed_by is not None:
+            if claimed_by is not None and self._storage_table_exists(session, storage_identifier):
                 raise ModelRegistrationConflictError(
                     f"storage_identifier {storage_identifier!r} is already registered to "
                     f"vector store {claimed_by!r}, which resolves to this same schema. "
@@ -372,6 +372,17 @@ class RegistryManager:
             )
         )
 
+    def _storage_table_exists(self, session: Session, storage_identifier: str) -> bool:
+        """Does a table named *storage_identifier* exist in this store's own schema?
+
+        Two stores holding the same identifier only collide when they resolve
+        to one schema, which is exactly when the other store's table is
+        already present here.
+        """
+        return inspect(session.connection()).has_table(
+            storage_identifier, schema=physical_schema_of(self._embedding_engine)
+        )
+
     def _storage_identifier_owner(
         self, session: Session, storage_identifier: str
     ) -> Optional[str]:
@@ -379,9 +390,8 @@ class RegistryManager:
         *storage_identifier*, or None.
 
         ``storage_identifier`` is the physical table name and is derived from
-        the model name alone, so two stores that resolve to one schema would
-        otherwise both point at the same table while holding separate registry
-        rows.
+        the model name alone. Whether the two stores actually share a table
+        is decided by :meth:`_storage_table_exists`.
 
         Parameters
         ----------

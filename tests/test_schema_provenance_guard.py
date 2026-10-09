@@ -110,7 +110,9 @@ def test_primary_schema_guard_fires_on_genuine_primary_drift(pg_db, pg_engine):
         backend_a.register_model(
             model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, dimensions=EMBEDDING_DIM
         )
-
-        resolved_b = _resolved(pg_db, database_config_name="emb_guard", schema=schema_b)
-        with pytest.raises(SchemaDriftError):
-            _open_writer("pgvector", database=resolved_b)
+        try:
+            resolved_b = _resolved(pg_db, database_config_name="emb_guard", schema=schema_b)
+            with pytest.raises(SchemaDriftError):
+                _open_writer("pgvector", database=resolved_b)
+        finally:
+            backend_a.delete_model(model_name=MODEL_NAME)

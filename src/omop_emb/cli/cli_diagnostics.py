@@ -5,9 +5,10 @@ import logging
 import sqlalchemy as sa
 import typer
 from oa_configurator import Resolver
+from omop_alchemy.cdm.model.vocabulary import Concept
 
 from omop_emb.backends import open_vector_store_reader
-from omop_emb.config import OmopEmbConfig, resolve_omop_cdm_engine
+from omop_emb.config import OmopEmbConfig, open_cdm_sessions
 from omop_emb.utils.errors import MissingStorageTableError
 
 logger = logging.getLogger(__name__)
@@ -25,14 +26,13 @@ def health_check():
 
         # CDM connectivity is optional for the health check
         try:
-            omop_cdm_engine = resolve_omop_cdm_engine()
-            with omop_cdm_engine.connect() as conn:
-                conn.execute(sa.text("SELECT 1"))
-            typer.echo(f"CDM engine: {omop_cdm_engine.url} | connected.")
+            with open_cdm_sessions() as cdm_sessions, cdm_sessions() as session:
+                session.execute(sa.select(Concept.concept_id).limit(1))
+            typer.echo(f"CDM: {cfg.cdm_db} | concept table reachable.")
         except RuntimeError as exc:
-            typer.echo(f"CDM engine: not configured ({exc})")
+            typer.echo(f"CDM: not configured ({exc})")
         except Exception as exc:
-            typer.echo(f"CDM engine: connection failed. {exc}")
+            typer.echo(f"CDM: connection failed. {exc}")
 
         records = store.get_registered_models()
         if not records:

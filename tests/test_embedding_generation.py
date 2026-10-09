@@ -19,6 +19,7 @@ from oa_configurator.resolver import ResolvedModel, ResolvedProvider
 from sqlalchemy import insert
 
 from omop_alchemy.cdm.model.vocabulary import Concept
+from omop_alchemy.cross_database import cdm_sessionmaker
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.config import MetricType
 from omop_emb.interface import (
@@ -27,7 +28,7 @@ from omop_emb.interface import (
     EmbeddingWriterInterface,
 )
 
-from .conftest import sqlite_resolved_database
+from .conftest import sqlite_cdm_database
 
 OLLAMA_BASE = "http://localhost:11434"
 OLLAMA_MODEL = "nomic-embed-text:v1.5"
@@ -230,8 +231,9 @@ class TestEmbeddingWriterInterfaceEmbedTexts:
 
 
 def test_population_batches_include_missing_and_metadata_changed_concepts():
-    cdm_engine = sqlite_resolved_database().create_engine()
-    Concept.__table__.create(cdm_engine)
+    resolved = sqlite_cdm_database()
+    cdm_engine, vocab_engine = resolved.create_engines()
+    Concept.__table__.create(vocab_engine)
     base = {
         "concept_name": "Concept",
         "domain_id": "Condition",
@@ -243,7 +245,7 @@ def test_population_batches_include_missing_and_metadata_changed_concepts():
         "valid_end_date": date(2099, 12, 31),
         "invalid_reason": None,
     }
-    with cdm_engine.begin() as connection:
+    with vocab_engine.begin() as connection:
         connection.execute(
             insert(Concept),
             [dict(base, concept_id=concept_id) for concept_id in (1, 2, 3)],
@@ -263,11 +265,11 @@ def test_population_batches_include_missing_and_metadata_changed_concepts():
             backend=storage,
             metric_type=MetricType.COSINE,
             resolved_model=_make_resolved_model(),
+            cdm_session_factory=cdm_sessionmaker(resolved, primary=cdm_engine, vocab=vocab_engine),
         )
 
     batches = tuple(
         writer.get_concepts_requiring_embedding_batched(
-            cdm_engine,
             batch_size=2,
         )
     )

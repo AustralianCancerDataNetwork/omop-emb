@@ -9,6 +9,8 @@ import sqlalchemy as sa
 from oa_configurator import (
     CDMDatabaseConfig,
     ConnectionConfig,
+    GenericDatabaseConfig,
+    ResolvedCDMDatabase,
     Dialect,
     Resolver,
     ResolvedDatabase,
@@ -31,9 +33,20 @@ def sqlite_resolved_database(database_name: str = ":memory:") -> ResolvedDatabas
     involved."""
     cfg = StackConfig.for_session(
         connections={"db": ConnectionConfig(dialect=Dialect.SQLITE, database_name=database_name)},
-        databases={"default": CDMDatabaseConfig(connection="db")},
+        databases={"default": GenericDatabaseConfig(connection="db")},
     )
     return Resolver(cfg).resolve_database("default")
+
+
+def sqlite_cdm_database(database_name: str = ":memory:") -> ResolvedCDMDatabase:
+    """A SQLite CDM database entry, for test code reading concepts."""
+    cfg = StackConfig.for_session(
+        connections={"db": ConnectionConfig(dialect=Dialect.SQLITE, database_name=database_name)},
+        databases={"cdm": CDMDatabaseConfig(connection="db")},
+    )
+    resolved = Resolver(cfg).resolve_database("cdm")
+    assert isinstance(resolved, ResolvedCDMDatabase)
+    return resolved
 
 
 def sqlite_resolved_vector_store(database_name: str = ":memory:") -> ResolvedVectorStore:

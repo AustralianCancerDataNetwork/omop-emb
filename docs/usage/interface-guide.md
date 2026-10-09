@@ -53,9 +53,20 @@ writer = EmbeddingWriterInterface(
     backend=backend,
     metric_type=MetricType.COSINE,
     resolved_model=resolved_model,
-    omop_cdm_engine=cdm_engine,  # optional; used to enrich search results
+    cdm_session_factory=cdm_sessions,  # needed to read concepts; also enriches search results
 )
 ```
+
+`cdm_sessions` opens sessions on the OMOP CDM. Build it with `omop_alchemy.cross_database.cdm_sessionmaker`, which sends each table to the database hosting it, so concept reads reach the vocabulary even when it lives on its own server:
+
+```python
+from omop_alchemy.cross_database import cdm_sessionmaker
+
+primary, vocab = resolved_cdm.create_engines()
+cdm_sessions = cdm_sessionmaker(resolved_cdm, primary=primary, vocab=vocab)
+```
+
+Inside omop-emb's own CLI, `omop_emb.config.open_cdm_sessions()` does this for the configured `cdm_db`.
 
 `resolved_model` is an `oa_configurator.ResolvedModel` — provider, connection details, `embedding_dim`, and `document_prefix`/`query_prefix` all live on the `[models.*]` entry it was resolved from (see [Asymmetric Embeddings](asymmetric-embeddings.md)), not on `omop-emb`'s own config. The interface builds and owns the `ModelBackend` itself via `omop_llm.build_model_backend_from_resolved(resolved_model)`; there is no separate client object to construct first.
 
@@ -76,9 +87,7 @@ writer.register_model(index_config=FlatIndexConfig())  # explicit equivalent
 ```python
 # Fetch candidate concepts from the CDM, then pass the returned rows back as
 # concept_meta so filter columns can be stored alongside the embeddings.
-missing = writer.get_concepts_without_embedding(
-    omop_cdm_engine=cdm_engine,
-)
+missing = writer.get_concepts_without_embedding()
 
 writer.embed_and_upsert_concepts(
     concept_ids=tuple(missing.keys()),
@@ -125,7 +134,7 @@ reader = EmbeddingReaderInterface(
     backend=store,
     metric_type=MetricType.COSINE,
     provider_type="ollama",
-    omop_cdm_engine=cdm_engine,   # optional; enriches results with concept_name
+    cdm_session_factory=cdm_sessions,   # optional; enriches results with concept_name
 )
 ```
 
@@ -251,7 +260,6 @@ concept_filter = CDMConceptFilter(
 )
 
 n_missing = writer.count_concepts_without_embedding(
-    omop_cdm_engine=cdm_engine,
     concept_filter=concept_filter,
 )
 ```
@@ -380,5 +388,5 @@ for m in models:
 2. **`EmbeddingWriterInterface` for write flows**, `EmbeddingReaderInterface` for query-only services.
 3. **Use `writer.canonical_model_name`** when constructing a matching reader: it is guaranteed to be canonical.
 4. **Always register with `FlatIndexConfig`** first. Run `rebuild_index` or `omop-emb maintenance rebuild-index` after ingestion to build HNSW.
-5. **CDM enrichment is optional**: omit `omop_cdm_engine` when `concept_name` is not needed to avoid the CDM round-trip.
+5. **The CDM session factory is given once, on the constructor**: the methods that read concepts use it and raise without it. A reader that never needs `concept_name` can omit it to avoid the CDM round-trip.
 6. **FAISS is a read-acceleration sidecar, never the source of truth**: build it directly from the backend with `omop-emb maintenance build-faiss-cache` and supply `faiss_cache_dir` to `EmbeddingReaderInterface` for faster approximate search.

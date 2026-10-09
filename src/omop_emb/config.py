@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from enum import StrEnum
-from typing import Annotated, ClassVar, Dict, Tuple
+from typing import TYPE_CHECKING, Annotated, ClassVar, Dict, Generator, Tuple
 
 from pydantic import Field
-from sqlalchemy import Engine
 from oa_configurator import (
     CDMDatabaseConfig,
     GenericDatabaseConfig,
     ModelConfig,
     PackageConfigBase,
     RefTo,
-    Resolver,
+    ResolvedCDMDatabase,
     ResolvedVectorStore,
+    Resolver,
     VectorStoreConfig,
 )
+
+if TYPE_CHECKING:
+    from omop_emb.utils.cdm import CDMSessionFactory
 
 MODEL_REGISTRY_SCHEMA: str = "omop_emb_registry"
 REGISTRY_SCHEMA_KEY: str = "registry"
@@ -68,9 +72,31 @@ class OmopEmbConfig(PackageConfigBase):
     )
 
 
-def resolve_omop_cdm_engine() -> Engine:
-    """Resolve CDM engine via oa-configurator, used read-only."""
-    return OmopEmbConfig.get_engine(OmopEmbConfig.get_config().cdm_db)
+@contextmanager
+def open_cdm_sessions() -> Generator[CDMSessionFactory, None, None]:
+    """Session factory on the CDM database named by ``OmopEmbConfig.cdm_db``.
+
+    Sessions send each table to the engine hosting it, so concept reads reach
+    the vocabulary wherever it lives. Both engines are disposed on exit.
+
+    Raises
+    ------
+    TypeError
+        If ``cdm_db`` does not name a CDM database entry.
+    """
+    from omop_alchemy.cross_database import cdm_sessionmaker
+
+    resolved = Resolver.from_active_config().resolve_database(OmopEmbConfig.get_config().cdm_db)
+    if not isinstance(resolved, ResolvedCDMDatabase):
+        raise TypeError(
+            f"OmopEmbConfig.cdm_db must name a CDM database, got {type(resolved).__name__}."
+        )
+    primary, vocab = resolved.create_engines()
+    try:
+        yield cdm_sessionmaker(resolved, primary=primary, vocab=vocab)
+    finally:
+        for engine in {primary, vocab}:
+            engine.dispose()
 
 
 def resolve_omop_vector_store() -> ResolvedVectorStore:

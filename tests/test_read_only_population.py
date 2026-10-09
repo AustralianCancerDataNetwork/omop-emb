@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import event, insert, inspect, text
 
 from omop_alchemy.cdm.model.vocabulary import Concept
+from omop_alchemy.cross_database import cdm_sessionmaker
 from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
@@ -13,7 +14,7 @@ from omop_emb.model_registry import ModelRegistry
 from omop_emb.population import PopulationScope, plan_population
 from omop_emb.utils.errors import MissingStorageTableError
 
-from .conftest import sqlite_resolved_database, sqlite_resolved_vector_store
+from .conftest import sqlite_cdm_database, sqlite_resolved_vector_store
 
 
 def _concept(concept_id: int, **overrides):
@@ -109,7 +110,9 @@ def test_dropped_storage_table_raises_instead_of_being_recreated(tmp_path) -> No
 
 
 def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
-    engine = sqlite_resolved_database().create_engine()
+    resolved = sqlite_cdm_database()
+    engine, _ = resolved.create_engines()
+    cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
     Concept.__table__.create(engine)
     with engine.begin() as connection:
         connection.execute(
@@ -130,7 +133,7 @@ def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
             )
 
     plan = plan_population(
-        engine,
+        cdm_sessions,
         FakeStore(),
         model_name="test-model",
         scope=PopulationScope(standard_only=True),
@@ -150,7 +153,9 @@ def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:
     is a classification concept (``'C'``, not standard) despite its blank
     invalid_reason normalizing to valid; concept 3 has no standard flag at
     all; concept 4 is standard but marked deleted."""
-    engine = sqlite_resolved_database().create_engine()
+    resolved = sqlite_cdm_database()
+    engine, _ = resolved.create_engines()
+    cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
     Concept.__table__.create(engine)
     with engine.begin() as connection:
         connection.execute(
@@ -171,7 +176,7 @@ def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:
             return iter(())
 
     plan = plan_population(
-        engine,
+        cdm_sessions,
         EmptyStore(),
         model_name="test-model",
         scope=PopulationScope(standard_only=True, valid_only=True),
@@ -183,7 +188,9 @@ def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:
 
 
 def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:
-    engine = sqlite_resolved_database().create_engine()
+    resolved = sqlite_cdm_database()
+    engine, _ = resolved.create_engines()
+    cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
     Concept.__table__.create(engine)
     with engine.begin() as connection:
         connection.execute(
@@ -204,7 +211,7 @@ def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:
             )
 
     plan = plan_population(
-        engine,
+        cdm_sessions,
         Store(),
         model_name="test-model",
         scope=PopulationScope(vocabularies=("SNOMED",)),
@@ -216,7 +223,9 @@ def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:
 
 
 def test_metadata_change_is_pending() -> None:
-    engine = sqlite_resolved_database().create_engine()
+    resolved = sqlite_cdm_database()
+    engine, _ = resolved.create_engines()
+    cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
     Concept.__table__.create(engine)
     with engine.begin() as connection:
         connection.execute(insert(Concept), [_concept(1)])
@@ -227,7 +236,7 @@ def test_metadata_change_is_pending() -> None:
         def iter_stored_embeddings(self, _model_name: str, *, batch_size: int = 10_000):
             return (ConceptEmbeddingRecord(1, "Measurement", "SNOMED", True, True),)
 
-    plan = plan_population(engine, Store(), model_name="test-model")
+    plan = plan_population(cdm_sessions, Store(), model_name="test-model")
 
     assert plan.metadata_changed_ids == frozenset({1})
     assert plan.pending_ids == frozenset({1})

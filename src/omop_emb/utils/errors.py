@@ -21,6 +21,15 @@ class MisplacedRegistryError(EmbeddingBackendError):
     """A model registry table exists outside the registry schema, where it would be ignored."""
 
 
+class LegacyRegistryError(EmbeddingBackendError):
+    """A model registry predating per-store row scoping was found.
+
+    Raised on both reader and writer paths instead of migrating in place:
+    upgrading the layout is the standalone migration script's job, so no
+    reader ever runs DDL and concurrent first-opens cannot race each other.
+    """
+
+
 class ModelRegistrationConflictError(Exception):
     def __init__(self, message: str, conflict_field: str):
         super().__init__(message)

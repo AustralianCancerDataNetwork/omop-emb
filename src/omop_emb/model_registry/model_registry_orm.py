@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import warnings
 from collections.abc import Callable, Sequence
 from typing import Any, Optional
 
 from oa_configurator import (
-    Dialect,
     ResolvedDatabase,
     SchemaClaim,
-    database_config_name_of,
     find_table_in_other_schemas,
     physical_schema_of,
     qualified,
@@ -24,7 +21,6 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
     inspect,
-    text,
 )
 from sqlalchemy.orm import DeclarativeBase, mapped_column, validates, Mapped
 
@@ -37,7 +33,7 @@ from omop_emb.config import (
     MetricType,
 )
 from omop_emb.backends.index_config import IndexConfig
-from omop_emb.utils.errors import MisplacedRegistryError
+from omop_emb.utils.errors import MisplacedRegistryError, LegacyRegistryError
 
 
 class ModelRegistryBase(DeclarativeBase):
@@ -256,9 +252,9 @@ def registry_reader_engine(
 ) -> Engine:
     """Build a read-only engine mapped to the registry schema.
 
-    Registers nothing and creates nothing. Raises if a registry table
-    exists in a different schema than expected (see
-    ``_reject_misplaced_registry``); otherwise a missing table is left for
+    Registers nothing, creates nothing, and migrates nothing. Raises on a
+    pre-2.0 or misplaced registry (see ``_reject_incompatible_registry``);
+    otherwise a missing table is left for
     ``RegistryManager.registry_available`` to report.
 
     Parameters
@@ -276,10 +272,10 @@ def registry_reader_engine(
         If the registry schema has no registry table but another schema does.
     """
     engine = _registry_engine(database, extensions=extensions, register_claims=False)
-    registry_schema = resolve_registry_physical_schema(engine)
-    if registry_schema is not None:
-        with engine.connect() as connection:
-            _reject_misplaced_registry(connection, registry_schema=registry_schema)
+    with engine.connect() as connection:
+        _reject_incompatible_registry(
+            connection, registry_schema=resolve_registry_physical_schema(connection)
+        )
     return engine
 
 
@@ -325,147 +321,104 @@ def ensure_registry_table(engine: Engine) -> None:
     """
     with engine.begin() as connection:
         registry_schema = resolve_registry_physical_schema(connection)
-        if registry_schema is not None:
-            _reject_misplaced_registry(connection, registry_schema=registry_schema)
+        _reject_incompatible_registry(connection, registry_schema=registry_schema)
         ModelRegistryBase.metadata.create_all(connection, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
-    _migrate_legacy_single_tenant_registry_rows(engine)
-    _migrate_legacy_provider_type_column(engine)
 
 
-def _reject_misplaced_registry(connection: Connection, *, registry_schema: str) -> None:
-    """Refuse to create an empty registry while a registry table exists in another schema.
+_LEGACY_SIGNATURE_COLUMNS = frozenset({"model_name", "storage_identifier", "dimensions"})
+
+
+def _is_legacy_layout(columns: set[str]) -> bool:
+    """True if *columns* describe a pre-2.0 registry.
+
+    Requires the full legacy signature, not merely a missing
+    ``database_config_name``, so an unrelated or partially-created table that
+    happens to be named ``model_registry`` is not reported as a legacy
+    registry needing migration.
+
+    Parameters
+    ----------
+    columns : set[str]
+        Column names of the candidate table.
+
+    Returns
+    -------
+    bool
+    """
+    return "database_config_name" not in columns and _LEGACY_SIGNATURE_COLUMNS <= columns
+
+
+def _reject_incompatible_registry(connection: Connection, *, registry_schema: str | None) -> None:
+    """Refuse to operate against a registry this version cannot read correctly.
+
+    Read-only: detects and reports, never migrates. Upgrading a pre-2.0
+    layout is ``migrations/to_v2.py``'s job, so no reader path runs DDL and
+    two concurrent first-opens cannot race one another.
+
+    Three cases, in order:
+
+    - the registry in *registry_schema* predates per-store row scoping (no
+      ``database_config_name`` column), so every lookup would fail on the
+      missing column
+    - a legacy-signature registry sits in another schema. Checked even when
+      the current registry already exists here, because that is precisely the
+      staggered-upgrade case: another store created the shared registry
+      while this store's rows are still in their old location, where they
+      would read back as an empty model catalogue rather than an error
+    - no registry here, but a current-layout one in another schema, which is
+      simply misplaced and can be moved
 
     Parameters
     ----------
     connection : sqlalchemy.Connection
-        Connection the registry is created on.
-    registry_schema : str
-        Physical schema the registry belongs in.
+        Connection to the registry's database.
+    registry_schema : str or None
+        Physical schema the registry belongs in. None for a dialect with no
+        multi-schema concept, where the default schema is the only location.
 
     Raises
     ------
+    LegacyRegistryError
+        If a pre-2.0 registry layout is found, here or elsewhere.
     MisplacedRegistryError
-        If *registry_schema* has no registry table but another schema does.
+        If a current-layout registry exists only in another schema.
     """
+    inspector = inspect(connection)
     table_name = ModelRegistry.__tablename__
-    if inspect(connection).has_table(table_name, schema=registry_schema):
-        return
-    found = find_table_in_other_schemas(connection, table_name, physical_schema=registry_schema)
-    if not found:
-        return
-    quoted_registry_schema = connection.dialect.identifier_preparer.quote_schema(registry_schema)
-    raise MisplacedRegistryError(
-        f"Found the model registry in schema(s) {list(found)}, but omop-emb keeps it in "
-        f"{registry_schema!r}. Move it before continuing:\n"
-        f"  CREATE SCHEMA IF NOT EXISTS {quoted_registry_schema};\n"
-        f"  ALTER TABLE {qualified(connection, table_name, physical_schema=found[0])} "
-        f"SET SCHEMA {quoted_registry_schema};"
+
+    def columns_of(schema: str | None) -> set[str]:
+        return {column["name"] for column in inspector.get_columns(table_name, schema=schema)}
+
+    present_here = inspector.has_table(table_name, schema=registry_schema)
+    if present_here and _is_legacy_layout(columns_of(registry_schema)):
+        raise LegacyRegistryError(
+            f"The model registry in schema {registry_schema!r} predates per-store row "
+            "scoping (no database_config_name column), so this version cannot read it. "
+            "Run migrations/to_v2.py to upgrade it, which preserves existing rows and "
+            "their storage identifiers."
+        )
+
+    # A dialect without schemas has only the one location, already checked above.
+    elsewhere = (
+        find_table_in_other_schemas(connection, table_name, physical_schema=registry_schema)
+        if registry_schema is not None
+        else ()
     )
-
-
-def _migrate_legacy_single_tenant_registry_rows(engine: Engine) -> None:
-    """Backfill database_config_name on a registry that predates per-store
-    row scoping.
-
-    Every existing row is backfilled with *this* engine's own
-    database_config_name, since only one vector-store entry could ever
-    have written them before this column existed.
-
-    Postgres-only: SQLite registries are per-file already, and the
-    multi-statement ALTER TABLE sequence here isn't expressible through
-    SQLite's ALTER TABLE subset. Idempotent, so normal backend construction
-    can run it unconditionally.
-    """
-    if engine.dialect.name != Dialect.POSTGRESQL:
-        return
-    registry_schema = resolve_registry_physical_schema(engine)
-    columns = {
-        column["name"]
-        for column in inspect(engine).get_columns(ModelRegistry.__tablename__, schema=registry_schema)
-    }
-    if "database_config_name" in columns:
-        return
-    # Some other partial/non-standard table, not a registry predating this column.
-    if "model_name" not in columns or "storage_identifier" not in columns:
-        return
-    database_config_name = database_config_name_of(engine)
-    if database_config_name is None:
-        return
-    table = qualified(engine, ModelRegistry.__tablename__, physical_schema=registry_schema)
-    with engine.begin() as connection:
-        connection.execute(text(f"ALTER TABLE {table} ADD COLUMN database_config_name VARCHAR"))
-        connection.execute(
-            text(f"UPDATE {table} SET database_config_name = :name WHERE database_config_name IS NULL"),
-            {"name": database_config_name},
-        )
-        connection.execute(text(f"ALTER TABLE {table} ALTER COLUMN database_config_name SET NOT NULL"))
-        connection.execute(text(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS model_registry_pkey"))
-        connection.execute(
-            text(
-                f"ALTER TABLE {table} ADD CONSTRAINT model_registry_pkey "
-                "PRIMARY KEY (database_config_name, model_name)"
+    for schema in elsewhere:
+        if _is_legacy_layout(columns_of(schema)):
+            raise LegacyRegistryError(
+                f"Found a pre-2.0 model registry in schema {schema!r} while the current "
+                f"registry lives in {registry_schema!r}. This store's models are still in "
+                "the old location and would read back as an empty catalogue. Run "
+                "migrations/to_v2.py, which migrates every store in one pass."
             )
-        )
-        connection.execute(
-            text(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS model_registry_storage_identifier_key")
-        )
-        connection.execute(
-            text(
-                f"ALTER TABLE {table} ADD CONSTRAINT uq_model_registry_storage_identifier "
-                "UNIQUE (database_config_name, storage_identifier)"
-            )
-        )
 
-
-def _migrate_legacy_provider_type_column(engine: Engine) -> None:
-    """Upgrade the pre-omop-llm provider column without rebuilding embeddings.
-
-    Older registries used ``Enum(ProviderType, native_enum=False)``, which
-    stored enum member names such as ``OLLAMA`` in a ``VARCHAR(6)`` column.
-    SQLite does not enforce that length, but PostgreSQL does, preventing newer
-    provider keys such as ``anthropic`` from being inserted. Widen the
-    PostgreSQL column and normalize legacy names in place on both backends.
-
-    Idempotent, so normal backend construction can run it unconditionally
-    for both existing and newly-created registries. Not cached: a safe
-    cache key would need bindable's genuine physical identity, which isn't
-    derivable here without reaching into oa-configurator's private
-    identity helpers.
-    """
-    registry_schema = resolve_registry_physical_schema(engine)
-    columns = inspect(engine).get_columns(ModelRegistry.__tablename__, schema=registry_schema)
-    provider_column = next(
-        (column for column in columns if column["name"] == "provider_type"),
-        None,
-    )
-    if provider_column is None:
-        return
-
-    legacy_length = getattr(provider_column["type"], "length", None)
-    with engine.begin() as connection:
-        if engine.dialect.name == Dialect.POSTGRESQL and legacy_length is not None:
-            warnings.warn(
-                "Widening a legacy fixed-length provider_type column. This "
-                "migration path is deprecated and will be removed once no "
-                "pre-omop-llm registry remains.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            connection.execute(
-                text(
-                    f"ALTER TABLE {qualified(connection, ModelRegistry.__tablename__, physical_schema=registry_schema)} "
-                    "ALTER COLUMN provider_type TYPE VARCHAR "
-                    "USING provider_type::text"
-                )
-            )
-        # Raw text(), not update(): update() against the full mapped table
-        # would pull in updated_at's onupdate=func.now() default, which the
-        # legacy partial table (provider_type only) doesn't have.
-        connection.execute(
-            text(
-                f"UPDATE {qualified(connection, ModelRegistry.__tablename__, physical_schema=registry_schema)} "
-                "SET provider_type = lower(provider_type) "
-                "WHERE provider_type IS NOT NULL "
-                "AND provider_type <> lower(provider_type)"
-            )
+    if not present_here and elsewhere:
+        quoted_registry_schema = connection.dialect.identifier_preparer.quote_schema(registry_schema)
+        raise MisplacedRegistryError(
+            f"Found the model registry in schema(s) {list(elsewhere)}, but omop-emb keeps it in "
+            f"{registry_schema!r}. Move it before continuing:\n"
+            f"  CREATE SCHEMA IF NOT EXISTS {quoted_registry_schema};\n"
+            f"  ALTER TABLE {qualified(connection, table_name, physical_schema=elsewhere[0])} "
+            f"SET SCHEMA {quoted_registry_schema};"
         )

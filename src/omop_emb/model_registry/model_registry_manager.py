@@ -184,6 +184,18 @@ class RegistryManager:
                     )
                 return self._row_to_record(existing)
 
+            claimed_by = self._storage_identifier_owner(session, storage_identifier)
+            if claimed_by is not None:
+                raise ModelRegistrationConflictError(
+                    f"storage_identifier {storage_identifier!r} is already registered to "
+                    f"vector store {claimed_by!r}, which resolves to this same schema. "
+                    "Registering it here would make both stores share one physical table, "
+                    "so deleting the model in either would drop the other's embeddings. "
+                    "Give this store its own schema, or register the model under a "
+                    "different name.",
+                    conflict_field="storage_identifier",
+                )
+
         new_row = ModelRegistry(
             database_config_name=self._database_config_name,
             model_name=model_name,
@@ -357,6 +369,36 @@ class RegistryManager:
             select(ModelRegistry).where(
                 ModelRegistry.database_config_name == self._database_config_name,
                 ModelRegistry.model_name == model_name,
+            )
+        )
+
+    def _storage_identifier_owner(
+        self, session: Session, storage_identifier: str
+    ) -> Optional[str]:
+        """Name of another vector store already registered against
+        *storage_identifier*, or None.
+
+        ``storage_identifier`` is the physical table name and is derived from
+        the model name alone, so two stores that resolve to one schema would
+        otherwise both point at the same table while holding separate registry
+        rows.
+
+        Parameters
+        ----------
+        session : sqlalchemy.orm.Session
+            Session on the registry's own database.
+        storage_identifier : str
+            Physical table name about to be claimed.
+
+        Returns
+        -------
+        str or None
+            The other store's ``database_config_name``.
+        """
+        return session.scalar(
+            select(ModelRegistry.database_config_name).where(
+                ModelRegistry.storage_identifier == storage_identifier,
+                ModelRegistry.database_config_name != self._database_config_name,
             )
         )
 

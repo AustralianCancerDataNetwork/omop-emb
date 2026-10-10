@@ -77,7 +77,7 @@ class NearestConceptMatch:
     columns (see :class:`~omop_emb.backends.embedding_table.ConceptEmbeddingMixin`),
     so they are available regardless of whether a CDM engine is configured.
     ``concept_name`` is the only field enriched by the interface layer from
-    the OMOP CDM, and only when an ``omop_cdm_engine`` is provided.
+    the OMOP CDM, and only when a ``cdm_session_factory`` is provided.
 
     Attributes
     ----------

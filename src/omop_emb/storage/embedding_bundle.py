@@ -2,20 +2,14 @@
 
 A bundle is a single HDF5 file holding the raw (never normalized)
 embeddings for one model, plus enough metadata to re-register and
-re-import them into any :class:`EmbeddingBackend`. ``metric_type`` is not
-a caller-facing export parameter: the embeddings table has no
-metric-specific columns, so it's derived internally from the registry
-purely to label the bundle.
+re-import them into any :class:`EmbeddingBackend`. It carries no metric:
+stored vectors are metric-independent, and an HNSW index's metric is part
+of ``index_config``.
 
-This exists purely for moving raw embeddings between backends or systems
-(backup/restore, migration): the *bundle file* has no relationship to
-FAISS. :class:`~omop_emb.storage.faiss.faiss_cache.FAISSCache` builds
-directly from a live :class:`EmbeddingBackend` (see
-:func:`stream_embedding_batches`, shared by both); it never reads or
-writes a bundle. It does, however, share :class:`ExportMetadata`: the
-same small dataclass backs both the bundle's HDF5 attributes and the
-FAISS cache's per-index JSON sidecar, since both are "facts about an
-exported/built artifact" with the same shape.
+Bundles move raw embeddings between backends or systems (backup/restore,
+migration) and are unrelated to FAISS.
+:class:`~omop_emb.storage.faiss.faiss_cache.FAISSCache` builds directly
+from a store via :func:`stream_embedding_batches`.
 
 Disk layout (single ``.h5`` file)
 ----------------------------------
@@ -31,8 +25,12 @@ instead of materialising the full array in memory)::
 
 Root attributes::
 
-    schema_version, omop_emb_version, model_name, dimensions, metric_type,
+    schema_version, omop_emb_version, model_name, dimensions,
     provider_type, index_config, row_count, exported_at
+
+Schema version 1 additionally stored ``metric_type``: the HNSW metric, or a
+``cosine`` placeholder for FLAT. Reading a version 1 bundle checks it
+against ``index_config`` and then discards it.
 """
 
 from __future__ import annotations
@@ -50,14 +48,15 @@ import h5py
 import numpy as np
 from tqdm import tqdm
 
-from omop_emb.backends.base_backend import EmbeddingBackend
+from omop_emb.backends.base_backend import EmbeddingBackend, EmbeddingStoreReader
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
-from omop_emb.backends.index_config import IndexConfig, index_config_from_index_type
+from omop_emb.backends.index_config import IndexConfig, index_config_from_dict
 from omop_emb.config import MetricType
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = (1, 2)
 
 CONCEPT_IDS = "concept_ids"
 EMBEDDINGS = "embeddings"
@@ -79,7 +78,7 @@ ATTR_SCHEMA_VERSION = "schema_version"
 ATTR_OMOP_EMB_VERSION = "omop_emb_version"
 ATTR_MODEL_NAME = "model_name"
 ATTR_DIMENSIONS = "dimensions"
-ATTR_METRIC_TYPE = "metric_type"
+ATTR_V1_METRIC_TYPE = "metric_type"
 ATTR_PROVIDER_TYPE = "provider_type"
 ATTR_INDEX_CONFIG = "index_config"
 ATTR_ROW_COUNT = "row_count"
@@ -90,7 +89,6 @@ REQUIRED_ATTRS = (
     ATTR_OMOP_EMB_VERSION,
     ATTR_MODEL_NAME,
     ATTR_DIMENSIONS,
-    ATTR_METRIC_TYPE,
     ATTR_PROVIDER_TYPE,
     ATTR_INDEX_CONFIG,
     ATTR_ROW_COUNT,
@@ -100,6 +98,10 @@ REQUIRED_ATTRS = (
 
 class BundleCorruptionError(ValueError):
     """Raised when a bundle file is missing required fields or has inconsistent shapes."""
+
+
+class UnsupportedBundleVersionError(BundleCorruptionError):
+    """Raised when a bundle's schema_version is not one this omop-emb reads."""
 
 def get_required_attribute(attrs: h5py.AttributeManager, attr_name: str) -> str:
     if attr_name not in REQUIRED_ATTRS:
@@ -126,80 +128,80 @@ def get_required_dataset(f: h5py.File, ds_name: str) -> h5py.Dataset:
 
 
 @dataclass(frozen=True)
-class ExportMetadata:
-    """Facts about an exported/built artifact: a bundle or a FAISS cache.
+class BundleMetadata:
+    """A bundle's root attributes.
 
-    Deliberately not :class:`EmbeddingModelRecord`: there is no live registry
-    row to read when this is reconstructed from a bare file (no
-    ``storage_identifier``/``created_at`` to draw on), so fabricating those
-    would mean inventing placeholder values. Backs two different on-disk
-    formats via two independent (de)serializers: :meth:`from_h5_attrs`
-    (the bundle's HDF5 attributes) and :meth:`to_json`/:meth:`from_json`
-    (the FAISS cache's per-index JSON sidecar). Each direction populates
-    every field even though it only reads back some of them: e.g. the
-    bundle path never reads ``index_config`` back, the FAISS path never
-    reads ``provider_type`` back: both are free to obtain (already on
-    the ``EmbeddingModelRecord`` fetched at write time), so it isn't worth
-    two separate types over.
+    Attributes
+    ----------
+    model_name : str
+    dimensions : int
+    provider_type : str
+    index_config : IndexConfig
+        The source store's index, rebuilt by ``import_bundle(rebuild_index=True)``.
+    row_count : int
+    exported_at : str
+        ISO timestamp of the export.
     """
 
     model_name: str
     dimensions: int
-    metric_type: MetricType
     provider_type: str
     index_config: IndexConfig
     row_count: int
     exported_at: str
 
     @classmethod
-    def from_h5_attrs(cls, attrs: "h5py.AttributeManager") -> "ExportMetadata":
+    def from_h5_attrs(cls, attrs: "h5py.AttributeManager") -> "BundleMetadata":
+        """Read the attributes of a bundle of any supported schema version.
+
+        Raises
+        ------
+        BundleCorruptionError
+            If an attribute is missing, or a version 1 HNSW bundle's metric
+            disagrees with its index_config.
+        UnsupportedBundleVersionError
+            If the schema version is not supported.
+        """
+        version = _schema_version(attrs)
+        index_config_dict = json.loads(get_required_attribute(attrs, ATTR_INDEX_CONFIG))
+        index_config = index_config_from_dict(index_config_dict.get("index_type"), index_config_dict)
+        if version == 1:
+            _check_v1_metric(attrs, index_config)
         return cls(
             model_name=get_required_attribute(attrs, ATTR_MODEL_NAME),
             dimensions=int(get_required_attribute(attrs, ATTR_DIMENSIONS)),
-            metric_type=MetricType(get_required_attribute(attrs, ATTR_METRIC_TYPE)),
             provider_type=str(get_required_attribute(attrs, ATTR_PROVIDER_TYPE)),
-            index_config=index_config_from_index_type(
-                **json.loads(get_required_attribute(attrs, ATTR_INDEX_CONFIG))
-            ),
+            index_config=index_config,
             row_count=int(get_required_attribute(attrs, ATTR_ROW_COUNT)),
             exported_at=str(get_required_attribute(attrs, ATTR_EXPORTED_AT)),
         )
 
-    def to_json(self) -> str:
-        return json.dumps(
-            {
-                "model_name": self.model_name,
-                "dimensions": self.dimensions,
-                "metric_type": self.metric_type.value,
-                "provider_type": self.provider_type,
-                "index_config": self.index_config.to_dict(),
-                "row_count": self.row_count,
-                "exported_at": self.exported_at,
-            },
-            indent=2,
+
+def _schema_version(attrs: "h5py.AttributeManager") -> int:
+    """Return the bundle's schema version, raising if it is missing or unsupported."""
+    version = int(get_required_attribute(attrs, ATTR_SCHEMA_VERSION))
+    if version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise UnsupportedBundleVersionError(
+            f"Bundle schema version {version} is not supported; this omop-emb reads "
+            f"versions {list(SUPPORTED_SCHEMA_VERSIONS)}."
         )
+    return version
 
-    @classmethod
-    def from_json(cls, text: str) -> "ExportMetadata":
-        """Deserialise from a per-index ``.json`` sidecar string.
 
-        Raises
-        ------
-        ValueError
-            If the JSON is malformed or contains an unknown enum value.
-        """
-        d = json.loads(text)
-        if "index_config" not in d:
-            raise ValueError("Missing 'index_config' field in cache metadata JSON.")
+def _check_v1_metric(attrs: "h5py.AttributeManager", index_config: IndexConfig) -> None:
+    """Check a version 1 bundle's metric_type against its index_config.
 
-        return cls(
-            model_name=d.get("model_name", ""),
-            dimensions=int(d.get("dimensions", 0)),
-            metric_type=MetricType(d["metric_type"]),
-            provider_type=str(d["provider_type"]),
-            index_config=index_config_from_index_type(**d["index_config"]),
-            row_count=int(d.get("row_count", -1)),
-            exported_at=d.get("exported_at", ""),
+    Version 1 wrote the HNSW metric, or ``cosine`` as a placeholder for FLAT.
+    """
+    if ATTR_V1_METRIC_TYPE not in attrs:
+        raise BundleCorruptionError(
+            f"Version 1 bundle is missing required attribute '{ATTR_V1_METRIC_TYPE}'."
+        )
+    metric_type = MetricType(str(attrs[ATTR_V1_METRIC_TYPE]))
+    if index_config.metric_type is not None and metric_type != index_config.metric_type:
+        raise BundleCorruptionError(
+            f"Version 1 bundle has metric_type '{metric_type.value}' but its index_config "
+            f"is built for '{index_config.metric_type.value}'."
         )
 
 
@@ -220,65 +222,43 @@ class EmbeddingBatch:
 
 
 def stream_embedding_batches(
-    backend: EmbeddingBackend,
+    backend: EmbeddingStoreReader,
     model_name: str,
-    metric_type: MetricType,
     concept_ids: Sequence[int],
     batch_size: int,
 ) -> Iterator[EmbeddingBatch]:
-    """Stream every row for *concept_ids* out of *backend* in bounded-memory batches.
+    """Stream every row for concept_ids out of backend in bounded-memory batches.
 
-    Shared by :func:`export_bundle` (writes batches to an HDF5 bundle) and
-    :meth:`~omop_emb.storage.faiss.faiss_cache.FAISSCache.build_from_backend`
-    (feeds batches straight into a FAISS index): the only two places that
-    need every embedding for a model out of the backend without loading it
-    all into memory at once.
+    Shared by :func:`export_bundle` and
+    :meth:`~omop_emb.storage.faiss.faiss_cache.FAISSCache.build_from_backend`.
     """
     for id_batch in batched(concept_ids, batch_size):
         id_batch_list = list(id_batch)
         emb_map = backend.get_embeddings_by_concept_ids(
             model_name=model_name,
-            metric_type=metric_type,
             concept_ids=id_batch_list,
         )
-        filter_meta = backend.get_concept_filter_metadata(
+        records = backend.get_concept_filter_metadata(
             model_name=model_name,
-            metric_type=metric_type,
             concept_ids=id_batch_list,
         )
-
-        batch_cids = []
-        batch_vecs = []
-        batch_domains = []
-        batch_vocabs = []
-        batch_standard = []
-        batch_valid = []
-        for cid in id_batch_list:
-            if cid not in emb_map:
-                continue
-            batch_cids.append(cid)
-            batch_vecs.append(emb_map[cid])
-            m = filter_meta.get(cid, {})
-            batch_domains.append(str(m.get("domain_id", "")))
-            batch_vocabs.append(str(m.get("vocabulary_id", "")))
-            batch_standard.append(bool(m.get("is_standard", False)))
-            batch_valid.append(bool(m.get("is_valid", True)))
-
-        if not batch_cids:
+        batch_records = [records[cid] for cid in id_batch_list if cid in emb_map]
+        if not batch_records:
             continue
 
         yield EmbeddingBatch(
-            concept_ids=np.asarray(batch_cids, dtype=np.int64),
-            embeddings=np.asarray(batch_vecs, dtype=np.float32),
-            domain_ids=batch_domains,
-            vocabulary_ids=batch_vocabs,
-            is_standard=batch_standard,
-            is_valid=batch_valid,
+            concept_ids=np.asarray([r.concept_id for r in batch_records], dtype=np.int64),
+            embeddings=np.asarray([emb_map[r.concept_id] for r in batch_records], dtype=np.float32),
+            domain_ids=[r.domain_id for r in batch_records],
+            vocabulary_ids=[r.vocabulary_id for r in batch_records],
+            is_standard=[r.is_standard for r in batch_records],
+            is_valid=[r.is_valid for r in batch_records],
         )
 
 
 def validate_bundle(f: "h5py.File") -> None:
     """Raise :class:`BundleCorruptionError` if *f* doesn't match the bundle schema."""
+    _schema_version(f.attrs)
     missing_attrs = [a for a in REQUIRED_ATTRS if a not in f.attrs]
     missing_datasets = [d for d in REQUIRED_DATASETS if d not in f]
     if missing_attrs or missing_datasets:
@@ -307,24 +287,16 @@ def validate_bundle(f: "h5py.File") -> None:
 
 
 def export_bundle(
-    backend: EmbeddingBackend,
+    backend: EmbeddingStoreReader,
     model_name: str,
     output_dir: "Path | str",
     batch_size: int = 100_000,
-) -> "tuple[ExportMetadata, Path]":
+) -> "tuple[BundleMetadata, Path]":
     """Stream every embedding for *model_name* into one HDF5 bundle.
 
     Raw, never-normalized vectors are written directly into a chunked,
     disk-backed dataset batch by batch, so peak memory stays close to one
     batch's worth regardless of how many rows are exported.
-
-    There is no ``metric_type`` parameter: the embeddings table has no
-    metric-specific columns (metric only ever selects a distance operator
-    at *query* time, which this function never does), so it isn't a
-    caller-facing concept here. Internally, whatever the registry already
-    locks the model to (or COSINE, if the model is FLAT/unconstrained) is
-    used purely to satisfy the existing backend method signatures and to
-    label the bundle's own metadata.
 
     The output filename is derived from the model's
     :attr:`EmbeddingModelRecord.storage_identifier` (already unique per
@@ -332,7 +304,7 @@ def export_bundle(
 
     Returns
     -------
-    tuple[ExportMetadata, Path]
+    tuple[BundleMetadata, Path]
         The written bundle's metadata and the path it was written to.
 
     Raises
@@ -347,17 +319,11 @@ def export_bundle(
     if record is None:
         raise ValueError(f"Model '{model_name}' is not registered in the backend.")
 
-    metric_type = record.metric_type or MetricType.COSINE
     h5_path = output_dir / f"{record.storage_identifier}.h5"
 
-    all_ids = sorted(
-        backend.get_all_stored_concept_ids(model_name=model_name, metric_type=metric_type)
-    )
+    all_ids = sorted(backend.get_stored_concept_ids(model_name=model_name))
     if not all_ids:
-        raise ValueError(
-            f"No embeddings found for '{model_name}' (metric={metric_type.value}). "
-            "Nothing to export."
-        )
+        raise ValueError(f"No embeddings found for '{model_name}'. Nothing to export.")
 
     n = len(all_ids)
     dimensions = record.dimensions
@@ -397,7 +363,7 @@ def export_bundle(
 
         cursor = 0
         for batch in tqdm(
-            stream_embedding_batches(backend, model_name, metric_type, all_ids, batch_size),
+            stream_embedding_batches(backend, model_name, all_ids, batch_size),
             total=(n + batch_size - 1) // batch_size,
             desc="Streaming export to bundle",
         ):
@@ -424,10 +390,9 @@ def export_bundle(
                 ds.resize((cursor,) + ds.shape[1:])
             n = cursor
 
-        meta = ExportMetadata(
+        meta = BundleMetadata(
             model_name=model_name,
             dimensions=dimensions,
-            metric_type=metric_type,
             provider_type=record.provider_type,
             index_config=record.index_config,
             row_count=n,
@@ -437,16 +402,14 @@ def export_bundle(
         f.attrs[ATTR_OMOP_EMB_VERSION] = _pkg_version("omop-emb")
         f.attrs[ATTR_MODEL_NAME] = meta.model_name
         f.attrs[ATTR_DIMENSIONS] = meta.dimensions
-        f.attrs[ATTR_METRIC_TYPE] = meta.metric_type.value
         f.attrs[ATTR_PROVIDER_TYPE] = meta.provider_type
         f.attrs[ATTR_INDEX_CONFIG] = json.dumps(meta.index_config.to_dict())
         f.attrs[ATTR_ROW_COUNT] = meta.row_count
         f.attrs[ATTR_EXPORTED_AT] = meta.exported_at
 
     logger.info(
-        "Bundle export complete: %d vectors, metric=%s, file='%s'.",
+        "Bundle export complete: %d vectors, file='%s'.",
         meta.row_count,
-        metric_type.value,
         h5_path,
     )
     return meta, h5_path
@@ -482,6 +445,8 @@ def import_bundle(
     BundleCorruptionError
         If the file is missing required datasets/attributes or has
         inconsistent shapes.
+    UnsupportedBundleVersionError
+        If the bundle's schema version is not supported.
     RuntimeError
         If the backend already has embeddings for this model and
         ``force`` is ``False``.
@@ -492,19 +457,17 @@ def import_bundle(
 
     with h5py.File(h5_path, "r") as f:
         validate_bundle(f)
-        meta = ExportMetadata.from_h5_attrs(f.attrs)
+        meta = BundleMetadata.from_h5_attrs(f.attrs)
 
-        if not force and backend.is_model_registered(model_name=meta.model_name):
-            existing = backend.get_embedding_count(
-                model_name=meta.model_name, metric_type=meta.metric_type
-            )
+        was_already_registered = backend.get_registered_model(model_name=meta.model_name) is not None
+        if not force and was_already_registered:
+            existing = backend.get_embedding_count(model_name=meta.model_name)
             if existing > 0:
                 raise RuntimeError(
                     f"Backend already has {existing} embeddings for '{meta.model_name}'. "
                     "Pass force=True to overwrite."
                 )
 
-        was_already_registered = backend.is_model_registered(model_name=meta.model_name)
         if not was_already_registered:
             backend.register_model(
                 model_name=meta.model_name,
@@ -543,7 +506,6 @@ def import_bundle(
 
         backend.bulk_upsert_embeddings(
             model_name=meta.model_name,
-            metric_type=meta.metric_type,
             batches=_batches(),
             total_n_batches=(n + batch_size - 1) // batch_size,
         )
@@ -560,10 +522,9 @@ def import_bundle(
         )
 
     logger.info(
-        "Imported %d vectors for '%s' (metric=%s) from bundle '%s'.",
+        "Imported %d vectors for '%s' from bundle '%s'.",
         n,
         meta.model_name,
-        meta.metric_type.value,
         h5_path,
     )
     return n

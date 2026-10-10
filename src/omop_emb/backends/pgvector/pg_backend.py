@@ -5,7 +5,13 @@ from datetime import datetime
 from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
-from sqlalchemy import Engine, select, text, create_engine
+from oa_configurator import (
+    Dialect,
+    Role,
+    guard_schema_provenance_for,
+    physical_schema_of,
+)
+from sqlalchemy import inspect, select, text
 
 try:
     from pgvector.sqlalchemy import Vector  # noqa: F401
@@ -14,35 +20,30 @@ except ImportError as _e:
         "pgvector is not installed. Install it with: pip install omop-emb[pgvector]"
     ) from _e
 
-from omop_emb.config import BackendType, MetricType
 from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
     EmbeddingBackend,
-)
-from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig, IndexConfig
-from omop_emb.backends.pgvector.pg_index_manager import (
-    PGVectorBaseIndexManager,
-    PGVectorFlatIndexManager,
-    PGVectorHNSWIndexManager,
+    writes,
 )
 from omop_emb.backends.embedding_table import (
-    EMBEDDING_COLUMN_NAME,
     PGEmbeddingTable,
 )
+from omop_emb.backends.index_config import HNSWIndexConfig, IndexConfig
 from omop_emb.backends.pgvector.pg_sql import (
     create_pg_embedding_table,
     drop_pg_embedding_table,
+    hnsw_index_ddl,
+    pg_embedding_table_descriptor,
     q_all_concept_ids,
     q_embedding_count_by_vocabulary,
-    q_upsert_embeddings,
-    q_create_extension_pgvector,
     query_concept_filter_metadata,
     query_concept_ids_matching_filter,
+    query_embeddings_by_ids,
     query_nearest_concept_ids,
     table_exists,
-    pg_embedding_table_descriptor,
+    upsert_embedding_rows,
 )
-from omop_emb.backends.db_utils import temp_filter_table
+from omop_emb.config import BackendType, MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
@@ -53,10 +54,39 @@ from omop_emb.utils.embedding_utils import (
 
 logger = logging.getLogger(__name__)
 
-_INDEX_MANAGER_FOR_CONFIG: dict[type[IndexConfig], type[PGVectorBaseIndexManager]] = {
-    FlatIndexConfig: PGVectorFlatIndexManager,
-    HNSWIndexConfig: PGVectorHNSWIndexManager,
-}
+
+def _validate_pg_registration(dimensions: int) -> None:
+    """Validate pgvector dimensions, including the halfvec limit."""
+    vector_column_type_for_dimensions(dimensions)
+
+
+def _create_vector_extension(dbapi_connection, _connection_record) -> None:
+    """Connect-event callable: ensure the pgvector extension exists on this connection.
+
+    Passed as an ``extensions`` callable to ``ResolvedDatabase.create_engine()``
+    (see its docstring). ``CREATE EXTENSION IF NOT EXISTS`` is atomic and
+    idempotent, so re-running it on every connection is safe and cheap.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS vector CASCADE;")
+        dbapi_connection.commit()
+    finally:
+        cursor.close()
+
+
+def _set_read_only(dbapi_connection, _connection_record) -> None:
+    """Connect-event callable: make every transaction on this connection read-only.
+
+    Passed as an ``extensions`` callable by ``open_vector_store_reader()``.
+    PostgreSQL then rejects any DDL or write, temporary tables included.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;")
+        dbapi_connection.commit()
+    finally:
+        cursor.close()
 
 
 class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
@@ -69,34 +99,13 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     Parameters
     ----------
     emb_engine : Engine
-        SQLAlchemy engine connected to the pgvector database.
-
-    Notes
-    -----
-    Call :meth:`pre_initialise_store` once to create the ``vector`` extension
-    if it does not already exist. This is called automatically during
-    ``__init__``.
+        SQLAlchemy engine connected to the pgvector database. On the writer
+        path, ``_create_vector_extension`` is attached as an ``extensions``
+        callable and creates the ``vector`` extension; the reader path runs no
+        DDL and relies on it already existing.
+    writable : bool, optional
+        Forwarded to ``EmbeddingBackend``.
     """
-
-    def __init__(self, emb_engine: Engine) -> None:
-        self._index_managers: dict[str, PGVectorBaseIndexManager] = {}
-        super().__init__(emb_engine=emb_engine)
-
-    @classmethod
-    def from_db_url(cls, db_url: str) -> PGVectorEmbeddingBackend:
-        """Create a pgvector embedding backend from a database URL.
-
-        Parameters
-        ----------
-        db_url : str
-            Database URL in SQLAlchemy format, e.g. ``postgresql://user:pass@host:port/dbname``.
-
-        Returns
-        -------
-        PGVectorEmbeddingBackend
-        """
-        engine = create_engine(db_url, echo=False)
-        return cls(emb_engine=engine)
 
     # ------------------------------------------------------------------
     # Backend identity
@@ -108,16 +117,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
 
     @property
     def dialect(self) -> str:
-        return "postgresql"
-
-    # ------------------------------------------------------------------
-    # Store lifecycle
-    # ------------------------------------------------------------------
-
-    def pre_initialise_store(self) -> None:
-        """Create the pgvector extension if it does not exist."""
-        with self.emb_engine.begin() as conn:
-            conn.execute(q_create_extension_pgvector())
+        return Dialect.POSTGRESQL
 
     # ------------------------------------------------------------------
     # Storage table management
@@ -135,17 +135,18 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         self, model_record: EmbeddingModelRecord
     ) -> type[PGEmbeddingTable]:
         return create_pg_embedding_table(
-            engine=self.emb_engine, model_record=model_record
+            engine=self.emb_engine,
+            model_record=model_record,
         )
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
-        self._index_managers.pop(model_record.storage_identifier, None)
         drop_pg_embedding_table(engine=self.emb_engine, model_record=model_record)
 
     # ------------------------------------------------------------------
     # Model registration override
     # ------------------------------------------------------------------
 
+    @writes
     def register_model(
         self,
         *,
@@ -181,9 +182,13 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         Raises
         ------
         ValueError
-            If ``dimensions`` exceeds the pgvector halfvec limit of 4 000.
+            If ``dimensions`` exceeds the pgvector halfvec limit of 4 000, or
+            for any reason :meth:`EmbeddingBackend.register_model` raises
+            (a reserved metadata key, or a non-``FlatIndexConfig`` index).
+        ModelRegistrationConflictError
+            If the model is already registered with a different dimensionality.
         """
-        vector_column_type_for_dimensions(dimensions)  # validates halfvec limit
+        _validate_pg_registration(dimensions)
         return super().register_model(
             model_name=model_name,
             dimensions=dimensions,
@@ -200,37 +205,32 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     def _rebuild_index_impl(
         self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig
     ) -> None:
-        manager_cls = _INDEX_MANAGER_FOR_CONFIG.get(type(index_config))
-        if manager_cls is None:
-            raise ValueError(
-                f"No pgvector index manager for config type {type(index_config).__name__}."
-            )
-        manager = manager_cls(
-            emb_engine=self.emb_engine,
-            tablename=model_record.storage_identifier,
-            embedding_column=EMBEDDING_COLUMN_NAME,
-            index_config=index_config,
-            dimensions=model_record.dimensions,
+        """Drop every physical index on the table, then create the HNSW index index_config describes."""
+        with self.emb_engine.begin() as conn:
+            with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
+                for statement in self.drop_index_sql(model_record.model_name):
+                    conn.execute(text(statement))
+                if isinstance(index_config, HNSWIndexConfig):
+                    conn.execute(text(hnsw_index_ddl(self.emb_engine, model_record, index_config)))
+        logger.info(
+            f"Rebuilt '{model_record.storage_identifier}' with index type '{index_config.index_type.value}'."
         )
-        metric = index_config.metric_type or MetricType.COSINE
-        manager.rebuild_index(metric)
-        self._index_managers[model_record.storage_identifier] = manager
 
-    def get_index_manager(
-        self, storage_identifier: str
-    ) -> Optional[PGVectorBaseIndexManager]:
-        """Return the active index manager for a table, or ``None`` if not set.
-
-        Parameters
-        ----------
-        storage_identifier : str
-            Physical table name.
-
-        Returns
-        -------
-        PGVectorBaseIndexManager or None
-        """
-        return self._index_managers.get(storage_identifier)
+    def physical_indexes(self, model_name: str) -> tuple[str, ...]:
+        """Return existing indexes for this model's table without creating or
+        changing them."""
+        record = self.get_registered_model(model_name=model_name)
+        if record is None:
+            return ()
+        physical_schema = physical_schema_of(self.emb_engine)
+        expected_prefix = f"idx_{record.storage_identifier}_"
+        return tuple(
+            str(item["name"])
+            for item in inspect(self.emb_engine).get_indexes(
+                record.storage_identifier, schema=physical_schema,
+            )
+            if str(item["name"]).startswith(expected_prefix)
+        )
 
     # ------------------------------------------------------------------
     # Core write operations
@@ -248,15 +248,15 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             records=records,
             dimensions=model_record.dimensions,
         )
-        table = self._table_cache[model_record.storage_identifier]
-        stmt = q_upsert_embeddings(
-            records=records,
-            embeddings=embeddings,
-            registered_table=table,
-        )
+        table = self._storage_table(model_record)
         try:
             with self.emb_session_factory.begin() as session:
-                session.execute(stmt)
+                upsert_embedding_rows(
+                    session=session,
+                    records=records,
+                    embeddings=embeddings,
+                    registered_table=table,
+                )
         except Exception as exc:
             logger.error(
                 "Failed to upsert embeddings for '%s': %s", model_record.model_name, exc
@@ -274,21 +274,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     ) -> Mapping[int, Sequence[float]]:
         if not concept_ids:
             return {}
-        table = self._table_cache[model_record.storage_identifier]
-        with self.emb_session_factory.begin() as session:
-            with temp_filter_table(
-                session,
-                list(concept_ids),
-                "BIGINT",
-                table_name="_tmp_emb_cids",
-                dialect=self.dialect,
-            ) as temp_table_name:
-                rows = session.execute(
-                    select(table.concept_id, getattr(table, EMBEDDING_COLUMN_NAME)).where(
-                        text(f'concept_id IN (SELECT id FROM "{temp_table_name}")')
-                    )
-                ).all()
-        result = {int(row[0]): list(row[1]) for row in rows}
+        table = self._storage_table(model_record)
+        with self.emb_session_factory() as session:
+            result = query_embeddings_by_ids(session=session, embedding_table=table, concept_ids=concept_ids)
         missing = set(concept_ids) - set(result.keys())
         if missing:
             raise ValueError(
@@ -307,13 +295,12 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         self.validate_embeddings(query_embeddings, model_record.dimensions)
 
-        manager = self._index_managers.get(model_record.storage_identifier)
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
 
         with self.emb_session_factory.begin() as session:
-            if isinstance(manager, PGVectorHNSWIndexManager):
+            if isinstance(model_record.index_config, HNSWIndexConfig):
                 session.execute(
-                    text(f"SET hnsw.ef_search = {manager.index_config.ef_search}")
+                    text(f"SET LOCAL hnsw.ef_search = {int(model_record.index_config.ef_search)}")
                 )
 
             ann_rows = query_nearest_concept_ids(
@@ -323,7 +310,6 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                 metric_type=metric_type,
                 k=k,
                 concept_filter=concept_filter,
-                dialect=self.dialect,
             )
 
         results: list[list[NearestConceptMatch]] = [
@@ -349,7 +335,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     # ------------------------------------------------------------------
 
     def _has_any_embeddings_impl(self, *, model_record: EmbeddingModelRecord) -> bool:
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return (
                 session.execute(select(table.concept_id).limit(1)).first() is not None
@@ -358,7 +344,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     def _get_all_stored_concept_ids_impl(
         self, *, model_record: EmbeddingModelRecord
     ) -> set[int]:
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return {row[0] for row in session.execute(q_all_concept_ids(table))}
 
@@ -367,25 +353,25 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         *,
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
-    ) -> Mapping[int, Mapping[str, object]]:
+    ) -> Mapping[int, ConceptEmbeddingRecord]:
         if not concept_ids:
             return {}
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         concept_filter = EmbeddingConceptFilter(concept_ids=tuple(concept_ids))
-        with self.emb_session_factory.begin() as session:
+        with self.emb_session_factory() as session:
             rows = query_concept_filter_metadata(
                 session=session,
                 embedding_table=table,
                 concept_filter=concept_filter,
-                dialect=self.dialect,
             )
         return {
-            int(row[0]): {
-                "domain_id": row[1] or "",
-                "vocabulary_id": row[2] or "",
-                "is_standard": bool(row[3]),
-                "is_valid": bool(row[4]),
-            }
+            int(row[0]): ConceptEmbeddingRecord(
+                concept_id=int(row[0]),
+                domain_id=row[1] or "",
+                vocabulary_id=row[2] or "",
+                is_standard=bool(row[3]),
+                is_valid=bool(row[4]),
+            )
             for row in rows
         }
 
@@ -395,21 +381,18 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         model_record: EmbeddingModelRecord,
         concept_filter: EmbeddingConceptFilter,
     ) -> set[int]:
-        if concept_filter.is_empty():
-            return self._get_all_stored_concept_ids_impl(model_record=model_record)
-        table = self._table_cache[model_record.storage_identifier]
-        with self.emb_session_factory.begin() as session:
+        table = self._storage_table(model_record)
+        with self.emb_session_factory() as session:
             return query_concept_ids_matching_filter(
                 session=session,
                 embedding_table=table,
                 concept_filter=concept_filter,
-                dialect=self.dialect,
             )
 
     def _get_embedding_count_by_vocabulary_impl(
         self, *, model_record: EmbeddingModelRecord
     ) -> Mapping[str, int]:
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             rows = session.execute(q_embedding_count_by_vocabulary(table)).all()
         return {row[0]: int(row[1]) for row in rows}

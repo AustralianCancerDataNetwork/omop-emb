@@ -6,7 +6,9 @@ with no FAISS dependency.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -14,12 +16,13 @@ import pytest
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
-from omop_emb.backends.sqlitevec import (
-    SQLiteVecEmbeddingBackend,
-    create_sqlitevec_engine,
-)
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.config import MetricType
+from omop_emb.model_registry import registry_writer_engine
 from omop_emb.storage import embedding_bundle
+
+from .conftest import sqlite_resolved_database
 
 pytest.importorskip("h5py", reason="h5py not installed")
 
@@ -28,7 +31,7 @@ _PROVIDER = "ollama"
 
 
 def _make_backend() -> SQLiteVecEmbeddingBackend:
-    engine = create_sqlitevec_engine(":memory:")
+    engine = registry_writer_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
     return SQLiteVecEmbeddingBackend(emb_engine=engine)
 
 
@@ -38,7 +41,6 @@ def _populate(
     dim: int,
     ids: list[int],
     vecs: np.ndarray,
-    metric_type: MetricType,
 ) -> None:
     backend.register_model(
         model_name=_MODEL,
@@ -53,7 +55,7 @@ def _populate(
         for i in ids
     ]
     backend.upsert_embeddings(
-        model_name=_MODEL, metric_type=metric_type, records=records, embeddings=vecs
+        model_name=_MODEL, records=records, embeddings=vecs
     )
 
 
@@ -72,7 +74,7 @@ class TestBundleRoundTrip:
         )
 
         backend = _make_backend()
-        _populate(backend, dim=dim, ids=ids, vecs=vecs, metric_type=MetricType.COSINE)
+        _populate(backend, dim=dim, ids=ids, vecs=vecs)
 
         meta, bundle_path = embedding_bundle.export_bundle(
             backend=backend,
@@ -86,7 +88,7 @@ class TestBundleRoundTrip:
         assert imported == len(ids)
 
         roundtripped = target_backend.get_embeddings_by_concept_ids(
-            model_name=_MODEL, metric_type=MetricType.COSINE, concept_ids=ids
+            model_name=_MODEL, concept_ids=ids
         )
         for cid, original in zip(ids, vecs):
             got = np.asarray(roundtripped[cid], dtype=np.float32)
@@ -101,7 +103,7 @@ class TestBundleRoundTrip:
         vecs = np.array([[7.0, -2.0], [0.5, 0.5]], dtype=np.float32)
 
         backend = _make_backend()
-        _populate(backend, dim=dim, ids=ids, vecs=vecs, metric_type=MetricType.L2)
+        _populate(backend, dim=dim, ids=ids, vecs=vecs)
 
         _, bundle_path = embedding_bundle.export_bundle(
             backend=backend, model_name=_MODEL, output_dir=tmp_path
@@ -111,7 +113,7 @@ class TestBundleRoundTrip:
         embedding_bundle.import_bundle(backend=target_backend, h5_path=bundle_path)
 
         roundtripped = target_backend.get_embeddings_by_concept_ids(
-            model_name=_MODEL, metric_type=MetricType.L2, concept_ids=ids
+            model_name=_MODEL, concept_ids=ids
         )
         for cid, original in zip(ids, vecs):
             np.testing.assert_allclose(
@@ -124,7 +126,7 @@ class TestBundleRoundTrip:
         vecs = np.array([[1.0, 2.0]], dtype=np.float32)
 
         backend = _make_backend()
-        _populate(backend, dim=dim, ids=ids, vecs=vecs, metric_type=MetricType.COSINE)
+        _populate(backend, dim=dim, ids=ids, vecs=vecs)
 
         _, bundle_path = embedding_bundle.export_bundle(
             backend=backend, model_name=_MODEL, output_dir=tmp_path
@@ -155,7 +157,7 @@ class TestBundleRoundTrip:
         vecs = np.array([[1.0, 2.0]], dtype=np.float32)
 
         backend = _make_backend()
-        _populate(backend, dim=dim, ids=ids, vecs=vecs, metric_type=MetricType.COSINE)
+        _populate(backend, dim=dim, ids=ids, vecs=vecs)
 
         _, bundle_path = embedding_bundle.export_bundle(
             backend=backend, model_name=_MODEL, output_dir=tmp_path
@@ -184,7 +186,7 @@ class TestBundleRoundTrip:
         vecs = np.array([[1.0, 2.0]], dtype=np.float32)
 
         source_backend = _make_backend()
-        _populate(source_backend, dim=dim, ids=ids, vecs=vecs, metric_type=MetricType.COSINE)
+        _populate(source_backend, dim=dim, ids=ids, vecs=vecs)
 
         meta, bundle_path = embedding_bundle.export_bundle(
             backend=source_backend, model_name=_MODEL, output_dir=tmp_path
@@ -214,7 +216,6 @@ class TestImportRebuildIndex:
             dim=dim,
             ids=[1],
             vecs=np.array([[1.0, 0.0]], dtype=np.float32),
-            metric_type=MetricType.COSINE,
         )
         _, bundle_path = embedding_bundle.export_bundle(
             backend=backend, model_name=_MODEL, output_dir=tmp_path
@@ -244,7 +245,6 @@ class TestImportRebuildIndex:
             dim=dim,
             ids=[1],
             vecs=np.array([[1.0, 0.0]], dtype=np.float32),
-            metric_type=MetricType.COSINE,
         )
         _, bundle_path = embedding_bundle.export_bundle(
             backend=backend, model_name=_MODEL, output_dir=tmp_path
@@ -276,7 +276,6 @@ class TestImportBackdatesRegistration:
             dim=dim,
             ids=[1],
             vecs=np.array([[1.0, 0.0]], dtype=np.float32),
-            metric_type=MetricType.COSINE,
         )
         _, bundle_path = embedding_bundle.export_bundle(
             backend=backend, model_name=_MODEL, output_dir=tmp_path
@@ -300,22 +299,9 @@ class TestImportBackdatesRegistration:
 
 @pytest.mark.unit
 class TestExportNaming:
-    """export_bundle() takes no metric_type: the filename and the recorded
-    metric are both derived from the registry, never from a caller-supplied
-    value."""
-
-    def test_filename_derived_from_storage_identifier_and_metric_defaults_to_cosine(
-        self, tmp_path
-    ):
-        dim = 2
+    def test_filename_derived_from_storage_identifier(self, tmp_path):
         backend = _make_backend()
-        _populate(
-            backend,
-            dim=dim,
-            ids=[1],
-            vecs=np.array([[1.0, 0.0]], dtype=np.float32),
-            metric_type=MetricType.COSINE,
-        )
+        _populate(backend, dim=2, ids=[1], vecs=np.array([[1.0, 0.0]], dtype=np.float32))
 
         record = backend.get_registered_model(model_name=_MODEL)
         meta, bundle_path = embedding_bundle.export_bundle(
@@ -323,11 +309,73 @@ class TestExportNaming:
         )
         assert record is not None
         assert bundle_path == tmp_path / f"{record.storage_identifier}.h5"
-        assert bundle_path.exists()
-        # Model is FLAT-registered (the only state register_model() allows),
-        # so record.metric_type is None and the bundle defaults to COSINE.
-        assert record.metric_type is None
-        assert meta.metric_type == MetricType.COSINE
+        assert meta.index_config == record.index_config
+
+
+def _bundle(tmp_path) -> Path:
+    backend = _make_backend()
+    _populate(backend, dim=2, ids=[1], vecs=np.array([[1.0, 0.0]], dtype=np.float32))
+    _, bundle_path = embedding_bundle.export_bundle(backend=backend, model_name=_MODEL, output_dir=tmp_path)
+    return bundle_path
+
+
+def _as_v1(bundle_path: Path, *, metric_type: str, index_config: dict | None = None) -> None:
+    """Rewrite a bundle's attributes the way schema version 1 wrote them."""
+    with h5py.File(bundle_path, "a") as f:
+        f.attrs[embedding_bundle.ATTR_SCHEMA_VERSION] = 1
+        f.attrs[embedding_bundle.ATTR_V1_METRIC_TYPE] = metric_type
+        if index_config is not None:
+            f.attrs[embedding_bundle.ATTR_INDEX_CONFIG] = json.dumps(index_config)
+
+
+_HNSW_L2 = {"index_type": "hnsw", "metric_type": "l2", "num_neighbors": 32, "ef_search": 16, "ef_construction": 64}
+
+
+@pytest.mark.unit
+class TestBundleSchemaVersions:
+    def test_export_writes_version_2_without_metric(self, tmp_path):
+        with h5py.File(_bundle(tmp_path)) as f:
+            assert f.attrs[embedding_bundle.ATTR_SCHEMA_VERSION] == 2
+            assert embedding_bundle.ATTR_V1_METRIC_TYPE not in f.attrs
+
+    def test_version_1_flat_bundle_imports(self, tmp_path):
+        bundle_path = _bundle(tmp_path)
+        _as_v1(bundle_path, metric_type="cosine")
+        assert embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path) == 1
+
+    def test_version_1_hnsw_bundle_with_matching_metric_reads(self, tmp_path):
+        bundle_path = _bundle(tmp_path)
+        _as_v1(bundle_path, metric_type="l2", index_config=_HNSW_L2)
+        with h5py.File(bundle_path) as f:
+            meta = embedding_bundle.BundleMetadata.from_h5_attrs(f.attrs)
+        assert meta.index_config.metric_type is MetricType.L2
+
+    def test_version_1_hnsw_bundle_with_mismatching_metric_raises(self, tmp_path):
+        bundle_path = _bundle(tmp_path)
+        _as_v1(bundle_path, metric_type="cosine", index_config=_HNSW_L2)
+        with pytest.raises(embedding_bundle.BundleCorruptionError, match="built for 'l2'"):
+            embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path)
+
+    def test_version_1_bundle_without_metric_raises(self, tmp_path):
+        bundle_path = _bundle(tmp_path)
+        with h5py.File(bundle_path, "a") as f:
+            f.attrs[embedding_bundle.ATTR_SCHEMA_VERSION] = 1
+        with pytest.raises(embedding_bundle.BundleCorruptionError, match="metric_type"):
+            embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path)
+
+    def test_missing_schema_version_raises(self, tmp_path):
+        bundle_path = _bundle(tmp_path)
+        with h5py.File(bundle_path, "a") as f:
+            del f.attrs[embedding_bundle.ATTR_SCHEMA_VERSION]
+        with pytest.raises(embedding_bundle.BundleCorruptionError, match="schema_version"):
+            embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path)
+
+    def test_unsupported_schema_version_raises(self, tmp_path):
+        bundle_path = _bundle(tmp_path)
+        with h5py.File(bundle_path, "a") as f:
+            f.attrs[embedding_bundle.ATTR_SCHEMA_VERSION] = 3
+        with pytest.raises(embedding_bundle.UnsupportedBundleVersionError, match="version 3"):
+            embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path)
 
 
 @pytest.mark.unit
@@ -343,7 +391,6 @@ class TestBundleSchemaValidation:
             dim=dim,
             ids=[1],
             vecs=np.array([[1.0, 0.0]], dtype=np.float32),
-            metric_type=MetricType.COSINE,
         )
         _, bundle_path = embedding_bundle.export_bundle(
             backend=backend, model_name=_MODEL, output_dir=tmp_path

@@ -3,14 +3,19 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-from sqlalchemy import create_engine, event, insert, inspect
+from oa_configurator import CDMDatabaseConfig, ConnectionConfig, Dialect, Resolver, StackConfig
+from sqlalchemy import event, insert, inspect, text
 
 from omop_alchemy.cdm.model.vocabulary import Concept
-from omop_emb.backends import ReadOnlyEmbeddingStore, StoredEmbedding
-from omop_emb.backends.embedding_table import concept_metadata_table_descriptor
+from omop_alchemy.cross_database import cdm_sessionmaker
+from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
+from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
-from omop_emb.model_registry import RegistryManager, ensure_registry_schema
+from omop_emb.model_registry import ModelRegistry
 from omop_emb.population import PopulationScope, plan_population
+from omop_emb.utils.errors import MissingStorageTableError
+
+from .conftest import sqlite_cdm_database, sqlite_resolved_vector_store
 
 
 def _concept(concept_id: int, **overrides):
@@ -30,57 +35,34 @@ def _concept(concept_id: int, **overrides):
     return values
 
 
-def test_read_only_registry_does_not_create_schema() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    store = ReadOnlyEmbeddingStore(
-        engine,
-        backend_type="sqlitevec",
-        schema="main",
-    )
-
-    assert store.initialized is False
-    assert store.registered_models() == ()
-    assert inspect(engine).has_table("model_registry") is False
-    store.close()
+def test_reader_before_any_write_does_not_create_the_registry(tmp_path) -> None:
+    """A store that's never been set up reports an empty registry instead of
+    being set up by being looked at."""
+    with open_vector_store_reader(sqlite_resolved_vector_store(str(tmp_path / "test.db"))) as reader:
+        assert reader.initialized is False
+        assert reader.get_registered_models() == ()
+        assert inspect(reader.emb_engine).has_table(ModelRegistry.__tablename__) is False  # ty: ignore[unresolved-attribute]
 
 
-def test_explicit_registry_initialization_is_visible_to_read_only_store() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    ensure_registry_schema(engine)
-    store = ReadOnlyEmbeddingStore(
-        engine,
-        backend_type="sqlitevec",
-        schema="main",
-    )
+def test_reader_after_writer_sees_the_registry(tmp_path) -> None:
+    store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
+    open_vector_store_writer(store).close()
 
-    assert store.initialized is True
-    assert store.registered_models() == ()
-    store.close()
+    with open_vector_store_reader(store) as reader:
+        assert reader.initialized is True
+        assert reader.get_registered_models() == ()
 
 
-def test_stored_embeddings_use_read_only_core_query() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    registry = RegistryManager(engine)
-    record = registry.register_model(
-        model_name="test-model",
-        provider_type="ollama",
-        index_config=FlatIndexConfig(),
-        dimensions=3,
-    )
-    table = concept_metadata_table_descriptor(record.storage_identifier)
-    table.create(engine)
-    with engine.begin() as connection:
-        connection.execute(
-            insert(table),
-            [
-                {
-                    "concept_id": 7,
-                    "domain_id": "Condition",
-                    "vocabulary_id": "SNOMED",
-                    "is_standard": True,
-                    "is_valid": True,
-                }
-            ],
+def test_reader_sees_registered_models_and_stored_embeddings_without_mutating(tmp_path) -> None:
+    """A model registered through the writer is visible through a reader on
+    the same file, and reading it issues no mutating SQL."""
+    store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
+    with open_vector_store_writer(store) as writer:
+        writer.register_model(
+            model_name="test-model",
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=1,
         )
 
     statements: list[str] = []
@@ -88,18 +70,15 @@ def test_stored_embeddings_use_read_only_core_query() -> None:
     def capture(_connection, _cursor, statement, _parameters, _context, _many):
         statements.append(statement.strip().lower())
 
-    event.listen(engine, "before_cursor_execute", capture)
-    try:
-        with ReadOnlyEmbeddingStore(
-            engine,
-            backend_type="sqlitevec",
-            schema="main",
-        ) as store:
-            assert store.stored_embeddings("test-model") == (
-                StoredEmbedding(7, "Condition", "SNOMED", True, True),
-            )
-    finally:
-        event.remove(engine, "before_cursor_execute", capture)
+    with open_vector_store_reader(store) as reader:
+        engine = reader.emb_engine  # ty: ignore[unresolved-attribute]
+        event.listen(engine, "before_cursor_execute", capture)
+        try:
+            assert reader.initialized is True
+            assert [m.model_name for m in reader.get_registered_models()] == ["test-model"]
+            assert tuple(reader.iter_stored_embeddings("test-model")) == ()
+        finally:
+            event.remove(engine, "before_cursor_execute", capture)
 
     assert statements
     assert not any(
@@ -110,22 +89,31 @@ def test_stored_embeddings_use_read_only_core_query() -> None:
     )
 
 
-def test_read_only_registry_rejects_mutation() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    ensure_registry_schema(engine)
-    registry = RegistryManager.read_only(engine)
-
-    with pytest.raises(RuntimeError, match="opened read-only"):
-        registry.register_model(
+def test_dropped_storage_table_raises_instead_of_being_recreated(tmp_path) -> None:
+    """A model registered but whose physical table was dropped out from under
+    it raises MissingStorageTableError for a fresh backend instance (an empty
+    in-process table-descriptor cache), instead of silently recreating an
+    empty table."""
+    store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
+    with open_vector_store_writer(store) as writer:
+        record = writer.register_model(
             model_name="test-model",
             provider_type="ollama",
             index_config=FlatIndexConfig(),
-            dimensions=3,
+            dimensions=1,
         )
+        with writer.emb_engine.begin() as connection:
+            connection.execute(text(f"DROP TABLE {record.storage_identifier}"))
+
+    with open_vector_store_reader(store) as reader:
+        with pytest.raises(MissingStorageTableError):
+            reader.has_any_embeddings(model_name="test-model")
 
 
 def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
-    engine = create_engine("sqlite:///:memory:")
+    resolved = sqlite_cdm_database()
+    engine, _ = resolved.create_engines()
+    cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
     Concept.__table__.create(engine)
     with engine.begin() as connection:
         connection.execute(
@@ -139,14 +127,14 @@ def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
     class FakeStore:
         initialized = True
 
-        def stored_embeddings(self, _model_name: str):
+        def iter_stored_embeddings(self, _model_name: str, *, batch_size: int = 10_000):
             return (
-                StoredEmbedding(1, "Condition", "SNOMED", True, True),
-                StoredEmbedding(3, "Condition", "SNOMED", True, True),
+                ConceptEmbeddingRecord(1, "Condition", "SNOMED", True, True),
+                ConceptEmbeddingRecord(3, "Condition", "SNOMED", True, True),
             )
 
     plan = plan_population(
-        engine,
+        cdm_sessions,
         FakeStore(),
         model_name="test-model",
         scope=PopulationScope(standard_only=True),
@@ -160,8 +148,54 @@ def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
     assert plan.pending_ids == frozenset({2})
 
 
+def test_population_reads_concepts_from_a_separate_vocab_database(tmp_path):
+    primary_path = tmp_path / "primary.db"
+    vocab_path = tmp_path / "vocab.db"
+    config = StackConfig.for_session(
+        connections={
+            "primary": ConnectionConfig(dialect=Dialect.SQLITE, database_name=str(primary_path)),
+            "vocab": ConnectionConfig(dialect=Dialect.SQLITE, database_name=str(vocab_path)),
+        },
+        databases={
+            "cdm": CDMDatabaseConfig(
+                connection="primary", vocab_connection="vocab",
+            ),
+        },
+    )
+    resolved = Resolver(config).resolve_database("cdm")
+    primary, vocab = resolved.create_engines()
+    Concept.__table__.create(vocab)
+    with vocab.begin() as connection:
+        connection.execute(insert(Concept), [_concept(101)])
+
+    class EmptyStore:
+        initialized = True
+
+        def iter_stored_embeddings(self, _model_name: str, *, batch_size: int = 10_000):
+            return iter(())
+
+    plan = plan_population(
+        cdm_sessionmaker(resolved, primary=primary, vocab=vocab),
+        EmptyStore(),
+        model_name="test-model",
+        scope=PopulationScope(),
+    )
+
+    assert plan.rows[0].eligible_ids == frozenset({101})
+    assert inspect(primary).has_table("concept") is False
+    primary.dispose()
+    vocab.dispose()
+
+
 def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:
-    engine = create_engine("sqlite:///:memory:")
+    """Only concept 1 is both standard (``'S'``) and valid (no invalid_reason,
+    confirmed directly against omop_alchemy's own ``ConceptFilter``): concept 2
+    is a classification concept (``'C'``, not standard) despite its blank
+    invalid_reason normalizing to valid; concept 3 has no standard flag at
+    all; concept 4 is standard but marked deleted."""
+    resolved = sqlite_cdm_database()
+    engine, _ = resolved.create_engines()
+    cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
     Concept.__table__.create(engine)
     with engine.begin() as connection:
         connection.execute(
@@ -182,19 +216,21 @@ def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:
             return iter(())
 
     plan = plan_population(
-        engine,
+        cdm_sessions,
         EmptyStore(),
         model_name="test-model",
         scope=PopulationScope(standard_only=True, valid_only=True),
         batch_size=2,
     )
 
-    assert plan.eligible_ids == frozenset({1, 2})
-    assert plan.missing_ids == frozenset({1, 2})
+    assert plan.eligible_ids == frozenset({1})
+    assert plan.missing_ids == frozenset({1})
 
 
 def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:
-    engine = create_engine("sqlite:///:memory:")
+    resolved = sqlite_cdm_database()
+    engine, _ = resolved.create_engines()
+    cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
     Concept.__table__.create(engine)
     with engine.begin() as connection:
         connection.execute(
@@ -208,14 +244,14 @@ def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:
     class Store:
         initialized = True
 
-        def stored_embeddings(self, _model_name: str):
+        def iter_stored_embeddings(self, _model_name: str, *, batch_size: int = 10_000):
             return (
-                StoredEmbedding(1, "Condition", "SNOMED", True, True),
-                StoredEmbedding(2, "Drug", "RxNorm", True, True),
+                ConceptEmbeddingRecord(1, "Condition", "SNOMED", True, True),
+                ConceptEmbeddingRecord(2, "Drug", "RxNorm", True, True),
             )
 
     plan = plan_population(
-        engine,
+        cdm_sessions,
         Store(),
         model_name="test-model",
         scope=PopulationScope(vocabularies=("SNOMED",)),
@@ -227,7 +263,9 @@ def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:
 
 
 def test_metadata_change_is_pending() -> None:
-    engine = create_engine("sqlite:///:memory:")
+    resolved = sqlite_cdm_database()
+    engine, _ = resolved.create_engines()
+    cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
     Concept.__table__.create(engine)
     with engine.begin() as connection:
         connection.execute(insert(Concept), [_concept(1)])
@@ -235,10 +273,10 @@ def test_metadata_change_is_pending() -> None:
     class Store:
         initialized = True
 
-        def stored_embeddings(self, _model_name: str):
-            return (StoredEmbedding(1, "Measurement", "SNOMED", True, True),)
+        def iter_stored_embeddings(self, _model_name: str, *, batch_size: int = 10_000):
+            return (ConceptEmbeddingRecord(1, "Measurement", "SNOMED", True, True),)
 
-    plan = plan_population(engine, Store(), model_name="test-model")
+    plan = plan_population(cdm_sessions, Store(), model_name="test-model")
 
     assert plan.metadata_changed_ids == frozenset({1})
     assert plan.pending_ids == frozenset({1})

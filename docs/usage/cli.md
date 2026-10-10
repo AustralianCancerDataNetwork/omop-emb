@@ -225,7 +225,7 @@ omop-emb maintenance delete-model --model <NAME> [OPTIONS]
 
 Stream all embeddings for one model from the primary backend into a single, self-describing HDF5 bundle (raw vectors, never normalized, plus concept metadata). This is the lossless source of truth for backup/restore and for migrating raw embeddings to another backend (see `import`). Peak memory stays close to one batch's worth regardless of table size.
 
-There is no `--metric-type` flag: the embeddings table has no metric-specific columns (metric only ever selects a distance operator at *query* time, which export never does), so it isn't something to choose here. The bundle records whatever metric the model's registry entry is already locked to (or `cosine`, if the model is FLAT/unconstrained, the only state a freshly registered model can be in) purely as metadata. The output filename is derived from the model's storage identifier, not a literal path you choose.
+Stored vectors carry no metric, so the bundle has none; an HNSW index's metric travels inside its `index_config`. Bundles are written as schema version 2. Version 1 bundles, which also stored a `metric_type`, still import. Export opens the store read-only. The output filename is derived from the model's storage identifier, not a literal path you choose.
 
 ```bash
 omop-emb maintenance export --model <NAME> --output-dir <DIR> [OPTIONS]

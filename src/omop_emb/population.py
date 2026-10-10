@@ -7,13 +7,14 @@ from dataclasses import dataclass, field
 from itertools import chain
 from typing import Literal
 
-from sqlalchemy import Engine, Row, select
-from sqlalchemy.orm import Session
+from sqlalchemy import Row, select
 
 from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_alchemy.cdm.query import ConceptFilter
 
-from omop_emb.backends.read_only import ReadOnlyEmbeddingStore, StoredEmbedding
+from omop_emb.backends.base_backend import EmbeddingStoreReader
+from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
+from omop_emb.utils.cdm import CDMSessionFactory, streamed
 
 
 @dataclass(frozen=True)
@@ -116,8 +117,8 @@ class _VocabularyAccumulator:
 
 
 def plan_population(
-    cdm_engine: Engine,
-    store: ReadOnlyEmbeddingStore,
+    cdm_session_factory: CDMSessionFactory,
+    store: EmbeddingStoreReader,
     *,
     model_name: str,
     scope: PopulationScope = PopulationScope(),
@@ -136,11 +137,11 @@ def plan_population(
 
     stored = {
         item.concept_id: item
-        for item in _iter_stored_embeddings(store, model_name, batch_size=batch_size)
+        for item in store.iter_stored_embeddings(model_name, batch_size=batch_size)
     }
     accumulators: dict[str, _VocabularyAccumulator] = {}
 
-    for row in _iter_current_concepts(cdm_engine, scope, batch_size=batch_size):
+    for row in _iter_current_concepts(cdm_session_factory, scope, batch_size=batch_size):
         concept_id = int(row.concept_id)
         vocabulary = str(row.vocabulary_id)
         accumulator = accumulators.setdefault(vocabulary, _VocabularyAccumulator())
@@ -148,7 +149,7 @@ def plan_population(
         stored_item = stored.pop(concept_id, None)
         if stored_item is None:
             accumulator.missing.add(concept_id)
-        elif _metadata_matches(row, stored_item):
+        elif stored_item.matches_cdm_row(row):
             accumulator.compatible.add(concept_id)
         else:
             accumulator.metadata_changed.add(concept_id)
@@ -174,7 +175,7 @@ def plan_population(
 
 
 def _iter_current_concepts(
-    cdm_engine: Engine,
+    cdm_session_factory: CDMSessionFactory,
     scope: PopulationScope,
     *,
     batch_size: int,
@@ -190,40 +191,17 @@ def _iter_current_concepts(
                 Concept.is_valid_expr().label("is_valid"),
             )
         )
-        .execution_options(stream_results=True, yield_per=batch_size)
     )
-    with Session(cdm_engine) as session:
-        yield from session.execute(statement)
+    with cdm_session_factory() as session:
+        yield from session.execute(streamed(statement, batch_size))
 
 
-def _iter_stored_embeddings(
-    store: ReadOnlyEmbeddingStore,
-    model_name: str,
-    *,
-    batch_size: int,
-) -> Iterator[StoredEmbedding]:
-    iterator = getattr(store, "iter_stored_embeddings", None)
-    if iterator is not None:
-        yield from iterator(model_name, batch_size=batch_size)
-        return
-    yield from store.stored_embeddings(model_name)
-
-
-def _stored_matches_scope(item: StoredEmbedding, scope: PopulationScope) -> bool:
+def _stored_matches_scope(item: ConceptEmbeddingRecord, scope: PopulationScope) -> bool:
     return (
         (not scope.vocabularies or item.vocabulary_id in scope.vocabularies)
         and (not scope.domains or item.domain_id in scope.domains)
         and (not scope.standard_only or item.is_standard)
         and (not scope.valid_only or item.is_valid)
-    )
-
-
-def _metadata_matches(row: Row, stored: StoredEmbedding) -> bool:
-    return (
-        str(row.domain_id) == stored.domain_id
-        and str(row.vocabulary_id) == stored.vocabulary_id
-        and bool(row.is_standard) == stored.is_standard
-        and bool(row.is_valid) == stored.is_valid
     )
 
 

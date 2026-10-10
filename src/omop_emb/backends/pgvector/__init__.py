@@ -9,13 +9,7 @@ same message.
 """
 
 from omop_emb.backends.pgvector.pg_backend import PGVectorEmbeddingBackend
-from omop_emb.backends.pgvector.pg_index_manager import (
-    PGVectorFlatIndexManager,
-    PGVectorHNSWIndexManager,
-)
 
 __all__ = [
     "PGVectorEmbeddingBackend",
-    "PGVectorFlatIndexManager",
-    "PGVectorHNSWIndexManager",
 ]

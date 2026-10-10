@@ -16,15 +16,19 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pytest
 from oa_configurator.resolver import ResolvedModel, ResolvedProvider
-from sqlalchemy import create_engine, insert
+from sqlalchemy import insert
 
 from omop_alchemy.cdm.model.vocabulary import Concept
+from omop_alchemy.cross_database import cdm_sessionmaker
+from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.config import MetricType
 from omop_emb.interface import (
     EmbeddingRole,
     EmbeddingReaderInterface,
     EmbeddingWriterInterface,
 )
+
+from .conftest import sqlite_cdm_database
 
 OLLAMA_BASE = "http://localhost:11434"
 OLLAMA_MODEL = "nomic-embed-text:v1.5"
@@ -227,8 +231,9 @@ class TestEmbeddingWriterInterfaceEmbedTexts:
 
 
 def test_population_batches_include_missing_and_metadata_changed_concepts():
-    cdm_engine = create_engine("sqlite:///:memory:")
-    Concept.__table__.create(cdm_engine)
+    resolved = sqlite_cdm_database()
+    cdm_engine, vocab_engine = resolved.create_engines()
+    Concept.__table__.create(vocab_engine)
     base = {
         "concept_name": "Concept",
         "domain_id": "Condition",
@@ -240,7 +245,7 @@ def test_population_batches_include_missing_and_metadata_changed_concepts():
         "valid_end_date": date(2099, 12, 31),
         "invalid_reason": None,
     }
-    with cdm_engine.begin() as connection:
+    with vocab_engine.begin() as connection:
         connection.execute(
             insert(Concept),
             [dict(base, concept_id=concept_id) for concept_id in (1, 2, 3)],
@@ -249,18 +254,8 @@ def test_population_batches_include_missing_and_metadata_changed_concepts():
     storage = _mock_storage_backend()
     storage.get_concept_filter_metadata.side_effect = (
         {
-            1: {
-                "domain_id": "Condition",
-                "vocabulary_id": "SNOMED",
-                "is_standard": True,
-                "is_valid": True,
-            },
-            2: {
-                "domain_id": "Measurement",
-                "vocabulary_id": "SNOMED",
-                "is_standard": True,
-                "is_valid": True,
-            },
+            1: ConceptEmbeddingRecord(1, "Condition", "SNOMED", True, True),
+            2: ConceptEmbeddingRecord(2, "Measurement", "SNOMED", True, True),
         },
         {},
     )
@@ -270,11 +265,11 @@ def test_population_batches_include_missing_and_metadata_changed_concepts():
             backend=storage,
             metric_type=MetricType.COSINE,
             resolved_model=_make_resolved_model(),
+            cdm_session_factory=cdm_sessionmaker(resolved, primary=cdm_engine, vocab=vocab_engine),
         )
 
     batches = tuple(
         writer.get_concepts_requiring_embedding_batched(
-            cdm_engine,
             batch_size=2,
         )
     )

@@ -51,7 +51,6 @@ class SharedBackendTests:
         self._register(backend)
         backend.upsert_embeddings(
             model_name=MODEL_NAME,
-            metric_type=metric_type,
             records=list(CONCEPT_RECORDS),
             embeddings=CONCEPT_EMBEDDINGS,
         )
@@ -80,12 +79,12 @@ class SharedBackendTests:
                 dimensions=EMBEDDING_DIM + 1,
             )
 
-    def test_is_model_registered(self, backend: EmbeddingBackend):
-        assert not backend.is_model_registered(model_name=MODEL_NAME), (
+    def test_get_registered_model_before_and_after_registration(self, backend: EmbeddingBackend):
+        assert backend.get_registered_model(model_name=MODEL_NAME) is None, (
             "Model should not be registered before registration"
         )
         self._register(backend)
-        assert backend.is_model_registered(model_name=MODEL_NAME), (
+        assert backend.get_registered_model(model_name=MODEL_NAME) is not None, (
             "Model should be registered after registration"
         )
 
@@ -122,14 +121,12 @@ class SharedBackendTests:
         self._upsert_all(backend)
         assert backend.has_any_embeddings(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
         )
 
     def test_upsert_count_matches(self, backend: EmbeddingBackend):
         self._upsert_all(backend)
         count = backend.get_embedding_count(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
         )
         assert count == len(CONCEPT_RECORDS)
 
@@ -137,7 +134,6 @@ class SharedBackendTests:
         self._upsert_all(backend)
         counts = backend.get_embedding_count_by_vocabulary(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
         )
         assert counts == {"SNOMED": 2, "RxNorm": 2}
 
@@ -145,13 +141,11 @@ class SharedBackendTests:
         self._upsert_all(backend)
         backend.upsert_embeddings(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
             records=list(CONCEPT_RECORDS),
             embeddings=CONCEPT_EMBEDDINGS,
         )
         count = backend.get_embedding_count(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
         )
         assert count == len(CONCEPT_RECORDS)
 
@@ -159,11 +153,10 @@ class SharedBackendTests:
     # Read: concept IDs
     # ------------------------------------------------------------------
 
-    def test_get_all_stored_concept_ids(self, backend: EmbeddingBackend):
+    def test_get_stored_concept_ids_without_filter(self, backend: EmbeddingBackend):
         self._upsert_all(backend)
-        stored = backend.get_all_stored_concept_ids(
+        stored = backend.get_stored_concept_ids(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
         )
         expected = {r.concept_id for r in CONCEPT_RECORDS}
         assert stored == expected
@@ -172,7 +165,6 @@ class SharedBackendTests:
         self._upsert_all(backend)
         result = backend.get_embeddings_by_concept_ids(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
             concept_ids=[HYPERTENSION_ID, DIABETES_ID],
         )
         assert set(result.keys()) == {HYPERTENSION_ID, DIABETES_ID}
@@ -345,36 +337,33 @@ class SharedBackendTests:
             )
 
     # ------------------------------------------------------------------
-    # get_concept_ids_matching_filter (FAISS pre-filter source)
+    # get_stored_concept_ids (FAISS pre-filter source)
     # ------------------------------------------------------------------
 
-    def test_get_concept_ids_matching_filter_domain(self, backend: EmbeddingBackend):
+    def test_get_stored_concept_ids_domain_filter(self, backend: EmbeddingBackend):
         self._upsert_all(backend)
-        matching = backend.get_concept_ids_matching_filter(
+        matching = backend.get_stored_concept_ids(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
             concept_filter=EmbeddingConceptFilter(domains=("Drug",)),
         )
         assert matching == {ASPIRIN_ID, NON_STANDARD_ID}
 
-    def test_get_concept_ids_matching_filter_require_standard(
+    def test_get_stored_concept_ids_require_standard_filter(
         self, backend: EmbeddingBackend
     ):
         self._upsert_all(backend)
-        matching = backend.get_concept_ids_matching_filter(
+        matching = backend.get_stored_concept_ids(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
             concept_filter=EmbeddingConceptFilter(require_standard=True),
         )
         assert matching == {HYPERTENSION_ID, DIABETES_ID, ASPIRIN_ID}
 
-    def test_get_concept_ids_matching_filter_empty_returns_all(
+    def test_get_stored_concept_ids_empty_filter_returns_all(
         self, backend: EmbeddingBackend
     ):
         self._upsert_all(backend)
-        matching = backend.get_concept_ids_matching_filter(
+        matching = backend.get_stored_concept_ids(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
             concept_filter=EmbeddingConceptFilter(),
         )
         assert matching == {r.concept_id for r in CONCEPT_RECORDS}
@@ -385,9 +374,9 @@ class SharedBackendTests:
 
     def test_delete_model_removes_registry_entry(self, backend: EmbeddingBackend):
         self._register(backend)
-        assert backend.is_model_registered(model_name=MODEL_NAME)
+        assert backend.get_registered_model(model_name=MODEL_NAME) is not None
         backend.delete_model(model_name=MODEL_NAME)
-        assert not backend.is_model_registered(model_name=MODEL_NAME)
+        assert backend.get_registered_model(model_name=MODEL_NAME) is None
 
     def test_patch_model_metadata(self, backend: EmbeddingBackend):
         self._register(backend)

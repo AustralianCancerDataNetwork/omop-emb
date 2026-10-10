@@ -11,7 +11,8 @@ from typing import Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from numpy import ndarray
-from sqlalchemy import Engine, MetaData, Table, create_engine, event, text
+from oa_configurator import Dialect
+from sqlalchemy import Engine, MetaData, Table, text
 
 try:
     import sqlite_vec
@@ -50,28 +51,25 @@ from omop_emb.utils.embedding_utils import (
 logger = logging.getLogger(__name__)
 
 
-def create_sqlitevec_engine(db_path: str) -> Engine:
-    """Create a SQLAlchemy engine for sqlite-vec with the extension pre-loaded.
+def _load_sqlite_vec(dbapi_connection, _connection_record) -> None:
+    """Connect-event callable: load the sqlite-vec extension on this connection.
 
-    Parameters
-    ----------
-    db_path : str
-        File path to the SQLite database, or ``':memory:'`` for an in-memory
-        database.
-
-    Returns
-    -------
-    Engine
+    Passed as an ``extensions`` callable to ``ResolvedDatabase.create_engine()``
+    (see its docstring). Loading a SQLite extension is inherently a
+    per-connection operation, so this is safe to run on every new connection.
     """
-    engine = create_engine(f"sqlite:///{db_path}", echo=False)
+    dbapi_connection.enable_load_extension(True)
+    sqlite_vec.load(dbapi_connection)
+    dbapi_connection.enable_load_extension(False)
 
-    @event.listens_for(engine, "connect")
-    def _load_sqlite_vec(dbapi_conn, _connection_record):
-        dbapi_conn.enable_load_extension(True)
-        sqlite_vec.load(dbapi_conn)
-        dbapi_conn.enable_load_extension(False)
 
-    return engine
+def _set_query_only(dbapi_connection, _connection_record) -> None:
+    """Connect-event callable: make this connection reject every write.
+
+    Passed as an ``extensions`` callable by ``open_vector_store_reader()``.
+    SQLite then rejects any DDL or write, temporary tables included.
+    """
+    dbapi_connection.execute("PRAGMA query_only = ON")
 
 
 class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
@@ -90,24 +88,14 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
       ``CREATE VIRTUAL TABLE``.
     """
 
-    def __init__(self, emb_engine: Engine) -> None:
+    def __init__(
+        self,
+        emb_engine: Engine,
+        *,
+        writable: bool = True,
+    ) -> None:
         self._sqlite_vec_metadata = MetaData()
-        super().__init__(emb_engine=emb_engine)
-
-    @classmethod
-    def from_path(cls, db_path: str) -> "SQLiteVecEmbeddingBackend":
-        """Construct a backend from a database file path.
-
-        Parameters
-        ----------
-        db_path : str
-            File path to the SQLite database, or ``':memory:'`` for testing.
-
-        Returns
-        -------
-        SQLiteVecEmbeddingBackend
-        """
-        return cls(emb_engine=create_sqlitevec_engine(db_path))
+        super().__init__(emb_engine=emb_engine, writable=writable)
 
     # ------------------------------------------------------------------
     # Backend identity
@@ -119,7 +107,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
 
     @property
     def dialect(self) -> str:
-        return "sqlite"
+        return Dialect.SQLITE
 
     # ------------------------------------------------------------------
     # Storage table management
@@ -135,7 +123,6 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         ddl = ddl_create_vec0(
             table_name=model_record.storage_identifier,
             dimensions=model_record.dimensions,
-            metric_type=model_record.metric_type,
         )
         with self.emb_engine.begin() as conn:
             conn.execute(text(ddl))
@@ -158,6 +145,10 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
             )
         # vec0 is always a flat scan -> no DDL needed.
 
+    def physical_indexes(self, model_name: str) -> tuple[str, ...]:
+        """vec0 is always a flat scan; there is no secondary physical index."""
+        return ()
+
     # ------------------------------------------------------------------
     # Core write operations
     # ------------------------------------------------------------------
@@ -174,14 +165,13 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
             records=records,
             dimensions=model_record.dimensions,
         )
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory.begin() as session:
             dml_upsert_rows(
                 session=session,
                 table=table,
                 records=records,
                 embeddings=embeddings.astype(np.float32),
-                dialect=self.dialect,
             )
 
     # ------------------------------------------------------------------
@@ -195,13 +185,12 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     ) -> Mapping[int, Sequence[float]]:
         if not concept_ids:
             return {}
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             result = query_embeddings_by_ids(
                 session=session,
                 table=table,
                 concept_ids=concept_ids,
-                dialect=self.dialect,
             )
         missing = set(concept_ids) - set(result.keys())
         if missing:
@@ -221,7 +210,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         self.validate_embeddings(query_embeddings, model_record.dimensions)
 
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             batches = query_knn_batch(
                 session=session,
@@ -230,7 +219,6 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 metric_type=metric_type,
                 k=k,
                 concept_filter=concept_filter,
-                dialect=self.dialect,
             )
 
         results = [
@@ -254,14 +242,14 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     # ------------------------------------------------------------------
 
     def _has_any_embeddings_impl(self, *, model_record: EmbeddingModelRecord) -> bool:
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return query_has_any(session=session, table=table)
 
     def _get_all_stored_concept_ids_impl(
         self, *, model_record: EmbeddingModelRecord
     ) -> set[int]:
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return query_all_concept_ids(session=session, table=table)
 
@@ -270,25 +258,25 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         *,
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
-    ) -> Mapping[int, Mapping[str, object]]:
+    ) -> Mapping[int, ConceptEmbeddingRecord]:
         if not concept_ids:
             return {}
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         concept_filter = EmbeddingConceptFilter(concept_ids=tuple(concept_ids))
         with self.emb_session_factory() as session:
             rows = query_concept_filter_metadata(
                 session=session,
                 table=table,
                 concept_filter=concept_filter,
-                dialect=self.dialect,
             )
         return {
-            int(row[0]): {
-                "domain_id": row[1] or "",
-                "vocabulary_id": row[2] or "",
-                "is_standard": bool(row[3]),
-                "is_valid": bool(row[4]),
-            }
+            int(row[0]): ConceptEmbeddingRecord(
+                concept_id=int(row[0]),
+                domain_id=row[1] or "",
+                vocabulary_id=row[2] or "",
+                is_standard=bool(row[3]),
+                is_valid=bool(row[4]),
+            )
             for row in rows
         }
 
@@ -298,20 +286,17 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         model_record: EmbeddingModelRecord,
         concept_filter: EmbeddingConceptFilter,
     ) -> set[int]:
-        if concept_filter.is_empty():
-            return self._get_all_stored_concept_ids_impl(model_record=model_record)
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return query_concept_ids_matching_filter(
                 session=session,
                 table=table,
                 concept_filter=concept_filter,
-                dialect=self.dialect,
             )
 
     def _get_embedding_count_by_vocabulary_impl(
         self, *, model_record: EmbeddingModelRecord
     ) -> Mapping[str, int]:
-        table = self._table_cache[model_record.storage_identifier]
+        table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return query_embedding_count_by_vocabulary(session=session, table=table)

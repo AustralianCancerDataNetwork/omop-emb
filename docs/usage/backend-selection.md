@@ -10,7 +10,7 @@
 | **pgvector** | `pgvector` | `omop-emb[pgvector]` + PostgreSQL | Scales to large corpora. HNSW indexing and `halfvec` storage. |
 
 !!! note "FAISS is a sidecar, not a backend"
-    FAISS (`omop-emb[faiss-cpu]`) is a read-acceleration layer that sits on top of sqlite-vec or pgvector. It is not a primary backend and has no `backend_type` of its own. See the [CLI reference](cli.md#faiss-sidecar) for how to export and use FAISS indices.
+    FAISS (`omop-emb[faiss-cpu]`) is a read-acceleration layer that sits on top of sqlite-vec or pgvector. It is not a primary backend and has no `backend_type` of its own. See the [CLI reference](cli.md#build-faiss-cache) for how to export and use FAISS indices.
 
 ## Selecting a backend
 
@@ -86,7 +86,7 @@ omop-emb maintenance rebuild-index --model-name embedding-model --index-type hns
 ```
 
 !!! info "pgvector HNSW"
-    HNSW is a SQL `CREATE INDEX USING hnsw` object built by `rebuild_index`. Without it, pgvector falls back to a sequential scan automatically. `ef_search` is applied per session at query time.
+    HNSW is a SQL `CREATE INDEX USING hnsw` object built by `rebuild_index`. Without it, pgvector falls back to a sequential scan automatically. `ef_search` is read from the registry and applied to each query's transaction. A rebuild leaves exactly the index it describes: switching metric or reverting to FLAT drops the previous HNSW index.
 
 !!! warning "pgvector dimension limit"
     The pgvector `vector` column type supports **at most 2,000 dimensions**. Models with more than 2,000 dimensions automatically use the `halfvec` column type (up to 4,000 dimensions). Registering above 4,000 dimensions raises a `ValueError`.
@@ -101,4 +101,4 @@ Each backend supports a subset of distance metrics:
 | pgvector | L2, Cosine, L1 | L2, Cosine, L1 |
 | FAISS sidecar | L2, Cosine | L2, Cosine |
 
-For FLAT models, the metric is supplied by the caller at query time. For HNSW models, the metric is locked in at `rebuild_index` time and must be supplied consistently at every query.
+Stored vectors carry no metric; only queries do. For FLAT models any supported metric can be used per query. For HNSW models the metric is set by `rebuild_index` and queries must use it.

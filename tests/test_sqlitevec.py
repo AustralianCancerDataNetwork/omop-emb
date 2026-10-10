@@ -7,16 +7,22 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import sqlalchemy as sa
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.config import MetricType
+from omop_emb.model_registry import RegistryManager, registry_writer_engine
+from omop_emb.model_registry.model_registry_orm import ModelRegistry
 
 from .conftest import (
+    CONCEPT_RECORDS,
     EMBEDDING_DIM,
     MODEL_NAME,
     PROVIDER_TYPE,
     QUERY_EMBEDDING,
+    sqlite_resolved_database,
 )
 from .shared_backend_tests import SharedBackendTests
 
@@ -94,7 +100,6 @@ class TestSQLiteVecSpecific:
         )
         svec_backend.upsert_embeddings(
             model_name=MODEL_NAME,
-            metric_type=MetricType.COSINE,
             records=nonzero_records,
             embeddings=nonzero_embeddings,
         )
@@ -129,9 +134,60 @@ class TestSQLiteVecSpecific:
         assert r1.storage_identifier == r2.storage_identifier
         assert len(svec_backend.get_registered_models(model_name=MODEL_NAME)) == 1
 
-    def test_from_path_constructor(self, tmp_path):
+    def test_existing_old_style_storage_identifier_keeps_working(
+        self, svec_backend: SQLiteVecEmbeddingBackend, monkeypatch
+    ):
+        model_name = "old-style-model"
+        storage_identifier = "emb_old_style_model"
+        vector = np.linspace(0.0, 1.0, EMBEDDING_DIM, dtype=np.float32).reshape(1, -1)
+        with svec_backend._registry.emb_session_factory.begin() as session:
+            session.add(
+                ModelRegistry(
+                    database_config_name=svec_backend._registry._database_config_name,
+                    model_name=model_name,
+                    provider_type=PROVIDER_TYPE,
+                    storage_identifier=storage_identifier,
+                    dimensions=EMBEDDING_DIM,
+                    index_config=FlatIndexConfig(),
+                    details={},
+                )
+            )
+
+        record = svec_backend.get_registered_model(model_name=model_name)
+        assert record is not None
+        assert record.storage_identifier == storage_identifier
+        svec_backend._ensure_storage_table(record)
+        monkeypatch.setattr(
+            RegistryManager,
+            "storage_name",
+            staticmethod(lambda *_args: pytest.fail("existing row identifier was recomputed")),
+        )
+        same_record = svec_backend.register_model(
+            model_name=model_name,
+            provider_type=PROVIDER_TYPE,
+            index_config=FlatIndexConfig(),
+            dimensions=EMBEDDING_DIM,
+        )
+        assert same_record.storage_identifier == storage_identifier
+        svec_backend.upsert_embeddings(
+            model_name=model_name, records=CONCEPT_RECORDS[:1], embeddings=vector
+        )
+        found = svec_backend.get_embeddings_by_concept_ids(
+            model_name=model_name, concept_ids=[CONCEPT_RECORDS[0].concept_id]
+        )
+        assert np.allclose(found[CONCEPT_RECORDS[0].concept_id], vector[0])
+
+        svec_backend.delete_model(model_name=model_name)
+        assert svec_backend.get_registered_model(model_name=model_name) is None
+        assert not sa.inspect(svec_backend.emb_engine).has_table(storage_identifier)
+
+    def test_file_backed_engine_constructor(self, tmp_path):
+        """A real file-backed (not just in-memory) engine works end to end."""
         db_file = str(tmp_path / "test.db")
-        backend = SQLiteVecEmbeddingBackend.from_path(db_file)
+        engine = registry_writer_engine(
+            sqlite_resolved_database(db_file), extensions=[_load_sqlite_vec]
+        )
+        backend = SQLiteVecEmbeddingBackend(emb_engine=engine)
         record = backend.register_model(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,

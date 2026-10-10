@@ -9,34 +9,31 @@ Both interfaces accept a **pre-constructed** `EmbeddingBackend` (sqlite-vec or p
 
 ---
 
-## Constructing a backend
+## Opening a vector store
 
-Resolve the vector store named in `[tools.omop_emb]` (a `[vector_stores.*]` entry) using `resolve_backend_from_resolved_vector_store`:
+Resolve the vector store named in `[tools.omop_emb]` (a `[vector_stores.*]` entry), then open it for writing or for reading:
 
 ```python
 from oa_configurator import Resolver
-from omop_emb.backends import resolve_backend_from_resolved_vector_store
+from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.config import OmopEmbConfig
 
 cfg = OmopEmbConfig.get_config()
 resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-backend = resolve_backend_from_resolved_vector_store(resolved)
+
+backend = open_vector_store_writer(resolved)  # EmbeddingBackend
+store = open_vector_store_reader(resolved)    # EmbeddingStoreReader
 ```
 
-`resolve_backend(backend_type, *, database)` is the lower-level, pure resolver underneath. It never reads config itself, so call it directly only when you already have an explicit `backend_type`/`database` (an oa-configurator `ResolvedDatabase`) in hand rather than the configured defaults.
+| | `open_vector_store_writer()` | `open_vector_store_reader()` |
+|---|---|---|
+| Returns | `EmbeddingBackend` | `EmbeddingStoreReader` |
+| Registers the registry's schema claim | yes | no |
+| Creates the registry table / pgvector extension | yes | no |
+| Write methods | allowed | raise `ReadOnlyStoreError` |
+| Database connection | read-write | read-only (PostgreSQL `READ ONLY` transactions, SQLite `query_only`) |
 
-Or construct one directly:
-
-```python
-from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
-from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
-
-# sqlite-vec
-backend = SQLiteVecEmbeddingBackend.from_path(db_path="/data/omop_emb.db")
-
-# pgvector
-backend = PGVectorEmbeddingBackend.from_db_url(db_url="postgresql+psycopg://user:pass@host:5432/db")
-```
+`EmbeddingStoreReader` is a `Protocol` listing every read: registry lookups (`get_registered_model()`, `get_registered_models()`), stored data (`iter_stored_embeddings()`, `has_any_embeddings()`, `get_stored_concept_ids()`, `get_embeddings_by_concept_ids()`, `get_concept_filter_metadata()`, the counts), `get_nearest_concepts()`, and index inspection (`physical_indexes()`, `drop_index_sql()`). Both backends satisfy it, and `EmbeddingReaderInterface`, `export_bundle()` and `FAISSCache.build_from_backend()` accept it. Only `get_nearest_concepts()` takes a `metric_type`; nothing stored depends on one. A store that was never set up reports an empty registry instead of being created by being looked at. On pgvector the `vector` extension must already exist in the database; the writer creates it.
 
 ---
 
@@ -56,9 +53,20 @@ writer = EmbeddingWriterInterface(
     backend=backend,
     metric_type=MetricType.COSINE,
     resolved_model=resolved_model,
-    omop_cdm_engine=cdm_engine,  # optional; used to enrich search results
+    cdm_session_factory=cdm_sessions,  # needed to read concepts; also enriches search results
 )
 ```
+
+`cdm_sessions` opens sessions on the OMOP CDM. Build it with `omop_alchemy.cross_database.cdm_sessionmaker`, which sends each table to the database hosting it, so concept reads reach the vocabulary even when it lives on its own server:
+
+```python
+from omop_alchemy.cross_database import cdm_sessionmaker
+
+primary, vocab = resolved_cdm.create_engines()
+cdm_sessions = cdm_sessionmaker(resolved_cdm, primary=primary, vocab=vocab)
+```
+
+Inside omop-emb's own CLI, `omop_emb.config.open_cdm_sessions()` does this for the configured `cdm_db`.
 
 `resolved_model` is an `oa_configurator.ResolvedModel` — provider, connection details, `embedding_dim`, and `document_prefix`/`query_prefix` all live on the `[models.*]` entry it was resolved from (see [Asymmetric Embeddings](asymmetric-embeddings.md)), not on `omop-emb`'s own config. The interface builds and owns the `ModelBackend` itself via `omop_llm.build_model_backend_from_resolved(resolved_model)`; there is no separate client object to construct first.
 
@@ -79,9 +87,7 @@ writer.register_model(index_config=FlatIndexConfig())  # explicit equivalent
 ```python
 # Fetch candidate concepts from the CDM, then pass the returned rows back as
 # concept_meta so filter columns can be stored alongside the embeddings.
-missing = writer.get_concepts_without_embedding(
-    omop_cdm_engine=cdm_engine,
-)
+missing = writer.get_concepts_without_embedding()
 
 writer.embed_and_upsert_concepts(
     concept_ids=tuple(missing.keys()),
@@ -125,10 +131,10 @@ from omop_emb.config import MetricType
 
 reader = EmbeddingReaderInterface(
     model="nomic-embed-text:v1.5",
-    backend=backend,
+    backend=store,
     metric_type=MetricType.COSINE,
     provider_type="ollama",
-    omop_cdm_engine=cdm_engine,   # optional; enriches results with concept_name
+    cdm_session_factory=cdm_sessions,   # optional; enriches results with concept_name
 )
 ```
 
@@ -186,9 +192,14 @@ results = reader.get_nearest_concepts(query_embedding=joint_vec[None, :], k=10)
 `get_nearest_concepts_from_query_texts` takes a `ModelBackend` directly: build one with `omop_llm.build_model_backend` (the reader has no default backend of its own to embed with):
 
 ```python
-from omop_llm import build_model_backend
+from omop_llm import Capabilities, build_model_backend
 
-model_backend = build_model_backend("ollama", "nomic-embed-text:v1.5", base_url="http://localhost:11434")
+model_backend = build_model_backend(
+    "ollama",
+    "nomic-embed-text:v1.5",
+    model_capabilities=Capabilities(embeddings=True),
+    base_url="http://localhost:11434",
+)
 
 results = reader.get_nearest_concepts_from_query_texts(
     query_texts=("high blood pressure", "type 2 diabetes"),
@@ -204,7 +215,7 @@ Supply `faiss_cache_dir` to route searches through a pre-built FAISS index inste
 ```python
 reader = EmbeddingReaderInterface(
     model="nomic-embed-text:v1.5",
-    backend=backend,
+    backend=store,
     metric_type=MetricType.COSINE,
     provider_type="ollama",
     faiss_cache_dir="/data/faiss_cache",
@@ -249,7 +260,6 @@ concept_filter = CDMConceptFilter(
 )
 
 n_missing = writer.count_concepts_without_embedding(
-    omop_cdm_engine=cdm_engine,
     concept_filter=concept_filter,
 )
 ```
@@ -267,6 +277,7 @@ from omop_llm import build_model_backend
 model_backend = build_model_backend(
     "ollama",
     "nomic-embed-text:v1.5",
+    model_capabilities=Capabilities(embeddings=True),
     base_url="http://host.docker.internal:11434",
 )
 
@@ -279,6 +290,7 @@ print(model_backend.dimensions())  # auto-discovered via Ollama /api/show
 model_backend = build_model_backend(
     "openai",
     "text-embedding-3-large",
+    model_capabilities=Capabilities(embeddings=True),
     base_url="https://api.openai.com/v1",
     api_key="sk-...",
 )
@@ -321,10 +333,7 @@ See `omop_llm.providers.supported_providers()` for the full list of provider key
 ## Utility functions
 
 ```python
-from omop_emb import EmbeddingReaderInterface
-
-models = EmbeddingReaderInterface.list_registered_models(
-    backend=backend,
+models = store.get_registered_models(
     provider_type="ollama",  # optional filter
 )
 for m in models:
@@ -379,5 +388,5 @@ for m in models:
 2. **`EmbeddingWriterInterface` for write flows**, `EmbeddingReaderInterface` for query-only services.
 3. **Use `writer.canonical_model_name`** when constructing a matching reader: it is guaranteed to be canonical.
 4. **Always register with `FlatIndexConfig`** first. Run `rebuild_index` or `omop-emb maintenance rebuild-index` after ingestion to build HNSW.
-5. **CDM enrichment is optional**: omit `omop_cdm_engine` when `concept_name` is not needed to avoid the CDM round-trip.
+5. **The CDM session factory is given once, on the constructor**: the methods that read concepts use it and raise without it. A reader that never needs `concept_name` can omit it to avoid the CDM round-trip.
 6. **FAISS is a read-acceleration sidecar, never the source of truth**: build it directly from the backend with `omop-emb maintenance build-faiss-cache` and supply `faiss_cache_dir` to `EmbeddingReaderInterface` for faster approximate search.

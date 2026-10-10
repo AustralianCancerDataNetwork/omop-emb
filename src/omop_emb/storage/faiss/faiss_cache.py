@@ -3,7 +3,7 @@ built from local indices and (eventually) GPU support.
 
 ``FAISSCache`` is NOT a storage backend, and is NOT the source of
 truth for embeddings. It builds on-disk FAISS indices directly from a live
-:class:`~omop_emb.backends.base_backend.EmbeddingBackend` (see
+:class:`~omop_emb.backends.base_backend.EmbeddingStoreReader` (see
 :meth:`FAISSCache.build_from_backend`) for lower-latency approximate
 search. ``faiss-cpu`` is the only optional dependency.
 
@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from collections import OrderedDict
-from typing import Mapping, Optional, Tuple, cast
+from typing import Mapping, Optional, Tuple
 
 import numpy as np
 from tqdm import tqdm
@@ -54,10 +54,11 @@ except ImportError as _faiss_err:
 
 from omop_emb.config import MetricType, IndexType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
-from omop_emb.backends.base_backend import EmbeddingBackend
-from omop_emb.backends.index_config import IndexConfig
+from omop_emb.backends.base_backend import EmbeddingStoreReader
+from omop_emb.backends.index_config import IndexConfig, index_config_from_dict
+from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
-from omop_emb.storage.embedding_bundle import ExportMetadata, stream_embedding_batches
+from omop_emb.storage.embedding_bundle import stream_embedding_batches
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,71 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+@dataclass(frozen=True)
+class FAISSCacheMetadata:
+    """Contents of one FAISS index's ``.json`` sidecar.
+
+    Attributes
+    ----------
+    model_name : str
+    dimensions : int
+    metric_type : MetricType
+        Metric the index was built for; COSINE indexes hold normalized vectors.
+    provider_type : str
+    index_config : IndexConfig
+        The FAISS index configuration.
+    row_count : int
+    exported_at : str
+        ISO timestamp of the build, compared against the registry's ``updated_at``.
+    """
+
+    model_name: str
+    dimensions: int
+    metric_type: MetricType
+    provider_type: str
+    index_config: IndexConfig
+    row_count: int
+    exported_at: str
+
+    def to_json(self) -> str:
+        """Serialise to the sidecar's JSON text."""
+        return json.dumps(
+            {
+                "model_name": self.model_name,
+                "dimensions": self.dimensions,
+                "metric_type": self.metric_type.value,
+                "provider_type": self.provider_type,
+                "index_config": self.index_config.to_dict(),
+                "row_count": self.row_count,
+                "exported_at": self.exported_at,
+            },
+            indent=2,
+        )
+
+    @classmethod
+    def from_json(cls, text: str) -> "FAISSCacheMetadata":
+        """Deserialise from the sidecar's JSON text.
+
+        Raises
+        ------
+        ValueError
+            If the JSON is malformed or contains an unknown enum value.
+        """
+        d = json.loads(text)
+        if "index_config" not in d:
+            raise ValueError("Missing 'index_config' field in cache metadata JSON.")
+
+        return cls(
+            model_name=d.get("model_name", ""),
+            dimensions=int(d.get("dimensions", 0)),
+            metric_type=MetricType(d["metric_type"]),
+            provider_type=str(d["provider_type"]),
+            index_config=index_config_from_dict(d["index_config"].get("index_type"), d["index_config"]),
+            row_count=int(d.get("row_count", -1)),
+            exported_at=d.get("exported_at", ""),
+        )
+
+
 # ---------------------------------------------------------------------------
 # FAISSCache
 # ---------------------------------------------------------------------------
@@ -224,8 +290,8 @@ class FAISSCache:
         """Path to a legacy ``metadata.npz`` file, if one exists.
 
         ``build_from_backend()`` no longer writes this file. Concept-filter
-        predicates are now evaluated live against the backend (see
-        :meth:`EmbeddingBackend.get_concept_ids_matching_filter`).
+        predicates are now evaluated live against the store (see
+        :meth:`EmbeddingBackend.get_stored_concept_ids`).
         """
         return self.model_dir / "metadata.npz"
 
@@ -256,7 +322,7 @@ class FAISSCache:
             return False
 
         try:
-            meta = ExportMetadata.from_json(json_path.read_text())
+            meta = FAISSCacheMetadata.from_json(json_path.read_text())
         except (json.JSONDecodeError, OSError, ValueError, KeyError):
             return False
 
@@ -280,11 +346,11 @@ class FAISSCache:
         index_config: IndexConfig,
     ) -> dict:
         """Return a summary dict describing the staleness state of one index."""
-        meta: Optional[ExportMetadata] = None
+        meta: Optional[FAISSCacheMetadata] = None
         json_path = self.json_path(metric_type, index_config)
         if json_path.exists():
             try:
-                meta = ExportMetadata.from_json(json_path.read_text())
+                meta = FAISSCacheMetadata.from_json(json_path.read_text())
             except (json.JSONDecodeError, OSError, ValueError, KeyError):
                 pass
         return {
@@ -303,7 +369,7 @@ class FAISSCache:
 
     def build_from_backend(
         self,
-        backend: EmbeddingBackend,
+        backend: EmbeddingStoreReader,
         metric_type: MetricType,
         index_config: IndexConfig,
         batch_size: int = 100_000,
@@ -336,14 +402,9 @@ class FAISSCache:
 
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
-        all_ids = sorted(
-            backend.get_all_stored_concept_ids(model_name=self._model_name, metric_type=metric_type)
-        )
+        all_ids = sorted(backend.get_stored_concept_ids(model_name=self._model_name))
         if not all_ids:
-            raise ValueError(
-                f"No embeddings found for '{self._model_name}' (metric={metric_type.value}). "
-                "Nothing to index."
-            )
+            raise ValueError(f"No embeddings found for '{self._model_name}'. Nothing to index.")
 
         n = len(all_ids)
         dimensions = record.dimensions
@@ -355,7 +416,7 @@ class FAISSCache:
 
         row_count = 0
         for batch in tqdm(
-            stream_embedding_batches(backend, self._model_name, metric_type, all_ids, batch_size),
+            stream_embedding_batches(backend, self._model_name, all_ids, batch_size),
             total=(n + batch_size - 1) // batch_size,
             desc="Building FAISS index from backend",
         ):
@@ -372,7 +433,7 @@ class FAISSCache:
         faiss.write_index(index, str(faiss_path))
         logger.info("Built FAISS index at '%s' (%d vectors).", faiss_path, row_count)
 
-        meta = ExportMetadata(
+        meta = FAISSCacheMetadata(
             model_name=self._model_name,
             dimensions=dimensions,
             metric_type=metric_type,
@@ -402,7 +463,7 @@ class FAISSCache:
         index_config: IndexConfig,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
-        backend: Optional[EmbeddingBackend] = None,
+        backend: Optional[EmbeddingStoreReader] = None,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
         """Search a specific FAISS index for nearest concepts.
 
@@ -421,9 +482,9 @@ class FAISSCache:
             Index configuration identifying which on-disk index to load.
         concept_filter : EmbeddingConceptFilter, optional
             Applied as a pre-filter over the live backend.
-        backend : EmbeddingBackend, optional
+        backend : EmbeddingStoreReader, optional
             Used to resolve concept_filter to a concept-ID set (via
-            :meth:`EmbeddingBackend.get_concept_ids_matching_filter`) and,
+            :meth:`EmbeddingBackend.get_stored_concept_ids`) and,
             regardless of concept_filter, to populate each result's
             ``domain_id``, ``vocabulary_id``, ``is_standard``, and
             ``is_active`` from the embedding table (via
@@ -456,7 +517,7 @@ class FAISSCache:
         if concept_filter is not None and not concept_filter.is_empty():
             if backend is None:
                 raise ValueError("backend is required when concept_filter is set.")
-            selector_ids = self._build_filter_selector_ids(concept_filter, backend, metric_type, index)
+            selector_ids = self._build_filter_selector_ids(concept_filter, backend, index)
             if selector_ids is not None:
                 sel = faiss.IDSelectorBatch(selector_ids)
                 params = faiss.SearchParameters()
@@ -464,13 +525,12 @@ class FAISSCache:
 
         distances, ids_matrix = index.search(query, k, params=params)
 
-        metadata_by_id: dict[int, Mapping[str, object]] = {}
+        metadata_by_id: Mapping[int, ConceptEmbeddingRecord] = {}
         if backend is not None:
             unique_ids = {int(cid) for id_row in ids_matrix for cid in id_row if cid != -1}
             if unique_ids:
                 metadata_by_id = backend.get_concept_filter_metadata(
                     model_name=self._model_name,
-                    metric_type=metric_type,
                     concept_ids=tuple(unique_ids),
                 )
 
@@ -480,7 +540,7 @@ class FAISSCache:
             for dist, cid in zip(dist_row, id_row):
                 if cid == -1:
                     continue
-                meta = metadata_by_id.get(int(cid), {})
+                meta = metadata_by_id.get(int(cid))
                 row_matches.append(
                     NearestConceptMatch(
                         concept_id=int(cid),
@@ -489,10 +549,10 @@ class FAISSCache:
                                 self._to_metric_dist(float(dist), metric_type), metric_type
                             )
                         ),
-                        domain_id=cast(Optional[str], meta.get("domain_id")),
-                        vocabulary_id=cast(Optional[str], meta.get("vocabulary_id")),
-                        is_standard=cast(Optional[bool], meta.get("is_standard")),
-                        is_active=cast(Optional[bool], meta.get("is_valid")),
+                        domain_id=meta.domain_id if meta else None,
+                        vocabulary_id=meta.vocabulary_id if meta else None,
+                        is_standard=meta.is_standard if meta else None,
+                        is_active=meta.is_valid if meta else None,
                     )
                 )
             results.append(tuple(row_matches))
@@ -505,8 +565,7 @@ class FAISSCache:
     def _build_filter_selector_ids(
         self,
         concept_filter: EmbeddingConceptFilter,
-        backend: EmbeddingBackend,
-        metric_type: MetricType,
+        backend: EmbeddingStoreReader,
         index: "faiss.Index",
     ) -> Optional[np.ndarray]:
         """Get selector IDs for a given concept filter to supply to
@@ -525,9 +584,8 @@ class FAISSCache:
             self._filter_cache.move_to_end(concept_filter)
             return self._filter_cache[concept_filter]
 
-        matching_ids = backend.get_concept_ids_matching_filter(
+        matching_ids = backend.get_stored_concept_ids(
             model_name=self._model_name,
-            metric_type=metric_type,
             concept_filter=concept_filter,
         )
         result = (

@@ -102,7 +102,7 @@ markers = [
   "faiss: FAISS sidecar tests",
 ]
 testpaths = ["tests"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m 'not db_dialect'"
 filterwarnings = [
     "ignore:datetime\\.datetime\\.utcfromtimestamp\\(\\) is deprecated:DeprecationWarning:dateutil.tz.tz",
     "ignore:builtin type .* has no __module__ attribute:DeprecationWarning",

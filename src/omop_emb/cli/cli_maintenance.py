@@ -7,14 +7,13 @@ import typer
 from oa_configurator import Resolver
 from omop_llm.providers import canonical_model_name
 
-from omop_emb.backends import resolve_backend_from_resolved_vector_store
+from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.config import (
     IndexType,
     MetricType,
     OmopEmbConfig,
 )
-from omop_emb.interface import EmbeddingReaderInterface
 from omop_emb.storage import embedding_bundle
 
 logger = logging.getLogger(__name__)
@@ -42,12 +41,8 @@ def list_models(
 
     cfg = OmopEmbConfig.get_config()
     resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-    backend = resolve_backend_from_resolved_vector_store(resolved)
-    records = EmbeddingReaderInterface.list_registered_models(
-        backend=backend,
-        provider_type=provider_type,
-        model_name=model,
-    )
+    with open_vector_store_reader(resolved) as store:
+        records = store.get_registered_models(model_name=model, provider_type=provider_type)
 
     if not records:
         typer.echo("No registered models found.")
@@ -133,7 +128,7 @@ def rebuild_index(
 
     cfg = OmopEmbConfig.get_config()
     resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-    backend = resolve_backend_from_resolved_vector_store(resolved)
+    backend = open_vector_store_writer(resolved)
 
     record = backend.get_registered_model(model_name=model)
     if record is None:
@@ -202,7 +197,7 @@ def delete_model(
 
     cfg = OmopEmbConfig.get_config()
     resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-    backend = resolve_backend_from_resolved_vector_store(resolved)
+    backend = open_vector_store_writer(resolved)
     record = backend.get_registered_model(model_name=model)
     if record is None:
         typer.echo(
@@ -261,18 +256,14 @@ def export_bundle_cmd(
 
     cfg = OmopEmbConfig.get_config()
     resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-    backend = resolve_backend_from_resolved_vector_store(resolved)
-
-    meta, h5_path = embedding_bundle.export_bundle(
-        backend=backend,
-        model_name=model,
-        output_dir=output_dir,
-        batch_size=batch_size,
-    )
-    typer.echo(
-        f"Exported {meta.row_count} embeddings for '{model}' "
-        f"(metric={meta.metric_type.value}) to '{h5_path}'."
-    )
+    with open_vector_store_reader(resolved) as store:
+        meta, h5_path = embedding_bundle.export_bundle(
+            backend=store,
+            model_name=model,
+            output_dir=output_dir,
+            batch_size=batch_size,
+        )
+    typer.echo(f"Exported {meta.row_count} embeddings for '{model}' to '{h5_path}'.")
 
 
 @app.command(
@@ -347,20 +338,19 @@ def build_faiss_cache(
 
     cfg = OmopEmbConfig.get_config()
     resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-    backend = resolve_backend_from_resolved_vector_store(resolved)
-
     index_config = index_config_from_index_type(
         index_type,
         metric_type=metric_type,
         num_neighbors=hnsw_m,
     )
     cache = FAISSCache(model_name=model, cache_dir=faiss_cache_dir)
-    cache.build_from_backend(
-        backend=backend,
-        metric_type=metric_type,
-        index_config=index_config,
-        batch_size=batch_size,
-    )
+    with open_vector_store_reader(resolved) as store:
+        cache.build_from_backend(
+            backend=store,
+            metric_type=metric_type,
+            index_config=index_config,
+            batch_size=batch_size,
+        )
     typer.echo(
         f"FAISS cache built at '{cache.model_dir}' for '{model}' "
         f"(metric={metric_type.value}, index={index_type.value})."
@@ -416,12 +406,12 @@ def check_faiss_cache(
 
     cfg = OmopEmbConfig.get_config()
     resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-    backend = resolve_backend_from_resolved_vector_store(resolved)
-    record = backend.get_registered_model(model_name=model)
+    with open_vector_store_reader(resolved) as store:
+        record = store.get_registered_model(model_name=model)
+        registered = [r.model_name for r in store.get_registered_models()]
     if record is None:
         typer.echo(
-            f"No registered model found for '{model}'. "
-            f"Registered models: {[r.model_name for r in backend.get_registered_models()]}",
+            f"No registered model found for '{model}'. Registered models: {registered}",
             err=True,
         )
         raise typer.Exit(1)
@@ -486,7 +476,7 @@ def import_bundle_cmd(
 
     cfg = OmopEmbConfig.get_config()
     resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-    backend = resolve_backend_from_resolved_vector_store(resolved)
+    backend = open_vector_store_writer(resolved)
     try:
         imported = embedding_bundle.import_bundle(
             backend=backend,

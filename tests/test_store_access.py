@@ -3,8 +3,18 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pytest
+from oa_configurator import (
+    ConnectionConfig,
+    Dialect,
+    GenericDatabaseConfig,
+    ResolvedVectorStore,
+    Resolver,
+    StackConfig,
+)
 from sqlalchemy import event, text
 from sqlalchemy.exc import InternalError, OperationalError
 
@@ -17,6 +27,7 @@ from omop_emb.backends.base_backend import EmbeddingBackend
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.config import MetricType
+from omop_emb.model_registry.model_registry_orm import ModelRegistry
 from omop_emb.storage.embedding_bundle import export_bundle
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.utils.errors import ModelRegistrationConflictError, ReadOnlyStoreError
@@ -54,6 +65,42 @@ def _populate(store):
         writer.register_model(model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3)
         writer.upsert_embeddings(model_name=_MODEL, records=list(_RECORDS), embeddings=_VECTORS)
     return store
+
+
+def _same_database_stores(path, second_path=None):
+    second_path = second_path or path
+    if str(second_path) == str(path):
+        connections = {
+            "shared": ConnectionConfig(dialect=Dialect.SQLITE, database_name=str(path)),
+        }
+        store_connections = {"store_a": "shared", "store_b": "shared"}
+    else:
+        connections = {
+            "store_a_connection": ConnectionConfig(dialect=Dialect.SQLITE, database_name=str(path)),
+            "store_b_connection": ConnectionConfig(dialect=Dialect.SQLITE, database_name=str(second_path)),
+        }
+        store_connections = {
+            "store_a": "store_a_connection",
+            "store_b": "store_b_connection",
+        }
+    config = StackConfig.for_session(
+        connections=connections,
+        databases={
+            name: GenericDatabaseConfig(connection=connection)
+            for name, connection in store_connections.items()
+        },
+    )
+    resolver = Resolver(config)
+    return resolver, tuple(
+        ResolvedVectorStore(
+            name=name,
+            backend_type="sqlitevec",
+            database=resolver.resolve_database(name),
+            faiss_cache_dir=None,
+            configuration={},
+        )
+        for name in ("store_a", "store_b")
+    )
 
 
 def test_every_public_backend_member_is_classified_exactly_once():
@@ -123,6 +170,139 @@ def test_reader_rejects_every_write(tmp_path):
         assert [record.model_name for record in reader.get_registered_models()] == [_MODEL]
 
 
+@pytest.mark.parametrize("use_path_alias", [False, True])
+def test_one_store_per_model_on_same_sqlite_file(tmp_path, use_path_alias):
+    real_path = tmp_path / "shared.db"
+    alias_path = tmp_path / "alias.db"
+    second_path = alias_path if use_path_alias else real_path
+    _, (store_a, store_b) = _same_database_stores(real_path, second_path)
+    with open_vector_store_writer(store_a) as first:
+        record_a = first.register_model(
+            model_name=_MODEL,
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=3,
+        )
+        first.upsert_embeddings(model_name=_MODEL, records=_RECORDS, embeddings=_VECTORS)
+        again = first.register_model(
+            model_name=_MODEL,
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=3,
+        )
+        assert again == record_a
+    if use_path_alias:
+        alias_path.symlink_to(real_path)
+
+    with open_vector_store_writer(store_b) as second:
+        with pytest.raises(ModelRegistrationConflictError) as exc_info:
+            second.register_model(
+                model_name=_MODEL,
+                provider_type="ollama",
+                index_config=FlatIndexConfig(),
+                dimensions=3,
+            )
+        assert str(exc_info.value) == (
+            f"Model '{_MODEL}' is already registered by vector store 'store_a' in this database. "
+            "Use that store, or delete the model there first."
+        )
+        assert exc_info.value.conflict_field == "model_name"
+
+    with open_vector_store_writer(store_a) as first:
+        first.delete_model(model_name=_MODEL)
+        assert first.get_registered_model(model_name=_MODEL) is None
+    with open_vector_store_writer(store_b) as second:
+        second.register_model(
+            model_name=_MODEL,
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=3,
+        )
+
+
+def test_same_model_can_register_in_different_sqlite_databases(tmp_path):
+    _, (store_a, store_b) = _same_database_stores(
+        tmp_path / "store-a.db", tmp_path / "store-b.db"
+    )
+    with open_vector_store_writer(store_a) as first, open_vector_store_writer(store_b) as second:
+        record_a = first.register_model(
+            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3
+        )
+        record_b = second.register_model(
+            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3
+        )
+        assert record_a.storage_identifier != record_b.storage_identifier
+
+
+def test_concurrent_cross_store_registration_on_sqlite_has_one_winner(tmp_path):
+    _, (store_a, store_b) = _same_database_stores(tmp_path / "concurrent.db")
+    # Initialize the shared registry before the concurrent registration calls.
+    with open_vector_store_writer(store_a) as first, open_vector_store_writer(store_b) as second:
+        def register(writer):
+            try:
+                return writer.register_model(
+                    model_name=_MODEL,
+                    provider_type="ollama",
+                    index_config=FlatIndexConfig(),
+                    dimensions=3,
+                )
+            except ModelRegistrationConflictError as error:
+                return error
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(register, (first, second)))
+
+    successes = [result for result in outcomes if not isinstance(result, Exception)]
+    conflicts = [result for result in outcomes if isinstance(result, ModelRegistrationConflictError)]
+    assert len(successes) == 1
+    assert len(conflicts) == 1
+    assert str(conflicts[0]).startswith(f"Model '{_MODEL}' is already registered by vector store '")
+
+
+def test_prerelease_registry_without_model_unique_constraint_still_refuses_second_store(tmp_path):
+    import sqlalchemy as sa
+
+    _, (store_a, store_b) = _same_database_stores(tmp_path / "prerelease.db")
+    with open_vector_store_writer(store_a) as writer:
+        engine = writer.emb_engine
+        table = ModelRegistry.__table__.to_metadata(sa.MetaData())
+        for constraint in tuple(table.constraints):
+            if isinstance(constraint, sa.UniqueConstraint) and constraint.name == "uq_model_registry_model_name":
+                table.constraints.remove(constraint)
+        with engine.begin() as connection:
+            ModelRegistry.__table__.drop(connection)
+            table.create(connection)
+        writer.register_model(
+            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3
+        )
+
+    with open_vector_store_writer(store_b) as writer, pytest.raises(
+        ModelRegistrationConflictError, match="store_a"
+    ):
+        writer.register_model(
+            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3
+        )
+
+
+def test_register_model_does_not_read_active_config(tmp_path, monkeypatch):
+    import oa_configurator
+
+    _, (store_a, _) = _same_database_stores(tmp_path / "without-config.db")
+
+    def no_active_config(cls):
+        raise FileNotFoundError("no active config")
+
+    monkeypatch.setattr(oa_configurator.Resolver, "from_active_config", classmethod(no_active_config))
+    with open_vector_store_writer(store_a) as writer:
+        registered = writer.register_model(
+            model_name=_MODEL,
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=3,
+        )
+    assert registered.model_name == _MODEL
+
+
 def _assert_every_read_works_without_mutating_sql(store) -> None:
     statements: list[str] = []
 
@@ -177,9 +357,8 @@ def test_reader_connection_refuses_writes_at_database_level(tmp_path):
     store = _populated_store(tmp_path)
     with open_vector_store_reader(store) as reader:
         engine = reader.emb_engine  # ty: ignore[unresolved-attribute]
-        with pytest.raises(OperationalError, match="readonly"):
-            with engine.begin() as connection:
-                connection.execute(text("CREATE TEMPORARY TABLE _probe (id INTEGER)"))
+        with engine.begin() as connection, pytest.raises(OperationalError, match="readonly"):
+            connection.execute(text("CREATE TEMPORARY TABLE _probe (id INTEGER)"))
 
 
 def test_export_and_faiss_build_run_on_a_reader(tmp_path):
@@ -225,13 +404,16 @@ def test_only_the_writer_attaches_the_vector_extension_hook(pg_db, monkeypatch):
 
 @pytest.mark.postgresql
 @pytest.mark.db_dialect
-def test_two_vector_stores_on_one_physical_database_do_not_share_registry_rows(pg_db):
-    """model_registry rows are scoped by database_config_name. Before
-    that column existed, two stores sharing one physical database (and
-    hence one omop_emb_registry schema) shared one global set of rows. As a result,
-    store B could see and recreate store A's models."""
+def test_one_model_name_is_unique_across_schemas_in_one_postgres_database(pg_db):
+    """The registry is shared across schemas in one physical database."""
     import sqlalchemy as sa
-    from oa_configurator import ConnectionConfig, GenericDatabaseConfig, Resolver, ResolvedVectorStore, StackConfig
+    from oa_configurator import (
+        ConnectionConfig,
+        GenericDatabaseConfig,
+        ResolvedVectorStore,
+        Resolver,
+        StackConfig,
+    )
     from oa_configurator.testing import isolated_test_schema
 
     conn_url = sa.engine.make_url(pg_db.committing_engine.url)
@@ -267,19 +449,19 @@ def test_two_vector_stores_on_one_physical_database_do_not_share_registry_rows(p
                 writer_a.register_model(
                     model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
                 )
-            with open_vector_store_writer(store_b) as writer_b:
-                # Same model_name as store_a, on a different physical schema --
-                # must succeed independently, not collide with store_a's row.
+            with open_vector_store_writer(store_b) as writer_b, pytest.raises(
+                ModelRegistrationConflictError, match="store_a"
+            ):
                 writer_b.register_model(
                     model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
                 )
-
-                assert [r.model_name for r in writer_a.get_registered_models()] == [_MODEL]
-                assert [r.model_name for r in writer_b.get_registered_models()] == [_MODEL]
-
+            with open_vector_store_writer(store_a) as writer_a:
                 writer_a.delete_model(model_name=_MODEL)
-                # store_a's delete must not remove store_b's same-named row.
-                assert writer_b.get_registered_models() != ()
+            with open_vector_store_writer(store_b) as writer_b:
+                assert writer_b.get_registered_models() == ()
+                writer_b.register_model(
+                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                )
                 writer_b.delete_model(model_name=_MODEL)
         finally:
             for store in (store_a, store_b):
@@ -288,14 +470,16 @@ def test_two_vector_stores_on_one_physical_database_do_not_share_registry_rows(p
                         writer.delete_model(model_name=_MODEL)
 
 
-def test_two_vector_stores_on_one_schema_cannot_share_a_storage_table(pg_db):
-    """Two stores resolving to one schema would both write the same physical
-    table, so the second registration of a same-named model is refused.
-
-    One config refuses two entries sharing a schema, so the stores come from
-    two separate configs, as two deployments sharing one database would."""
+def test_one_store_per_model_on_one_postgres_registry(pg_db):
+    """A shared registry gives one vector store ownership of each model name."""
     import sqlalchemy as sa
-    from oa_configurator import ConnectionConfig, GenericDatabaseConfig, Resolver, ResolvedVectorStore, StackConfig
+    from oa_configurator import (
+        ConnectionConfig,
+        GenericDatabaseConfig,
+        ResolvedVectorStore,
+        Resolver,
+        StackConfig,
+    )
     from oa_configurator.testing import isolated_test_schema
 
     conn_url = sa.engine.make_url(pg_db.committing_engine.url)
@@ -306,7 +490,7 @@ def test_two_vector_stores_on_one_schema_cannot_share_a_storage_table(pg_db):
     )
 
     with isolated_test_schema(pg_db.committing_engine, prefix="emb_shared") as schema:
-        store_x, store_y = (
+        store_a, store_b = (
             ResolvedVectorStore(
                 name=name,
                 backend_type="pgvector",
@@ -319,21 +503,35 @@ def test_two_vector_stores_on_one_schema_cannot_share_a_storage_table(pg_db):
                 faiss_cache_dir=None,
                 configuration={},
             )
-            for name in ("store_x", "store_y")
+            for name in ("store_a", "store_b")
         )
         try:
-            with open_vector_store_writer(store_x) as writer_x:
-                writer_x.register_model(
+            with open_vector_store_writer(store_a) as writer_a:
+                record_a = writer_a.register_model(
                     model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
                 )
-            with open_vector_store_writer(store_y) as writer_y:
+                assert writer_a.register_model(
+                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                ) == record_a
+            with open_vector_store_writer(store_b) as writer_b:
                 with pytest.raises(ModelRegistrationConflictError) as exc_info:
-                    writer_y.register_model(
+                    writer_b.register_model(
                         model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
                     )
-            assert exc_info.value.conflict_field == "storage_identifier"
+                assert str(exc_info.value) == (
+                    f"Model '{_MODEL}' is already registered by vector store 'store_a' in this database. "
+                    "Use that store, or delete the model there first."
+                )
+                assert exc_info.value.conflict_field == "model_name"
+            with open_vector_store_writer(store_a) as writer_a:
+                writer_a.delete_model(model_name=_MODEL)
+            with open_vector_store_writer(store_b) as writer_b:
+                record_b = writer_b.register_model(
+                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                )
+                assert record_b.model_name == _MODEL
         finally:
-            for store in (store_x, store_y):
+            for store in (store_a, store_b):
                 with open_vector_store_writer(store) as writer:
                     if writer.get_registered_model(model_name=_MODEL) is not None:
                         writer.delete_model(model_name=_MODEL)
@@ -363,6 +561,5 @@ class TestPostgresReader:
     def test_connection_refuses_writes_at_database_level(self, store):
         with open_vector_store_reader(store) as reader:
             engine = reader.emb_engine  # ty: ignore[unresolved-attribute]
-            with pytest.raises(InternalError, match="read-only transaction"):
-                with engine.begin() as connection:
-                    connection.execute(text("CREATE TEMPORARY TABLE _probe (id INTEGER)"))
+            with engine.begin() as connection, pytest.raises(InternalError, match="read-only transaction"):
+                connection.execute(text("CREATE TEMPORARY TABLE _probe (id INTEGER)"))

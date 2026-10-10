@@ -14,13 +14,13 @@ pytest.importorskip(
 )
 
 import sqlalchemy as sa
-from oa_configurator import Role
+from oa_configurator import Role, physical_schema_of
 from oa_configurator.testing import resolve_with_role_schemas, scoped_test_schema
 
+from omop_emb.backends.base_backend import _open_writer
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 from omop_emb.config import IndexType, MetricType
-from omop_emb.backends.base_backend import _open_writer
 from omop_emb.model_registry import RegistryManager, registry_reader_engine
 
 from .conftest import (
@@ -174,6 +174,65 @@ class TestPGVectorHNSWBackend:
             k=1,
         )
         assert results[0][0].concept_id == HYPERTENSION_ID
+
+
+@pytest.mark.pgvector
+@pytest.mark.integration
+def test_long_provider_model_variants_have_independent_tables_and_indexes(
+    pg_backend: PGVectorEmbeddingBackend,
+):
+    variants = (
+        "hf.co/second-state/multilingual-e5-large-instruct-GGUF:Q8_0",
+        "hf.co/second-state/multilingual-e5-large-instruct-GGUF:Q5_0",
+        "hf.co/second-state/multilingual-e5-large-instruct-GGUF:Q4_K_M",
+    )
+    records = {}
+    try:
+        for model_name in variants:
+            records[model_name] = pg_backend.register_model(
+                model_name=model_name,
+                provider_type=PROVIDER_TYPE,
+                index_config=FlatIndexConfig(),
+                dimensions=EMBEDDING_DIM,
+            )
+        table_names = {record.storage_identifier for record in records.values()}
+        assert len(table_names) == len(variants)
+        inspector = sa.inspect(pg_backend.emb_engine)
+        schema = physical_schema_of(pg_backend.emb_engine)
+        assert all(inspector.has_table(table, schema=schema) for table in table_names)
+
+        for model_name in variants:
+            pg_backend.rebuild_index(
+                model_name=model_name,
+                index_config=HNSWIndexConfig(metric_type=MetricType.L2),
+            )
+        initial_indexes = {
+            name: pg_backend.physical_indexes(name) for name in variants
+        }
+        all_indexes = {indexes[0] for indexes in initial_indexes.values()}
+        assert len(all_indexes) == len(variants)
+        assert all(indexes == (f"idx_{records[name].storage_identifier}_l2",)
+                   for name, indexes in initial_indexes.items())
+
+        first, *other_variants = variants
+        pg_backend.rebuild_index(
+            model_name=first,
+            index_config=HNSWIndexConfig(metric_type=MetricType.COSINE),
+        )
+        assert pg_backend.physical_indexes(first) == (
+            f"idx_{records[first].storage_identifier}_cosine",
+        )
+        assert all(pg_backend.physical_indexes(name) == initial_indexes[name]
+                   for name in other_variants)
+
+        pg_backend.rebuild_index(model_name=first, index_config=FlatIndexConfig())
+        assert pg_backend.physical_indexes(first) == ()
+        assert all(pg_backend.physical_indexes(name) == initial_indexes[name]
+                   for name in other_variants)
+    finally:
+        for model_name in records:
+            if pg_backend.get_registered_model(model_name=model_name) is not None:
+                pg_backend.delete_model(model_name=model_name)
 
 
 @pytest.mark.pgvector

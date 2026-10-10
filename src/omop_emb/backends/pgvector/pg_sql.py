@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import typing
 from typing import List, Optional, Sequence, Union
 
 from numpy import ndarray
@@ -23,16 +24,21 @@ from oa_configurator import (
     qualified,
     physical_schema_of,
 )
-from sqlalchemy import Engine, Integer, Row, Select, func, inspect, literal, select, text
+from sqlalchemy import Engine, Integer, MetaData, Row, Select, func, inspect, literal, select, text
 from sqlalchemy.sql import cast, column, values
 from sqlalchemy.sql.elements import ColumnElement
-from sqlalchemy.orm import Session, mapped_column
+from sqlalchemy.orm import Session, mapped_column, registry
 
 from omop_emb.config import MetricType
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import HNSWIndexConfig
 from omop_emb.backends.db_utils import apply_concept_filter_where, in_values
-from omop_emb.backends.embedding_table import EMBEDDING_COLUMN_NAME, EmbeddingTableBase, PGEmbeddingTable
+from omop_emb.backends.embedding_table import (
+    EMBEDDING_COLUMN_NAME,
+    ConceptEmbeddingMixin,
+    EmbeddingTableBase,
+    PGEmbeddingTable,
+)
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, vector_column_type_for_dimensions
 
@@ -421,6 +427,7 @@ def _cached_pg_embedding_table_descriptor(tablename: str, dimensions: int) -> ty
     from pgvector.sqlalchemy import VECTOR, HALFVEC  # optional dependency
 
     col_type = vector_column_type_for_dimensions(dimensions)
+    descriptor_registry = registry(metadata=MetaData())
     emb_col = mapped_column(
         HALFVEC(dimensions)
         if col_type == VectorColumnType.HALFVEC
@@ -428,13 +435,14 @@ def _cached_pg_embedding_table_descriptor(tablename: str, dimensions: int) -> ty
         nullable=False,
         index=False,
     )
-    return type(
+    descriptor = type(
         f"PGEmbedding_{tablename}",
-        (PGEmbeddingTable,),
+        (ConceptEmbeddingMixin,),
         {
             "__tablename__": tablename,
-            "__table_args__": {"schema": Role.PRIMARY.value, "extend_existing": True},
+            "__table_args__": {"schema": Role.PRIMARY.value},
             "__module__": __name__,
             EMBEDDING_COLUMN_NAME: emb_col,
         },
     )
+    return typing.cast(type[PGEmbeddingTable], descriptor_registry.mapped(descriptor))

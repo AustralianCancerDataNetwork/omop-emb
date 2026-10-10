@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import pytest
 import sqlalchemy as sa
-
 from oa_configurator import ensure_schema
+from sqlalchemy.exc import IntegrityError
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.config import MODEL_REGISTRY_SCHEMA, IndexType, MetricType
 from omop_emb.model_registry import (
     REGISTRY_SCHEMA_KEY,
+    ModelRegistry,
     RegistryManager,
     ensure_registry_table,
     registry_reader_engine,
@@ -31,10 +32,6 @@ BACKEND_PREFIX = "sqlitevec"
 METRIC = MetricType.L2
 FLAT = FlatIndexConfig()
 HNSW = HNSWIndexConfig(metric_type=MetricType.COSINE)
-
-_SAFE = RegistryManager.safe_model_name(MODEL_NAME)
-_PG_STORAGE_ID = RegistryManager.storage_name(_SAFE, "pgvector")
-
 
 @pytest.mark.unit
 class TestRegistryManager:
@@ -63,6 +60,29 @@ class TestRegistryManager:
             dimensions=EMBEDDING_DIM,
         )
         assert r1.storage_identifier == r2.storage_identifier
+
+    def test_database_unique_constraint_covers_model_name(self, registry: RegistryManager):
+        registry.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FLAT,
+            dimensions=EMBEDDING_DIM,
+        )
+        with (
+            pytest.raises(IntegrityError),
+            registry._embedding_sessionmaker() as session,
+            session.begin(),
+        ):
+            session.add(
+                ModelRegistry(
+                    database_config_name="another-store",
+                    model_name=MODEL_NAME,
+                    provider_type=PROVIDER_TYPE,
+                    dimensions=EMBEDDING_DIM,
+                    storage_identifier="another-table",
+                    index_config=FLAT,
+                )
+            )
 
     def test_dimension_conflict_raises(self, registry: RegistryManager):
         registry.register_model(
@@ -200,10 +220,9 @@ class TestRegistryManager:
         assert RegistryManager.safe_model_name("a__b") == "a_b"
 
     def test_storage_name_format(self):
-        name = RegistryManager.storage_name(
-            safe_model_name="mymodel_v1",
-        )
-        assert name == "emb_mymodel_v1"
+        name = RegistryManager.storage_name("vector_store", "MyModel:v1")
+        assert name.startswith("emb_mymodel_v1_")
+        assert len(name.rsplit("_", 1)[1]) == 8
 
 
 @pytest.mark.unit
@@ -233,8 +252,7 @@ class TestProviderTypeValidation:
 
 
 def _create_pre_scoping_registry(connection: sa.Connection, *, schema: str | None = None) -> None:
-    """Create a model_registry table in the layout every pre-2.2 release
-    shipped: the three signature columns and no database_config_name.
+    """Create a model_registry table without per-store scoping.
 
     The provider_type width reproduces v1.x, where the column was declared
     Enum(ProviderType, native_enum=False) and so rendered VARCHAR(6) holding
@@ -261,17 +279,39 @@ def _create_pre_scoping_registry(connection: sa.Connection, *, schema: str | Non
 
 
 @pytest.mark.unit
-def test_pre_scoping_registry_is_rejected_rather_than_migrated():
-    """A registry predating per-store row scoping is refused outright. No
-    reader path upgrades it, so nothing runs DDL against a table a concurrent
-    writer may be using; migrations/to_v2.py does that offline instead.
-    """
+@pytest.mark.parametrize(
+    ("signature", "error_match"),
+    [
+        ("legacy", "without per-store scoping"),
+        ("partial", "unrecognised or partial signature"),
+    ],
+)
+def test_unreadable_registry_signatures_are_rejected(signature, error_match):
+    """Readers and writers refuse old or incomplete layouts without DDL."""
     engine = registry_reader_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
     with engine.begin() as connection:
-        _create_pre_scoping_registry(connection)
+        if signature == "legacy":
+            _create_pre_scoping_registry(connection)
+        else:
+            connection.execute(sa.text(
+                "CREATE TABLE model_registry (model_name TEXT, storage_identifier TEXT)"
+            ))
 
-    with pytest.raises(LegacyRegistryError, match="database_config_name"):
+    with pytest.raises(LegacyRegistryError, match=error_match):
         ensure_registry_table(engine)
+
+
+@pytest.mark.unit
+def test_reader_rejects_legacy_registry_created_before_reader_opens(tmp_path):
+    path = tmp_path / "legacy-reader.db"
+    resolved = sqlite_resolved_database(str(path))
+    setup_engine = sa.create_engine(f"sqlite:///{path}")
+    with setup_engine.begin() as connection:
+        _create_pre_scoping_registry(connection)
+    setup_engine.dispose()
+
+    with pytest.raises(LegacyRegistryError, match="without per-store scoping"):
+        registry_reader_engine(resolved, extensions=[_load_sqlite_vec])
 
 
 @pytest.mark.unit

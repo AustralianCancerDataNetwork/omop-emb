@@ -16,7 +16,10 @@ from omop_emb.backends.pgvector.pg_sql import (
     hnsw_operator_class,
 )
 from omop_emb.config import IndexType, MetricType, VectorColumnType
-from omop_emb.model_registry import EmbeddingModelRecord
+from omop_emb.model_registry import EmbeddingModelRecord, RegistryManager
+from omop_emb.model_registry.model_registry_manager import (
+    STORAGE_IDENTIFIER_READABLE_PREFIX_LENGTH,
+)
 from omop_emb.utils.embedding_utils import vector_column_type_for_dimensions
 
 pytestmark = pytest.mark.unit
@@ -43,6 +46,24 @@ def _record(dimensions: int = 4) -> EmbeddingModelRecord:
 def test_index_name_format():
     assert hnsw_index_name("my_table", MetricType.L2) == "idx_my_table_l2"
     assert hnsw_index_name("my_table", MetricType.COSINE) == "idx_my_table_cosine"
+
+
+def test_store_scoped_storage_names_are_deterministic_and_fit_every_index():
+    model_name = "hf.co/second-state/multilingual-e5-large-instruct-GGUF:" + "x" * 80
+    storage_id = RegistryManager.storage_name("store_a", model_name)
+
+    assert storage_id == RegistryManager.storage_name("store_a", model_name)
+    assert storage_id != RegistryManager.storage_name("store_b", model_name)
+    assert len(storage_id.encode("ascii")) <= 63
+    readable_prefix = storage_id[len("emb_") : storage_id.rfind("_")]
+    assert len(readable_prefix) == STORAGE_IDENTIFIER_READABLE_PREFIX_LENGTH == 38
+    assert all(char in "abcdefghijklmnopqrstuvwxyz0123456789_" for char in readable_prefix)
+    for metric in MetricType:
+        index_name = hnsw_index_name(storage_id, metric)
+        assert len(index_name.encode("ascii")) <= 63
+
+    sanitized = RegistryManager.storage_name("store_a", " ..My__Model!! ")
+    assert sanitized[4 : sanitized.rfind("_")] == "my_model"
 
 
 @pytest.mark.parametrize(
@@ -91,7 +112,10 @@ def test_vector_column_type_rejects_oversized():
 
 @pytest.mark.parametrize("metric", [MetricType.HAMMING, MetricType.JACCARD])
 def test_bit_metrics_not_in_pgvector_supported_metrics(metric):
-    from omop_emb.config import BackendType, is_supported_index_metric_combination_for_backend
+    from omop_emb.config import (
+        BackendType,
+        is_supported_index_metric_combination_for_backend,
+    )
 
     for index in (IndexType.FLAT, IndexType.HNSW):
         assert not is_supported_index_metric_combination_for_backend(

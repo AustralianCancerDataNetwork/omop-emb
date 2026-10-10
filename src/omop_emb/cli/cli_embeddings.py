@@ -7,7 +7,7 @@ from typing import Annotated, Generator, List, Optional, Sequence, Union
 
 import typer
 from tqdm import tqdm
-from oa_configurator import Resolver, ResolvedModel
+from oa_configurator import ConfigurationError, Resolver, ResolvedModel
 from omop_llm import build_model_backend_from_resolved
 
 from omop_emb.utils.cdm import CDMSessionFactory, check_concept_cdm
@@ -551,7 +551,7 @@ def search(
         cdm_sessions: Optional[CDMSessionFactory]
         try:
             cdm_sessions = stack.enter_context(open_cdm_sessions())
-        except RuntimeError:
+        except (RuntimeError, ConfigurationError):
             cdm_sessions = None
             logger.info(
                 "CDM not configured; concept names will not be enriched in results."

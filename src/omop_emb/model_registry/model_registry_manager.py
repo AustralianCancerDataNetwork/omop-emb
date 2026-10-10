@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
-from datetime import datetime, timezone
-from typing import Mapping, Optional
+from collections.abc import Mapping
+from datetime import UTC, datetime
 
+from oa_configurator import database_config_name_of
 from sqlalchemy import Engine, inspect, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from omop_emb.backends.index_config import (
@@ -13,8 +16,7 @@ from omop_emb.backends.index_config import (
     IndexConfig,
     index_config_from_dict,
 )
-from oa_configurator import database_config_name_of, physical_schema_of
-
+from omop_emb.config import MetricType
 from omop_emb.model_registry.model_registry_orm import (
     ModelRegistry,
     resolve_registry_physical_schema,
@@ -23,6 +25,108 @@ from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
 from omop_emb.utils.errors import ModelRegistrationConflictError
 
 logger = logging.getLogger(__name__)
+_MAX_POSTGRES_IDENTIFIER_BYTES = 63
+_STORAGE_IDENTIFIER_HASH_LENGTH = 8
+_INDEX_NAME_FIXED_BYTES = len("idx_") + len("emb_") + 2 + _STORAGE_IDENTIFIER_HASH_LENGTH
+STORAGE_IDENTIFIER_READABLE_PREFIX_LENGTH = (
+    _MAX_POSTGRES_IDENTIFIER_BYTES
+    - _INDEX_NAME_FIXED_BYTES
+    - max(len(metric.value.encode("utf-8")) for metric in MetricType)
+)
+
+
+def _register_model_atomically(
+    manager: RegistryManager,
+    *,
+    model_name: str,
+    provider_type: str,
+    dimensions: int,
+    index_config: IndexConfig,
+    metadata: Mapping[str, object] | None,
+    registered_at: datetime | None,
+) -> EmbeddingModelRecord:
+    try:
+        with manager.emb_session_factory(expire_on_commit=False) as session, session.begin():
+            if manager.embedding_engine.dialect.name == "sqlite":
+                # SQLite's deferred transactions can both read before either
+                # inserts. Acquire the write reservation before the pre-check
+                # so the second registration observes the first committed row.
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            existing = manager._fetch_row(session, model_name)
+            if existing is not None:
+                return _existing_registration_result(
+                    manager, existing, model_name, dimensions, metadata
+                )
+            other_store = _other_store_for_model(session, manager, model_name)
+            if other_store is not None:
+                raise _store_conflict(model_name, other_store)
+            row = ModelRegistry(
+                database_config_name=manager._database_config_name,
+                model_name=model_name,
+                provider_type=provider_type,
+                dimensions=dimensions,
+                storage_identifier=manager.storage_name(manager._database_config_name, model_name),
+                details=dict(metadata) if metadata else {},
+                index_config=index_config,
+            )
+            if registered_at is not None:
+                row.created_at = registered_at
+                row.updated_at = registered_at
+            session.add(row)
+            session.flush()
+    except IntegrityError:
+        with manager.emb_session_factory() as session:
+            existing = manager._fetch_row(session, model_name)
+            if existing is not None:
+                return _existing_registration_result(
+                    manager, existing, model_name, dimensions, metadata
+                )
+            other_store = _other_store_for_model(session, manager, model_name)
+            if other_store is not None:
+                raise _store_conflict(model_name, other_store)
+        raise
+    return manager._row_to_record(row)
+
+
+def _other_store_for_model(
+    session: Session, manager: RegistryManager, model_name: str
+) -> str | None:
+    return session.scalar(
+        select(ModelRegistry.database_config_name).where(
+            ModelRegistry.model_name == model_name,
+            ModelRegistry.database_config_name != manager._database_config_name,
+        )
+    )
+
+
+def _store_conflict(model_name: str, store_name: str) -> ModelRegistrationConflictError:
+    return ModelRegistrationConflictError(
+        f"Model '{model_name}' is already registered by vector store '{store_name}' "
+        "in this database. Use that store, or delete the model there first.",
+        conflict_field="model_name",
+    )
+
+
+def _existing_registration_result(
+    manager: RegistryManager,
+    existing: ModelRegistry,
+    model_name: str,
+    dimensions: int,
+    metadata: Mapping[str, object] | None,
+) -> EmbeddingModelRecord:
+    if existing.dimensions != dimensions:
+        raise ModelRegistrationConflictError(
+            f"Model '{model_name}' already registered with "
+            f"dimensions={existing.dimensions}, got {dimensions}.",
+            conflict_field="dimensions",
+        )
+    if existing.details != (metadata or {}):
+        raise ModelRegistrationConflictError(
+            f"Model '{model_name}' is already registered with different metadata. "
+            "Reuse the existing model name or choose a new one.",
+            conflict_field="metadata",
+        )
+    return manager._row_to_record(existing)
 
 
 class RegistryManager:
@@ -89,8 +193,8 @@ class RegistryManager:
     def get_registered_models(
         self,
         *,
-        model_name: Optional[str] = None,
-        provider_type: Optional[str] = None,
+        model_name: str | None = None,
+        provider_type: str | None = None,
     ) -> tuple[EmbeddingModelRecord, ...]:
         """Return all registered models matching the given filters.
 
@@ -127,8 +231,8 @@ class RegistryManager:
         index_config: IndexConfig,
         dimensions: int,
         provider_type: str,
-        metadata: Optional[Mapping[str, object]] = None,
-        registered_at: Optional[datetime] = None,
+        metadata: Mapping[str, object] | None = None,
+        registered_at: datetime | None = None,
     ) -> EmbeddingModelRecord:
         """Register a model or return the existing record if already registered.
 
@@ -164,54 +268,15 @@ class RegistryManager:
             If ``metadata`` contains a reserved key.
         """
         _validate_metadata_keys(metadata)
-        safe_model_name = self.safe_model_name(model_name)
-        storage_identifier = self.storage_name(safe_model_name)
-
-        with self.emb_session_factory(expire_on_commit=False) as session:
-            existing = self._fetch_row(session, model_name)
-            if existing is not None:
-                if existing.dimensions != dimensions:
-                    raise ModelRegistrationConflictError(
-                        f"Model '{model_name}' already registered with "
-                        f"dimensions={existing.dimensions}, got {dimensions}.",
-                        conflict_field="dimensions",
-                    )
-                if existing.details != (metadata or {}):
-                    raise ModelRegistrationConflictError(
-                        f"Model '{model_name}' is already registered with different "
-                        f"metadata. Reuse the existing model name or choose a new one.",
-                        conflict_field="metadata",
-                    )
-                return self._row_to_record(existing)
-
-            claimed_by = self._storage_identifier_owner(session, storage_identifier)
-            if claimed_by is not None and self._storage_table_exists(session, storage_identifier):
-                raise ModelRegistrationConflictError(
-                    f"storage_identifier {storage_identifier!r} is already registered to "
-                    f"vector store {claimed_by!r}, which resolves to this same schema. "
-                    "Registering it here would make both stores share one physical table, "
-                    "so deleting the model in either would drop the other's embeddings. "
-                    "Give this store its own schema, or register the model under a "
-                    "different name.",
-                    conflict_field="storage_identifier",
-                )
-
-        new_row = ModelRegistry(
-            database_config_name=self._database_config_name,
+        return _register_model_atomically(
+            self,
             model_name=model_name,
             provider_type=provider_type,
             dimensions=dimensions,
-            storage_identifier=storage_identifier,
-            details=dict(metadata) if metadata else {},
             index_config=index_config,
+            metadata=metadata,
+            registered_at=registered_at,
         )
-        if registered_at is not None:
-            new_row.created_at = registered_at
-            new_row.updated_at = registered_at
-        with self.emb_session_factory(expire_on_commit=False) as session:
-            session.add(new_row)
-            session.commit()
-        return self._row_to_record(new_row)
 
     def delete_model(self, *, model_name: str) -> None:
         """Delete a registry row. No-op if the row does not exist.
@@ -314,7 +379,7 @@ class RegistryManager:
                     ModelRegistry.database_config_name == self._database_config_name,
                     ModelRegistry.model_name == model_name,
                 )
-                .values(updated_at=datetime.now(timezone.utc))
+                .values(updated_at=datetime.now(UTC))
             )
 
     # ------------------------------------------------------------------
@@ -343,72 +408,37 @@ class RegistryManager:
         return re.sub(r"_+", "_", sanitized).strip("_")
 
     @staticmethod
-    def storage_name(safe_model_name: str, embedding_table_prefix: str = "emb") -> str:
-        """Return the physical table name for a model.
+    def storage_name(database_config_name: str | None, model_name: str) -> str:
+        """Build the deterministic physical table name for a new model registration.
 
         Parameters
         ----------
-        safe_model_name : str
-            Output of :meth:`safe_model_name`.
-        embedding_table_prefix : str, default "emb"
-            Prefix for the embedding table name.
+        database_config_name : str or None
+            The owning ``[databases.*]`` entry name, if available.
+        model_name : str
+            Canonical provider model ID.
 
         Returns
         -------
         str
-            Table name of the form ``<embedding_table_prefix>_<model>``.
+            Store-scoped name ``emb_<readable>_<8 hex SHA-256 characters>``.
         """
-        return f"{embedding_table_prefix}_{safe_model_name}"
+        readable = re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]", "_", model_name.lower()))
+        readable = readable.strip("_")[:STORAGE_IDENTIFIER_READABLE_PREFIX_LENGTH].rstrip("_")
+        readable = readable or "model"
+        identity = f"{database_config_name or ''}|{model_name}".encode()
+        digest = hashlib.sha256(identity).hexdigest()[:_STORAGE_IDENTIFIER_HASH_LENGTH]
+        return f"emb_{readable}_{digest}"
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _fetch_row(self, session: Session, model_name: str) -> Optional[ModelRegistry]:
+    def _fetch_row(self, session: Session, model_name: str) -> ModelRegistry | None:
         return session.scalar(
             select(ModelRegistry).where(
                 ModelRegistry.database_config_name == self._database_config_name,
                 ModelRegistry.model_name == model_name,
-            )
-        )
-
-    def _storage_table_exists(self, session: Session, storage_identifier: str) -> bool:
-        """Does a table named *storage_identifier* exist in this store's own schema?
-
-        Two stores holding the same identifier only collide when they resolve
-        to one schema, which is exactly when the other store's table is
-        already present here.
-        """
-        return inspect(session.connection()).has_table(
-            storage_identifier, schema=physical_schema_of(self._embedding_engine)
-        )
-
-    def _storage_identifier_owner(
-        self, session: Session, storage_identifier: str
-    ) -> Optional[str]:
-        """Name of another vector store already registered against
-        *storage_identifier*, or None.
-
-        ``storage_identifier`` is the physical table name and is derived from
-        the model name alone. Whether the two stores actually share a table
-        is decided by :meth:`_storage_table_exists`.
-
-        Parameters
-        ----------
-        session : sqlalchemy.orm.Session
-            Session on the registry's own database.
-        storage_identifier : str
-            Physical table name about to be claimed.
-
-        Returns
-        -------
-        str or None
-            The other store's ``database_config_name``.
-        """
-        return session.scalar(
-            select(ModelRegistry.database_config_name).where(
-                ModelRegistry.storage_identifier == storage_identifier,
-                ModelRegistry.database_config_name != self._database_config_name,
             )
         )
 
@@ -445,7 +475,7 @@ class RegistryManager:
 # ---------------------------------------------------------------------------
 
 
-def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
+def _as_utc(value: datetime | None) -> datetime | None:
     """Attach UTC tzinfo to a naive datetime, leaving aware ones untouched.
 
     sqlite has no native timezone-aware storage, so SQLAlchemy round-trips
@@ -456,11 +486,11 @@ def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
     datetimes (e.g. a bundle's ``exported_at``) without crashing.
     """
     if value is not None and value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+        return value.replace(tzinfo=UTC)
     return value
 
 
-def _validate_metadata_keys(metadata: Optional[Mapping[str, object]]) -> None:
+def _validate_metadata_keys(metadata: Mapping[str, object] | None) -> None:
     """Raise ``ValueError`` if ``metadata`` contains a reserved key.
 
     Parameters

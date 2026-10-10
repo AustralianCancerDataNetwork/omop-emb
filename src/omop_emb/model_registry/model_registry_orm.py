@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Any, Optional
+from typing import Any
 
 from oa_configurator import (
     ResolvedDatabase,
@@ -10,36 +10,34 @@ from oa_configurator import (
     physical_schema_of,
     qualified,
 )
+from omop_llm import supported_providers
 from sqlalchemy import (
+    JSON,
     Connection,
     DateTime,
     Engine,
     Enum,
     Integer,
-    JSON,
     String,
     UniqueConstraint,
     func,
     inspect,
 )
-from sqlalchemy.orm import DeclarativeBase, mapped_column, validates, Mapped
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
 
-from omop_llm import supported_providers
-
+from omop_emb.backends.index_config import IndexConfig
 from omop_emb.config import (
     MODEL_REGISTRY_SCHEMA,
     REGISTRY_SCHEMA_KEY,
     IndexType,
     MetricType,
 )
-from omop_emb.backends.index_config import IndexConfig
-from omop_emb.utils.errors import MisplacedRegistryError, LegacyRegistryError
+from omop_emb.utils.errors import LegacyRegistryError, MisplacedRegistryError
 
 
 class ModelRegistryBase(DeclarativeBase):
     """Dedicated declarative base for local model registry metadata."""
 
-    pass
 
 
 class ModelRegistry(ModelRegistryBase):
@@ -56,8 +54,8 @@ class ModelRegistry(ModelRegistryBase):
     ----------
     database_config_name : str
         The ``[databases.*]``/vector-store entry this row belongs to.
-        Part of the primary key, so two stores sharing one physical
-        database never see or recreate each other's models.
+        Part of the primary key. A separate unique constraint on
+        ``model_name`` limits each model to one vector store per database.
     model_name : str
         Canonical model name including tag.
     provider_type : str
@@ -67,7 +65,8 @@ class ModelRegistry(ModelRegistryBase):
     storage_identifier : str
         Physical table name where the model's embeddings are stored.
         Unique within database_config_name (not globally: two stores may
-        independently store a same-named model). Format: ``<backend>_<safe_model>``.
+        independently store a same-named model). New names are store-scoped;
+        existing rows retain their stored identifier.
     dimensions : int
         Embedding vector dimensionality.
     index_type : IndexType
@@ -96,6 +95,7 @@ class ModelRegistry(ModelRegistryBase):
 
     __tablename__ = "model_registry"
     __table_args__ = (
+        UniqueConstraint("model_name", name="uq_model_registry_model_name"),
         UniqueConstraint(
             "database_config_name", "storage_identifier", name="uq_model_registry_storage_identifier"
         ),
@@ -112,7 +112,7 @@ class ModelRegistry(ModelRegistryBase):
     index_type: Mapped[IndexType] = mapped_column(
         Enum(IndexType, native_enum=False), nullable=False, default=IndexType.FLAT
     )
-    metric_type: Mapped[Optional[MetricType]] = mapped_column(
+    metric_type: Mapped[MetricType | None] = mapped_column(
         Enum(MetricType, native_enum=False), nullable=True
     )
     index_config: Mapped[Any] = mapped_column(JSON, nullable=True, default=dict)
@@ -142,7 +142,7 @@ class ModelRegistry(ModelRegistryBase):
     @validates("index_config")
     def _validate_and_sync_index_config(
         self, _key: str, index_config: IndexConfig
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Unpack an ``IndexConfig`` into the row's index columns.
 
         Parameters
@@ -253,7 +253,8 @@ def registry_reader_engine(
     """Build a read-only engine mapped to the registry schema.
 
     Registers nothing, creates nothing, and migrates nothing. Raises on a
-    pre-2.0 or misplaced registry (see ``_reject_incompatible_registry``);
+    registry without per-store scoping or misplaced registry (see
+    ``_reject_incompatible_registry``);
     otherwise a missing table is left for
     ``RegistryManager.registry_available`` to report.
 
@@ -326,10 +327,15 @@ def ensure_registry_table(engine: Engine) -> None:
 
 
 _LEGACY_SIGNATURE_COLUMNS = frozenset({"model_name", "storage_identifier", "dimensions"})
+_CURRENT_SIGNATURE_COLUMNS = _LEGACY_SIGNATURE_COLUMNS | {"database_config_name"}
+MIGRATION_COMMAND = (
+    "uv run https://raw.githubusercontent.com/AustralianCancerDataNetwork/oa-configurator/"
+    "<tag>/migrations/to_v2.py"
+)  # TODO(release): replace <tag> with the oa-configurator release tag.
 
 
 def _is_legacy_layout(columns: set[str]) -> bool:
-    """True if *columns* describe a pre-2.0 registry.
+    """True if *columns* describe a registry without per-store scoping.
 
     Requires the full legacy signature, not merely a missing
     ``database_config_name``, so an unrelated or partially-created table that
@@ -348,11 +354,26 @@ def _is_legacy_layout(columns: set[str]) -> bool:
     return "database_config_name" not in columns and _LEGACY_SIGNATURE_COLUMNS <= columns
 
 
+def _reject_unreadable_local_registry(columns: set[str], schema: str | None) -> None:
+    if _is_legacy_layout(columns):
+        raise LegacyRegistryError(
+            f"The model registry in schema {schema!r} belongs to registries without "
+            "per-store scoping (omop-emb before this release), so this version "
+            f"cannot read it. Upgrade it with: {MIGRATION_COMMAND}"
+        )
+    if not _CURRENT_SIGNATURE_COLUMNS <= columns:
+        raise LegacyRegistryError(
+            f"The model_registry table in schema {schema!r} has an unrecognised or "
+            f"partial signature ({sorted(columns)}). It was not changed. "
+            "Check the table before continuing."
+        )
+
+
 def _reject_incompatible_registry(connection: Connection, *, registry_schema: str | None) -> None:
     """Refuse to operate against a registry this version cannot read correctly.
 
-    Read-only: detects and reports, never migrates. Upgrading a pre-2.0
-    layout is ``migrations/to_v2.py``'s job, so no reader path runs DDL and
+    Read-only: detects and reports, never migrates. Upgrading a registry
+    without per-store scoping is the standalone migration script's job, so no reader path runs DDL and
     two concurrent first-opens cannot race one another.
 
     Three cases, in order:
@@ -379,7 +400,8 @@ def _reject_incompatible_registry(connection: Connection, *, registry_schema: st
     Raises
     ------
     LegacyRegistryError
-        If a pre-2.0 registry layout is found, here or elsewhere.
+        If a registry without per-store scoping or an unrecognised partial
+        registry table is found, here or elsewhere.
     MisplacedRegistryError
         If a current-layout registry exists only in another schema.
     """
@@ -390,13 +412,8 @@ def _reject_incompatible_registry(connection: Connection, *, registry_schema: st
         return {column["name"] for column in inspector.get_columns(table_name, schema=schema)}
 
     present_here = inspector.has_table(table_name, schema=registry_schema)
-    if present_here and _is_legacy_layout(columns_of(registry_schema)):
-        raise LegacyRegistryError(
-            f"The model registry in schema {registry_schema!r} predates per-store row "
-            "scoping (no database_config_name column), so this version cannot read it. "
-            "Run migrations/to_v2.py to upgrade it, which preserves existing rows and "
-            "their storage identifiers."
-        )
+    if present_here:
+        _reject_unreadable_local_registry(columns_of(registry_schema), registry_schema)
 
     # A dialect without schemas has only the one location, already checked above.
     if registry_schema is None:
@@ -405,13 +422,18 @@ def _reject_incompatible_registry(connection: Connection, *, registry_schema: st
     elsewhere = find_table_in_other_schemas(
         connection, table_name, physical_schema=registry_schema
     )
+    elsewhere = [
+        schema for schema in elsewhere
+        if _LEGACY_SIGNATURE_COLUMNS <= columns_of(schema)
+    ]
     for schema in elsewhere:
-        if _is_legacy_layout(columns_of(schema)):
+        columns = columns_of(schema)
+        if _is_legacy_layout(columns):
             raise LegacyRegistryError(
-                f"Found a pre-2.0 model registry in schema {schema!r} while the current "
-                f"registry lives in {registry_schema!r}. This store's models are still in "
-                "the old location and would read back as an empty catalogue. Run "
-                "migrations/to_v2.py, which migrates every store in one pass."
+                f"Found a registry without per-store scoping (omop-emb before this "
+                f"release) in schema {schema!r} while the current registry lives in "
+                f"{registry_schema!r}. This store's models would read back as an empty "
+                f"catalogue. Upgrade it with: {MIGRATION_COMMAND}"
             )
 
     if not present_here and elsewhere:

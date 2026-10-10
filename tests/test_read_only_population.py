@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from oa_configurator import CDMDatabaseConfig, ConnectionConfig, Dialect, Resolver, StackConfig
 from sqlalchemy import event, insert, inspect, text
 
 from omop_alchemy.cdm.model.vocabulary import Concept
@@ -145,6 +146,45 @@ def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
     assert row.missing_ids == frozenset({2})
     assert row.stale_ids == frozenset({3})
     assert plan.pending_ids == frozenset({2})
+
+
+def test_population_reads_concepts_from_a_separate_vocab_database(tmp_path):
+    primary_path = tmp_path / "primary.db"
+    vocab_path = tmp_path / "vocab.db"
+    config = StackConfig.for_session(
+        connections={
+            "primary": ConnectionConfig(dialect=Dialect.SQLITE, database_name=str(primary_path)),
+            "vocab": ConnectionConfig(dialect=Dialect.SQLITE, database_name=str(vocab_path)),
+        },
+        databases={
+            "cdm": CDMDatabaseConfig(
+                connection="primary", vocab_connection="vocab",
+            ),
+        },
+    )
+    resolved = Resolver(config).resolve_database("cdm")
+    primary, vocab = resolved.create_engines()
+    Concept.__table__.create(vocab)
+    with vocab.begin() as connection:
+        connection.execute(insert(Concept), [_concept(101)])
+
+    class EmptyStore:
+        initialized = True
+
+        def iter_stored_embeddings(self, _model_name: str, *, batch_size: int = 10_000):
+            return iter(())
+
+    plan = plan_population(
+        cdm_sessionmaker(resolved, primary=primary, vocab=vocab),
+        EmptyStore(),
+        model_name="test-model",
+        scope=PopulationScope(),
+    )
+
+    assert plan.rows[0].eligible_ids == frozenset({101})
+    assert inspect(primary).has_table("concept") is False
+    primary.dispose()
+    vocab.dispose()
 
 
 def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:

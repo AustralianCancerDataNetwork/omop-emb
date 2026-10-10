@@ -18,7 +18,11 @@ pytestmark = [pytest.mark.postgresql, pytest.mark.db_dialect]
 
 def _create_registry_table(engine: sa.Engine, schema: str) -> None:
     with engine.begin() as connection:
-        connection.execute(sa.text(f'CREATE TABLE "{schema}".model_registry (model_name text)'))
+        connection.execute(sa.text(
+            f'CREATE TABLE "{schema}".model_registry ('
+            "database_config_name text, model_name text, storage_identifier text, "
+            "dimensions integer)"
+        ))
 
 
 def test_registry_left_in_another_schema_is_refused(pg_db) -> None:
@@ -44,6 +48,28 @@ def test_registry_in_its_own_schema_passes(pg_db) -> None:
         _create_registry_table(scoped.engine, registry_schema)
         with scoped.engine.connect() as connection:
             _reject_incompatible_registry(connection, registry_schema=registry_schema)
+
+
+def test_unrelated_model_registry_table_elsewhere_does_not_block_bootstrap(
+    pg_db, monkeypatch
+) -> None:
+    from omop_emb.model_registry import model_registry_orm
+
+    with (
+        isolated_test_schema(pg_db.committing_engine, prefix="emb_registry_proper") as proper_schema,
+        isolated_test_schema(pg_db.committing_engine, prefix="emb_app_table") as unrelated_schema,
+    ):
+        with pg_db.committing_engine.begin() as connection:
+            connection.execute(
+                sa.text(f'CREATE TABLE "{unrelated_schema}".model_registry (application_id text)')
+            )
+        monkeypatch.setattr(
+            model_registry_orm,
+            "find_table_in_other_schemas",
+            lambda *_args, **_kwargs: [unrelated_schema],
+        )
+        with pg_db.committing_engine.connect() as connection:
+            _reject_incompatible_registry(connection, registry_schema=proper_schema)
 
 
 def test_reader_refuses_a_registry_left_in_another_schema(pg_db, monkeypatch) -> None:

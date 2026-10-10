@@ -5,7 +5,12 @@ from datetime import datetime
 from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
-from oa_configurator import Dialect, Role, guard_schema_provenance_for, physical_schema_of
+from oa_configurator import (
+    Dialect,
+    Role,
+    guard_schema_provenance_for,
+    physical_schema_of,
+)
 from sqlalchemy import inspect, select, text
 
 try:
@@ -15,30 +20,30 @@ except ImportError as _e:
         "pgvector is not installed. Install it with: pip install omop-emb[pgvector]"
     ) from _e
 
-from omop_emb.config import BackendType, MetricType
 from omop_emb.backends.base_backend import (
-    writes,
     ConceptEmbeddingRecord,
     EmbeddingBackend,
+    writes,
 )
-from omop_emb.backends.index_config import HNSWIndexConfig, IndexConfig
 from omop_emb.backends.embedding_table import (
     PGEmbeddingTable,
 )
+from omop_emb.backends.index_config import HNSWIndexConfig, IndexConfig
 from omop_emb.backends.pgvector.pg_sql import (
     create_pg_embedding_table,
     drop_pg_embedding_table,
     hnsw_index_ddl,
+    pg_embedding_table_descriptor,
     q_all_concept_ids,
     q_embedding_count_by_vocabulary,
-    upsert_embedding_rows,
     query_concept_filter_metadata,
     query_concept_ids_matching_filter,
     query_embeddings_by_ids,
     query_nearest_concept_ids,
     table_exists,
-    pg_embedding_table_descriptor,
+    upsert_embedding_rows,
 )
+from omop_emb.config import BackendType, MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
@@ -48,6 +53,12 @@ from omop_emb.utils.embedding_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_pg_registration(dimensions: int) -> None:
+    """Validate pgvector dimensions, including the halfvec limit."""
+    vector_column_type_for_dimensions(dimensions)
+
 
 def _create_vector_extension(dbapi_connection, _connection_record) -> None:
     """Connect-event callable: ensure the pgvector extension exists on this connection.
@@ -177,7 +188,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         ModelRegistrationConflictError
             If the model is already registered with a different dimensionality.
         """
-        vector_column_type_for_dimensions(dimensions)  # validates halfvec limit
+        _validate_pg_registration(dimensions)
         return super().register_model(
             model_name=model_name,
             dimensions=dimensions,

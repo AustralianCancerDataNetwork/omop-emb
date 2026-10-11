@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -853,7 +853,7 @@
 </table>
 <div class="admonition note">
 <p class="admonition-title">FAISS is a sidecar, not a backend</p>
-<p>FAISS (<code>omop-emb[faiss-cpu]</code>) is a read-acceleration layer that sits on top of sqlite-vec or pgvector. It is not a primary backend and has no <code>backend_type</code> of its own. See the <a href="../cli/#faiss-sidecar">CLI reference</a> for how to export and use FAISS indices.</p>
+<p>FAISS (<code>omop-emb[faiss-cpu]</code>) is a read-acceleration layer that sits on top of sqlite-vec or pgvector. It is not a primary backend and has no <code>backend_type</code> of its own. See the <a href="../cli/#build-faiss-cache">CLI reference</a> for how to export and use FAISS indices.</p>
 </div>
 <h2 id="selecting-a-backend">Selecting a backend</h2>
 <div class="highlight"><pre><span></span><code><span class="k">[vector_stores.vector_store]</span>
@@ -930,7 +930,7 @@ omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index
 </code></pre></div>
 <div class="admonition info">
 <p class="admonition-title">pgvector HNSW</p>
-<p>HNSW is a SQL <code>CREATE INDEX USING hnsw</code> object built by <code>rebuild_index</code>. Without it, pgvector falls back to a sequential scan automatically. <code>ef_search</code> is applied per session at query time.</p>
+<p>HNSW is a SQL <code>CREATE INDEX USING hnsw</code> object built by <code>rebuild_index</code>. Without it, pgvector falls back to a sequential scan automatically. <code>ef_search</code> is read from the registry and applied to each query's transaction. A rebuild leaves exactly the index it describes: switching metric or reverting to FLAT drops the previous HNSW index.</p>
 </div>
 <div class="admonition warning">
 <p class="admonition-title">pgvector dimension limit</p>
@@ -964,7 +964,7 @@ omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index
 </tr>
 </tbody>
 </table>
-<p>For FLAT models, the metric is supplied by the caller at query time. For HNSW models, the metric is locked in at <code>rebuild_index</code> time and must be supplied consistently at every query.</p>
+<p>Stored vectors carry no metric; only queries do. For FLAT models any supported metric can be used per query. For HNSW models the metric is set by <code>rebuild_index</code> and queries must use it.</p>
 
 
 
@@ -1023,7 +1023,7 @@ omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.path", "navigation.top", "content.code.copy", "content.code.annotate"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

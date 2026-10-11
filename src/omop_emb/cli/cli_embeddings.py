@@ -2,17 +2,17 @@
 
 import itertools
 import logging
+from collections.abc import Generator, Sequence
 from contextlib import ExitStack
-from typing import Annotated, Generator, List, Optional, Sequence, Union
+from typing import Annotated
 
 import typer
-from tqdm import tqdm
-from oa_configurator import ConfigurationError, Resolver, ResolvedModel
+from oa_configurator import ConfigurationError, ResolvedModel, Resolver
 from omop_llm import build_model_backend_from_resolved
+from tqdm import tqdm
 
-from omop_emb.utils.cdm import CDMSessionFactory, check_concept_cdm
-from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
+from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.config import (
     IndexType,
     MetricType,
@@ -20,6 +20,7 @@ from omop_emb.config import (
     open_cdm_sessions,
 )
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
+from omop_emb.utils.cdm import CDMSessionFactory, check_concept_cdm
 from omop_emb.utils.embedding_utils import (
     CDMConceptFilter,
     EmbeddingConceptFilter,
@@ -33,8 +34,8 @@ app = typer.Typer(
 
 
 def consolidate_queries(
-    queries: Optional[Union[str, List[str]]],
-    queries_file: Optional[str],
+    queries: str | list[str] | None,
+    queries_file: str | None,
 ) -> Generator[str, None, None]:
     if queries is not None and queries_file is not None:
         raise ValueError("Cannot provide both --queries and --queries-file.")
@@ -70,7 +71,7 @@ def _get_config() -> OmopEmbConfig:
         )
 
 
-def _resolve_model(model_name: Optional[str], cfg: OmopEmbConfig) -> ResolvedModel:
+def _resolve_model(model_name: str | None, cfg: OmopEmbConfig) -> ResolvedModel:
     """Resolve a [models.*] entry by name, defaulting to cfg.embedding_model_name.
 
     Converts an unknown model/provider name into an actionable setup message
@@ -115,7 +116,7 @@ def add_embeddings(
         ),
     ] = 100,
     model_name: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--model-name",
             "-m",
@@ -133,7 +134,7 @@ def add_embeddings(
         ),
     ] = False,
     vocabularies: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--vocabulary",
             help="Embed only concepts from specific OMOP vocabularies. Repeat to add multiple.",
@@ -141,7 +142,7 @@ def add_embeddings(
         ),
     ] = None,
     domains: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--domain",
             help="Embed only concepts from specific OMOP domains. Repeat to add multiple.",
@@ -149,7 +150,7 @@ def add_embeddings(
         ),
     ] = None,
     num_embeddings: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--num-embeddings",
             "-n",
@@ -189,9 +190,9 @@ def _add_embeddings(
     resolved_model: ResolvedModel,
     batch_size: int,
     standard_only: bool,
-    domains: Optional[list[str]],
-    vocabularies: Optional[list[str]],
-    num_embeddings: Optional[int],
+    domains: list[str] | None,
+    vocabularies: list[str] | None,
+    num_embeddings: int | None,
 ) -> None:
     """Embed every concept matching the filters that lacks a current embedding."""
     # Ingestion runs no queries, so the interface's metric is never used here.
@@ -241,8 +242,8 @@ def _add_embeddings(
 
         typer.echo(f"Processed {n_processed:,} concepts.")
         logger.info("Completed embedding generation and storage.")
-    except Exception as e:
-        logger.exception(f"Error during embedding generation and storage.\n{e}")
+    except Exception:
+        logger.exception("Error during embedding generation and storage.")
         if not embedding_writer.has_any_embeddings():
             logger.info("No embeddings were stored. Cleaning up model registration.")
             embedding_writer.delete_model()
@@ -252,7 +253,7 @@ def _add_embeddings(
 @app.command()
 def create_index(
     model_name: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--model-name",
             "-m",
@@ -278,7 +279,7 @@ def create_index(
         ),
     ] = IndexType.FLAT,
     index_hnsw_num_neighbors: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-hnsw-num-neighbors",
             help="HNSW: number of neighbors per graph node.",
@@ -286,7 +287,7 @@ def create_index(
         ),
     ] = None,
     index_hnsw_ef_search: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-hnsw-ef-search",
             help="HNSW: ef parameter controlling recall during search.",
@@ -294,7 +295,7 @@ def create_index(
         ),
     ] = None,
     index_hnsw_ef_construction: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-ef-construction",
             help="HNSW: ef parameter controlling graph quality during construction.",
@@ -362,7 +363,7 @@ def add_embeddings_with_index(
         ),
     ] = 100,
     model_name: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--model-name",
             "-m",
@@ -380,7 +381,7 @@ def add_embeddings_with_index(
         ),
     ] = False,
     vocabularies: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--vocabulary",
             help="Embed only concepts from specific OMOP vocabularies. Repeat to add multiple.",
@@ -388,7 +389,7 @@ def add_embeddings_with_index(
         ),
     ] = None,
     domains: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--domain",
             help="Embed only concepts from specific OMOP domains. Repeat to add multiple.",
@@ -396,7 +397,7 @@ def add_embeddings_with_index(
         ),
     ] = None,
     num_embeddings: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--num-embeddings",
             "-n",
@@ -405,7 +406,7 @@ def add_embeddings_with_index(
         ),
     ] = None,
     index_hnsw_num_neighbors: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-hnsw-num-neighbors",
             help="HNSW: number of neighbors per graph node.",
@@ -413,7 +414,7 @@ def add_embeddings_with_index(
         ),
     ] = None,
     index_hnsw_ef_search: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-hnsw-ef-search",
             help="HNSW: ef parameter controlling recall during search.",
@@ -421,7 +422,7 @@ def add_embeddings_with_index(
         ),
     ] = None,
     index_hnsw_ef_construction: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-ef-construction",
             help="HNSW: ef parameter controlling graph quality during construction.",
@@ -456,14 +457,14 @@ def add_embeddings_with_index(
 @app.command()
 def search(
     queries: Annotated[
-        Optional[List[str]],
+        list[str] | None,
         typer.Option(
             "--query",
             help="Query text to search. Repeat to search multiple queries.",
         ),
     ] = None,
     queries_file: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--queries-file",
             help="Path to a .txt file with one query per line.",
@@ -487,7 +488,7 @@ def search(
         ),
     ] = 100,
     model_name: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--model-name",
             "-m",
@@ -513,7 +514,7 @@ def search(
         ),
     ] = False,
     vocabularies: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--vocabulary",
             help="Filter results to specific OMOP vocabularies. Repeat to add multiple.",
@@ -521,7 +522,7 @@ def search(
         ),
     ] = None,
     domains: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--domain",
             help="Filter results to specific OMOP domains. Repeat to add multiple.",
@@ -529,7 +530,7 @@ def search(
         ),
     ] = None,
     faiss_cache_dir: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--faiss-cache-dir",
             help="Directory to cache FAISS index files for on-disk search with FAISS instead of the regular backend.",
@@ -544,11 +545,10 @@ def search(
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
     resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
     resolved_faiss_cache_dir = faiss_cache_dir or resolved_vector_store.faiss_cache_dir
-    store = open_vector_store_reader(resolved_vector_store)
-
     with ExitStack() as stack:
+        store = stack.enter_context(open_vector_store_reader(resolved_vector_store))
         # CDM enrichment is optional for search
-        cdm_sessions: Optional[CDMSessionFactory]
+        cdm_sessions: CDMSessionFactory | None
         try:
             cdm_sessions = stack.enter_context(open_cdm_sessions())
         except (RuntimeError, ConfigurationError):
@@ -575,15 +575,15 @@ def _search(
     queries_generator: Generator[str, None, None],
     *,
     store,
-    cdm_sessions: Optional[CDMSessionFactory],
+    cdm_sessions: CDMSessionFactory | None,
     resolved_model: ResolvedModel,
     metric_type: MetricType,
-    faiss_cache_dir: Optional[str],
+    faiss_cache_dir: str | None,
     batch_size: int,
     k: int,
     standard_only: bool,
-    domains: Optional[list[str]],
-    vocabularies: Optional[list[str]],
+    domains: list[str] | None,
+    vocabularies: list[str] | None,
 ) -> None:
     """Print the nearest concepts for each query, batch by batch."""
 

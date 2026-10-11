@@ -3,11 +3,17 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-from oa_configurator import CDMDatabaseConfig, ConnectionConfig, Dialect, Resolver, StackConfig
-from sqlalchemy import event, insert, inspect, text
-
+from oa_configurator import (
+    CDMDatabaseConfig,
+    ConnectionConfig,
+    Dialect,
+    Resolver,
+    StackConfig,
+)
 from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_alchemy.cross_database import cdm_sessionmaker
+from sqlalchemy import event, insert, inspect, text
+
 from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
@@ -107,7 +113,16 @@ def test_dropped_storage_table_raises_instead_of_being_recreated(tmp_path) -> No
 
     with open_vector_store_reader(store) as reader:
         with pytest.raises(MissingStorageTableError):
-            reader.has_any_embeddings(model_name="test-model")
+            tuple(reader.iter_stored_embeddings("test-model"))
+
+        resolved = sqlite_cdm_database()
+        engine, _ = resolved.create_engines()
+        try:
+            cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
+            with pytest.raises(MissingStorageTableError):
+                plan_population(cdm_sessions, reader, model_name="test-model")
+        finally:
+            engine.dispose()
 
 
 def test_population_plan_distinguishes_missing_and_stale_ids() -> None:

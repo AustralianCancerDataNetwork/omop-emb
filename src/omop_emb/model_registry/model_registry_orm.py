@@ -330,8 +330,8 @@ _LEGACY_SIGNATURE_COLUMNS = frozenset({"model_name", "storage_identifier", "dime
 _CURRENT_SIGNATURE_COLUMNS = _LEGACY_SIGNATURE_COLUMNS | {"database_config_name"}
 MIGRATION_COMMAND = (
     "uv run https://raw.githubusercontent.com/AustralianCancerDataNetwork/oa-configurator/"
-    "<tag>/migrations/to_v2.py"
-)  # TODO(release): replace <tag> with the oa-configurator release tag.
+    "main/migrations/to_v2.py"
+)
 
 
 def _is_legacy_layout(columns: set[str]) -> bool:
@@ -359,7 +359,9 @@ def _reject_unreadable_local_registry(columns: set[str], schema: str | None) -> 
         raise LegacyRegistryError(
             f"The model registry in schema {schema!r} belongs to registries without "
             "per-store scoping (omop-emb before this release), so this version "
-            f"cannot read it. Upgrade it with: {MIGRATION_COMMAND}"
+            "cannot read it. The migration script is not available yet; see "
+            "https://github.com/AustralianCancerDataNetwork/oa-configurator/issues/40. "
+            f"Once it ships, run: {MIGRATION_COMMAND}"
         )
     if not _CURRENT_SIGNATURE_COLUMNS <= columns:
         raise LegacyRegistryError(
@@ -433,7 +435,9 @@ def _reject_incompatible_registry(connection: Connection, *, registry_schema: st
                 f"Found a registry without per-store scoping (omop-emb before this "
                 f"release) in schema {schema!r} while the current registry lives in "
                 f"{registry_schema!r}. This store's models would read back as an empty "
-                f"catalogue. Upgrade it with: {MIGRATION_COMMAND}"
+                "catalogue. The migration script is not available yet; see "
+                "https://github.com/AustralianCancerDataNetwork/oa-configurator/issues/40. "
+                f"Once it ships, run: {MIGRATION_COMMAND}"
             )
 
     if not present_here and elsewhere:

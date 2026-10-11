@@ -297,8 +297,13 @@ def test_unreadable_registry_signatures_are_rejected(signature, error_match):
                 "CREATE TABLE model_registry (model_name TEXT, storage_identifier TEXT)"
             ))
 
-    with pytest.raises(LegacyRegistryError, match=error_match):
+    with pytest.raises(LegacyRegistryError, match=error_match) as exc_info:
         ensure_registry_table(engine)
+    if signature == "legacy":
+        assert "without per-store scoping" in str(exc_info.value)
+        assert "migration script is not available yet" in str(exc_info.value)
+        assert "oa-configurator/issues/40" in str(exc_info.value)
+        assert "uv run https://raw.githubusercontent.com/AustralianCancerDataNetwork/oa-configurator/main/migrations/to_v2.py" in str(exc_info.value)
 
 
 @pytest.mark.unit

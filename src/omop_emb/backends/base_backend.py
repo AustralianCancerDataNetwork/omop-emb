@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from collections.abc import Iterator
-from functools import wraps
 import logging
+from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime
-from typing import Any, Callable, Concatenate, Generic, Iterable, Mapping, Optional, Protocol, Sequence, Tuple, TypeVar, Union
+from functools import wraps
+from typing import (
+    Any,
+    Concatenate,
+    Protocol,
+    Self,
+)
+
 from numpy import ndarray
 from oa_configurator import (
     Dialect,
@@ -18,17 +24,16 @@ from sqlalchemy import Engine, inspect, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
+from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
+from omop_emb.backends.index_config import FlatIndexConfig, IndexConfig
 from omop_emb.config import (
     BackendType,
     MetricType,
     get_supported_index_types_for_backend,
-    is_supported_index_metric_combination_for_backend,
     is_index_type_supported_for_backend,
+    is_supported_index_metric_combination_for_backend,
     parse_backend_type,
 )
-
-from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
-from omop_emb.backends.index_config import IndexConfig, FlatIndexConfig
 from omop_emb.model_registry import (
     EmbeddingModelRecord,
     RegistryManager,
@@ -49,9 +54,6 @@ from omop_emb.utils.errors import (
 )
 
 logger = logging.getLogger(__name__)
-
-TEmbeddingTable = TypeVar("TEmbeddingTable")
-
 
 # ---------------------------------------------------------------------------
 # Write marker
@@ -124,7 +126,7 @@ class EmbeddingStoreReader(Protocol):
         query_embeddings: ndarray,
         concept_filter: EmbeddingConceptFilter | None = None,
         k: int = ...,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]: ...
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]: ...
 
     def physical_indexes(self, model_name: str) -> tuple[str, ...]: ...
 
@@ -132,12 +134,12 @@ class EmbeddingStoreReader(Protocol):
 
     def close(self) -> None: ...
 
-    def __enter__(self) -> EmbeddingStoreReader: ...
+    def __enter__(self) -> EmbeddingStoreReader: ...  # noqa: PYI034
 
     def __exit__(self, *_exc_info: object) -> None: ...
 
 
-class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
+class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
     """Abstract base class for embedding storage and retrieval backends; implements EmbeddingStoreReader.
 
     Parameters
@@ -229,7 +231,7 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
         """Dispose the underlying engine."""
         self.emb_engine.dispose()
 
-    def __enter__(self) -> "EmbeddingBackend":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_exc_info: object) -> None:
@@ -241,15 +243,13 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
         *,
         batch_size: int = 10_000,
     ) -> Iterator[ConceptEmbeddingRecord]:
-        """Stream concept metadata from one model table; yields nothing if the model or table is absent."""
+        """Stream concept metadata; yields nothing if the model is not registered."""
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than zero.")
         record = self.get_registered_model(model_name=model_name)
         if record is None:
             return
-        if not self._storage_table_exists(record):
-            return
-        table = self._get_storage_table_descriptor(record)
+        table = self._storage_table(record)
         columns = inspect(table).columns  # ty: ignore[unresolved-attribute]
         statement = streamed(
             select(
@@ -324,9 +324,9 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
         model_name: str,
         dimensions: int,
         provider_type: str,
-        index_config: Optional[IndexConfig] = None,
-        metadata: Optional[Mapping[str, object]] = None,
-        registered_at: Optional[datetime] = None,
+        index_config: IndexConfig | None = None,
+        metadata: Mapping[str, object] | None = None,
+        registered_at: datetime | None = None,
     ) -> EmbeddingModelRecord:
         """Register a model and create its physical storage table.
 
@@ -510,7 +510,7 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
         self,
         *,
         model_name: str,
-    ) -> Optional[EmbeddingModelRecord]:
+    ) -> EmbeddingModelRecord | None:
         """Return the registry record for *model_name*, or ``None`` if not registered.
 
         Parameters
@@ -528,8 +528,8 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
     def get_registered_models(
         self,
         *,
-        model_name: Optional[str] = None,
-        provider_type: Optional[str] = None,
+        model_name: str | None = None,
+        provider_type: str | None = None,
     ) -> tuple[EmbeddingModelRecord, ...]:
         """Return all registry entries for this backend, with optional filters.
 
@@ -711,8 +711,8 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
         self,
         *,
         model_name: str,
-        batches: Iterable[Tuple[Sequence[ConceptEmbeddingRecord], ndarray]],
-        total_n_batches: Optional[int] = None,
+        batches: Iterable[tuple[Sequence[ConceptEmbeddingRecord], ndarray]],
+        total_n_batches: int | None = None,
     ) -> None:
         """Upsert embeddings in multiple batches, delegating to ``upsert_embeddings``.
 
@@ -786,9 +786,9 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
         model_name: str,
         metric_type: MetricType,
         query_embeddings: ndarray,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        concept_filter: EmbeddingConceptFilter | None = None,
         k: int = DEFAULT_K_NEAREST,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
         """Find the nearest stored concepts for one or more query vectors.
 
         Parameters
@@ -831,9 +831,9 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
         model_record: EmbeddingModelRecord,
         metric_type: MetricType,
         query_embeddings: ndarray,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        concept_filter: EmbeddingConceptFilter | None = None,
         k: int = DEFAULT_K_NEAREST,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]: ...
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]: ...
 
     # ------------------------------------------------------------------
     # Utility / diagnostic queries
@@ -866,7 +866,7 @@ class EmbeddingBackend(EmbeddingStoreReader, ABC, Generic[TEmbeddingTable]):
         self,
         *,
         model_name: str,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        concept_filter: EmbeddingConceptFilter | None = None,
     ) -> set[int]:
         """Return the stored concept IDs satisfying concept_filter, or all of them without one.
 
@@ -1044,18 +1044,24 @@ def _extensions_for(backend_type: BackendType, *, writable: bool) -> Sequence[Ca
     DDL and makes the database itself reject writes on every connection.
     """
     if backend_type == BackendType.SQLITEVEC:
-        from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec, _set_query_only
+        from omop_emb.backends.sqlitevec.sqlitevec_backend import (
+            _load_sqlite_vec,
+            _set_query_only,
+        )
 
         return [_load_sqlite_vec] if writable else [_load_sqlite_vec, _set_query_only]
     elif backend_type == BackendType.PGVECTOR:
-        from omop_emb.backends.pgvector.pg_backend import _create_vector_extension, _set_read_only
+        from omop_emb.backends.pgvector.pg_backend import (
+            _create_vector_extension,
+            _set_read_only,
+        )
 
         return [_create_vector_extension] if writable else [_set_read_only]
     else:
         raise UnknownEmbeddingBackendError(f"Unknown backend type {backend_type!r}.")
 
 
-def _parse_backend_type(backend_type: Union[str, BackendType]) -> BackendType:
+def _parse_backend_type(backend_type: str | BackendType) -> BackendType:
     """parse_backend_type(), case-insensitive for strings.
 
     Raises
@@ -1107,7 +1113,7 @@ def _backend_class_for(backend_type: BackendType, *, dialect: str) -> type[Embed
 
 
 def _open_writer(
-    backend_type: Union[str, BackendType],
+    backend_type: str | BackendType,
     *,
     database: ResolvedDatabase,
 ) -> EmbeddingBackend:

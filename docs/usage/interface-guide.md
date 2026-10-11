@@ -271,7 +271,7 @@ n_missing = writer.count_concepts_without_embedding(
 Model calling (construction, canonicalization, dimension discovery, batched embedding calls, role-prefix application) is entirely `omop_llm.ModelBackend`'s job. `omop-emb` never talks to a provider endpoint directly; `EmbeddingWriterInterface` builds one internally via `omop_llm.build_model_backend_from_resolved(resolved_model)` (see "Creating the interface" above). Any caller that needs to embed text without a full writer interface (e.g. on-the-fly query embedding, or a quick standalone script) can build a `ModelBackend` directly with plain keyword arguments instead:
 
 ```python
-from omop_llm import build_model_backend
+from omop_llm import Capabilities, build_model_backend
 
 # Ollama: provider specified explicitly (works with any hostname or IP)
 model_backend = build_model_backend(

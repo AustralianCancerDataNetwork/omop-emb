@@ -14,6 +14,10 @@ Written by `omop-config configure omop_emb`.
 | `embedding_model_name` | a `[models.*]` entry | yes | Which model generates embeddings. Defaults to `"embedding-model"`. |
 | `vector_store_name` | a `[vector_stores.*]` entry | yes | Which storage backend holds them. Defaults to `"vector_store"`. |
 
+Registry rows belong to the `[databases.*]` entry name used by the vector store. Renaming that entry orphans its existing rows; keep the name stable or migrate the rows before renaming it.
+
+A model can be registered by only one vector store per database; pre-release registry tables without the database constraint still enforce this through the registration pre-check.
+
 ```toml
 [tools.omop_emb]
 cdm_db               = "cdm_db"

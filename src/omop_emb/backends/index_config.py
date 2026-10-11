@@ -126,9 +126,7 @@ class IndexConfig(ABC):
         Notes
         -----
         Use this method to reconstruct an ``IndexConfig`` from the ORM
-        ``index_config`` JSON column. It is distinct from
-        :meth:`from_metadata`, which reads from a metadata dict that wraps the
-        config under ``"index_config"`` key.
+        ``index_config`` JSON column.
         """
         if not is_dataclass(cls):
             raise TypeError(f"Must be called on a dataclass, not {cls.__name__}.")
@@ -263,18 +261,20 @@ def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexC
     raise ValueError(f"No IndexConfig defined for index type {index_type!r}.")
 
 
-def index_config_from_orm_row(
-    index_type: IndexType, config_dict: Optional[dict[str, Any]]
+def index_config_from_dict(
+    index_type: IndexType | str, config_dict: Optional[dict[str, Any]]
 ) -> IndexConfig:
-    """Reconstruct an ``IndexConfig`` from ORM column values.
+    """Reconstruct an ``IndexConfig`` from its serialised ``to_dict()`` form.
+
+    Used for the registry's ORM columns, bundle attributes and FAISS sidecars.
+    Enum fields are coerced from their string values.
 
     Parameters
     ----------
-    index_type : IndexType
-        Value of the ORM ``index_type`` column.
+    index_type : IndexType or str
+        The serialised index type.
     config_dict : dict[str, Any] or None
-        Value of the ORM ``index_config`` JSON column. May be ``None`` or
-        empty for legacy FLAT rows.
+        The ``to_dict()`` output. May be ``None`` or empty for FLAT.
 
     Returns
     -------
@@ -287,6 +287,7 @@ def index_config_from_orm_row(
         If ``index_type`` has no registered config class, or if HNSW
         reconstruction fails.
     """
+    index_type = parse_index_type(index_type)
     if index_type == IndexType.FLAT:
         return FlatIndexConfig()
     if index_type == IndexType.HNSW:

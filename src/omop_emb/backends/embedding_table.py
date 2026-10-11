@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass
-from typing import TypeVar
+from typing import Any, TypeVar
 
-from sqlalchemy import Boolean, Column, Integer, MetaData, String, Table
+from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import DeclarativeBase, MappedColumn, mapped_column
 from sqlalchemy.sql.type_api import TypeEngine
 
@@ -37,34 +37,6 @@ CONCEPT_METADATA_COLUMNS: tuple[EmbeddingColumnSpec, ...] = (
 )
 
 EMBEDDING_COLUMN_NAME = "embedding"
-
-
-def concept_metadata_table_descriptor(
-    table_name: str,
-    *,
-    schema: str | None = None,
-    metadata: MetaData | None = None,
-) -> Table:
-    """Describe the shared metadata columns of an existing embedding table.
-
-    The descriptor is deliberately independent of the vector column, whose
-    type differs by backend. Constructing it issues no SQL and is suitable for
-    read-only Core queries against both sqlite-vec and pgvector tables.
-    """
-
-    return Table(
-        table_name,
-        metadata or MetaData(),
-        *(
-            Column(
-                spec.name,
-                spec.type_,
-                primary_key=spec.name == "concept_id",
-            )
-            for spec in CONCEPT_METADATA_COLUMNS
-        ),
-        schema=schema,
-    )
 
 
 def _check_columns_match_spec(cls: _T) -> _T:
@@ -111,6 +83,25 @@ class ConceptEmbeddingRecord:
     vocabulary_id: str
     is_standard: bool
     is_valid: bool
+
+    def matches_cdm_row(self, row: Any) -> bool:
+        """Whether row's domain, vocabulary, standardness and validity equal this record's.
+
+        Parameters
+        ----------
+        row : Any
+            CDM concept row with ``domain_id``, ``vocabulary_id``, ``is_standard`` and ``is_valid``.
+
+        Returns
+        -------
+        bool
+        """
+        return (
+            str(row.domain_id) == self.domain_id
+            and str(row.vocabulary_id) == self.vocabulary_id
+            and bool(row.is_standard) == self.is_standard
+            and bool(row.is_valid) == self.is_valid
+        )
 
 
 class EmbeddingTableBase(DeclarativeBase):

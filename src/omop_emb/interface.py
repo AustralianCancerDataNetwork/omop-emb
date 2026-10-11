@@ -2,20 +2,21 @@
 
 Design
 ------
-* The interface accepts a pre-constructed ``EmbeddingBackend`` (sqlite-vec
-  default, or pgvector optional) so it is backend-agnostic.
+* The reader interface accepts any ``EmbeddingStoreReader`` (a reader or a
+  writer store); the writer interface requires an ``EmbeddingBackend`` opened
+  for writing. Both are backend-agnostic.
 * Table identity is ``(model_name, provider_type)``: one row per model in the
   registry. ``metric_type`` is supplied by the caller at query time.
-* ``omop_cdm_engine`` is **optional** on the reader interface.  When provided,
+* ``cdm_session_factory`` is **optional** on the reader interface.  When provided,
   KNN results are enriched with ``concept_name`` from the CDM.  When absent,
   ``NearestConceptMatch.concept_name`` is ``None``.
   ``domain_id``, ``vocabulary_id``, ``is_standard``, and ``is_active`` come
   from the embedding table directly and are always populated regardless.
   These attributes are necessary to be in the embedding table for filtering
   without round-tripping to the CDM, and are populated from the CDM at ingestion time.
-* ``omop_cdm_engine`` is **required** for ingestion methods
-  (``embed_and_upsert_concepts``) because concept metadata must be fetched
-  from the CDM to populate the embedding table filter columns.
+* ``cdm_session_factory`` is **required** by the methods that read concepts
+  from the CDM to decide what to embed, and they raise without it. It is
+  given once, on the constructor.
 * Model calling is entirely ``omop_llm.ModelBackend``'s job (construction,
   canonicalization, dimension discovery, batched embedding calls). The writer
   interface builds one at construction time and owns only the domain logic
@@ -39,12 +40,13 @@ from typing import (
 
 import numpy as np
 from numpy import ndarray
-from sqlalchemy import Engine, Row
+from sqlalchemy import Row
 from oa_configurator import ResolvedModel
 from omop_llm import EmbeddingRole, ModelBackend, build_model_backend_from_resolved
 from omop_llm.providers import canonical_model_name as resolve_canonical_model_name
 
 from omop_emb.utils.cdm import (
+    CDMSessionFactory,
     count_missing_concepts,
     fetch_cdm_concepts_for_filter,
     iter_cdm_concepts_for_filter,
@@ -53,6 +55,7 @@ from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
     EmbeddingBackend,
     EmbeddingModelRecord,
+    EmbeddingStoreReader,
 )
 from omop_emb.backends.index_config import IndexConfig
 from omop_emb.config import BackendType, MetricType
@@ -66,20 +69,6 @@ if TYPE_CHECKING:
     from omop_emb.storage.faiss import FAISSCache
 
 logger = logging.getLogger(__name__)
-
-
-def _stored_metadata_matches(
-    row: Row,
-    stored: Mapping[str, object] | None,
-) -> bool:
-    if stored is None:
-        return False
-    return (
-        str(row.domain_id) == str(stored["domain_id"])
-        and str(row.vocabulary_id) == str(stored["vocabulary_id"])
-        and bool(row.is_standard) == bool(stored["is_standard"])
-        and bool(row.is_valid) == bool(stored["is_valid"])
-    )
 
 
 def _resolve_k(k: Optional[int], default: int) -> int:
@@ -99,23 +88,28 @@ def _resolve_k(k: Optional[int], default: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-class EmbeddingReaderInterface:
+class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
     """Backend-neutral read interface for embedding search and retrieval.
+
+    Generic over the store type ``S`` it holds, so ``backend`` keeps the type
+    of the store passed in.
 
     Parameters
     ----------
-    backend : EmbeddingBackend
-        Pre-constructed backend (SQLiteVecEmbeddingBackend or PGVectorEmbeddingBackend).
+    backend : S
+        Store from ``open_vector_store_reader()`` or ``open_vector_store_writer()``.
     metric_type : MetricType
         Distance metric used for KNN queries and validated against the registry.
-    omop_cdm_engine : Engine, optional
-        Engine for the user's OMOP CDM.  When provided, KNN results are
-        enriched with ``concept_name`` from the CDM.  When absent,
+    cdm_session_factory : CDMSessionFactory, optional
+        Opens sessions on the user's OMOP CDM, e.g. from
+        ``omop_alchemy.cross_database.cdm_sessionmaker``.  When provided, KNN
+        results are enriched with ``concept_name`` from the CDM.  When absent,
         ``concept_name`` is ``None``. ``domain_id``, ``vocabulary_id``,
         ``is_standard``, and ``is_active`` are populated directly from the
         embedding table by the backend.
     model : str
-        Model name in canonical form.
+        Model name that is expected to be canonicalized by the constructor. 
+        A possibly-canonical name is accepted as we cannot know if canonical or not.
     provider_type : str, optional
         omop-llm provider key. Defaults to ``'ollama'``.
     k : int
@@ -129,10 +123,10 @@ class EmbeddingReaderInterface:
     def __init__(
         self,
         model: str,
-        backend: EmbeddingBackend,
+        backend: S,
         metric_type: MetricType,
         *,
-        omop_cdm_engine: Optional[Engine] = None,
+        cdm_session_factory: Optional[CDMSessionFactory] = None,
         provider_type: str = "ollama",
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
         faiss_cache_dir: Optional[str] = None,
@@ -149,7 +143,7 @@ class EmbeddingReaderInterface:
         self._provider_type = provider_type
         self._canonical_model_name = canonical_model_name
         self._k = k
-        self._cdm_engine = omop_cdm_engine
+        self._cdm_session_factory = cdm_session_factory
 
         self._faiss_cache: Optional["FAISSCache"] = None
         if faiss_cache_dir is not None:
@@ -171,7 +165,7 @@ class EmbeddingReaderInterface:
     # ------------------------------------------------------------------
 
     @property
-    def backend(self) -> EmbeddingBackend:
+    def backend(self) -> S:
         return self._backend
 
     @property
@@ -246,52 +240,14 @@ class EmbeddingReaderInterface:
     # Registry queries
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def list_registered_models(
-        backend: EmbeddingBackend,
-        provider_type: Optional[str] = None,
-        model_name: Optional[str] = None,
-    ) -> tuple[EmbeddingModelRecord, ...]:
-        """List models registered by the backend, optionally filtered by provider and/or model name.
-
-        Parameters
-        ----------
-        backend : EmbeddingBackend
-            Backend to query.
-        provider_type : str, optional
-            omop-llm provider key that serves the model.
-        model_name : str, optional
-            Filter by canonical model name.
-
-        Returns
-        -------
-        tuple[EmbeddingModelRecord, ...]
-        """
-        return backend.get_registered_models(
-            model_name=model_name,
-            provider_type=provider_type,
-        )
-
-    def get_model_table_name(self) -> Optional[str]:
-        record = self._backend.get_registered_model(
-            model_name=self.canonical_model_name
-        )
-        return record.storage_identifier if record is not None else None
-
     def is_model_registered(self) -> bool:
-        return self._backend.is_model_registered(model_name=self.canonical_model_name)
+        return self._backend.get_registered_model(model_name=self.canonical_model_name) is not None
 
     def has_any_embeddings(self) -> bool:
-        return self._backend.has_any_embeddings(
-            model_name=self.canonical_model_name,
-            metric_type=self._metric_type,
-        )
+        return self._backend.has_any_embeddings(model_name=self.canonical_model_name)
 
     def get_embedding_count(self) -> int:
-        return self._backend.get_embedding_count(
-            model_name=self.canonical_model_name,
-            metric_type=self._metric_type,
-        )
+        return self._backend.get_embedding_count(model_name=self.canonical_model_name)
 
     def get_embedding_count_by_vocabulary(self) -> Mapping[str, int]:
         """Return stored embedding counts grouped by vocabulary_id.
@@ -302,10 +258,7 @@ class EmbeddingReaderInterface:
             ``vocabulary_id`` to embedding count, for every vocabulary with at
             least one stored embedding.
         """
-        return self._backend.get_embedding_count_by_vocabulary(
-            model_name=self.canonical_model_name,
-            metric_type=self._metric_type,
-        )
+        return self._backend.get_embedding_count_by_vocabulary(model_name=self.canonical_model_name)
 
     # ------------------------------------------------------------------
     # Search
@@ -415,31 +368,7 @@ class EmbeddingReaderInterface:
     ) -> Mapping[int, Sequence[float]]:
         return self._backend.get_embeddings_by_concept_ids(
             model_name=self.canonical_model_name,
-            metric_type=self._metric_type,
             concept_ids=concept_ids,
-        )
-
-    def get_indexed_concept_ids(
-        self,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
-    ) -> set[int]:
-        """Return every stored concept_id matching *concept_filter*.
-
-        Parameters
-        ----------
-        concept_filter : EmbeddingConceptFilter, optional
-            Filter constraints to evaluate (domain, vocabulary, standard,
-            concept ID allowlist). When omitted, every stored concept_id is
-            returned.
-
-        Returns
-        -------
-        set[int]
-        """
-        return self._backend.get_concept_ids_matching_filter(
-            model_name=self.canonical_model_name,
-            metric_type=self._metric_type,
-            concept_filter=concept_filter or EmbeddingConceptFilter(),
         )
 
     def get_similar_concepts(
@@ -564,9 +493,23 @@ class EmbeddingReaderInterface:
     # Concepts without embedding (requires CDM)
     # ------------------------------------------------------------------
 
+    def _require_cdm(self) -> CDMSessionFactory:
+        """The CDM session factory, required by the methods that read concepts.
+
+        Raises
+        ------
+        ValueError
+            If the interface was built without ``cdm_session_factory``.
+        """
+        if self._cdm_session_factory is None:
+            raise ValueError(
+                f"{type(self).__name__} was built without cdm_session_factory, which this "
+                "method needs to read concepts from the CDM."
+            )
+        return self._cdm_session_factory
+
     def get_concepts_without_embedding(
         self,
-        omop_cdm_engine: Engine,
         *,
         concept_filter: Optional[CDMConceptFilter] = None,
     ) -> Mapping[int, Row]:
@@ -577,32 +520,24 @@ class EmbeddingReaderInterface:
         """
         all_concepts = fetch_cdm_concepts_for_filter(
             concept_filter=concept_filter,
-            cdm_engine=omop_cdm_engine,
+            cdm_session_factory=self._require_cdm(),
         )
-        embedded_ids = self._backend.get_all_stored_concept_ids(
-            model_name=self.canonical_model_name,
-            metric_type=self._metric_type,
-        )
+        embedded_ids = self._backend.get_stored_concept_ids(model_name=self.canonical_model_name)
         return {
             cid: row for cid, row in all_concepts.items() if cid not in embedded_ids
         }
 
     def count_concepts_without_embedding(
         self,
-        omop_cdm_engine: Engine,
         *,
         concept_filter: Optional[CDMConceptFilter] = None,
     ) -> int:
         """Return how many CDM concepts match *concept_filter* but lack an embedding."""
-        embedded_ids = self._backend.get_all_stored_concept_ids(
-            model_name=self.canonical_model_name,
-            metric_type=self._metric_type,
-        )
-        return count_missing_concepts(concept_filter, omop_cdm_engine, embedded_ids)
+        embedded_ids = self._backend.get_stored_concept_ids(model_name=self.canonical_model_name)
+        return count_missing_concepts(concept_filter, self._require_cdm(), embedded_ids)
 
     def get_concepts_without_embedding_batched(
         self,
-        omop_cdm_engine: Engine,
         *,
         batch_size: int,
         concept_filter: Optional[CDMConceptFilter] = None,
@@ -613,13 +548,10 @@ class EmbeddingReaderInterface:
         Streams CDM rows and filters against already-embedded IDs on-the-fly,
         so only one batch of CDM rows is in memory at a time.
         """
-        embedded_ids = self._backend.get_all_stored_concept_ids(
-            model_name=self.canonical_model_name,
-            metric_type=self._metric_type,
-        )
+        embedded_ids = self._backend.get_stored_concept_ids(model_name=self.canonical_model_name)
         batch: dict[int, Row] = {}
         n_yielded = 0
-        for row in iter_cdm_concepts_for_filter(concept_filter, omop_cdm_engine):
+        for row in iter_cdm_concepts_for_filter(concept_filter, self._require_cdm()):
             if row.concept_id in embedded_ids:
                 continue
             batch[row.concept_id] = row
@@ -639,7 +571,6 @@ class EmbeddingReaderInterface:
 
     def count_concepts_requiring_embedding(
         self,
-        omop_cdm_engine: Engine,
         *,
         concept_filter: Optional[CDMConceptFilter] = None,
         batch_size: int = 10_000,
@@ -649,7 +580,6 @@ class EmbeddingReaderInterface:
         return sum(
             len(batch)
             for batch in self.get_concepts_requiring_embedding_batched(
-                omop_cdm_engine,
                 concept_filter=concept_filter,
                 batch_size=batch_size,
             )
@@ -657,7 +587,6 @@ class EmbeddingReaderInterface:
 
     def get_concepts_requiring_embedding_batched(
         self,
-        omop_cdm_engine: Engine,
         *,
         batch_size: int,
         concept_filter: Optional[CDMConceptFilter] = None,
@@ -683,16 +612,15 @@ class EmbeddingReaderInterface:
             concept_ids = tuple(candidate_batch)
             stored = self._backend.get_concept_filter_metadata(
                 model_name=self.canonical_model_name,
-                metric_type=self._metric_type,
                 concept_ids=concept_ids,
             )
             return {
                 concept_id: row
                 for concept_id, row in candidate_batch.items()
-                if not _stored_metadata_matches(row, stored.get(concept_id))
+                if concept_id not in stored or not stored[concept_id].matches_cdm_row(row)
             }
 
-        for row in iter_cdm_concepts_for_filter(concept_filter, omop_cdm_engine):
+        for row in iter_cdm_concepts_for_filter(concept_filter, self._require_cdm()):
             candidate_batch[int(row.concept_id)] = row
             if len(candidate_batch) < batch_size:
                 continue
@@ -732,16 +660,16 @@ class EmbeddingReaderInterface:
 
         Notes
         -----
-        Enriched concepts (if a CDM engine is provided) will have the following attributes:
+        Enriched concepts (if a CDM session factory is provided) will have the following attributes:
             - `concept_name` (str): The name of the concept from the CDM.
         """
-        if not self._cdm_engine:
+        if self._cdm_session_factory is None:
             return raw
 
         unique_ids = {r.concept_id for results in raw for r in results}
         concept_filter = CDMConceptFilter(concept_ids=tuple(unique_ids))
         rows = fetch_cdm_concepts_for_filter(
-            concept_filter=concept_filter, cdm_engine=self._cdm_engine
+            concept_filter=concept_filter, cdm_session_factory=self._cdm_session_factory
         )
 
         return tuple(
@@ -763,7 +691,7 @@ class EmbeddingReaderInterface:
 # ---------------------------------------------------------------------------
 
 
-class EmbeddingWriterInterface(EmbeddingReaderInterface):
+class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
     """Reader interface extended with embedding generation and write operations.
 
     Builds and owns an ``omop_llm.ModelBackend`` directly: there is no
@@ -783,9 +711,9 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         ``omop-emb``'s own config.
     embedding_batch_size : int, optional
         Default number of texts per API call. Default is 32.
-    omop_cdm_engine : Engine, optional
-        CDM engine used for result enrichment.  Pass to write methods directly
-        when needed for ingestion.
+    cdm_session_factory : CDMSessionFactory, optional
+        Opens CDM sessions, for result enrichment and for the methods that
+        read concepts to decide what to embed.
     """
 
     def __init__(
@@ -795,7 +723,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         resolved_model: ResolvedModel,
         embedding_batch_size: int = 32,
         *,
-        omop_cdm_engine: Optional[Engine] = None,
+        cdm_session_factory: Optional[CDMSessionFactory] = None,
     ):
         self._model_backend: ModelBackend = build_model_backend_from_resolved(resolved_model)
         self._embedding_batch_size = embedding_batch_size
@@ -804,7 +732,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         super().__init__(
             backend=backend,
             metric_type=metric_type,
-            omop_cdm_engine=omop_cdm_engine,
+            cdm_session_factory=cdm_session_factory,
             model=self._model_backend.model,
             provider_type=self._model_backend.provider,
         )
@@ -916,7 +844,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         """Upsert pre-built ConceptEmbeddingRecords with their embeddings."""
         self._backend.upsert_embeddings(
             model_name=self.canonical_model_name,
-            metric_type=self._metric_type,
             records=records,
             embeddings=embeddings,
         )
@@ -930,7 +857,6 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface):
         """Upsert from a lazy ``(records, embeddings)`` iterable."""
         self._backend.bulk_upsert_embeddings(
             model_name=self.canonical_model_name,
-            metric_type=self._metric_type,
             batches=batches,
             total_n_batches=total_n_batches,
         )

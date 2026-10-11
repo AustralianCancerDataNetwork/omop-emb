@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Mapping, Optional
 
-from omop_emb.config import IndexType, MetricType
 from omop_emb.backends.index_config import IndexConfig
+from omop_emb.config import IndexType, MetricType
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,8 @@ class EmbeddingModelRecord:
     dimensions : int
         Embedding vector dimensionality.
     storage_identifier : str
-        Physical table name. Unique per model; format ``<backend>_<safe_model>``.
+        Physical table name stored at registration. New names are store-scoped;
+        existing rows keep the identifier already recorded here.
     metadata : Mapping[str, object]
         Free-form operational data.
     created_at : datetime, optional

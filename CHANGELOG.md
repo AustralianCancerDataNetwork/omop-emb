@@ -1,3 +1,7 @@
+## Unreleased
+
+- A model can be registered by only one vector store per database; registration now reports a conflict if another store already owns the model name.
+
 > [!NOTE]
 > This file is no longer maintained. Release history from this point forward is in [GitHub Releases](https://github.com/AustralianCancerDataNetwork/omop-emb/releases).
 

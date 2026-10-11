@@ -2,23 +2,25 @@
 
 import itertools
 import logging
-from typing import Annotated, Generator, List, Optional, Sequence, Union
+from collections.abc import Generator, Sequence
+from contextlib import ExitStack
+from typing import Annotated
 
 import typer
-from tqdm import tqdm
-from oa_configurator import Resolver, ResolvedModel
+from oa_configurator import ConfigurationError, ResolvedModel, Resolver
 from omop_llm import build_model_backend_from_resolved
+from tqdm import tqdm
 
-from omop_emb.utils.cdm import check_concept_cdm
+from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.backends.index_config import index_config_from_index_type
-from omop_emb.backends import resolve_backend_from_resolved_vector_store
 from omop_emb.config import (
     IndexType,
     MetricType,
     OmopEmbConfig,
-    resolve_omop_cdm_engine,
+    open_cdm_sessions,
 )
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
+from omop_emb.utils.cdm import CDMSessionFactory, check_concept_cdm
 from omop_emb.utils.embedding_utils import (
     CDMConceptFilter,
     EmbeddingConceptFilter,
@@ -32,8 +34,8 @@ app = typer.Typer(
 
 
 def consolidate_queries(
-    queries: Optional[Union[str, List[str]]],
-    queries_file: Optional[str],
+    queries: str | list[str] | None,
+    queries_file: str | None,
 ) -> Generator[str, None, None]:
     if queries is not None and queries_file is not None:
         raise ValueError("Cannot provide both --queries and --queries-file.")
@@ -69,7 +71,7 @@ def _get_config() -> OmopEmbConfig:
         )
 
 
-def _resolve_model(model_name: Optional[str], cfg: OmopEmbConfig) -> ResolvedModel:
+def _resolve_model(model_name: str | None, cfg: OmopEmbConfig) -> ResolvedModel:
     """Resolve a [models.*] entry by name, defaulting to cfg.embedding_model_name.
 
     Converts an unknown model/provider name into an actionable setup message
@@ -114,7 +116,7 @@ def add_embeddings(
         ),
     ] = 100,
     model_name: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--model-name",
             "-m",
@@ -132,7 +134,7 @@ def add_embeddings(
         ),
     ] = False,
     vocabularies: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--vocabulary",
             help="Embed only concepts from specific OMOP vocabularies. Repeat to add multiple.",
@@ -140,7 +142,7 @@ def add_embeddings(
         ),
     ] = None,
     domains: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--domain",
             help="Embed only concepts from specific OMOP domains. Repeat to add multiple.",
@@ -148,7 +150,7 @@ def add_embeddings(
         ),
     ] = None,
     num_embeddings: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--num-embeddings",
             "-n",
@@ -167,18 +169,41 @@ def add_embeddings(
     resolved_model = _resolve_model(model_name, cfg)
 
     resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-    backend = resolve_backend_from_resolved_vector_store(resolved_vector_store)
-    omop_cdm_engine = resolve_omop_cdm_engine()
+    backend = open_vector_store_writer(resolved_vector_store)
+    with open_cdm_sessions() as cdm_sessions:
+        _add_embeddings(
+            backend=backend,
+            cdm_sessions=cdm_sessions,
+            resolved_model=resolved_model,
+            batch_size=batch_size,
+            standard_only=standard_only,
+            domains=domains,
+            vocabularies=vocabularies,
+            num_embeddings=num_embeddings,
+        )
 
-    # FLAT registration: metric_type=COSINE is used only for upsert validation;
-    # FLAT accepts any backend-supported metric, so COSINE is always valid here.
+
+def _add_embeddings(
+    *,
+    backend,
+    cdm_sessions: CDMSessionFactory,
+    resolved_model: ResolvedModel,
+    batch_size: int,
+    standard_only: bool,
+    domains: list[str] | None,
+    vocabularies: list[str] | None,
+    num_embeddings: int | None,
+) -> None:
+    """Embed every concept matching the filters that lacks a current embedding."""
+    # Ingestion runs no queries, so the interface's metric is never used here.
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
         metric_type=MetricType.COSINE,
         resolved_model=resolved_model,
         embedding_batch_size=batch_size,
+        cdm_session_factory=cdm_sessions,
     )
-    check_concept_cdm(omop_cdm_engine)
+    check_concept_cdm(cdm_sessions)
 
     try:
         embedding_writer.register_model()
@@ -190,7 +215,6 @@ def add_embeddings(
             vocabularies=tuple(vocabularies) if vocabularies else None,
         )
         n_pending = embedding_writer.count_concepts_requiring_embedding(
-            omop_cdm_engine=omop_cdm_engine,
             concept_filter=concept_filter,
         )
         n_total = (
@@ -201,7 +225,6 @@ def add_embeddings(
         n_processed = 0
         with tqdm(total=n_total, desc="Processing", unit="concept") as pbar:
             for batch_dict in embedding_writer.get_concepts_requiring_embedding_batched(
-                omop_cdm_engine=omop_cdm_engine,
                 concept_filter=concept_filter,
                 batch_size=batch_size,
                 limit=num_embeddings,
@@ -219,8 +242,8 @@ def add_embeddings(
 
         typer.echo(f"Processed {n_processed:,} concepts.")
         logger.info("Completed embedding generation and storage.")
-    except Exception as e:
-        logger.exception(f"Error during embedding generation and storage.\n{e}")
+    except Exception:
+        logger.exception("Error during embedding generation and storage.")
         if not embedding_writer.has_any_embeddings():
             logger.info("No embeddings were stored. Cleaning up model registration.")
             embedding_writer.delete_model()
@@ -230,7 +253,7 @@ def add_embeddings(
 @app.command()
 def create_index(
     model_name: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--model-name",
             "-m",
@@ -256,7 +279,7 @@ def create_index(
         ),
     ] = IndexType.FLAT,
     index_hnsw_num_neighbors: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-hnsw-num-neighbors",
             help="HNSW: number of neighbors per graph node.",
@@ -264,7 +287,7 @@ def create_index(
         ),
     ] = None,
     index_hnsw_ef_search: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-hnsw-ef-search",
             help="HNSW: ef parameter controlling recall during search.",
@@ -272,7 +295,7 @@ def create_index(
         ),
     ] = None,
     index_hnsw_ef_construction: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-ef-construction",
             help="HNSW: ef parameter controlling graph quality during construction.",
@@ -291,7 +314,7 @@ def create_index(
     resolved_model = _resolve_model(model_name, cfg)
 
     resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
-    backend = resolve_backend_from_resolved_vector_store(resolved_vector_store)
+    backend = open_vector_store_writer(resolved_vector_store)
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
         metric_type=metric_type,
@@ -340,7 +363,7 @@ def add_embeddings_with_index(
         ),
     ] = 100,
     model_name: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--model-name",
             "-m",
@@ -358,7 +381,7 @@ def add_embeddings_with_index(
         ),
     ] = False,
     vocabularies: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--vocabulary",
             help="Embed only concepts from specific OMOP vocabularies. Repeat to add multiple.",
@@ -366,7 +389,7 @@ def add_embeddings_with_index(
         ),
     ] = None,
     domains: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--domain",
             help="Embed only concepts from specific OMOP domains. Repeat to add multiple.",
@@ -374,7 +397,7 @@ def add_embeddings_with_index(
         ),
     ] = None,
     num_embeddings: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--num-embeddings",
             "-n",
@@ -383,7 +406,7 @@ def add_embeddings_with_index(
         ),
     ] = None,
     index_hnsw_num_neighbors: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-hnsw-num-neighbors",
             help="HNSW: number of neighbors per graph node.",
@@ -391,7 +414,7 @@ def add_embeddings_with_index(
         ),
     ] = None,
     index_hnsw_ef_search: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-hnsw-ef-search",
             help="HNSW: ef parameter controlling recall during search.",
@@ -399,7 +422,7 @@ def add_embeddings_with_index(
         ),
     ] = None,
     index_hnsw_ef_construction: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-ef-construction",
             help="HNSW: ef parameter controlling graph quality during construction.",
@@ -434,14 +457,14 @@ def add_embeddings_with_index(
 @app.command()
 def search(
     queries: Annotated[
-        Optional[List[str]],
+        list[str] | None,
         typer.Option(
             "--query",
             help="Query text to search. Repeat to search multiple queries.",
         ),
     ] = None,
     queries_file: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--queries-file",
             help="Path to a .txt file with one query per line.",
@@ -465,7 +488,7 @@ def search(
         ),
     ] = 100,
     model_name: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--model-name",
             "-m",
@@ -491,7 +514,7 @@ def search(
         ),
     ] = False,
     vocabularies: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--vocabulary",
             help="Filter results to specific OMOP vocabularies. Repeat to add multiple.",
@@ -499,7 +522,7 @@ def search(
         ),
     ] = None,
     domains: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--domain",
             help="Filter results to specific OMOP domains. Repeat to add multiple.",
@@ -507,7 +530,7 @@ def search(
         ),
     ] = None,
     faiss_cache_dir: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--faiss-cache-dir",
             help="Directory to cache FAISS index files for on-disk search with FAISS instead of the regular backend.",
@@ -522,25 +545,56 @@ def search(
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
     resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
     resolved_faiss_cache_dir = faiss_cache_dir or resolved_vector_store.faiss_cache_dir
-    backend = resolve_backend_from_resolved_vector_store(resolved_vector_store)
-
-    # CDM enrichment is optional for search
-    try:
-        omop_cdm_engine = resolve_omop_cdm_engine()
-    except RuntimeError:
-        omop_cdm_engine = None
-        logger.info(
-            "CDM engine not configured; concept names will not be enriched in results."
+    with ExitStack() as stack:
+        store = stack.enter_context(open_vector_store_reader(resolved_vector_store))
+        # CDM enrichment is optional for search
+        cdm_sessions: CDMSessionFactory | None
+        try:
+            cdm_sessions = stack.enter_context(open_cdm_sessions())
+        except (RuntimeError, ConfigurationError):
+            cdm_sessions = None
+            logger.info(
+                "CDM not configured; concept names will not be enriched in results."
+            )
+        _search(
+            queries_generator,
+            store=store,
+            cdm_sessions=cdm_sessions,
+            resolved_model=resolved_model,
+            metric_type=metric_type,
+            faiss_cache_dir=resolved_faiss_cache_dir,
+            batch_size=batch_size,
+            k=k,
+            standard_only=standard_only,
+            domains=domains,
+            vocabularies=vocabularies,
         )
+
+
+def _search(
+    queries_generator: Generator[str, None, None],
+    *,
+    store,
+    cdm_sessions: CDMSessionFactory | None,
+    resolved_model: ResolvedModel,
+    metric_type: MetricType,
+    faiss_cache_dir: str | None,
+    batch_size: int,
+    k: int,
+    standard_only: bool,
+    domains: list[str] | None,
+    vocabularies: list[str] | None,
+) -> None:
+    """Print the nearest concepts for each query, batch by batch."""
 
     model_backend = build_model_backend_from_resolved(resolved_model)
     embedding_reader = EmbeddingReaderInterface(
         model=model_backend.model,
-        backend=backend,
+        backend=store,
         metric_type=metric_type,
-        omop_cdm_engine=omop_cdm_engine,
+        cdm_session_factory=cdm_sessions,
         provider_type=model_backend.provider,
-        faiss_cache_dir=resolved_faiss_cache_dir,
+        faiss_cache_dir=faiss_cache_dir,
     )
 
     concept_filter = EmbeddingConceptFilter(

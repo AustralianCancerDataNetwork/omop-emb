@@ -42,7 +42,7 @@ The backend (sqlite-vec or pgvector) is selected by a `[vector_stores.*]` entry'
 
 ```bash
 omop-config connections add emb --dialect postgresql+psycopg --host localhost --database-name omop_emb
-omop-config databases add emb_db --kind generic --connection emb
+omop-config databases add generic emb_db --connection emb
 omop-config vector-stores add vector_store --backend-type pgvector --database emb_db
 omop-config configure omop_emb --vector-store-name vector_store
 ```

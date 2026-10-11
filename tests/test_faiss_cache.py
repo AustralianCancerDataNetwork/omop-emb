@@ -12,14 +12,15 @@ import pytest
 import faiss
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
-from omop_emb.backends.sqlitevec import (
-    SQLiteVecEmbeddingBackend,
-    create_sqlitevec_engine,
-)
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.config import MetricType
+from omop_emb.model_registry import registry_writer_engine
 from omop_emb.storage import embedding_bundle
-from omop_emb.storage.faiss.faiss_cache import FAISSCache
+from omop_emb.storage.faiss.faiss_cache import FAISSCache, FAISSCacheMetadata
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+
+from .conftest import sqlite_resolved_database
 
 pytest.importorskip("faiss", reason="faiss-cpu not installed")
 
@@ -72,7 +73,7 @@ _L2_RECORDS = [
 
 
 def _make_svec_backend(dim: int) -> SQLiteVecEmbeddingBackend:
-    engine = create_sqlitevec_engine(":memory:")
+    engine = registry_writer_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
     return SQLiteVecEmbeddingBackend(emb_engine=engine)
 
 
@@ -82,7 +83,6 @@ def _populate_backend(
     dim: int,
     records: list[ConceptEmbeddingRecord],
     vecs: np.ndarray,
-    metric_type: MetricType,
 ) -> None:
     backend.register_model(
         model_name=_MODEL,
@@ -92,7 +92,6 @@ def _populate_backend(
     )
     backend.upsert_embeddings(
         model_name=_MODEL,
-        metric_type=metric_type,
         records=records,
         embeddings=vecs,
     )
@@ -128,7 +127,6 @@ class TestCosineCorrectness:
             dim=_COSINE_DIM,
             records=_COSINE_RECORDS,
             vecs=_COSINE_VECS,
-            metric_type=MetricType.COSINE,
         )
         return _build_faiss(tmp_path, backend, MetricType.COSINE)
 
@@ -191,7 +189,6 @@ class TestL2Correctness:
             dim=_L2_DIM,
             records=_L2_RECORDS,
             vecs=_L2_VECS,
-            metric_type=MetricType.L2,
         )
         return _build_faiss(tmp_path, backend, MetricType.L2)
 
@@ -237,7 +234,6 @@ class TestCrossBackendParity:
             dim=_COSINE_DIM,
             records=_COSINE_RECORDS,
             vecs=_COSINE_VECS,
-            metric_type=MetricType.COSINE,
         )
         cache = _build_faiss(tmp_path, backend, MetricType.COSINE)
 
@@ -264,7 +260,6 @@ class TestCrossBackendParity:
             dim=_L2_DIM,
             records=_L2_RECORDS,
             vecs=_L2_VECS,
-            metric_type=MetricType.L2,
         )
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
 
@@ -296,7 +291,6 @@ class TestIndexCache:
             dim=_L2_DIM,
             records=_L2_RECORDS,
             vecs=_L2_VECS,
-            metric_type=MetricType.L2,
         )
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
 
@@ -314,14 +308,6 @@ class TestIndexCache:
             dim=_COSINE_DIM,
             records=_COSINE_RECORDS,
             vecs=_COSINE_VECS,
-            metric_type=MetricType.L2,
-        )
-        _populate_backend_metric(
-            backend,
-            dim=_COSINE_DIM,
-            records=_COSINE_RECORDS,
-            vecs=_COSINE_VECS,
-            metric_type=MetricType.COSINE,
         )
 
         # The same raw vectors back both metrics: build both FAISS indices
@@ -362,7 +348,6 @@ class TestHNSWEfSearch:
             dim=_COSINE_DIM,
             records=_COSINE_RECORDS,
             vecs=_COSINE_VECS,
-            metric_type=MetricType.COSINE,
         )
 
         index_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=32)
@@ -387,7 +372,6 @@ class TestHNSWEfSearch:
             dim=_COSINE_DIM,
             records=_COSINE_RECORDS,
             vecs=_COSINE_VECS,
-            metric_type=MetricType.COSINE,
         )
 
         build_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=16)
@@ -417,7 +401,6 @@ class TestCrossMachineCacheReuse:
             dim=_COSINE_DIM,
             records=_COSINE_RECORDS,
             vecs=_COSINE_VECS,
-            metric_type=MetricType.COSINE,
         )
 
         _, bundle_path = embedding_bundle.export_bundle(
@@ -468,7 +451,7 @@ class TestConceptFilterPrefiltering:
             index_config=FlatIndexConfig(), dimensions=2,
         )
         backend.upsert_embeddings(
-            model_name=_MODEL, metric_type=MetricType.L2, records=records, embeddings=vecs,
+            model_name=_MODEL, records=records, embeddings=vecs,
         )
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
 
@@ -491,7 +474,6 @@ class TestConceptFilterPrefiltering:
         backend = _make_svec_backend(_L2_DIM)
         _populate_backend(
             backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
-            metric_type=MetricType.L2,
         )
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
 
@@ -514,7 +496,6 @@ class TestConceptFilterPrefiltering:
         backend = _make_svec_backend(_L2_DIM)
         _populate_backend(
             backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
-            metric_type=MetricType.L2,
         )
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
 
@@ -541,7 +522,6 @@ class TestNoMetadataNpz:
         backend = _make_svec_backend(_L2_DIM)
         _populate_backend(
             backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
-            metric_type=MetricType.L2,
         )
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
         assert not cache.metadata_path().exists()
@@ -561,7 +541,6 @@ class TestStalenessAfterUpsert:
         backend = _make_svec_backend(_L2_DIM)
         _populate_backend(
             backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
-            metric_type=MetricType.L2,
         )
         index_config = FlatIndexConfig()
         cache = _build_faiss(tmp_path, backend, MetricType.L2, index_config=index_config)
@@ -573,7 +552,6 @@ class TestStalenessAfterUpsert:
 
         backend.upsert_embeddings(
             model_name=_MODEL,
-            metric_type=MetricType.L2,
             records=[
                 ConceptEmbeddingRecord(
                     concept_id=99, domain_id="Test", vocabulary_id="Test", is_standard=True, is_valid=True
@@ -593,18 +571,17 @@ class TestStalenessAfterUpsert:
 # ---------------------------------------------------------------------------
 
 
-def _populate_backend_metric(
-    backend: SQLiteVecEmbeddingBackend,
-    *,
-    dim: int,
-    records: list[ConceptEmbeddingRecord],
-    vecs: np.ndarray,
-    metric_type: MetricType,
-) -> None:
-    """Upsert embeddings for a model already registered in *backend*."""
-    backend.upsert_embeddings(
-        model_name=_MODEL,
-        metric_type=metric_type,
-        records=records,
-        embeddings=vecs,
-    )
+class TestCacheMetadata:
+    def test_hnsw_sidecar_round_trips_with_enum_metric(self):
+        meta = FAISSCacheMetadata(
+            model_name=_MODEL,
+            dimensions=3,
+            metric_type=MetricType.L2,
+            provider_type=_PROVIDER,
+            index_config=HNSWIndexConfig(metric_type=MetricType.L2, ef_search=32),
+            row_count=1,
+            exported_at="2026-01-01T00:00:00+00:00",
+        )
+        restored = FAISSCacheMetadata.from_json(meta.to_json())
+        assert restored == meta
+        assert restored.index_config.metric_type is MetricType.L2

@@ -2,21 +2,28 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from enum import StrEnum
-from typing import Annotated, ClassVar, Dict, Tuple
+from typing import TYPE_CHECKING, Annotated, ClassVar, Dict, Generator, Tuple
 
 from pydantic import Field
-from sqlalchemy import Engine
 from oa_configurator import (
     CDMDatabaseConfig,
     GenericDatabaseConfig,
     ModelConfig,
     PackageConfigBase,
     RefTo,
-    Resolver,
+    ResolvedCDMDatabase,
     ResolvedVectorStore,
+    Resolver,
     VectorStoreConfig,
 )
+
+if TYPE_CHECKING:
+    from omop_emb.utils.cdm import CDMSessionFactory
+
+MODEL_REGISTRY_SCHEMA: str = "omop_emb_registry"
+REGISTRY_SCHEMA_KEY: str = "registry"
 
 
 class OmopEmbConfig(PackageConfigBase):
@@ -37,7 +44,18 @@ class OmopEmbConfig(PackageConfigBase):
     extra_logging_namespaces: ClassVar[tuple[str, ...]] = ("orm_loader", "omop_alchemy")
 
     cdm_db: Annotated[str, RefTo(CDMDatabaseConfig)] = "cdm_db"
-    test_emb_db: Annotated[str | None, RefTo(GenericDatabaseConfig, is_test=True)] = None
+    test_emb_db_pg: Annotated[str | None, RefTo(GenericDatabaseConfig, is_test=True)] = Field(
+        default=None,
+        description="Real PostgreSQL test database, for Postgres-only integration testing.",
+    )
+    test_emb_db_sqlite: Annotated[str | None, RefTo(GenericDatabaseConfig, is_test=True)] = Field(
+        default=None,
+        description=(
+            "Disposable SQLite test database; left unconfigured by design "
+            "since isolated_test_database(..., dialect='sqlite') provisions "
+            "one without needing a config entry."
+        ),
+    )
     embedding_model_name: Annotated[str, RefTo(ModelConfig)] = Field(
         default="embedding-model",
         description=(
@@ -54,16 +72,38 @@ class OmopEmbConfig(PackageConfigBase):
     )
 
 
-def resolve_omop_cdm_engine() -> Engine:
-    """Resolve CDM engine via oa-configurator, used read-only."""
-    return OmopEmbConfig.get_engine(OmopEmbConfig.get_config().cdm_db)
+@contextmanager
+def open_cdm_sessions() -> Generator[CDMSessionFactory, None, None]:
+    """Session factory on the CDM database named by ``OmopEmbConfig.cdm_db``.
+
+    Sessions send each table to the engine hosting it, so concept reads reach
+    the vocabulary wherever it lives. Both engines are disposed on exit.
+
+    Raises
+    ------
+    TypeError
+        If ``cdm_db`` does not name a CDM database entry.
+    """
+    from omop_alchemy.cross_database import cdm_sessionmaker
+
+    resolved = Resolver.from_active_config().resolve_database(OmopEmbConfig.get_config().cdm_db)
+    if not isinstance(resolved, ResolvedCDMDatabase):
+        raise TypeError(
+            f"OmopEmbConfig.cdm_db must name a CDM database, got {type(resolved).__name__}."
+        )
+    primary, vocab = resolved.create_engines()
+    try:
+        yield cdm_sessionmaker(resolved, primary=primary, vocab=vocab)
+    finally:
+        for engine in {primary, vocab}:
+            engine.dispose()
 
 
 def resolve_omop_vector_store() -> ResolvedVectorStore:
     """Resolve OmopEmbConfig's own configured vector store via oa-configurator.
 
     Callers that also need an ``EmbeddingBackend`` pass the result to
-    ``omop_emb.backends.resolve_backend_from_resolved``.
+    ``omop_emb.backends.open_vector_store_writer``.
     """
     cfg = OmopEmbConfig.get_config()
     return Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
@@ -254,6 +294,31 @@ SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[
 }
 
 
+def _supported_indices(backend: BackendType) -> Dict[IndexType, Tuple[MetricType, ...]]:
+    """The index/metric support map for *backend*.
+
+    Parameters
+    ----------
+    backend : BackendType
+
+    Returns
+    -------
+    Dict[IndexType, Tuple[MetricType, ...]]
+
+    Raises
+    ------
+    ValueError
+        If *backend* isn't registered in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.
+    """
+    try:
+        return SUPPORTED_INDICES_AND_METRICS_PER_BACKEND[backend]
+    except KeyError:
+        raise ValueError(
+            f"Unsupported backend {backend!r}. Supported: "
+            f"{sorted(b.value for b in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND)}."
+        ) from None
+
+
 def is_supported_index_metric_combination_for_backend(
     backend: BackendType, index: IndexType, metric: MetricType
 ) -> bool:
@@ -269,8 +334,7 @@ def is_supported_index_metric_combination_for_backend(
     -------
     bool
     """
-    supported = SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
-    return metric in supported.get(index, ())
+    return metric in _supported_indices(backend).get(index, ())
 
 
 def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) -> bool:
@@ -285,7 +349,7 @@ def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) 
     -------
     bool
     """
-    return index in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {})
+    return index in _supported_indices(backend)
 
 
 def get_supported_index_types_for_backend(
@@ -301,7 +365,7 @@ def get_supported_index_types_for_backend(
     -------
     tuple[IndexType, ...]
     """
-    return tuple(SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {}).keys())
+    return tuple(_supported_indices(backend).keys())
 
 
 def get_supported_metrics_for_backend(backend: BackendType) -> Tuple[MetricType, ...]:
@@ -316,6 +380,6 @@ def get_supported_metrics_for_backend(backend: BackendType) -> Tuple[MetricType,
     tuple[MetricType, ...]
     """
     seen: set[MetricType] = set()
-    for metrics in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.get(backend, {}).values():
+    for metrics in _supported_indices(backend).values():
         seen.update(metrics)
     return tuple(seen)

@@ -2,18 +2,62 @@
 
 from __future__ import annotations
 
-from typing import Iterator
-
 import numpy as np
 import pytest
 import sqlalchemy as sa
 
-from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.sqlitevec import (
-    SQLiteVecEmbeddingBackend,
-    create_sqlitevec_engine,
+from oa_configurator import (
+    CDMDatabaseConfig,
+    ConnectionConfig,
+    GenericDatabaseConfig,
+    ResolvedCDMDatabase,
+    Dialect,
+    Resolver,
+    ResolvedDatabase,
+    ResolvedVectorStore,
+    SchemaClaim,
+    StackConfig,
 )
-from omop_emb.config import OmopEmbConfig
+
+from omop_emb.backends.base_backend import ConceptEmbeddingRecord
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
+from omop_emb.config import MODEL_REGISTRY_SCHEMA, OmopEmbConfig, REGISTRY_SCHEMA_KEY
+from omop_emb.model_registry import ensure_registry_table
+
+
+def sqlite_resolved_database(database_name: str = ":memory:") -> ResolvedDatabase:
+    """A plain oa-configurator ``ResolvedDatabase`` for a SQLite target, for
+    test code that needs ``registry_writer_engine()``/``registry_reader_engine()``
+    against a bare SQLite file or ``:memory:`` target with no config file
+    involved."""
+    cfg = StackConfig.for_session(
+        connections={"db": ConnectionConfig(dialect=Dialect.SQLITE, database_name=database_name)},
+        databases={"default": GenericDatabaseConfig(connection="db")},
+    )
+    return Resolver(cfg).resolve_database("default")
+
+
+def sqlite_cdm_database(database_name: str = ":memory:") -> ResolvedCDMDatabase:
+    """A SQLite CDM database entry, for test code reading concepts."""
+    cfg = StackConfig.for_session(
+        connections={"db": ConnectionConfig(dialect=Dialect.SQLITE, database_name=database_name)},
+        databases={"cdm": CDMDatabaseConfig(connection="db")},
+    )
+    resolved = Resolver(cfg).resolve_database("cdm")
+    assert isinstance(resolved, ResolvedCDMDatabase)
+    return resolved
+
+
+def sqlite_resolved_vector_store(database_name: str = ":memory:") -> ResolvedVectorStore:
+    """A sqlite-vec ``ResolvedVectorStore`` on ``sqlite_resolved_database(database_name)``."""
+    return ResolvedVectorStore(
+        name="default",
+        backend_type="sqlitevec",
+        database=sqlite_resolved_database(database_name),
+        faiss_cache_dir=None,
+        configuration={},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +102,7 @@ QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
 # ---------------------------------------------------------------------------
 # PostgreSQL config (integration tests only)
 #
-# Resolved via OA_Configurator resource 'test_emb_db' in ~/.config/omop/config.toml.
+# Resolved via OA_Configurator resource 'test_emb_db_pg' in ~/.config/omop/config.toml.
 # Run: omop-config configure omop_emb (answer Y when asked to configure test database).
 # ---------------------------------------------------------------------------
 
@@ -69,11 +113,25 @@ QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
 
 
 @pytest.fixture
-def svec_engine():
-    """In-memory SQLiteVec engine, fresh per test."""
-    engine = create_sqlitevec_engine(":memory:")
-    yield engine
-    engine.dispose()
+def svec_engine(request):
+    """Fresh SQLiteVec engine per test, via oa-configurator's canonical
+    dialect-agnostic test-database entrypoint rather than a hand-built
+    ``sa.create_engine()``. Claims the registry schema and ensures the
+    registry table exists, matching what ``registry_writer_engine()``
+    does for a real engine built straight off a ``ResolvedDatabase``."""
+    from oa_configurator.testing import isolated_test_database
+
+    with isolated_test_database(
+        OmopEmbConfig, "test_emb_db_sqlite", dialect="sqlite", request=request,
+        schema_claims=[SchemaClaim(
+            schema_tag=REGISTRY_SCHEMA_KEY, physical_schema=MODEL_REGISTRY_SCHEMA,
+            reserved=True, owner="omop_emb",
+        )],
+        extensions=[_load_sqlite_vec],
+    ) as db:
+        engine = db.connection.engine
+        ensure_registry_table(engine)
+        yield engine
 
 
 @pytest.fixture
@@ -87,38 +145,29 @@ def svec_backend(svec_engine) -> SQLiteVecEmbeddingBackend:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
-def pg_engine() -> Iterator[sa.Engine]:
-    """Session-scoped PostgreSQL engine. Skipped when test_emb_db is not configured."""
-    from oa_configurator.pytest_plugin import (
-        create_fresh_test_db,
-        drop_test_db,
-        ensure_test_user_exists,
-        require_pg_extension,
-        resolve_test_database,
-    )
+@pytest.fixture
+def pg_db(request):
+    """Canonical isolated PostgreSQL test database (Phase 0 of the
+    schema_translate_map fix)."""
+    from oa_configurator.testing import install_postgres_extension, isolated_test_database
 
-    raw_url = resolve_test_database(OmopEmbConfig, "test_emb_db")
-    ensure_test_user_exists(raw_url)
-    url = create_fresh_test_db(raw_url, extensions=["vector"])
-    require_pg_extension(url, "vector")  # defensive: verify installation succeeded
-    engine = sa.create_engine(url, echo=False, future=True)
-    try:
-        with engine.connect() as conn:
-            conn.execute(sa.text("SELECT 1"))
-        yield engine
-    finally:
-        engine.dispose()
-        drop_test_db(raw_url)
+    with isolated_test_database(
+        OmopEmbConfig, "test_emb_db_pg",
+        extensions=[install_postgres_extension("vector")],
+        request=request,
+    ) as db:
+        yield db
 
 
 @pytest.fixture
-def pg_backend(pg_engine: sa.Engine):
-    """Function-scoped PGVectorEmbeddingBackend with a clean registry per test."""
-    from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
+def pg_backend(pg_db):
+    """Function-scoped PGVectorEmbeddingBackend with a clean registry per test,
+    built through ``_open_writer()`` so its engine claims the registry
+    schema and installs pgvector exactly as production does."""
+    from omop_emb.backends.base_backend import _open_writer
     from omop_emb.backends.embedding_table import EmbeddingTableBase
 
-    backend = PGVectorEmbeddingBackend(emb_engine=pg_engine)
+    backend = _open_writer("pgvector", database=pg_db.resolved)
 
     yield backend
 
@@ -132,3 +181,11 @@ def pg_backend(pg_engine: sa.Engine):
     # Remove the tables from the ORM cache
     EmbeddingTableBase.metadata.clear()
     EmbeddingTableBase.registry._class_registry.clear()
+    backend.emb_engine.dispose()
+
+
+@pytest.fixture
+def pg_engine(pg_backend) -> sa.Engine:
+    """``pg_backend``'s own committing engine: registry schema claimed and
+    pgvector installed. Isolation comes from ``pg_backend``'s teardown."""
+    return pg_backend.emb_engine

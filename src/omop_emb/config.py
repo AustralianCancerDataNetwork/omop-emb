@@ -172,8 +172,8 @@ class IndexType(StrEnum):
     FLAT
         Exact sequential scan. Always correct, slower at scale.
     HNSW
-        Approximate nearest-neighbor index. Supported by pgvector and FAISS
-        only, not by sqlite-vec.
+        Approximate nearest-neighbor index. Supported by pgvector, DuckDB
+        VSS, and FAISS, not by sqlite-vec.
     """
 
     FLAT = "flat"

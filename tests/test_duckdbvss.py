@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from oa_configurator import physical_schema_of, qualified
+from sqlalchemy import text
 
 pytest.importorskip(
     "duckdb_sqlalchemy", reason="omop-emb[duckdbvss] not installed: skipping duckdbvss tests"
@@ -122,3 +124,35 @@ class TestDuckDBVSSHNSWBackend:
             k=1,
         )
         assert results[0][0].concept_id == HYPERTENSION_ID
+
+    def _knn_uses_hnsw_index(self, duckdbvss_backend: DuckDBVSSEmbeddingBackend, *, table_ref: str) -> bool:
+        """EXPLAIN a KNN query shaped like _build_knn_stmt's real one
+        (ORDER BY array_distance(...) LIMIT k) and report whether DuckDB's
+        planner actually used the HNSW index, rather than trusting that a
+        CREATE INDEX call alone guarantees it's used at query time."""
+        with duckdbvss_backend.emb_engine.connect() as conn:
+            conn.execute(text("SET hnsw_enable_experimental_persistence = true"))
+            plan_rows = conn.execute(
+                text(f"EXPLAIN SELECT concept_id, array_distance(embedding, [-10.0]::FLOAT[1]) AS distance FROM {table_ref} ORDER BY distance LIMIT 1")
+            ).fetchall()
+        return any("HNSW Index:" in row[1] for row in plan_rows)
+
+    def test_knn_query_actually_uses_the_hnsw_index(
+        self, duckdbvss_backend: DuckDBVSSEmbeddingBackend
+    ):
+        """Regression guard for a silent fallback to a sequential scan: the
+        HNSW index must be the thing DuckDB's own query planner picks, not
+        merely present on the table."""
+        self._register_and_upsert(duckdbvss_backend)
+        record = duckdbvss_backend.get_registered_model(model_name=MODEL_NAME)
+        table_ref = qualified(
+            duckdbvss_backend.emb_engine, record.storage_identifier, physical_schema=physical_schema_of(duckdbvss_backend.emb_engine)
+        )
+
+        assert self._knn_uses_hnsw_index(duckdbvss_backend, table_ref=table_ref) is False
+
+        duckdbvss_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
+        assert self._knn_uses_hnsw_index(duckdbvss_backend, table_ref=table_ref) is True
+
+        duckdbvss_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
+        assert self._knn_uses_hnsw_index(duckdbvss_backend, table_ref=table_ref) is False

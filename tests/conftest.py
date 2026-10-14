@@ -5,16 +5,15 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import sqlalchemy as sa
-
 from oa_configurator import (
     CDMDatabaseConfig,
     ConnectionConfig,
+    Dialect,
     GenericDatabaseConfig,
     ResolvedCDMDatabase,
-    Dialect,
-    Resolver,
     ResolvedDatabase,
     ResolvedVectorStore,
+    Resolver,
     SchemaClaim,
     StackConfig,
 )
@@ -22,7 +21,7 @@ from oa_configurator import (
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
-from omop_emb.config import MODEL_REGISTRY_SCHEMA, OmopEmbConfig, REGISTRY_SCHEMA_KEY
+from omop_emb.config import MODEL_REGISTRY_SCHEMA, REGISTRY_SCHEMA_KEY, OmopEmbConfig
 from omop_emb.model_registry import ensure_registry_table
 
 
@@ -55,6 +54,26 @@ def sqlite_resolved_vector_store(database_name: str = ":memory:") -> ResolvedVec
         name="default",
         backend_type="sqlitevec",
         database=sqlite_resolved_database(database_name),
+        faiss_cache_dir=None,
+        configuration={},
+    )
+
+
+def duckdbvss_resolved_vector_store(database_name: str) -> ResolvedVectorStore:
+    """A duckdbvss ``ResolvedVectorStore`` on a plain, non-``test_only`` file
+    target, mirroring ``sqlite_resolved_vector_store``.
+
+    Deliberately not ``test_only`` to skip the  schema-claim drift check that 
+    would hide a real bug in the reader's own nonexistent-file handling.
+    """
+    cfg = StackConfig.for_session(
+        connections={"db": ConnectionConfig(dialect=Dialect.DUCKDB, database_name=database_name)},
+        databases={"default": GenericDatabaseConfig(connection="db")},
+    )
+    return ResolvedVectorStore(
+        name="default",
+        backend_type="duckdbvss",
+        database=Resolver(cfg).resolve_database("default"),
         faiss_cache_dir=None,
         configuration={},
     )
@@ -167,7 +186,10 @@ def svec_backend(svec_engine) -> SQLiteVecEmbeddingBackend:
 def pg_db(request):
     """Canonical isolated PostgreSQL test database (Phase 0 of the
     schema_translate_map fix)."""
-    from oa_configurator.testing import install_postgres_extension, isolated_test_database
+    from oa_configurator.testing import (
+        install_postgres_extension,
+        isolated_test_database,
+    )
 
     with isolated_test_database(
         OmopEmbConfig, "test_emb_db_pg",

@@ -11,15 +11,19 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
+import duckdb
 from numpy import ndarray
 from oa_configurator import (
     Dialect,
+    ResolvedDatabase,
     Role,
     guard_schema_provenance_for,
     physical_schema_of,
 )
 from sqlalchemy import inspect, select, text
+from sqlalchemy.engine import make_url
 
 from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
@@ -58,15 +62,34 @@ def _install_vss(dbapi_connection, _connection_record) -> None:
 
     Passed as an ``extensions`` callable to ``ResolvedDatabase.create_engine()``
     (see its docstring). Loading an extension is inherently per-connection,
-    so this is safe to run on every new connection.
+    so this is safe to run on every new connection. 
+    
+    Notes
+    -----
+    - Tries a bare ``LOAD`` first and only falls back to ``INSTALL`` 
+        - ``INSTALL`` needs network access the first time but is cached
+        locally for subsequent connections.
     """
     cursor = dbapi_connection.cursor()
     try:
-        cursor.execute("INSTALL vss; LOAD vss;")
+        try:
+            cursor.execute("LOAD vss;")
+        except duckdb.Error:
+            cursor.execute("INSTALL vss; LOAD vss;")
         cursor.execute("SET hnsw_enable_experimental_persistence = true;")
         dbapi_connection.commit()
     finally:
         cursor.close()
+
+
+def _ensure_duckdb_file_exists(database: ResolvedDatabase) -> None:
+    """Create database's DuckDB file if it doesn't exist yet.
+    ``read_only=True`` connections to a missing file fails outright.
+    """
+    path = make_url(database.connection.url).database
+    if path is None or path == ":memory:" or Path(path).exists():
+        return
+    duckdb.connect(path).close()
 
 
 class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]]):

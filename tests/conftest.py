@@ -60,6 +60,24 @@ def sqlite_resolved_vector_store(database_name: str = ":memory:") -> ResolvedVec
     )
 
 
+def duckdb_test_resolver(database_name: str = ":memory:") -> Resolver:
+    """A ``Resolver`` with a ``test_emb_db_duckdb`` entry, for
+    ``isolated_test_database()``'s ``resolver=`` override.
+
+    ``DuckDBTestStrategy.resolve_without_config()`` (the fallback
+    ``isolated_test_database(..., dialect="duckdb")`` would otherwise use
+    when nothing configures the field) fabricates a ``ResolvedCDMDatabase``,
+    built for omop-alchemy's CDM fixtures. omop-emb's embedding store is a
+    plain database, not a CDM one, so this builds a real, resolvable
+    ``GenericDatabaseConfig`` entry instead of relying on that fallback.
+    """
+    cfg = StackConfig.for_session(
+        connections={"db": ConnectionConfig(dialect=Dialect.DUCKDB, database_name=database_name, test_only=True)},
+        databases={"test_emb_db_duckdb": GenericDatabaseConfig(connection="db")},
+    )
+    return Resolver(cfg)
+
+
 # ---------------------------------------------------------------------------
 # Test data constants
 # ---------------------------------------------------------------------------
@@ -189,3 +207,53 @@ def pg_engine(pg_backend) -> sa.Engine:
     """``pg_backend``'s own committing engine: registry schema claimed and
     pgvector installed. Isolation comes from ``pg_backend``'s teardown."""
     return pg_backend.emb_engine
+
+
+# ---------------------------------------------------------------------------
+# Fixtures: DuckDB VSS (in-memory, function-scoped)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def duckdbvss_db(request):
+    """Canonical isolated DuckDB test database, VSS extension loaded."""
+    from oa_configurator.testing import isolated_test_database
+
+    from omop_emb.backends.duckdbvss.duckdbvss_backend import _install_vss
+
+    with isolated_test_database(
+        OmopEmbConfig, "test_emb_db_duckdb",
+        resolver=duckdb_test_resolver(),
+        extensions=[_install_vss],
+        request=request,
+    ) as db:
+        yield db
+
+
+@pytest.fixture
+def duckdbvss_backend(duckdbvss_db):
+    """Function-scoped DuckDBVSSEmbeddingBackend with a clean registry per
+    test, built through ``_open_writer()`` so its engine claims the registry
+    schema and loads the VSS extension exactly as production does."""
+    from omop_emb.backends.base_backend import _open_writer
+    from omop_emb.backends.embedding_table import EmbeddingTableBase
+
+    backend = _open_writer("duckdbvss", database=duckdbvss_db.resolved)
+
+    yield backend
+
+    for record in backend.get_registered_models():
+        try:
+            backend.delete_model(model_name=record.model_name)
+        except Exception:
+            pass
+
+    EmbeddingTableBase.metadata.clear()
+    EmbeddingTableBase.registry._class_registry.clear()
+    backend.emb_engine.dispose()
+
+
+@pytest.fixture
+def duckdbvss_engine(duckdbvss_backend) -> sa.Engine:
+    """``duckdbvss_backend``'s own engine: registry schema claimed and VSS loaded."""
+    return duckdbvss_backend.emb_engine

@@ -1057,6 +1057,10 @@ def _extensions_for(backend_type: BackendType, *, writable: bool) -> Sequence[Ca
         )
 
         return [_create_vector_extension] if writable else [_set_read_only]
+    elif backend_type == BackendType.DUCKDBVSS:
+        from omop_emb.backends.duckdbvss.duckdbvss_backend import _install_vss
+
+        return [_install_vss]
     else:
         raise UnknownEmbeddingBackendError(f"Unknown backend type {backend_type!r}.")
 
@@ -1108,6 +1112,20 @@ def _backend_class_for(backend_type: BackendType, *, dialect: str) -> type[Embed
                 "Install it with: pip install omop-emb[pgvector]"
             ) from exc
         return PGVectorEmbeddingBackend
+
+    elif backend_type == BackendType.DUCKDBVSS:
+        if dialect != Dialect.DUCKDB:
+            raise EmbeddingBackendConfigurationError(
+                f"duckdbvss backend requires a duckdb-dialect database, got dialect: {dialect!r}."
+            )
+        try:
+            from omop_emb.backends.duckdbvss import DuckDBVSSEmbeddingBackend
+        except ImportError as exc:
+            raise EmbeddingBackendDependencyError(
+                "duckdbvss backend is not installed. "
+                "Install it with: pip install omop-emb[duckdbvss]"
+            ) from exc
+        return DuckDBVSSEmbeddingBackend
     else:
         raise UnknownEmbeddingBackendError(f"Unknown backend type {backend_type!r}.")
 

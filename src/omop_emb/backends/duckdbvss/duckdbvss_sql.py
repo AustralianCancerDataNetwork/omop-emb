@@ -24,8 +24,19 @@ from oa_configurator import (
     physical_schema_of,
     qualified,
 )
-from sqlalchemy import REAL, Engine, MetaData, Row, Select, func, inspect, select, text
+from sqlalchemy import (
+    REAL, 
+    Engine, 
+    MetaData, 
+    Row, 
+    Select, 
+    Table, 
+    func, 
+    inspect, 
+    select
+)
 from sqlalchemy.orm import Session, mapped_column, registry
+from sqlalchemy.schema import DropTable
 from sqlalchemy.sql import cast
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -84,7 +95,7 @@ def drop_duckdbvss_embedding_table(engine: Engine, model_record: EmbeddingModelR
     with engine.begin() as conn:
         with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
             conn.execute(
-                text(f"DROP TABLE IF EXISTS {qualified(conn, tablename, physical_schema=physical_schema_of(conn))}")
+                DropTable(Table(tablename, MetaData(), schema=physical_schema_of(conn)), if_exists=True)
             )
     logger.info(f"Dropped embedding table '{tablename}'.")
 

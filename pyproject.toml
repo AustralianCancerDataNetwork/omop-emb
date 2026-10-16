@@ -50,12 +50,15 @@ pgvector = [
     "psycopg[binary]>=3.1.0",
     "pgvector>=0.3.0",
 ]
+duckdbvss = [
+    "duckdb-sqlalchemy>=1.5",
+]
 faiss-cpu = [
     "faiss-cpu>=1.8.0",
 ]
 dev = [
     "oa-configurator[postgres]>=2.0.0,<3",
-    "omop-emb[faiss-cpu,pgvector]",
+    "omop-emb[faiss-cpu,pgvector,duckdbvss]",
     "ty>=0.0.59",
     "pytest>=9.0.3",  # CVE-2025-71176
     "pytest-cov>=7.0.0",
@@ -99,6 +102,7 @@ markers = [
   "integration: Integration tests",
   "sqlitevec: sqlite-vec backend tests",
   "pgvector: pgvector backend tests",
+  "duckdbvss: DuckDB VSS backend tests",
   "faiss: FAISS sidecar tests",
 ]
 testpaths = ["tests"]

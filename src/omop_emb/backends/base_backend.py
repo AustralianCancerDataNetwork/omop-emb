@@ -1057,8 +1057,24 @@ def _extensions_for(backend_type: BackendType, *, writable: bool) -> Sequence[Ca
         )
 
         return [_create_vector_extension] if writable else [_set_read_only]
+    elif backend_type == BackendType.DUCKDBVSS:
+        from omop_emb.backends.duckdbvss.duckdbvss_backend import _install_vss
+
+        return [_install_vss]
     else:
         raise UnknownEmbeddingBackendError(f"Unknown backend type {backend_type!r}.")
+
+
+def _connect_args_for(backend_type: BackendType, *, writable: bool) -> dict[str, Any]:
+    """Connect-time kwargs for backend_type's engine, forwarded to
+    ``sqlalchemy.create_engine(connect_args=...)``.
+
+    Injects DuckDB's ``read_only=True`` flag for the reader path since 
+    DuckDB does not have a connect-event hook to enforce read-only mode.
+    """
+    if backend_type == BackendType.DUCKDBVSS and not writable:
+        return {"read_only": True}
+    return {}
 
 
 def _parse_backend_type(backend_type: str | BackendType) -> BackendType:
@@ -1108,6 +1124,20 @@ def _backend_class_for(backend_type: BackendType, *, dialect: str) -> type[Embed
                 "Install it with: pip install omop-emb[pgvector]"
             ) from exc
         return PGVectorEmbeddingBackend
+
+    elif backend_type == BackendType.DUCKDBVSS:
+        if dialect != Dialect.DUCKDB:
+            raise EmbeddingBackendConfigurationError(
+                f"duckdbvss backend requires a duckdb-dialect database, got dialect: {dialect!r}."
+            )
+        try:
+            from omop_emb.backends.duckdbvss import DuckDBVSSEmbeddingBackend
+        except ImportError as exc:
+            raise EmbeddingBackendDependencyError(
+                "duckdbvss backend is not installed. "
+                "Install it with: pip install omop-emb[duckdbvss]"
+            ) from exc
+        return DuckDBVSSEmbeddingBackend
     else:
         raise UnknownEmbeddingBackendError(f"Unknown backend type {backend_type!r}.")
 
@@ -1127,7 +1157,11 @@ def _open_writer(
     backend_cls = _backend_class_for(
         resolved_backend, dialect=make_url(database.connection.url).get_backend_name()
     )
-    emb_engine = registry_writer_engine(database, extensions=_extensions_for(resolved_backend, writable=True))
+    emb_engine = registry_writer_engine(
+        database,
+        extensions=_extensions_for(resolved_backend, writable=True),
+        connect_args=_connect_args_for(resolved_backend, writable=True),
+    )
     logger.info(f"Using {resolved_backend.value} backend with engine: {emb_engine.url}")
     return backend_cls(emb_engine=emb_engine)
 
@@ -1145,15 +1179,32 @@ def open_vector_store_writer(resolved: ResolvedVectorStore) -> EmbeddingBackend:
 def open_vector_store_reader(resolved: ResolvedVectorStore) -> EmbeddingStoreReader:
     """Open a resolved vector store read-only: no registration, no DDL, no writes.
 
-    Writes are refused twice: ``@writes`` methods raise ``ReadOnlyStoreError``,
-    and every connection is read-only at the database level. A store that's
-    never been set up reports an empty registry instead of being created by
-    being looked at.
+    Notes
+    -----
+    - Double protection against writes:
+        1. @writes methods raise ReadOnlyStoreError at the Python level.
+        2. The database connection itself is opened in read-only mode.
+    - A store that's never been set up reports an empty registry instead of raising.
     """
     resolved_backend = _parse_backend_type(resolved.backend_type)
     database = resolved.database
     backend_cls = _backend_class_for(
         resolved_backend, dialect=make_url(database.connection.url).get_backend_name()
     )
-    emb_engine = registry_reader_engine(database, extensions=_extensions_for(resolved_backend, writable=False))
+    connect_args = _connect_args_for(resolved_backend, writable=False)
+    if resolved_backend == BackendType.DUCKDBVSS:
+        # DuckDB rejects read_only=True on :memory: (nothing to protect anyways)
+        from omop_emb.backends.duckdbvss.duckdbvss_backend import (
+            _reader_database_for_missing_file,
+        )
+
+        substituted = _reader_database_for_missing_file(database)
+        if substituted is not database:
+            connect_args = {}
+        database = substituted
+    emb_engine = registry_reader_engine(
+        database,
+        extensions=_extensions_for(resolved_backend, writable=False),
+        connect_args=connect_args,
+    )
     return backend_cls(emb_engine=emb_engine, writable=False)

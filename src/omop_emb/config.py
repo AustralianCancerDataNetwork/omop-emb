@@ -56,6 +56,14 @@ class OmopEmbConfig(PackageConfigBase):
             "one without needing a config entry."
         ),
     )
+    test_emb_db_duckdb: Annotated[str | None, RefTo(GenericDatabaseConfig, is_test=True)] = Field(
+        default=None,
+        description=(
+            "Disposable DuckDB test database; left unconfigured by design "
+            "since isolated_test_database(..., dialect='duckdb') provisions "
+            "one without needing a config entry."
+        ),
+    )
     embedding_model_name: Annotated[str, RefTo(ModelConfig)] = Field(
         default="embedding-model",
         description=(
@@ -119,10 +127,14 @@ class BackendType(StrEnum):
     PGVECTOR
         Optional backend. Requires a PostgreSQL instance with the pgvector
         extension (``pip install omop-emb[pgvector]``).
+    DUCKDBVSS
+        Optional backend. Requires a DuckDB database and its VSS extension
+        (``pip install omop-emb[duckdbvss]``).
     """
 
     SQLITEVEC = "sqlitevec"
     PGVECTOR = "pgvector"
+    DUCKDBVSS = "duckdbvss"
 
 
 class VectorColumnType(StrEnum):
@@ -160,8 +172,8 @@ class IndexType(StrEnum):
     FLAT
         Exact sequential scan. Always correct, slower at scale.
     HNSW
-        Approximate nearest-neighbor index. Supported by pgvector and FAISS
-        only, not by sqlite-vec.
+        Approximate nearest-neighbor index. Supported by pgvector, DuckDB
+        VSS, and FAISS, not by sqlite-vec.
     """
 
     FLAT = "flat"
@@ -290,6 +302,11 @@ SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[
     BackendType.PGVECTOR: {
         IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1),
         IndexType.HNSW: (MetricType.L2, MetricType.COSINE, MetricType.L1),
+    },
+    # https://duckdb.org/docs/stable/core_extensions/vss.html
+    BackendType.DUCKDBVSS: {
+        IndexType.FLAT: (MetricType.L2, MetricType.COSINE),
+        IndexType.HNSW: (MetricType.L2, MetricType.COSINE),
     },
 }
 

@@ -21,17 +21,27 @@ from oa_configurator import (
     Dialect,
     Role,
     guard_schema_provenance_for,
-    qualified,
     physical_schema_of,
+    qualified,
 )
-from sqlalchemy import Engine, Integer, MetaData, Row, Select, func, inspect, literal, select, text
+from sqlalchemy import (
+    Engine,
+    Integer,
+    MetaData,
+    Row,
+    Select,
+    Table,
+    func,
+    inspect,
+    literal,
+    select,
+)
+from sqlalchemy.orm import Session, mapped_column, registry
+from sqlalchemy.schema import DropTable
 from sqlalchemy.sql import cast, column, values
 from sqlalchemy.sql.elements import ColumnElement
-from sqlalchemy.orm import Session, mapped_column, registry
 
-from omop_emb.config import MetricType
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.index_config import HNSWIndexConfig
 from omop_emb.backends.db_utils import apply_concept_filter_where, in_values
 from omop_emb.backends.embedding_table import (
     EMBEDDING_COLUMN_NAME,
@@ -39,8 +49,13 @@ from omop_emb.backends.embedding_table import (
     EmbeddingTableBase,
     PGEmbeddingTable,
 )
+from omop_emb.backends.index_config import HNSWIndexConfig
+from omop_emb.config import MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
-from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, vector_column_type_for_dimensions
+from omop_emb.utils.embedding_utils import (
+    EmbeddingConceptFilter,
+    vector_column_type_for_dimensions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +111,7 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
     with engine.begin() as conn:
         with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
             conn.execute(
-                text(f"DROP TABLE IF EXISTS {qualified(conn, tablename, physical_schema=physical_schema_of(conn))}")
+                DropTable(Table(tablename, MetaData(), schema=physical_schema_of(conn)), if_exists=True)
             )
     logger.info(f"Dropped embedding table '{tablename}'.")
 
@@ -420,11 +435,12 @@ def pg_embedding_table_descriptor(model_record: EmbeddingModelRecord) -> type[PG
 
 @functools.lru_cache(maxsize=None)
 def _cached_pg_embedding_table_descriptor(tablename: str, dimensions: int) -> type[PGEmbeddingTable]:
+    from pgvector.sqlalchemy import HALFVEC, VECTOR  # optional dependency
+
     from omop_emb.utils.embedding_utils import (
         VectorColumnType,
         vector_column_type_for_dimensions,
     )
-    from pgvector.sqlalchemy import VECTOR, HALFVEC  # optional dependency
 
     col_type = vector_column_type_for_dimensions(dimensions)
     descriptor_registry = registry(metadata=MetaData())

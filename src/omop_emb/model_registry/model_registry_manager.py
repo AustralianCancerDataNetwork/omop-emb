@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
-from oa_configurator import database_config_name_of
+from oa_configurator import Dialect, database_config_name_of
 from sqlalchemy import Engine, inspect, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -47,7 +47,7 @@ def _register_model_atomically(
 ) -> EmbeddingModelRecord:
     try:
         with manager.emb_session_factory(expire_on_commit=False) as session, session.begin():
-            if manager.embedding_engine.dialect.name == "sqlite":
+            if manager.embedding_engine.dialect.name == Dialect.SQLITE:
                 # SQLite's deferred transactions can both read before either
                 # inserts. Acquire the write reservation before the pre-check
                 # so the second registration observes the first committed row.

@@ -13,6 +13,7 @@ at point of use rather than being silently swallowed.
 from __future__ import annotations
 
 import importlib
+import subprocess
 import sys
 from unittest.mock import patch
 
@@ -171,6 +172,19 @@ def test_backends_importable_without_duckdbvss():
             importlib.import_module("omop_emb.backends")  # must not raise
     finally:
         sys.modules.update(saved)
+
+
+def test_omop_emb_importable_without_duckdb_sqlalchemy_fresh_process():
+    """Top-level import of omop_emb succeeds in a process that never imported
+    it before, with duckdb-sqlalchemy blocked.
+
+    Reaches omop_emb through omop_alchemy.config -> orm_loader.backends,
+    which is a different import path than the duckdbvss lazy shield this
+    file otherwise tests.
+    """
+    code = "import sys; sys.modules['duckdb_sqlalchemy'] = None; import omop_emb"
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
 
 
 def test_backends_duckdbvss_attr_missing_install_hint():

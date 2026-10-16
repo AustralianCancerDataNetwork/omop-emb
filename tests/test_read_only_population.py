@@ -60,7 +60,7 @@ def test_duckdb_reader_before_any_write_reports_empty_without_erroring(tmp_path)
         assert reader.get_registered_models() == ()
         assert inspect(reader.emb_engine).has_table(ModelRegistry.__tablename__) is False  # ty: ignore[unresolved-attribute]
 
-    assert db_path.exists()
+    assert not db_path.exists()
 
 
 @pytest.mark.duckdbvss

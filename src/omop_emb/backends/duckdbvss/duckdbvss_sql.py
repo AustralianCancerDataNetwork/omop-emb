@@ -110,8 +110,9 @@ def hnsw_index_ddl(engine: Engine, model_record: EmbeddingModelRecord, index_con
     tablename = model_record.storage_identifier
     metric = _HNSW_METRIC[index_config.metric_type]
     table_ref = qualified(engine, tablename, physical_schema=physical_schema_of(engine))
+    index_ref = qualified(engine, hnsw_index_name(tablename, index_config.metric_type), physical_schema=None)
     return (
-        f"CREATE INDEX {hnsw_index_name(tablename, index_config.metric_type)} "
+        f"CREATE INDEX {index_ref} "
         f"ON {table_ref} USING HNSW ({EMBEDDING_COLUMN_NAME}) "
         f"WITH (metric = '{metric}', ef_construction = {index_config.ef_construction}, "
         f"M = {index_config.num_neighbors})"

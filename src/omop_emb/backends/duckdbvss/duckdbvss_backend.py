@@ -9,6 +9,7 @@ is a fixed-size ``FLOAT[N]`` array, and the HNSW index is built by DuckDB's
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -82,14 +83,22 @@ def _install_vss(dbapi_connection, _connection_record) -> None:
         cursor.close()
 
 
-def _ensure_duckdb_file_exists(database: ResolvedDatabase) -> None:
-    """Create database's DuckDB file if it doesn't exist yet.
-    ``read_only=True`` connections to a missing file fails outright.
+def _reader_database_for_missing_file(database: ResolvedDatabase) -> ResolvedDatabase:
+    """database, or an ephemeral in-memory substitute if its DuckDB file doesn't exist yet.
+
+    ``read_only=True`` can't open a missing file, but a read-only reader
+    must never create one either. An ephemeral in-memory database reports
+    "nothing registered yet" through every existing backend method on its
+    own, so no separate stub reader type is needed.
     """
     path = make_url(database.connection.url).database
     if path is None or path == ":memory:" or Path(path).exists():
-        return
-    duckdb.connect(path).close()
+        return database
+    memory_url = "duckdb:///:memory:"
+    connection = dataclasses.replace(
+        database.connection, url=memory_url, safe_url=memory_url, _engine_url=make_url(memory_url)
+    )
+    return dataclasses.replace(database, connection=connection)
 
 
 class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]]):

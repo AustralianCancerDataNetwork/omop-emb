@@ -1191,15 +1191,20 @@ def open_vector_store_reader(resolved: ResolvedVectorStore) -> EmbeddingStoreRea
     backend_cls = _backend_class_for(
         resolved_backend, dialect=make_url(database.connection.url).get_backend_name()
     )
+    connect_args = _connect_args_for(resolved_backend, writable=False)
     if resolved_backend == BackendType.DUCKDBVSS:
+        # DuckDB rejects read_only=True on :memory: (nothing to protect anyways)
         from omop_emb.backends.duckdbvss.duckdbvss_backend import (
-            _ensure_duckdb_file_exists,
+            _reader_database_for_missing_file,
         )
 
-        _ensure_duckdb_file_exists(database)
+        substituted = _reader_database_for_missing_file(database)
+        if substituted is not database:
+            connect_args = {}
+        database = substituted
     emb_engine = registry_reader_engine(
         database,
         extensions=_extensions_for(resolved_backend, writable=False),
-        connect_args=_connect_args_for(resolved_backend, writable=False),
+        connect_args=connect_args,
     )
     return backend_cls(emb_engine=emb_engine, writable=False)

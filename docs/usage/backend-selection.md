@@ -103,19 +103,25 @@ Each backend supports a subset of distance metrics:
 
 | Backend | FLAT | HNSW |
 |---|---|---|
-| sqlite-vec | Cosine | none |
+| sqlite-vec | L2, Cosine, L1 | none |
 | pgvector | L2, Cosine, L1 | L2, Cosine, L1 |
 | FAISS sidecar | L2, Cosine | L2, Cosine |
 
-Stored vectors carry no metric; only queries do. For pgvector FLAT models any supported metric can be used per query. For HNSW models the metric is set by `rebuild_index` and queries must use it.
+Stored vectors carry no metric. A model carries one only when its backend needs it, and queries must then use exactly that metric.
 
-!!! important "sqlite-vec is cosine only"
-    sqlite-vec answers queries with its native `MATCH` search, which uses the metric declared on the table. omop-emb declares cosine when it creates the table, and queries with any other metric raise. `MATCH` returns at most 4096 results per query, so a larger `k` also raises.
+- **pgvector FLAT** computes the distance from the raw vectors, so a model without a metric accepts any supported metric per query. Registering or rebuilding with a `FlatIndexConfig(metric_type=...)` locks the model to it.
+- **pgvector HNSW** is locked to the metric it was built with. Change it with `rebuild_index`.
+- **sqlite-vec** declares the metric on the table, because its native `MATCH` search uses it. Every model is locked to one metric, cosine unless registered with `FlatIndexConfig(metric_type=...)`. Querying with another metric raises.
 
-    A table created by an earlier version has no declared metric and raises `LegacyVectorTableError` when it is first queried. Recreate it from the stored vectors once; no data is lost:
+!!! important "Changing the metric of a sqlite-vec model"
+    `rebuild_index` with another metric recreates the table from the stored vectors, so nothing is re-embedded:
 
     ```bash
-    omop-emb maintenance rebuild-index --model <canonical-model-name>
+    omop-emb maintenance rebuild-index --model <canonical-model-name> --metric-type l2
     ```
+
+    Without `--metric-type` the current metric is kept. `MATCH` returns at most 4096 results per query, so a larger `k` raises.
+
+    A table created by an earlier version has no declared metric and raises `LegacyVectorTableError` when it is first used. The same command without `--metric-type` recreates it with cosine.
 
     Recreating a table roughly doubles the database file until `VACUUM` returns the freed pages, and the rebuild runs `VACUUM` afterwards by default. Pass `--no-vacuum` (or `vacuum=False` to `rebuild_index`) to skip it, for example when free disk space is short.

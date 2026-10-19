@@ -214,7 +214,7 @@ class TestImportRebuildIndex:
             backend=target_backend, h5_path=bundle_path, rebuild_index=True
         )
 
-        assert calls == [(_MODEL, FlatIndexConfig())]
+        assert calls == [(_MODEL, FlatIndexConfig(metric_type=MetricType.COSINE))]
 
     def test_rebuild_index_false_by_default_skips_backend_call(self, tmp_path, monkeypatch):
         dim = 2

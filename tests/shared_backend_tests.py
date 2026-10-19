@@ -51,9 +51,9 @@ class SharedBackendTests:
         assert r1.storage_identifier == r2.storage_identifier
         assert len(backend.get_registered_models(model_name=MODEL_NAME)) == 1
 
-    def test_flat_registration_has_no_metric(self, backend: EmbeddingBackend):
-        """FLAT-registered models have metric_type=None: the metric is supplied at query time."""
-        assert register_flat(backend).metric_type is None
+    def test_flat_registration_takes_the_backends_default_metric(self, backend: EmbeddingBackend):
+        """None where queries choose the metric (pgvector), the table's metric where it is locked (sqlite-vec)."""
+        assert register_flat(backend).metric_type == backend._default_flat_metric
 
     def test_hnsw_registration_raises(self, backend: EmbeddingBackend):
         with pytest.raises(ValueError, match="Only FLAT index is allowed at registration"):

@@ -7,10 +7,18 @@ import inspect
 import pytest
 
 from omop_emb.backends.base_backend import EmbeddingBackend
-from omop_emb.backends.index_config import HNSWIndexConfig
+from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.config import MetricType
 
-from .conftest import MODEL_NAME, QUERY_EMBEDDING, upsert_all
+from .conftest import (
+    CONCEPT_EMBEDDINGS,
+    CONCEPT_RECORDS,
+    EMBEDDING_DIM,
+    MODEL_NAME,
+    PROVIDER_TYPE,
+    QUERY_EMBEDDING,
+    upsert_all,
+)
 
 
 def _query(backend: EmbeddingBackend, metric_type: MetricType):
@@ -38,10 +46,10 @@ def test_only_queries_take_a_metric(method):
 
 
 @pytest.mark.parametrize("metric", [MetricType.L2, MetricType.L1, MetricType.HAMMING])
-def test_sqlitevec_flat_supports_cosine_only(svec_backend, metric):
-    """The vec0 table declares cosine, so every other metric is refused."""
+def test_sqlitevec_model_accepts_only_its_registered_metric(svec_backend, metric):
+    """The vec0 table declares the model's metric (cosine by default), so other metrics are refused."""
     upsert_all(svec_backend)
-    with pytest.raises(ValueError, match="not supported"):
+    with pytest.raises(ValueError, match="indexed with metric 'cosine'"):
         _query(svec_backend, metric)
 
 
@@ -51,6 +59,21 @@ def test_sqlitevec_flat_supports_cosine_only(svec_backend, metric):
 def test_pgvector_flat_accepts_every_supported_metric(pg_backend, metric):
     upsert_all(pg_backend)
     assert len(_query(pg_backend, metric)[0]) == 1
+
+
+@pytest.mark.pgvector
+@pytest.mark.integration
+def test_pgvector_flat_with_a_metric_accepts_only_that_metric(pg_backend):
+    pg_backend.register_model(
+        model_name=MODEL_NAME,
+        provider_type=PROVIDER_TYPE,
+        index_config=FlatIndexConfig(metric_type=MetricType.L1),
+        dimensions=EMBEDDING_DIM,
+    )
+    pg_backend.upsert_embeddings(model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS)
+    assert len(_query(pg_backend, MetricType.L1)[0]) == 1
+    with pytest.raises(ValueError, match="indexed with metric 'l1'"):
+        _query(pg_backend, MetricType.COSINE)
 
 
 @pytest.mark.pgvector

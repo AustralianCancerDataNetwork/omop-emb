@@ -16,8 +16,8 @@ from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     MAX_KNN_K,
     ddl_drop_vec0,
-    recreate_vec0_with_cosine,
-    table_declares_cosine,
+    declared_metric,
+    recreate_vec0,
 )
 from omop_emb.config import MetricType
 from omop_emb.model_registry import RegistryManager, registry_writer_engine
@@ -27,6 +27,8 @@ from omop_emb.utils.errors import LegacyVectorTableError
 
 from .conftest import (
     ASPIRIN_ID,
+    DIABETES_ID,
+    L2_SIMILARITY,
     CONCEPT_EMBEDDINGS,
     CONCEPT_RECORDS,
     EMBEDDING_DIM,
@@ -66,7 +68,7 @@ class TestSQLiteVecSpecific:
                     provider_type=PROVIDER_TYPE,
                     storage_identifier=storage_identifier,
                     dimensions=EMBEDDING_DIM,
-                    index_config=FlatIndexConfig(),
+                    index_config=FlatIndexConfig(metric_type=MetricType.COSINE),
                     details={},
                 )
             )
@@ -135,8 +137,8 @@ def _make_pre_cosine_table(backend: SQLiteVecEmbeddingBackend, record, vectors: 
 
 
 @pytest.mark.unit
-class TestSQLiteVecCosineTable:
-    """The vec0 table declares the cosine metric that MATCH queries rely on."""
+class TestSQLiteVecMetricTable:
+    """The vec0 table declares the metric the model is registered with, which MATCH queries rely on."""
 
     def test_pre_cosine_table_raises_with_rebuild_instruction(
         self, svec_backend: SQLiteVecEmbeddingBackend
@@ -214,16 +216,133 @@ class TestSQLiteVecCosineTable:
         sa.event.listen(svec_backend.emb_engine, "before_cursor_execute", fail_on_nth_statement)
         try:
             with pytest.raises(RuntimeError, match="injected failure"):
-                recreate_vec0_with_cosine(svec_backend.emb_engine, table, EMBEDDING_DIM)
+                recreate_vec0(svec_backend.emb_engine, table, EMBEDDING_DIM, MetricType.COSINE)
         finally:
             sa.event.remove(svec_backend.emb_engine, "before_cursor_execute", fail_on_nth_statement)
 
-        assert not table_declares_cosine(svec_backend.emb_engine, table)
+        assert declared_metric(svec_backend.emb_engine, table) is None
         assert not sa.inspect(svec_backend.emb_engine).has_table(f"{table}__rebuild")
         with svec_backend.emb_engine.connect() as conn:
             assert conn.execute(sa.text(f'SELECT count(*) FROM "{table}"')).scalar_one() == len(CONCEPT_RECORDS)
-        assert recreate_vec0_with_cosine(svec_backend.emb_engine, table, EMBEDDING_DIM) == len(CONCEPT_RECORDS)
-        assert table_declares_cosine(svec_backend.emb_engine, table)
+        assert recreate_vec0(svec_backend.emb_engine, table, EMBEDDING_DIM, MetricType.COSINE) == len(CONCEPT_RECORDS)
+        assert declared_metric(svec_backend.emb_engine, table) == MetricType.COSINE
+
+    def test_registration_locks_cosine_by_default(self, svec_backend: SQLiteVecEmbeddingBackend):
+        record = register_flat(svec_backend)
+        assert record.metric_type == MetricType.COSINE
+        assert declared_metric(svec_backend.emb_engine, record.storage_identifier) == MetricType.COSINE
+
+    @pytest.mark.parametrize("metric", [MetricType.L2, MetricType.L1])
+    def test_registration_with_another_metric_locks_the_model_to_it(
+        self, svec_backend: SQLiteVecEmbeddingBackend, metric: MetricType
+    ):
+        record = svec_backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FlatIndexConfig(metric_type=metric),
+            dimensions=EMBEDDING_DIM,
+        )
+        assert record.metric_type == metric
+        assert declared_metric(svec_backend.emb_engine, record.storage_identifier) == metric
+        svec_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+        )
+        (matches,) = svec_backend.get_nearest_concepts(
+            model_name=MODEL_NAME, metric_type=metric, query_embeddings=QUERY_EMBEDDING, k=4
+        )
+        assert matches[0].concept_id == DIABETES_ID
+        similarities = [m.similarity for m in matches]
+        assert similarities == sorted(similarities, reverse=True)
+        other = MetricType.COSINE
+        with pytest.raises(ValueError, match=f"indexed with metric '{metric.value}'"):
+            svec_backend.get_nearest_concepts(
+                model_name=MODEL_NAME, metric_type=other, query_embeddings=QUERY_EMBEDDING, k=1
+            )
+
+    def test_l2_similarity_values(self, svec_backend: SQLiteVecEmbeddingBackend):
+        svec_backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FlatIndexConfig(metric_type=MetricType.L2),
+            dimensions=EMBEDDING_DIM,
+        )
+        svec_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+        )
+        (matches,) = svec_backend.get_nearest_concepts(
+            model_name=MODEL_NAME, metric_type=MetricType.L2, query_embeddings=QUERY_EMBEDDING, k=4
+        )
+        for match in matches:
+            assert match.similarity == pytest.approx(L2_SIMILARITY[match.concept_id], abs=1e-5)
+
+    def test_registering_an_unsupported_metric_raises(self, svec_backend: SQLiteVecEmbeddingBackend):
+        with pytest.raises(ValueError, match="not supported"):
+            svec_backend.register_model(
+                model_name=MODEL_NAME,
+                provider_type=PROVIDER_TYPE,
+                index_config=FlatIndexConfig(metric_type=MetricType.HAMMING),
+                dimensions=EMBEDDING_DIM,
+            )
+
+    def test_rebuild_index_switches_the_metric_keeping_rows(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
+        register_flat(svec_backend)
+        svec_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+        )
+
+        record = svec_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=FlatIndexConfig(metric_type=MetricType.L2)
+        )
+
+        assert record.metric_type == MetricType.L2
+        assert declared_metric(svec_backend.emb_engine, record.storage_identifier) == MetricType.L2
+        assert svec_backend.get_embedding_count(model_name=MODEL_NAME) == len(CONCEPT_RECORDS)
+        (matches,) = svec_backend.get_nearest_concepts(
+            model_name=MODEL_NAME, metric_type=MetricType.L2, query_embeddings=QUERY_EMBEDDING, k=1
+        )
+        assert matches[0].concept_id == DIABETES_ID
+        with pytest.raises(ValueError, match="indexed with metric 'l2'"):
+            svec_backend.get_nearest_concepts(
+                model_name=MODEL_NAME,
+                metric_type=MetricType.COSINE,
+                query_embeddings=QUERY_EMBEDDING,
+                k=1,
+            )
+
+    def test_rebuild_index_without_a_metric_keeps_the_current_one(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
+        svec_backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FlatIndexConfig(metric_type=MetricType.L1),
+            dimensions=EMBEDDING_DIM,
+        )
+        record = svec_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
+        assert record.metric_type == MetricType.L1
+        assert declared_metric(svec_backend.emb_engine, record.storage_identifier) == MetricType.L1
+
+    def test_registry_row_without_a_metric_raises_then_rebuilds_to_cosine(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
+        """A row registered before models carried a metric points at a table that declares cosine."""
+        register_flat(svec_backend)
+        svec_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+        )
+        svec_backend._registry.update_index_config(
+            model_name=MODEL_NAME, index_config=FlatIndexConfig()
+        )
+        svec_backend._table_cache.clear()
+
+        with pytest.raises(LegacyVectorTableError, match="rebuild-index"):
+            svec_backend.get_embedding_count(model_name=MODEL_NAME)
+
+        record = svec_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
+        assert record.metric_type == MetricType.COSINE
+        assert svec_backend.get_embedding_count(model_name=MODEL_NAME) == len(CONCEPT_RECORDS)
 
     def test_k_above_match_limit_raises(self, svec_backend: SQLiteVecEmbeddingBackend):
         register_flat(svec_backend)

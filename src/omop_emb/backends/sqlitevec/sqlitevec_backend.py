@@ -31,6 +31,7 @@ from omop_emb.backends.index_config import FlatIndexConfig, IndexConfig
 from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     ddl_create_vec0,
     ddl_drop_vec0,
+    declared_metric,
     dml_delete_rows,
     dml_upsert_rows,
     query_all_concept_ids,
@@ -40,8 +41,7 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     query_embeddings_by_ids,
     query_has_any,
     query_knn_batch,
-    recreate_vec0_with_cosine,
-    table_declares_cosine,
+    recreate_vec0,
     table_exists,
     sqlite_vec_table_descriptor,
     vacuum_database,
@@ -86,14 +86,18 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
 
     Notes
     -----
-    - Only the ``FLAT`` index type and the ``COSINE`` metric are supported. The
-      metric is declared on the vec0 table, so tables created without it must be
-      recreated with ``rebuild_index``.
+    - Only the ``FLAT`` index type is supported. Each model is locked to one
+      metric (L2, cosine or L1, cosine by default), declared on its vec0 table
+      and recorded in the registry. ``rebuild_index`` with another metric, or
+      on a table created without a declared metric, recreates the table from
+      the stored vectors.
     - vec0 is a SQLite virtual table type the SQLAlchemy ORM cannot map, but
       it accepts ordinary SQL once created. ``_table_cache`` therefore stores
       a Core :class:`~sqlalchemy.Table` used for every query except the initial 
       ``CREATE VIRTUAL TABLE``.
     """
+
+    _default_flat_metric = MetricType.COSINE
 
     def __init__(
         self,
@@ -123,20 +127,32 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     def _storage_table_exists(self, model_record: EmbeddingModelRecord) -> bool:
         return table_exists(self.emb_engine, model_record.storage_identifier)
 
+    def _legacy_table_error(self, model_record: EmbeddingModelRecord) -> LegacyVectorTableError:
+        declared = declared_metric(self.emb_engine, model_record.storage_identifier)
+        registered = model_record.metric_type
+        return LegacyVectorTableError(
+            f"The sqlite-vec table '{model_record.storage_identifier}' for model "
+            f"'{model_record.model_name}' declares metric '{declared.value if declared else 'none'}' "
+            f"but the registry has '{registered.value if registered else 'none'}'. "
+            "Recreate it from the stored vectors with "
+            f"`omop-emb maintenance rebuild-index --model {model_record.model_name}` "
+            "(add `--metric-type` to choose the metric, cosine by default)."
+        )
+
     def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> Table:
-        if not table_declares_cosine(self.emb_engine, model_record.storage_identifier):
-            raise LegacyVectorTableError(
-                f"The sqlite-vec table '{model_record.storage_identifier}' for model "
-                f"'{model_record.model_name}' was created without the cosine metric. "
-                "Recreate it from the stored vectors with "
-                f"`omop-emb maintenance rebuild-index --model {model_record.model_name}`."
-            )
+        declared = declared_metric(self.emb_engine, model_record.storage_identifier)
+        if declared is None or declared != model_record.metric_type:
+            raise self._legacy_table_error(model_record)
         return sqlite_vec_table_descriptor(model_record.storage_identifier, self._sqlite_vec_metadata)
 
     def _create_storage_table(self, model_record: EmbeddingModelRecord) -> Table:
+        metric_type = model_record.metric_type
+        if metric_type is None:
+            raise self._legacy_table_error(model_record)
         ddl = ddl_create_vec0(
             table_name=model_record.storage_identifier,
             dimensions=model_record.dimensions,
+            metric_type=metric_type,
         )
         with self.emb_engine.begin() as conn:
             conn.execute(text(ddl))
@@ -147,7 +163,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
             conn.execute(text(ddl_drop_vec0(model_record.storage_identifier)))
 
     # ------------------------------------------------------------------
-    # Index management (sqlite-vec supports FLAT only; rebuild recreates a pre-cosine table)
+    # Index management (sqlite-vec supports FLAT only; rebuild recreates a table whose metric differs)
     # ------------------------------------------------------------------
 
     def _rebuild_index_impl(
@@ -157,13 +173,19 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
             raise ValueError(
                 f"sqlite-vec only supports FLAT indexes. Got: {type(index_config).__name__}."
             )
-        if not table_declares_cosine(self.emb_engine, model_record.storage_identifier):
-            count = recreate_vec0_with_cosine(
-                self.emb_engine, model_record.storage_identifier, model_record.dimensions
+        metric_type = index_config.metric_type
+        if metric_type is None:
+            raise ValueError("sqlite-vec needs a metric_type for the table.")
+        if declared_metric(self.emb_engine, model_record.storage_identifier) != metric_type:
+            count = recreate_vec0(
+                self.emb_engine,
+                model_record.storage_identifier,
+                model_record.dimensions,
+                metric_type,
             )
             self._table_cache.pop(model_record.storage_identifier, None)
             logger.info(
-                f"Recreated '{model_record.storage_identifier}' with the cosine metric ({count} rows)."
+                f"Recreated '{model_record.storage_identifier}' with the {metric_type.value} metric ({count} rows)."
             )
             if vacuum:
                 try:

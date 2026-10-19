@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional, Sequence
 
 import numpy as np
@@ -29,6 +30,7 @@ from sqlalchemy.orm import Session
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.db_utils import apply_concept_filter_where, in_values
 from omop_emb.backends.embedding_table import CONCEPT_METADATA_COLUMNS, EMBEDDING_COLUMN_NAME
+from omop_emb.config import MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
@@ -36,7 +38,7 @@ logger = logging.getLogger(__name__)
 # Largest k that a vec0 MATCH query accepts.
 MAX_KNN_K = 4096
 
-_COSINE_DECLARATION = "distance_metric=cosine"
+_DECLARED_METRIC = re.compile(r"distance_metric=(\w+)")
 
 
 def table_exists(engine: Engine, table_name: str) -> bool:
@@ -54,8 +56,8 @@ def table_exists(engine: Engine, table_name: str) -> bool:
             is not None
         )
 
-def table_declares_cosine(engine: Engine, table_name: str) -> bool:
-    """Return ``True`` if the vec0 table *table_name* was created with the cosine metric.
+def declared_metric(engine: Engine, table_name: str) -> Optional[MetricType]:
+    """Return the metric the vec0 table *table_name* declares on its embedding column.
 
     Parameters
     ----------
@@ -64,18 +66,21 @@ def table_declares_cosine(engine: Engine, table_name: str) -> bool:
 
     Returns
     -------
-    bool
-        ``False`` for a table created without ``distance_metric=cosine``.
+    MetricType or None
+        ``None`` for a table created without a declared metric, or a missing table.
     """
     with engine.connect() as conn:
         ddl = conn.execute(
             text("SELECT sql FROM sqlite_master WHERE name = :n"), {"n": table_name}
-        ).scalar_one()
-    return _COSINE_DECLARATION in "".join(str(ddl).lower().split())
+        ).scalar_one_or_none()
+    match = _DECLARED_METRIC.search("".join(str(ddl or "").lower().split()))
+    return MetricType(match.group(1)) if match else None
 
 
-def recreate_vec0_with_cosine(engine: Engine, table_name: str, dimensions: int) -> int:
-    """Recreate a vec0 table with the cosine metric, keeping every stored row.
+def recreate_vec0(
+    engine: Engine, table_name: str, dimensions: int, metric_type: MetricType
+) -> int:
+    """Recreate a vec0 table with the given metric, keeping every stored row.
 
     Parameters
     ----------
@@ -85,6 +90,8 @@ def recreate_vec0_with_cosine(engine: Engine, table_name: str, dimensions: int) 
         Physical table name (the registry ``storage_identifier``).
     dimensions : int
         Embedding vector length.
+    metric_type : MetricType
+        Metric the recreated table declares.
 
     Returns
     -------
@@ -104,10 +111,10 @@ def recreate_vec0_with_cosine(engine: Engine, table_name: str, dimensions: int) 
     with engine.begin() as conn:
         conn.exec_driver_sql("BEGIN IMMEDIATE")
         conn.execute(text(ddl_drop_vec0(staging)))
-        conn.execute(text(ddl_create_vec0(staging, dimensions)))
+        conn.execute(text(ddl_create_vec0(staging, dimensions, metric_type)))
         conn.execute(text(f'INSERT INTO "{staging}"({columns}) SELECT {columns} FROM "{table_name}"'))
         conn.execute(text(ddl_drop_vec0(table_name)))
-        conn.execute(text(ddl_create_vec0(table_name, dimensions)))
+        conn.execute(text(ddl_create_vec0(table_name, dimensions, metric_type)))
         conn.execute(text(f'INSERT INTO "{table_name}"({columns}) SELECT {columns} FROM "{staging}"'))
         count = conn.execute(text(f'SELECT count(*) FROM "{table_name}"')).scalar_one()
         conn.execute(text(ddl_drop_vec0(staging)))
@@ -136,11 +143,11 @@ def sqlite_vec_table_descriptor(table_name: str, metadata: MetaData) -> Table:
     return Table(table_name, metadata, *columns, extend_existing=True)
 
 
-def ddl_create_vec0(table_name: str, dimensions: int) -> str:
+def ddl_create_vec0(table_name: str, dimensions: int, metric_type: MetricType) -> str:
     """Return DDL to create a vec0 virtual table for the given model.
 
-    The embedding column declares the cosine metric, which ``MATCH`` queries
-    use. The metric cannot be changed without recreating the table.
+    The embedding column declares the metric, which ``MATCH`` queries use. The
+    metric cannot be changed without recreating the table.
 
     Parameters
     ----------
@@ -148,13 +155,15 @@ def ddl_create_vec0(table_name: str, dimensions: int) -> str:
         Physical table name (the registry ``storage_identifier``).
     dimensions : int
         Embedding vector length.
+    metric_type : MetricType
+        Metric of the embedding column: L2, cosine or L1.
 
     Returns
     -------
     str
         ``CREATE VIRTUAL TABLE IF NOT EXISTS ...`` statement.
     """
-    embedding_col = f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}] {_COSINE_DECLARATION}"
+    embedding_col = f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}] distance_metric={metric_type.value}"
     metadata_cols = ", ".join(f"{c.name} {c.vec0_ddl}" for c in CONCEPT_METADATA_COLUMNS)
 
     return (
@@ -290,7 +299,7 @@ def query_knn_batch(
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
 ) -> list[Sequence[Row]]:
-    """Run cosine KNN queries against a vec0 table, one per vector in *query_vectors*.
+    """Run KNN queries against a vec0 table, one per vector in *query_vectors*, in the table's metric.
 
     Parameters
     ----------
@@ -308,7 +317,7 @@ def query_knn_batch(
     list[Sequence[Row]]
         One row sequence per query vector. Each row contains ``concept_id``,
         ``distance``, ``domain_id``, ``vocabulary_id``, ``is_standard``, and
-        ``is_valid``, ordered by cosine distance ascending.
+        ``is_valid``, ordered by distance ascending.
 
     Raises
     ------

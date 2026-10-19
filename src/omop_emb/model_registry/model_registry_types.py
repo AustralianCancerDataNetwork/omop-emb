@@ -39,9 +39,10 @@ class EmbeddingModelRecord:
     Notes
     -----
     ``metric_type`` is ``None`` when the model is registered with a FLAT
-    index (exact scan). In that case any backend-supported metric is valid
-    at query time. When ``metric_type`` is set (HNSW), queries must use
-    that metric exactly.
+    index (exact scan) without a metric. In that case any backend-supported
+    metric is valid at query time. When ``metric_type`` is set (HNSW, or FLAT
+    on a backend that fixes the metric on the table), queries must use that
+    metric exactly.
     """
 
     model_name: str
@@ -60,5 +61,5 @@ class EmbeddingModelRecord:
 
     @property
     def metric_type(self) -> Optional[MetricType]:
-        """Distance metric locked to the index, or ``None`` for FLAT."""
+        """Distance metric the model is locked to, or ``None`` if queries choose it."""
         return self.index_config.metric_type

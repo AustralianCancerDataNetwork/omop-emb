@@ -274,13 +274,15 @@ def create_index(
         ),
     ] = None,
     metric_type: Annotated[
-        MetricType,
+        MetricType | None,
         typer.Option(
             "--metric-type",
-            help="Distance metric. Required and locked in when --index-type is HNSW.",
+            help="Distance metric the model is locked to. HNSW: cosine unless given. "
+            "FLAT: optional on pgvector (any metric per query otherwise), "
+            "cosine unless given on sqlite-vec.",
             rich_help_panel="Index Options",
         ),
-    ] = MetricType.COSINE,
+    ] = None,
     index_type: Annotated[
         IndexType,
         typer.Option(
@@ -328,7 +330,7 @@ def create_index(
     backend = open_vector_store_writer(resolved_vector_store)
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
-        metric_type=metric_type,
+        metric_type=metric_type or MetricType.COSINE,
         resolved_model=resolved_model,
     )
 
@@ -337,25 +339,25 @@ def create_index(
         num_neighbors=index_hnsw_num_neighbors,
         ef_search=index_hnsw_ef_search,
         ef_construction=index_hnsw_ef_construction,
-        metric_type=metric_type if index_type == IndexType.HNSW else None,
+        metric_type=metric_type or (MetricType.COSINE if index_type == IndexType.HNSW else None),
     )
-    embedding_writer.rebuild_index(index_config=index_config)
-    metric_info = (
-        f" (metric={metric_type.value})" if index_type == IndexType.HNSW else ""
-    )
+    record = embedding_writer.rebuild_index(index_config=index_config)
+    metric_info = f" (metric={record.metric_type.value})" if record.metric_type else ""
     typer.echo(f"Index ({index_type.value}) built for '{embedding_writer.canonical_model_name}'{metric_info}.")
 
 
 @app.command()
 def add_embeddings_with_index(
     metric_type: Annotated[
-        MetricType,
+        MetricType | None,
         typer.Option(
             "--metric-type",
-            help="Distance metric for the index. Locked in when --index-type is HNSW.",
+            help="Distance metric the model is locked to. HNSW: cosine unless given. "
+            "FLAT: optional on pgvector (any metric per query otherwise), "
+            "cosine unless given on sqlite-vec.",
             rich_help_panel="Index Options",
         ),
-    ] = MetricType.COSINE,
+    ] = None,
     index_type: Annotated[
         IndexType,
         typer.Option(

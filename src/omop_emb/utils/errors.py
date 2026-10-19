@@ -31,7 +31,7 @@ class LegacyRegistryError(EmbeddingBackendError):
 
 
 class LegacyVectorTableError(EmbeddingBackendError):
-    """A sqlite-vec table was created without the cosine metric that queries need.
+    """A sqlite-vec table does not declare the metric its model is registered with.
 
     Raised instead of rewriting the table on open: recreating it is an
     explicit ``rebuild-index`` step. No stored vectors are lost.

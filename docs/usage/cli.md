@@ -80,7 +80,7 @@ Accepts all options from `add-embeddings`, plus:
 | Option | Default | Description |
 |---|---|---|
 | `--index-type` | `flat` | Index to build after ingestion (`flat` or `hnsw`). |
-| `--metric-type` | `cosine` | Distance metric. Required and locked in for `hnsw`. |
+| `--metric-type` | `None` | Metric the model is locked to: `cosine` unless given for `hnsw`, optional for `flat` on pgvector, `cosine` unless given on sqlite-vec. See [Metrics](backend-selection.md#metrics). |
 | `--index-hnsw-num-neighbors` | `None` | HNSW graph connectivity (`M`). |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
@@ -107,7 +107,7 @@ omop-emb embeddings create-index [OPTIONS]
 | Option | Default | Description |
 |---|---|---|
 | `--index-type` | `flat` | `flat` or `hnsw`. |
-| `--metric-type` | `cosine` | Distance metric. Required and locked in for `hnsw`. |
+| `--metric-type` | `None` | Metric the model is locked to: `cosine` unless given for `hnsw`, optional for `flat` on pgvector, `cosine` unless given on sqlite-vec. See [Metrics](backend-selection.md#metrics). |
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
@@ -195,7 +195,7 @@ omop-emb maintenance rebuild-index --model <CANONICAL_NAME> [OPTIONS]
 | Option | Default | Description |
 |---|---|---|
 | `--index-type` | `flat` | `flat` or `hnsw`. |
-| `--metric-type` | `cosine` | Distance metric (required and locked in for `hnsw`). |
+| `--metric-type` | `None` | Metric the model is locked to. `hnsw` uses `cosine` unless given. `flat` leaves it open on pgvector; on sqlite-vec the current metric is kept (`cosine` for a new table), and another metric recreates the table from the stored vectors. See [Metrics](backend-selection.md#metrics). |
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |

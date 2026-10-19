@@ -97,8 +97,6 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
       ``CREATE VIRTUAL TABLE``.
     """
 
-    _default_flat_metric = MetricType.COSINE
-
     def __init__(
         self,
         emb_engine: Engine,
@@ -119,6 +117,10 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     @property
     def dialect(self) -> str:
         return Dialect.SQLITE
+
+    @property
+    def default_flat_metric(self) -> MetricType:
+        return MetricType.COSINE
 
     # ------------------------------------------------------------------
     # Storage table management

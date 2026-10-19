@@ -38,11 +38,11 @@ class EmbeddingModelRecord:
 
     Notes
     -----
-    ``metric_type`` is ``None`` when the model is registered with a FLAT
-    index (exact scan) without a metric. In that case any backend-supported
-    metric is valid at query time. When ``metric_type`` is set (HNSW, or FLAT
-    on a backend that fixes the metric on the table), queries must use that
-    metric exactly.
+    ``metric_type`` is ``None`` for a FLAT model on a backend that computes
+    distances from the raw vectors (pgvector). In that case any
+    backend-supported metric is valid at query time. When ``metric_type`` is
+    set (HNSW, or FLAT on a backend that fixes the metric on the table),
+    queries must use that metric exactly.
     """
 
     model_name: str

@@ -127,6 +127,10 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     def dialect(self) -> str:
         return Dialect.POSTGRESQL
 
+    @property
+    def default_flat_metric(self) -> None:
+        return None
+
     # ------------------------------------------------------------------
     # Storage table management
     # ------------------------------------------------------------------

@@ -274,15 +274,14 @@ def create_index(
         ),
     ] = None,
     metric_type: Annotated[
-        MetricType | None,
+        MetricType,
         typer.Option(
             "--metric-type",
-            help="Distance metric the model is locked to. HNSW: cosine unless given. "
-            "FLAT: optional on pgvector (any metric per query otherwise), "
-            "cosine unless given on sqlite-vec.",
+            help="Distance metric. Locked in for HNSW and for FLAT on sqlite-vec. "
+            "Ignored for FLAT on pgvector, which takes the metric per query.",
             rich_help_panel="Index Options",
         ),
-    ] = None,
+    ] = MetricType.COSINE,
     index_type: Annotated[
         IndexType,
         typer.Option(
@@ -330,7 +329,7 @@ def create_index(
     backend = open_vector_store_writer(resolved_vector_store)
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
-        metric_type=metric_type or MetricType.COSINE,
+        metric_type=metric_type,
         resolved_model=resolved_model,
     )
 
@@ -339,7 +338,7 @@ def create_index(
         num_neighbors=index_hnsw_num_neighbors,
         ef_search=index_hnsw_ef_search,
         ef_construction=index_hnsw_ef_construction,
-        metric_type=metric_type or (MetricType.COSINE if index_type == IndexType.HNSW else None),
+        metric_type=metric_type,
     )
     record = embedding_writer.rebuild_index(index_config=index_config)
     metric_info = f" (metric={record.metric_type.value})" if record.metric_type else ""
@@ -349,15 +348,14 @@ def create_index(
 @app.command()
 def add_embeddings_with_index(
     metric_type: Annotated[
-        MetricType | None,
+        MetricType,
         typer.Option(
             "--metric-type",
-            help="Distance metric the model is locked to. HNSW: cosine unless given. "
-            "FLAT: optional on pgvector (any metric per query otherwise), "
-            "cosine unless given on sqlite-vec.",
+            help="Distance metric. Locked in for HNSW and for FLAT on sqlite-vec. "
+            "Ignored for FLAT on pgvector, which takes the metric per query.",
             rich_help_panel="Index Options",
         ),
-    ] = None,
+    ] = MetricType.COSINE,
     index_type: Annotated[
         IndexType,
         typer.Option(

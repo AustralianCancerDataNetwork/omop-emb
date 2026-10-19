@@ -177,8 +177,6 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
 
     DEFAULT_K_NEAREST = 10
     _DELETE_CHUNK_SIZE = 100_000
-    # Metric given to a FLAT model registered without one; None leaves the metric to the query.
-    _default_flat_metric: MetricType | None = None
 
     def __init__(
         self,
@@ -214,6 +212,17 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
     @abstractmethod
     def dialect(self) -> str:
         """SQL dialect this backend requires, matching ``emb_engine.dialect.name``."""
+        ...
+
+    @property
+    @abstractmethod
+    def default_flat_metric(self) -> MetricType | None:
+        """Metric a FLAT model takes when none is given.
+
+        ``None`` for backends that compute distances from the raw vectors, whose
+        FLAT models carry no metric. A metric for backends that lock it on the
+        table.
+        """
         ...
 
     @property
@@ -379,7 +388,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                 "To use a non-FLAT index, register the model first, ingest the data and then build the index.\n"
                 "See the CLI documentation for details."
             )
-        index_config = self._with_default_metric(index_config)
+        index_config = self._normalized_flat_metric(index_config)
         self._validate_index_config(index_config)
 
         preexisting = bool(self._registry.get_registered_models(model_name=model_name))
@@ -463,8 +472,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         index_config : IndexConfig
             Target index configuration. Pass ``HNSWIndexConfig`` (with
             ``metric_type`` set) to build an HNSW index, or ``FlatIndexConfig()``
-            to revert to an exact scan. A ``FlatIndexConfig`` with a metric
-            locks the model to that metric.
+            to revert to an exact scan. On sqlite-vec a ``FlatIndexConfig``
+            locks the model to its metric (cosine if none is given); pgvector
+            FLAT models take the metric per query, so any metric is dropped.
         vacuum : bool
             Run the backend's maintenance step after the rebuild. pgvector
             runs ``VACUUM (ANALYZE)`` on the table. sqlite-vec runs ``VACUUM``
@@ -486,12 +496,10 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         -----
         Afterwards the table carries exactly the index ``index_config`` describes:
         any other physical index on it is dropped. Queries then must use
-        ``index_config.metric_type`` when it is set. A FLAT config without a
-        metric keeps the model's current metric, or takes the backend's default,
-        when the backend locks the metric on the table (cosine on sqlite-vec).
+        ``index_config.metric_type`` when it is set.
         """
         record = self._registered_record(model_name)
-        index_config = self._with_default_metric(index_config, current=record.metric_type)
+        index_config = self._normalized_flat_metric(index_config)
         self._validate_index_config(index_config)
         self._rebuild_index_impl(model_record=record, index_config=index_config, vacuum=vacuum)
         return self._registry.update_index_config(
@@ -499,21 +507,23 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             index_config=index_config,
         )
 
-    def _with_default_metric(
-        self, index_config: IndexConfig, current: MetricType | None = None
-    ) -> IndexConfig:
-        """Give a FLAT config without a metric the model's current metric, else the backend's default.
+    def _normalized_flat_metric(self, index_config: IndexConfig) -> IndexConfig:
+        """Return a FLAT config with the metric its backend calls for.
 
-        Only backends with a ``_default_flat_metric`` (those that lock the metric
-        on the table) fill one in; others leave the config unchanged.
+        Backends with a ``default_flat_metric`` lock the metric on the table,
+        so their FLAT models keep the given metric or take that default. The
+        others compute distances from the raw vectors, so their FLAT models
+        carry no metric. Other index types are returned unchanged.
         """
-        if (
-            index_config.index_type == IndexType.FLAT
-            and index_config.metric_type is None
-            and self._default_flat_metric is not None
-        ):
-            return FlatIndexConfig(metric_type=current or self._default_flat_metric)
-        return index_config
+        if index_config.index_type != IndexType.FLAT:
+            return index_config
+        if self.default_flat_metric is None:
+            metric_type = None
+        else:
+            metric_type = index_config.metric_type or self.default_flat_metric
+        if metric_type == index_config.metric_type:
+            return index_config
+        return FlatIndexConfig(metric_type=metric_type)
 
     def _validate_index_config(self, index_config: IndexConfig) -> None:
         """Raise ``ValueError`` if the backend supports neither the index type nor its metric."""

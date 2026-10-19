@@ -109,9 +109,9 @@ Each backend supports a subset of distance metrics:
 
 Stored vectors carry no metric. A model carries one only when its backend needs it, and queries must then use exactly that metric.
 
-- **pgvector FLAT** computes the distance from the raw vectors, so a model without a metric accepts any supported metric per query. Registering or rebuilding with a `FlatIndexConfig(metric_type=...)` locks the model to it.
+- **pgvector FLAT** computes the distance from the raw vectors, so queries choose any supported metric. A metric given for a FLAT model is ignored.
 - **pgvector HNSW** is locked to the metric it was built with. Change it with `rebuild_index`.
-- **sqlite-vec** declares the metric on the table, because its native `MATCH` search uses it. Every model is locked to one metric, cosine unless registered with `FlatIndexConfig(metric_type=...)`. Querying with another metric raises.
+- **sqlite-vec** declares the metric on the table, because its native `MATCH` search uses it. Every model is locked to one metric, cosine unless given `FlatIndexConfig(metric_type=...)`. Querying with another metric raises.
 
 !!! important "Changing the metric of a sqlite-vec model"
     `rebuild_index` with another metric recreates the table from the stored vectors, so nothing is re-embedded:
@@ -120,7 +120,7 @@ Stored vectors carry no metric. A model carries one only when its backend needs 
     omop-emb maintenance rebuild-index --model <canonical-model-name> --metric-type l2
     ```
 
-    Without `--metric-type` the current metric is kept. `MATCH` returns at most 4096 results per query, so a larger `k` raises.
+    Without `--metric-type` the metric is cosine. `MATCH` returns at most 4096 results per query, so a larger `k` raises.
 
     A table created by an earlier version has no declared metric and raises `LegacyVectorTableError` when it is first used. The same command without `--metric-type` recreates it with cosine.
 

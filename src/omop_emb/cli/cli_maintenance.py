@@ -97,15 +97,14 @@ def rebuild_index(
         ),
     ] = IndexType.FLAT,
     metric_type: Annotated[
-        Optional[MetricType],
+        MetricType,
         typer.Option(
             "--metric-type",
-            help="Distance metric the model is locked to. HNSW: cosine unless given. "
-            "FLAT: optional on pgvector (any metric per query otherwise); on sqlite-vec "
-            "the current metric is kept, cosine for a new table.",
+            help="Distance metric. Locked in for HNSW and for FLAT on sqlite-vec. "
+            "Ignored for FLAT on pgvector, which takes the metric per query.",
             rich_help_panel="Index Options",
         ),
-    ] = None,
+    ] = MetricType.COSINE,
     index_hnsw_num_neighbors: Annotated[
         Optional[int],
         typer.Option(
@@ -163,7 +162,7 @@ def rebuild_index(
         num_neighbors=index_hnsw_num_neighbors,
         ef_search=index_hnsw_ef_search,
         ef_construction=index_hnsw_ef_construction,
-        metric_type=metric_type or (MetricType.COSINE if index_type == IndexType.HNSW else None),
+        metric_type=metric_type,
     )
     record = backend.rebuild_index(
         model_name=model,

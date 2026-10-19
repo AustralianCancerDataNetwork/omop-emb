@@ -45,6 +45,7 @@ from .conftest import (
 _NEITHER = frozenset({
     "DEFAULT_K_NEAREST",
     "backend_name",
+    "default_flat_metric",
     "dialect",
     "emb_engine",
     "emb_session_factory",

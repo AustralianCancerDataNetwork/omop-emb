@@ -80,7 +80,7 @@ Accepts all options from `add-embeddings`, plus:
 | Option | Default | Description |
 |---|---|---|
 | `--index-type` | `flat` | Index to build after ingestion (`flat` or `hnsw`). |
-| `--metric-type` | `None` | Metric the model is locked to: `cosine` unless given for `hnsw`, optional for `flat` on pgvector, `cosine` unless given on sqlite-vec. See [Metrics](backend-selection.md#metrics). |
+| `--metric-type` | `cosine` | Distance metric. Locked in for `hnsw` and for `flat` on sqlite-vec; ignored for `flat` on pgvector. See [Metrics](backend-selection.md#metrics). |
 | `--index-hnsw-num-neighbors` | `None` | HNSW graph connectivity (`M`). |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
@@ -107,7 +107,7 @@ omop-emb embeddings create-index [OPTIONS]
 | Option | Default | Description |
 |---|---|---|
 | `--index-type` | `flat` | `flat` or `hnsw`. |
-| `--metric-type` | `None` | Metric the model is locked to: `cosine` unless given for `hnsw`, optional for `flat` on pgvector, `cosine` unless given on sqlite-vec. See [Metrics](backend-selection.md#metrics). |
+| `--metric-type` | `cosine` | Distance metric. Locked in for `hnsw` and for `flat` on sqlite-vec; ignored for `flat` on pgvector. See [Metrics](backend-selection.md#metrics). |
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
@@ -195,7 +195,7 @@ omop-emb maintenance rebuild-index --model <CANONICAL_NAME> [OPTIONS]
 | Option | Default | Description |
 |---|---|---|
 | `--index-type` | `flat` | `flat` or `hnsw`. |
-| `--metric-type` | `None` | Metric the model is locked to. `hnsw` uses `cosine` unless given. `flat` leaves it open on pgvector; on sqlite-vec the current metric is kept (`cosine` for a new table), and another metric recreates the table from the stored vectors. See [Metrics](backend-selection.md#metrics). |
+| `--metric-type` | `cosine` | Distance metric. Locked in for `hnsw` and for `flat` on sqlite-vec, where another metric recreates the table from the stored vectors. Ignored for `flat` on pgvector. See [Metrics](backend-selection.md#metrics). |
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
@@ -256,7 +256,7 @@ omop-emb maintenance prune-embeddings --model <NAME> [OPTIONS]
 
 Stream all embeddings for one model from the primary backend into a single, self-describing HDF5 bundle (raw vectors, never normalized, plus concept metadata). This is the lossless source of truth for backup/restore and for migrating raw embeddings to another backend (see `import`). Peak memory stays close to one batch's worth regardless of table size.
 
-Stored vectors carry no metric, so the bundle has none; an HNSW index's metric travels inside its `index_config`. Bundles are written as schema version 2. Version 1 bundles, which also stored a `metric_type`, still import. Export opens the store read-only. The output filename is derived from the model's storage identifier, not a literal path you choose.
+Stored vectors carry no metric. A model locked to one (HNSW, or sqlite-vec) carries it inside its `index_config`, and a backend that does not lock FLAT models (pgvector) drops it on import. Bundles are written as schema version 2. Version 1 bundles, which also stored a `metric_type`, still import. Export opens the store read-only. The output filename is derived from the model's storage identifier, not a literal path you choose.
 
 ```bash
 omop-emb maintenance export --model <NAME> --output-dir <DIR> [OPTIONS]

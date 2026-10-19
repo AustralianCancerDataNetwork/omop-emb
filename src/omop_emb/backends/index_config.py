@@ -174,10 +174,9 @@ class FlatIndexConfig(IndexConfig):
     index_type : IndexType
         Always ``IndexType.FLAT``.
     metric_type : MetricType or None
-        ``None`` leaves the metric to the caller at query time, which backends
-        that compute distances from the raw vectors (pgvector) accept. A
-        metric locks the model to it, which backends that fix the metric on
-        the table (sqlite-vec) require.
+        Backends that fix the metric on the table (sqlite-vec) lock the model
+        to it and default to cosine. Backends that compute distances from the
+        raw vectors (pgvector) drop it, so queries choose the metric.
     """
 
     index_type: IndexType = IndexType.FLAT

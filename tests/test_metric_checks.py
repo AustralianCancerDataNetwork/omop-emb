@@ -63,17 +63,21 @@ def test_pgvector_flat_accepts_every_supported_metric(pg_backend, metric):
 
 @pytest.mark.pgvector
 @pytest.mark.integration
-def test_pgvector_flat_with_a_metric_accepts_only_that_metric(pg_backend):
-    pg_backend.register_model(
+def test_pgvector_flat_drops_a_given_metric_and_stays_free(pg_backend):
+    record = pg_backend.register_model(
         model_name=MODEL_NAME,
         provider_type=PROVIDER_TYPE,
         index_config=FlatIndexConfig(metric_type=MetricType.L1),
         dimensions=EMBEDDING_DIM,
     )
+    assert record.metric_type is None
     pg_backend.upsert_embeddings(model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS)
-    assert len(_query(pg_backend, MetricType.L1)[0]) == 1
-    with pytest.raises(ValueError, match="indexed with metric 'l1'"):
-        _query(pg_backend, MetricType.COSINE)
+    for metric in (MetricType.L1, MetricType.COSINE):
+        assert len(_query(pg_backend, metric)[0]) == 1
+    rebuilt = pg_backend.rebuild_index(
+        model_name=MODEL_NAME, index_config=FlatIndexConfig(metric_type=MetricType.L2)
+    )
+    assert rebuilt.metric_type is None
 
 
 @pytest.mark.pgvector

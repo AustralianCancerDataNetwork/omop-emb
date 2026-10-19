@@ -311,7 +311,7 @@ class TestSQLiteVecMetricTable:
                 k=1,
             )
 
-    def test_rebuild_index_without_a_metric_keeps_the_current_one(
+    def test_rebuild_index_without_a_metric_uses_cosine(
         self, svec_backend: SQLiteVecEmbeddingBackend
     ):
         svec_backend.register_model(
@@ -321,8 +321,8 @@ class TestSQLiteVecMetricTable:
             dimensions=EMBEDDING_DIM,
         )
         record = svec_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
-        assert record.metric_type == MetricType.L1
-        assert declared_metric(svec_backend.emb_engine, record.storage_identifier) == MetricType.L1
+        assert record.metric_type == MetricType.COSINE
+        assert declared_metric(svec_backend.emb_engine, record.storage_identifier) == MetricType.COSINE
 
     def test_registry_row_without_a_metric_raises_then_rebuilds_to_cosine(
         self, svec_backend: SQLiteVecEmbeddingBackend

@@ -31,6 +31,7 @@ from omop_emb.backends.index_config import FlatIndexConfig, IndexConfig
 from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     ddl_create_vec0,
     ddl_drop_vec0,
+    dml_delete_rows,
     dml_upsert_rows,
     query_all_concept_ids,
     query_concept_filter_metadata,
@@ -201,6 +202,16 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 records=records,
                 embeddings=embeddings.astype(np.float32),
             )
+
+    def _delete_embeddings_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+    ) -> int:
+        table = self._storage_table(model_record)
+        with self.emb_session_factory.begin() as session:
+            return dml_delete_rows(session=session, table=table, concept_ids=concept_ids)
 
     # ------------------------------------------------------------------
     # Core read operations

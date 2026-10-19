@@ -133,6 +133,14 @@ def add_embeddings(
             rich_help_panel="Concept Filters",
         ),
     ] = False,
+    include_invalid: Annotated[
+        bool,
+        typer.Option(
+            "--include-invalid",
+            help="Also embed invalid concepts (invalid_reason 'D' or 'U'). Skipped by default.",
+            rich_help_panel="Concept Filters",
+        ),
+    ] = False,
     vocabularies: Annotated[
         list[str] | None,
         typer.Option(
@@ -177,6 +185,7 @@ def add_embeddings(
             resolved_model=resolved_model,
             batch_size=batch_size,
             standard_only=standard_only,
+            include_invalid=include_invalid,
             domains=domains,
             vocabularies=vocabularies,
             num_embeddings=num_embeddings,
@@ -190,6 +199,7 @@ def _add_embeddings(
     resolved_model: ResolvedModel,
     batch_size: int,
     standard_only: bool,
+    include_invalid: bool,
     domains: list[str] | None,
     vocabularies: list[str] | None,
     num_embeddings: int | None,
@@ -211,6 +221,7 @@ def _add_embeddings(
         # Filter concepts
         concept_filter = CDMConceptFilter(
             require_standard=standard_only,
+            require_active=not include_invalid,
             domains=tuple(domains) if domains else None,
             vocabularies=tuple(vocabularies) if vocabularies else None,
         )
@@ -380,6 +391,14 @@ def add_embeddings_with_index(
             rich_help_panel="Concept Filters",
         ),
     ] = False,
+    include_invalid: Annotated[
+        bool,
+        typer.Option(
+            "--include-invalid",
+            help="Also embed invalid concepts (invalid_reason 'D' or 'U'). Skipped by default.",
+            rich_help_panel="Concept Filters",
+        ),
+    ] = False,
     vocabularies: Annotated[
         list[str] | None,
         typer.Option(
@@ -439,6 +458,7 @@ def add_embeddings_with_index(
         batch_size=batch_size,
         model_name=model_name,
         standard_only=standard_only,
+        include_invalid=include_invalid,
         vocabularies=vocabularies,
         domains=domains,
         num_embeddings=num_embeddings,

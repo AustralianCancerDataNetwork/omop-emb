@@ -140,6 +140,47 @@ class SharedBackendTests:
         assert count == len(CONCEPT_RECORDS)
 
     # ------------------------------------------------------------------
+    # Delete embeddings
+    # ------------------------------------------------------------------
+
+    def test_delete_embeddings_removes_rows_and_counts_existing_ones(self, backend: EmbeddingBackend):
+        upsert_all(backend)
+        deleted = backend.delete_embeddings(
+            model_name=MODEL_NAME,
+            concept_ids=[HYPERTENSION_ID, NON_STANDARD_ID, 999_999],
+        )
+        assert deleted == 2
+        assert backend.get_stored_concept_ids(model_name=MODEL_NAME) == {DIABETES_ID, ASPIRIN_ID}
+        assert backend.get_embedding_count(model_name=MODEL_NAME) == 2
+
+    def test_delete_embeddings_removes_rows_from_search_results(self, backend: EmbeddingBackend):
+        upsert_all(backend)
+        backend.delete_embeddings(model_name=MODEL_NAME, concept_ids=[DIABETES_ID])
+        (matches,) = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.COSINE,
+            query_embeddings=QUERY_EMBEDDING,
+            k=4,
+        )
+        assert DIABETES_ID not in {m.concept_id for m in matches}
+        assert len(matches) == 3
+
+    def test_delete_embeddings_without_ids_deletes_nothing(self, backend: EmbeddingBackend):
+        upsert_all(backend)
+        assert backend.delete_embeddings(model_name=MODEL_NAME, concept_ids=[]) == 0
+        assert backend.get_embedding_count(model_name=MODEL_NAME) == len(CONCEPT_RECORDS)
+
+    def test_delete_embeddings_runs_in_chunks(self, backend: EmbeddingBackend, monkeypatch):
+        monkeypatch.setattr(backend, "_DELETE_CHUNK_SIZE", 1)
+        upsert_all(backend)
+        deleted = backend.delete_embeddings(
+            model_name=MODEL_NAME,
+            concept_ids=[HYPERTENSION_ID, DIABETES_ID, ASPIRIN_ID],
+        )
+        assert deleted == 3
+        assert backend.get_stored_concept_ids(model_name=MODEL_NAME) == {NON_STANDARD_ID}
+
+    # ------------------------------------------------------------------
     # Read: concept IDs
     # ------------------------------------------------------------------
 

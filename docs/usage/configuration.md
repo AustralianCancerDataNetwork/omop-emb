@@ -10,7 +10,7 @@ Written by `omop-config configure omop_emb`.
 
 | Field | References | Required | Description |
 |---|---|---|---|
-| `cdm_db` | a `[databases.*]` entry, `kind = "cdm"` | yes | The OMOP CDM database. Needed for the concept ingestion CLI commands (`add-embeddings`, `add-embeddings-with-index`) and for search-result enrichment; not needed for `list-models`, `rebuild-index`, `delete-model`, or library usage against already-computed embeddings. |
+| `cdm_db` | a `[databases.*]` entry, `kind = "cdm"` | yes | The OMOP CDM database. Needed for the concept ingestion CLI commands (`add-embeddings`, `add-embeddings-with-index`), for `prune-embeddings`, and for search-result enrichment; not needed for `list-models`, `rebuild-index`, `delete-model`, or library usage against already-computed embeddings. |
 | `embedding_model_name` | a `[models.*]` entry | yes | Which model generates embeddings. Defaults to `"embedding-model"`. |
 | `vector_store_name` | a `[vector_stores.*]` entry | yes | Which storage backend holds them. Defaults to `"vector_store"`. |
 

@@ -175,6 +175,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
     """
 
     DEFAULT_K_NEAREST = 10
+    _DELETE_CHUNK_SIZE = 100_000
 
     def __init__(
         self,
@@ -711,6 +712,48 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         records: Sequence[ConceptEmbeddingRecord],
         embeddings: ndarray,
     ) -> None: ...
+
+    @writes
+    def delete_embeddings(
+        self,
+        *,
+        model_name: str,
+        concept_ids: Sequence[int],
+    ) -> int:
+        """Delete the stored embeddings of the given concepts.
+
+        Concept IDs without a stored embedding are ignored. The deletion runs
+        in chunks of ``_DELETE_CHUNK_SIZE`` IDs, one transaction each.
+
+        Parameters
+        ----------
+        model_name : str
+            Canonical model name including tag.
+        concept_ids : Sequence[int]
+            OMOP concept IDs whose embeddings are removed.
+
+        Returns
+        -------
+        int
+            Number of embedding rows deleted.
+        """
+        model_record = self._registered_record(model_name)
+        ids = list(concept_ids)
+        return sum(
+            self._delete_embeddings_impl(
+                model_record=model_record,
+                concept_ids=ids[start : start + self._DELETE_CHUNK_SIZE],
+            )
+            for start in range(0, len(ids), self._DELETE_CHUNK_SIZE)
+        )
+
+    @abstractmethod
+    def _delete_embeddings_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+    ) -> int: ...
 
     @writes
     def bulk_upsert_embeddings(

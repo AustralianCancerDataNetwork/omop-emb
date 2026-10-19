@@ -24,7 +24,7 @@ from oa_configurator import (
     qualified,
     physical_schema_of,
 )
-from sqlalchemy import Engine, MetaData, Row, Select, func, inspect, select, text
+from sqlalchemy import Engine, MetaData, Row, Select, delete, func, inspect, select, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.orm import Session, mapped_column, registry
 
@@ -223,6 +223,21 @@ def query_embeddings_by_ids(
         )
     ).all()
     return {int(row[0]): list(row[1]) for row in rows}
+
+
+def delete_embedding_rows(
+    session: Session,
+    embedding_table: type[PGEmbeddingTable],
+    concept_ids: Sequence[int],
+) -> int:
+    """Delete the rows of concept_ids and return how many existed."""
+    column = inspect(embedding_table).columns
+    result = session.execute(
+        delete(embedding_table).where(
+            in_values(column.concept_id, concept_ids, dialect=Dialect.POSTGRESQL)
+        )
+    )
+    return int(result.rowcount)  # ty: ignore[unresolved-attribute]
 
 
 # ---------------------------------------------------------------------------

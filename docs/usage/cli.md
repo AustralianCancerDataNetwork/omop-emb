@@ -28,7 +28,7 @@ Run `omop-emb <group> --help` to list commands within a group.
   `pip install "omop-emb[pgvector]"`.
 - **Configured via oa-configurator**: `omop-config configure omop_emb` (see [Getting Started: Configuration](../getting-started/configuration.md)). Resolves `cdm_db`, `embedding_model_name`, and `vector_store_name`.
 - **OMOP CDM** (`cdm_db`): required only for concept ingestion
-  (`add-embeddings`, `add-embeddings-with-index`) and for enriching `search` results with concept names. Not required for `list-models`, `rebuild-index`, `delete-model`, or diagnostics.
+  (`add-embeddings`, `add-embeddings-with-index`), for `prune-embeddings`, and for enriching `search` results with concept names. Not required for `list-models`, `rebuild-index`, `delete-model`, or diagnostics.
 
 ---
 
@@ -54,6 +54,7 @@ omop-emb embeddings add-embeddings [OPTIONS]
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--standard-only` | | `False` | Embed only standard concepts (`standard_concept = 'S'`). |
+| `--include-invalid` | | `False` | Also embed invalid concepts (`invalid_reason` of `D` or `U`). They are skipped by default. |
 | `--vocabulary` | | `None` | Restrict to specific OMOP vocabularies (repeatable). |
 | `--domain` | | `None` | Restrict to specific OMOP domains (repeatable). |
 | `--num-embeddings` | `-n` | `None` | Cap on total concepts processed (useful for testing). |
@@ -219,6 +220,35 @@ omop-emb maintenance delete-model --model <NAME> [OPTIONS]
 | `--provider-type` | | `None` | Provider used to canonicalize the model name when needed. |
 | `--yes` | `-y` | `False` | Skip confirmation prompt. |
 | `--verbose` | `-v` | | Increase log verbosity. |
+
+---
+
+### `prune-embeddings`
+
+Remove stored embeddings whose concept is outside the given scope or no longer exists in the CDM. By default the scope is all valid concepts, so invalid concepts embedded earlier are removed. Without `--apply` the command only reports what would be deleted. Applying a prune also marks the model as updated, so FAISS caches built before it report as stale.
+
+```bash
+omop-emb maintenance prune-embeddings --model <NAME> [OPTIONS]
+```
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--model` | `-m` | **required** | Canonical model name. |
+| `--provider-type` | | `None` | Provider used to canonicalize the model name when needed. |
+| `--apply` | | `False` | Delete the rows. Without it the command is a dry run. |
+| `--verbose` | `-v` | | Increase log verbosity. |
+
+**Scope**
+
+| Option | Default | Description |
+|---|---|---|
+| `--include-invalid` | `False` | Keep invalid concepts instead of pruning them. |
+| `--standard-only` | `False` | Keep only standard concepts. |
+| `--vocabulary` | `None` | Keep only these vocabularies (repeatable). |
+| `--domain` | `None` | Keep only these domains (repeatable). |
+
+!!! note "Reclaiming space"
+    Deleted rows leave dead space in the table and, on pgvector HNSW models, in the index. Run `maintenance rebuild-index` afterwards to reclaim it.
 
 ---
 

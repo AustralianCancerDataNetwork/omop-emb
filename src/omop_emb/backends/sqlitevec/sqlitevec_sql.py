@@ -191,6 +191,23 @@ def ddl_drop_vec0(table_name: str) -> str:
     return f'DROP TABLE IF EXISTS "{table_name}"'
 
 
+def dml_delete_rows(
+    session: Session,
+    table: Table,
+    concept_ids: Sequence[int],
+) -> int:
+    """Delete the rows of concept_ids from a vec0 table and return how many existed."""
+    existing = session.execute(
+        select(func.count()).select_from(table).where(
+            in_values(table.c.concept_id, concept_ids, dialect=Dialect.SQLITE)
+        )
+    ).scalar_one()
+    session.execute(
+        delete(table).where(in_values(table.c.concept_id, concept_ids, dialect=Dialect.SQLITE))
+    )
+    return int(existing)
+
+
 def dml_upsert_rows(
     session: Session,
     table: Table,

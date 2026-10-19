@@ -854,6 +854,26 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         )
         self._backend.refresh_model_updated_at_timestamp(model_name=self.canonical_model_name)
 
+    def delete_concept_embeddings(self, concept_ids: Sequence[int]) -> int:
+        """Delete the stored embeddings of the given concepts and mark the model as updated.
+
+        Parameters
+        ----------
+        concept_ids : Sequence[int]
+            OMOP concept IDs whose embeddings are removed.
+
+        Returns
+        -------
+        int
+            Number of embedding rows deleted.
+        """
+        deleted = self._backend.delete_embeddings(
+            model_name=self.canonical_model_name,
+            concept_ids=concept_ids,
+        )
+        self._backend.refresh_model_updated_at_timestamp(model_name=self.canonical_model_name)
+        return deleted
+
     def bulk_upsert_concept_embeddings(
         self,
         batches: Iterable[Tuple[Sequence[ConceptEmbeddingRecord], ndarray]],

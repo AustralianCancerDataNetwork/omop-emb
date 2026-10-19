@@ -34,6 +34,7 @@ from omop_emb.backends.embedding_table import (
 from omop_emb.backends.index_config import HNSWIndexConfig, IndexConfig
 from omop_emb.backends.pgvector.pg_sql import (
     create_pg_embedding_table,
+    delete_embedding_rows,
     drop_pg_embedding_table,
     hnsw_index_ddl,
     installed_pgvector_version,
@@ -286,6 +287,18 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                 "Failed to upsert embeddings for '%s': %s", model_record.model_name, exc
             )
             raise
+
+    def _delete_embeddings_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+    ) -> int:
+        table = self._storage_table(model_record)
+        with self.emb_session_factory.begin() as session:
+            return delete_embedding_rows(
+                session=session, embedding_table=table, concept_ids=concept_ids
+            )
 
     # ------------------------------------------------------------------
     # Core read operations

@@ -20,7 +20,7 @@ backend_type = "pgvector"    # or "sqlitevec"
 database     = "emb_db"
 ```
 
-See [Configuration Reference](configuration.md) for the full field list, both backends' setup.
+See [Configuration Reference](configuration.md) for the full field list, both backends' setup, and the [Performance Guide](performance.md) for which backend to pick at which size and what to tune.
 
 ## Index types
 

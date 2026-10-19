@@ -42,6 +42,7 @@ Document/query embedding prefixes for asymmetric models (nomic-embed-text, E5, B
 - [Getting Started: Configuration](getting-started/configuration.md)
 - [Installation](usage/installation.md)
 - [Embedding storage backends](usage/backend-selection.md)
+- [Performance guide](usage/performance.md)
 - [CLI Reference](usage/cli.md)
 - [Asymmetric Embeddings](usage/asymmetric-embeddings.md)
 - [Interface guide](usage/interface-guide.md)

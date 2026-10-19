@@ -96,3 +96,35 @@ def test_hnsw_accepts_only_its_index_metric(pg_backend):
     assert len(_query(pg_backend, MetricType.L2)[0]) == 1
     with pytest.raises(ValueError, match="indexed with metric 'l2'"):
         _query(pg_backend, MetricType.COSINE)
+
+
+@pytest.mark.pgvector
+@pytest.mark.integration
+def test_bundle_moves_between_sqlitevec_and_pgvector_without_carrying_the_lock(
+    svec_backend, pg_backend, tmp_path
+):
+    """sqlite-vec locks its models to a metric; pgvector FLAT stays free, and the other way round."""
+    pytest.importorskip("h5py")
+    from omop_emb.storage import embedding_bundle
+
+    svec_backend.register_model(
+        model_name=MODEL_NAME,
+        provider_type=PROVIDER_TYPE,
+        index_config=FlatIndexConfig(metric_type=MetricType.L2),
+        dimensions=EMBEDDING_DIM,
+    )
+    svec_backend.upsert_embeddings(model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS)
+    _, bundle = embedding_bundle.export_bundle(svec_backend, MODEL_NAME, tmp_path / "from_svec")
+
+    embedding_bundle.import_bundle(pg_backend, bundle, rebuild_index=True)
+
+    assert pg_backend.get_registered_model(model_name=MODEL_NAME).metric_type is None
+    for metric in (MetricType.L2, MetricType.COSINE, MetricType.L1):
+        assert len(_query(pg_backend, metric)[0]) == 1
+
+    _, back = embedding_bundle.export_bundle(pg_backend, MODEL_NAME, tmp_path / "from_pg")
+    svec_backend.delete_model(model_name=MODEL_NAME)
+    embedding_bundle.import_bundle(svec_backend, back, rebuild_index=True)
+
+    assert svec_backend.get_registered_model(model_name=MODEL_NAME).metric_type == MetricType.COSINE
+    assert len(_query(svec_backend, MetricType.COSINE)[0]) == 1

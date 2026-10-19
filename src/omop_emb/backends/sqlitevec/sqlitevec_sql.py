@@ -26,6 +26,7 @@ from sqlalchemy import (
     LargeBinary
 )
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.db_utils import apply_concept_filter_where, in_values
@@ -38,7 +39,22 @@ logger = logging.getLogger(__name__)
 # Largest k that a vec0 MATCH query accepts.
 MAX_KNN_K = 4096
 
+# Longest concept ID list answered with one equality lookup per ID. vec0 scans the whole
+# table for any other ID match, which costs as much as this many lookups at a few hundred
+# thousand rows and fewer on smaller tables.
+POINT_LOOKUP_MAX = 100
+
 _DECLARED_METRIC = re.compile(r"distance_metric=(\w+)")
+
+
+def _embedding_to_blob(vector: ndarray) -> bytes:
+    """Serialise one float32 vector (a row of an ``EmbeddingArray``) for a vec0 embedding column."""
+    return vector.tobytes()
+
+
+def _blob_to_embedding(blob: bytes) -> ndarray:
+    """Read a vec0 embedding blob as a float32 vector that owns its data and is writable."""
+    return np.frombuffer(blob, dtype=np.float32).copy()
 
 
 def table_exists(engine: Engine, table_name: str) -> bool:
@@ -200,20 +216,31 @@ def ddl_drop_vec0(table_name: str) -> str:
     return f'DROP TABLE IF EXISTS "{table_name}"'
 
 
+def _where_concept_ids(table: Table, concept_ids: Sequence[int]) -> list[ColumnElement[bool]]:
+    """Return conditions that together match concept_ids on a vec0 table.
+
+    A short list gets one equality per ID, which vec0 answers without scanning
+    the table. A longer one gets a single ``IN``, which costs one scan.
+    Duplicate IDs are ignored.
+    """
+    ids = list(dict.fromkeys(int(i) for i in concept_ids))
+    if len(ids) > POINT_LOOKUP_MAX:
+        return [in_values(table.c.concept_id, ids, dialect=Dialect.SQLITE)]
+    return [table.c.concept_id == i for i in ids]
+
+
 def dml_delete_rows(
     session: Session,
     table: Table,
     concept_ids: Sequence[int],
 ) -> int:
     """Delete the rows of concept_ids from a vec0 table and return how many existed."""
-    existing = session.execute(
-        select(func.count()).select_from(table).where(
-            in_values(table.c.concept_id, concept_ids, dialect=Dialect.SQLITE)
-        )
-    ).scalar_one()
-    session.execute(
-        delete(table).where(in_values(table.c.concept_id, concept_ids, dialect=Dialect.SQLITE))
-    )
+    existing = 0
+    for condition in _where_concept_ids(table, concept_ids):
+        existing += session.execute(
+            select(func.count()).select_from(table).where(condition)
+        ).scalar_one()
+        session.execute(delete(table).where(condition))
     return int(existing)
 
 
@@ -240,10 +267,8 @@ def dml_upsert_rows(
     vec0 has no native UPDATE support so upsert is implemented as
     delete-then-insert.
     """
-    concept_ids = [r.concept_id for r in records]
-    session.execute(
-        delete(table).where(in_values(table.c.concept_id, concept_ids, dialect=Dialect.SQLITE))
-    )
+    for condition in _where_concept_ids(table, [r.concept_id for r in records]):
+        session.execute(delete(table).where(condition))
 
     session.execute(
         insert(table),
@@ -396,7 +421,7 @@ def query_embeddings_by_ids(
     session: Session,
     table: Table,
     concept_ids: Sequence[int],
-) -> dict[int, list[float]]:
+) -> dict[int, ndarray]:
     """Fetch embedding vectors for a set of concept IDs.
 
     Parameters
@@ -407,15 +432,16 @@ def query_embeddings_by_ids(
 
     Returns
     -------
-    dict[int, list[float]]
-        Mapping of concept ID to embedding vector.
+    dict[int, ndarray]
+        Mapping of concept ID to its float32 embedding vector.
     """
-    rows = session.execute(
-        select(table.c.concept_id, table.c[EMBEDDING_COLUMN_NAME]).where(
-            in_values(table.c.concept_id, concept_ids, dialect=Dialect.SQLITE)
+    return {
+        int(row[0]): _blob_to_embedding(row[1])
+        for condition in _where_concept_ids(table, concept_ids)
+        for row in session.execute(
+            select(table.c.concept_id, table.c[EMBEDDING_COLUMN_NAME]).where(condition)
         )
-    ).all()
-    return {int(row[0]): _blob_to_embedding(row[1]) for row in rows}
+    }
 
 
 def query_has_any(session: Session, table: Table) -> bool:
@@ -438,35 +464,26 @@ def query_has_any(session: Session, table: Table) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _embedding_to_blob(emb: ndarray) -> bytes:
-    return emb.astype(np.float32).tobytes()
-
-
-def _blob_to_embedding(blob: bytes) -> list[float]:
-    return np.frombuffer(blob, dtype=np.float32).tolist()
-
-
-def query_concept_filter_metadata(
+def query_metadata_by_ids(
     session: Session,
     table: Table,
-    concept_filter: EmbeddingConceptFilter,
-) -> Sequence[Row]:
-    """Return filter metadata columns (raw rows) for every concept ID
-    satisfying concept_filter.
+    concept_ids: Sequence[int],
+) -> list[Row]:
+    """Return filter metadata rows for the stored concepts among concept_ids.
 
     Columns: ``concept_id``, ``domain_id``, ``vocabulary_id``, ``is_standard``,
     ``is_valid``. Row-to-domain-object conversion is the caller's job.
     """
-    stmt = apply_concept_filter_where(
-        select(
-            table.c.concept_id,
-            table.c.domain_id,
-            table.c.vocabulary_id,
-            table.c.is_standard,
-            table.c.is_valid,
-        ),
-        table.c,
-        concept_filter,
-        dialect=Dialect.SQLITE,
-    )
-    return session.execute(stmt).all()
+    return [
+        row
+        for condition in _where_concept_ids(table, concept_ids)
+        for row in session.execute(
+            select(
+                table.c.concept_id,
+                table.c.domain_id,
+                table.c.vocabulary_id,
+                table.c.is_standard,
+                table.c.is_valid,
+            ).where(condition)
+        )
+    ]

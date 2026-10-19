@@ -61,8 +61,10 @@ from omop_emb.backends.index_config import IndexConfig
 from omop_emb.config import BackendType, MetricType
 from omop_emb.utils.embedding_utils import (
     CDMConceptFilter,
+    EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
+    as_embedding_array,
 )
 
 if TYPE_CHECKING:
@@ -195,7 +197,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         *,
         role: EmbeddingRole,
         batch_size: Optional[int] = None,
-    ) -> np.ndarray:
+    ) -> EmbeddingArray:
         """Embed *text* against *model_backend*, validating the resulting shape.
 
         Callable without an interface instance for callers that hold a
@@ -219,8 +221,15 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
 
         Returns
         -------
-        np.ndarray
-            2-D float array of shape ``(n_texts, embedding_dim)``.
+        EmbeddingArray
+            Float32 array of shape ``(n_texts, embedding_dim)``.
+
+        Raises
+        ------
+        ValueError
+            If the model returns something other than a finite 2-D array.
+        RuntimeError
+            If the model returns a different number of vectors than texts.
         """
         if isinstance(text, str):
             text_tuple: Tuple[str, ...] = (text,)
@@ -229,9 +238,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
 
         vectors = model_backend.embed_texts(list(text_tuple), role=role, batch_size=batch_size)
 
-        result = np.array(vectors)
-        if result.ndim != 2:
-            raise RuntimeError(f"Expected 2-D embedding array, got shape {result.shape}")
+        result = as_embedding_array(vectors)
         if result.shape[0] != len(text_tuple):
             raise RuntimeError(f"Expected {len(text_tuple)} embeddings, got {result.shape[0]}")
         return result
@@ -266,7 +273,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
 
     def get_nearest_concepts(
         self,
-        query_embedding: np.ndarray,
+        query_embedding: EmbeddingArray,
         *,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: Optional[int] = None,
@@ -365,7 +372,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
     def get_embeddings_by_concept_ids(
         self,
         concept_ids: Tuple[int, ...],
-    ) -> Mapping[int, Sequence[float]]:
+    ) -> Mapping[int, ndarray]:
         return self._backend.get_embeddings_by_concept_ids(
             model_name=self.canonical_model_name,
             concept_ids=concept_ids,
@@ -422,7 +429,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         if missing:
             raise ValueError(f"No stored embedding for concept_ids: {missing}")
 
-        vectors = np.asarray([stored[cid] for cid in ids], dtype=np.float64)
+        vectors = as_embedding_array([stored[cid] for cid in ids])
         effective_k = _resolve_k(k, self._k)
 
         raw = self.get_nearest_concepts(
@@ -828,7 +835,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         *,
         role: EmbeddingRole,
         batch_size: Optional[int] = None,
-    ) -> np.ndarray:
+    ) -> EmbeddingArray:
         return self.generate_embeddings(
             self._model_backend,
             texts,
@@ -844,7 +851,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         self,
         *,
         records: Sequence[ConceptEmbeddingRecord],
-        embeddings: ndarray,
+        embeddings: EmbeddingArray,
     ) -> None:
         """Upsert pre-built ConceptEmbeddingRecords with their embeddings."""
         self._backend.upsert_embeddings(
@@ -876,7 +883,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
 
     def bulk_upsert_concept_embeddings(
         self,
-        batches: Iterable[Tuple[Sequence[ConceptEmbeddingRecord], ndarray]],
+        batches: Iterable[Tuple[Sequence[ConceptEmbeddingRecord], EmbeddingArray]],
         total_n_batches: Optional[int] = None,
     ) -> None:
         """Upsert from a lazy ``(records, embeddings)`` iterable."""
@@ -894,7 +901,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         concept_texts: Sequence[str],
         concept_meta: Mapping[int, Row],
         batch_size: Optional[int] = None,
-    ) -> ndarray:
+    ) -> EmbeddingArray:
         """Generate embeddings from CDM concepts and upsert with filter metadata.
         Concept_ids, concept_texts and concept_meta must be aligned (same length, same order).
         `fetch_cdm_concepts_for_filter` can be used to get aligned concept_meta for a set of concept_ids.

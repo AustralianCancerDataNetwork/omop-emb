@@ -467,4 +467,7 @@ def test_single_upsert_call_exceeds_the_bind_parameter_limit(pg_backend: PGVecto
     )
     assert pg_backend.get_embedding_count(model_name=MODEL_NAME) == n
     assert pg_backend.get_concept_filter_metadata(model_name=MODEL_NAME, concept_ids=[n - 1])[n - 1] == updated[-1]
-    assert pg_backend.get_embeddings_by_concept_ids(model_name=MODEL_NAME, concept_ids=[0])[0] == [2.0] * EMBEDDING_DIM
+    assert np.array_equal(
+        pg_backend.get_embeddings_by_concept_ids(model_name=MODEL_NAME, concept_ids=[0])[0],
+        np.full(EMBEDDING_DIM, 2.0, dtype=np.float32),
+    )

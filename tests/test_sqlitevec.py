@@ -13,6 +13,7 @@ from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
+from omop_emb.backends.sqlitevec import sqlitevec_sql
 from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     MAX_KNN_K,
     ddl_drop_vec0,
@@ -426,3 +427,85 @@ class TestSQLiteVecVacuum:
             assert backend.get_embedding_count(model_name=MODEL_NAME) == 600
         finally:
             backend.emb_engine.dispose()
+
+
+@pytest.mark.unit
+class TestSQLiteVecConceptIdLookups:
+    """Short ID lists use one equality lookup per ID, longer ones one scan, with identical results."""
+
+    IDS = [r.concept_id for r in CONCEPT_RECORDS]
+
+    @pytest.fixture(params=[0, 100], ids=["scan", "point-lookups"])
+    def backend(self, request, svec_backend: SQLiteVecEmbeddingBackend, monkeypatch):
+        monkeypatch.setattr(sqlitevec_sql, "POINT_LOOKUP_MAX", request.param)
+        register_flat(svec_backend)
+        svec_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+        )
+        return svec_backend
+
+    def test_embeddings_by_ids_skip_missing_and_duplicate_ids(self, backend):
+        table = backend._storage_table(backend.get_registered_model(model_name=MODEL_NAME))
+        with backend.emb_session_factory() as session:
+            found = sqlitevec_sql.query_embeddings_by_ids(
+                session, table, [self.IDS[0], self.IDS[0], 999_999, self.IDS[2]]
+            )
+        assert set(found) == {self.IDS[0], self.IDS[2]}
+        assert np.allclose(found[self.IDS[2]], CONCEPT_EMBEDDINGS[2])
+
+    def test_embeddings_by_ids_raises_for_missing_ids(self, backend):
+        with pytest.raises(ValueError, match="999999"):
+            backend.get_embeddings_by_concept_ids(
+                model_name=MODEL_NAME, concept_ids=[self.IDS[0], 999_999]
+            )
+
+    def test_metadata_by_ids_ignore_missing_ids(self, backend):
+        found = backend.get_concept_filter_metadata(
+            model_name=MODEL_NAME, concept_ids=[self.IDS[1], 999_999]
+        )
+        assert found == {self.IDS[1]: CONCEPT_RECORDS[1]}
+
+    def test_delete_counts_existing_rows_only(self, backend):
+        deleted = backend.delete_embeddings(
+            model_name=MODEL_NAME, concept_ids=[self.IDS[0], self.IDS[1], 999_999]
+        )
+        assert deleted == 2
+        assert backend.get_stored_concept_ids(model_name=MODEL_NAME) == set(self.IDS[2:])
+
+    def test_upsert_replaces_rows_without_duplicating_them(self, backend):
+        backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS[:2], embeddings=CONCEPT_EMBEDDINGS[:2]
+        )
+        assert backend.get_embedding_count(model_name=MODEL_NAME) == len(CONCEPT_RECORDS)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "limit, expected_statements, scans",
+    [(100, 3, False), (2, 1, True)],
+    ids=["short list: one lookup per id", "long list: one scan"],
+)
+def test_concept_id_lookup_statement_shape(
+    svec_backend: SQLiteVecEmbeddingBackend, monkeypatch, limit, expected_statements, scans
+):
+    monkeypatch.setattr(sqlitevec_sql, "POINT_LOOKUP_MAX", limit)
+    register_flat(svec_backend)
+    svec_backend.upsert_embeddings(
+        model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+    )
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, *_args):
+        statements.append(statement.lower())
+
+    sa.event.listen(svec_backend.emb_engine, "before_cursor_execute", capture)
+    try:
+        svec_backend.get_concept_filter_metadata(
+            model_name=MODEL_NAME, concept_ids=[r.concept_id for r in CONCEPT_RECORDS[:3]]
+        )
+    finally:
+        sa.event.remove(svec_backend.emb_engine, "before_cursor_execute", capture)
+
+    lookups = [s for s in statements if "select" in s and "concept_id" in s]
+    assert len(lookups) == expected_statements
+    assert all("json_each" in s for s in lookups) is scans

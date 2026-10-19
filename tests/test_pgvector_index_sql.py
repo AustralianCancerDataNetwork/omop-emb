@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import sqlalchemy as sa
 
@@ -131,7 +132,7 @@ def test_get_distance_raises_for_bit_metrics(metric):
         embedding = None
 
     with pytest.raises(ValueError, match="bit"):
-        get_distance(_FakeTable, [], metric)
+        get_distance(_FakeTable, np.empty(0, dtype=np.float32), metric)
 
 
 def test_get_similarity_raises_valueerror_for_hamming():

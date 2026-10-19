@@ -51,6 +51,7 @@ from omop_emb.backends.pgvector.pg_sql import (
 from omop_emb.config import BackendType, MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
+    EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
     get_similarity_from_distance,
@@ -270,13 +271,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         *,
         model_record: EmbeddingModelRecord,
         records: Sequence[ConceptEmbeddingRecord],
-        embeddings: ndarray,
+        embeddings: EmbeddingArray,
     ) -> None:
-        self.validate_embeddings_and_records(
-            embeddings=embeddings,
-            records=records,
-            dimensions=model_record.dimensions,
-        )
         table = self._storage_table(model_record)
         try:
             with self.emb_session_factory.begin() as session:
@@ -312,7 +308,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         self,
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
-    ) -> Mapping[int, Sequence[float]]:
+    ) -> Mapping[int, ndarray]:
         if not concept_ids:
             return {}
         table = self._storage_table(model_record)
@@ -370,12 +366,10 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         *,
         model_record: EmbeddingModelRecord,
         metric_type: MetricType,
-        query_embeddings: ndarray,
+        query_embeddings: EmbeddingArray,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
-        self.validate_embeddings(query_embeddings, model_record.dimensions)
-
         table = self._storage_table(model_record)
 
         with self.emb_session_factory.begin() as session:
@@ -396,7 +390,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                     k=k,
                     concept_filter=concept_filter,
                 )
-                for query_embedding in query_embeddings.tolist()
+                for query_embedding in query_embeddings
             ]
 
         results = [

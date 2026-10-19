@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 from typing import Mapping, Optional, Sequence, Tuple
 
-import numpy as np
 from numpy import ndarray
 from oa_configurator import Dialect
 from sqlalchemy import Engine, MetaData, Table, text
@@ -35,7 +34,7 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     dml_delete_rows,
     dml_upsert_rows,
     query_all_concept_ids,
-    query_concept_filter_metadata,
+    query_metadata_by_ids,
     query_concept_ids_matching_filter,
     query_embedding_count_by_vocabulary,
     query_embeddings_by_ids,
@@ -49,6 +48,7 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.errors import LegacyVectorTableError
 from omop_emb.utils.embedding_utils import (
+    EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
     get_similarity_from_distance,
@@ -211,20 +211,15 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         *,
         model_record: EmbeddingModelRecord,
         records: Sequence[ConceptEmbeddingRecord],
-        embeddings: ndarray,
+        embeddings: EmbeddingArray,
     ) -> None:
-        self.validate_embeddings_and_records(
-            embeddings=embeddings,
-            records=records,
-            dimensions=model_record.dimensions,
-        )
         table = self._storage_table(model_record)
         with self.emb_session_factory.begin() as session:
             dml_upsert_rows(
                 session=session,
                 table=table,
                 records=records,
-                embeddings=embeddings.astype(np.float32),
+                embeddings=embeddings,
             )
 
     def _delete_embeddings_impl(
@@ -245,7 +240,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         self,
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
-    ) -> Mapping[int, Sequence[float]]:
+    ) -> Mapping[int, ndarray]:
         if not concept_ids:
             return {}
         table = self._storage_table(model_record)
@@ -267,18 +262,16 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         *,
         model_record: EmbeddingModelRecord,
         metric_type: MetricType,
-        query_embeddings: ndarray,
+        query_embeddings: EmbeddingArray,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
-        self.validate_embeddings(query_embeddings, model_record.dimensions)
-
         table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             batches = query_knn_batch(
                 session=session,
                 table=table,
-                query_vectors=[v.astype(np.float32) for v in query_embeddings],
+                query_vectors=list(query_embeddings),
                 k=k,
                 concept_filter=concept_filter,
             )
@@ -324,13 +317,8 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         if not concept_ids:
             return {}
         table = self._storage_table(model_record)
-        concept_filter = EmbeddingConceptFilter(concept_ids=tuple(concept_ids))
         with self.emb_session_factory() as session:
-            rows = query_concept_filter_metadata(
-                session=session,
-                table=table,
-                concept_filter=concept_filter,
-            )
+            rows = query_metadata_by_ids(session=session, table=table, concept_ids=concept_ids)
         return {
             int(row[0]): ConceptEmbeddingRecord(
                 concept_id=int(row[0]),

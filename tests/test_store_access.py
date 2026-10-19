@@ -49,8 +49,6 @@ _NEITHER = frozenset({
     "dialect",
     "emb_engine",
     "emb_session_factory",
-    "validate_embeddings",
-    "validate_embeddings_and_records",
 })
 
 _MODEL = "test-model"

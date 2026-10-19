@@ -139,6 +139,70 @@ class SharedBackendTests:
         )
         assert count == len(CONCEPT_RECORDS)
 
+    def test_get_embeddings_by_concept_ids_returns_float32_arrays(self, backend: EmbeddingBackend):
+        upsert_all(backend)
+        result = backend.get_embeddings_by_concept_ids(
+            model_name=MODEL_NAME,
+            concept_ids=[HYPERTENSION_ID],
+        )
+        vector = result[HYPERTENSION_ID]
+        assert isinstance(vector, np.ndarray)
+        assert vector.dtype == np.float32
+        assert np.allclose(vector, CONCEPT_EMBEDDINGS[0])
+
+    # ------------------------------------------------------------------
+    # Embedding array validation
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "embeddings, message",
+        [
+            (np.ones((len(CONCEPT_RECORDS), EMBEDDING_DIM + 1)), "dimensionality"),
+            (np.ones(EMBEDDING_DIM), "2-D"),
+            (np.ones((len(CONCEPT_RECORDS) - 1, EMBEDDING_DIM)), "does not match"),
+            (np.full((len(CONCEPT_RECORDS), EMBEDDING_DIM), np.nan), "NaN or infinite"),
+        ],
+        ids=["wrong dimensionality", "1-D", "row count", "NaN"],
+    )
+    def test_upsert_rejects_malformed_embeddings(self, backend: EmbeddingBackend, embeddings, message):
+        register_flat(backend)
+        with pytest.raises(ValueError, match=message):
+            backend.upsert_embeddings(
+                model_name=MODEL_NAME, records=list(CONCEPT_RECORDS), embeddings=embeddings
+            )
+        assert backend.get_embedding_count(model_name=MODEL_NAME) == 0
+
+    @pytest.mark.parametrize(
+        "query, message",
+        [
+            (np.ones((1, EMBEDDING_DIM + 1)), "dimensionality"),
+            (np.ones(EMBEDDING_DIM), "2-D"),
+            (np.array([[np.inf] * EMBEDDING_DIM]), "NaN or infinite"),
+        ],
+        ids=["wrong dimensionality", "1-D", "infinite"],
+    )
+    def test_query_rejects_malformed_embeddings(self, backend: EmbeddingBackend, query, message):
+        upsert_all(backend)
+        with pytest.raises(ValueError, match=message):
+            backend.get_nearest_concepts(
+                model_name=MODEL_NAME, metric_type=MetricType.COSINE, query_embeddings=query, k=1
+            )
+
+    def test_float64_embeddings_are_accepted_and_stored_as_float32(self, backend: EmbeddingBackend):
+        register_flat(backend)
+        backend.upsert_embeddings(
+            model_name=MODEL_NAME,
+            records=list(CONCEPT_RECORDS),
+            embeddings=CONCEPT_EMBEDDINGS.astype(np.float64),
+        )
+        (matches,) = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.COSINE,
+            query_embeddings=QUERY_EMBEDDING.astype(np.float64),
+            k=1,
+        )
+        assert matches[0].concept_id == DIABETES_ID
+
     # ------------------------------------------------------------------
     # Delete embeddings
     # ------------------------------------------------------------------

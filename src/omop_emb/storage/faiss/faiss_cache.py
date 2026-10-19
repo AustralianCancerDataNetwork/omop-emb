@@ -53,7 +53,12 @@ except ImportError as _faiss_err:
     ) from _faiss_err
 
 from omop_emb.config import MetricType, IndexType
-from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, NearestConceptMatch
+from omop_emb.utils.embedding_utils import (
+    EmbeddingArray,
+    EmbeddingConceptFilter,
+    NearestConceptMatch,
+    as_embedding_array,
+)
 from omop_emb.backends.base_backend import EmbeddingStoreReader
 from omop_emb.backends.index_config import IndexConfig, index_config_from_dict
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
@@ -457,7 +462,7 @@ class FAISSCache:
 
     def search(
         self,
-        query_embeddings: np.ndarray,
+        query_embeddings: EmbeddingArray,
         k: int,
         metric_type: MetricType,
         index_config: IndexConfig,
@@ -507,11 +512,11 @@ class FAISSCache:
         """
         from omop_emb.utils.embedding_utils import get_similarity_from_distance
 
-        query = np.ascontiguousarray(query_embeddings, dtype=np.float32)
+        index = self._load_index(metric_type, index_config)
+        # A C-ordered copy as FAISS needs that layout, and normalize_L2 works in place.
+        query = np.array(as_embedding_array(query_embeddings, index.d), order="C")
         if metric_type == MetricType.COSINE:
             faiss.normalize_L2(query)
-
-        index = self._load_index(metric_type, index_config)
 
         params = None
         if concept_filter is not None and not concept_filter.is_empty():

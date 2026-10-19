@@ -108,6 +108,28 @@ class TestCosineCorrectness:
         by_id = {r.concept_id: r.similarity for r in results[0]}
         assert by_id[1] == pytest.approx(1.0, abs=1e-5)
 
+    def test_search_leaves_the_callers_query_unchanged(self, faiss_cosine: FAISSCache):
+        query = np.array([[3.0, 4.0]], dtype=np.float32)
+        faiss_cosine.search(
+            query, k=1, metric_type=MetricType.COSINE, index_config=FlatIndexConfig()
+        )
+        assert query.tolist() == [[3.0, 4.0]]
+
+    @pytest.mark.parametrize(
+        "query, message",
+        [
+            (np.ones((1, 3), dtype=np.float32), "dimensionality"),
+            (np.ones(2, dtype=np.float32), "2-D"),
+            (np.array([[np.nan, 1.0]], dtype=np.float32), "NaN or infinite"),
+        ],
+        ids=["wrong dimensionality", "1-D", "NaN"],
+    )
+    def test_search_rejects_malformed_queries(self, faiss_cosine: FAISSCache, query, message):
+        with pytest.raises(ValueError, match=message):
+            faiss_cosine.search(
+                query, k=1, metric_type=MetricType.COSINE, index_config=FlatIndexConfig()
+            )
+
     def test_orthogonal_vectors_score_half(self, faiss_cosine: FAISSCache):
         results = faiss_cosine.search(
             _COSINE_QUERY,

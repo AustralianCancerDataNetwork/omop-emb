@@ -14,8 +14,9 @@ from __future__ import annotations
 import functools
 import logging
 import typing
-from typing import List, Optional, Sequence, Union
+from typing import Optional, Sequence, Union
 
+import numpy as np
 from numpy import ndarray
 from oa_configurator import (
     Dialect,
@@ -210,19 +211,25 @@ def q_embedding_count_by_vocabulary(embedding_table: type[PGEmbeddingTable]) -> 
     ).group_by(embedding_table.vocabulary_id)
 
 
+def _as_float32_array(value) -> ndarray:
+    """Return a stored vector as a float32 array; halfvec values arrive as ``HalfVector``."""
+    to_numpy = getattr(value, "to_numpy", None)
+    return np.asarray(to_numpy() if to_numpy else value, dtype=np.float32)
+
+
 def query_embeddings_by_ids(
     session: Session,
     embedding_table: type[PGEmbeddingTable],
     concept_ids: Sequence[int],
-) -> dict[int, list[float]]:
-    """Fetch embedding vectors for concept_ids, keyed by concept ID; absent IDs are omitted."""
+) -> dict[int, ndarray]:
+    """Fetch float32 embedding vectors for concept_ids, keyed by concept ID; absent IDs are omitted."""
     column = inspect(embedding_table).columns
     rows = session.execute(
         select(column.concept_id, column[EMBEDDING_COLUMN_NAME]).where(
             in_values(column.concept_id, concept_ids, dialect=Dialect.POSTGRESQL)
         )
     ).all()
-    return {int(row[0]): list(row[1]) for row in rows}
+    return {int(row[0]): _as_float32_array(row[1]) for row in rows}
 
 
 def delete_embedding_rows(
@@ -248,7 +255,7 @@ def delete_embedding_rows(
 def query_nearest_concept_ids(
     session: Session,
     embedding_table: type[PGEmbeddingTable],
-    query_embedding: List[float],
+    query_embedding: ndarray,
     metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
@@ -268,8 +275,8 @@ def query_nearest_concept_ids(
     session : Session
     embedding_table : type[PGEmbeddingTable]
         ORM class for the embedding table.
-    query_embedding : list[float]
-        Query vector of length ``D``, bound as a typed vector.
+    query_embedding : ndarray
+        Query vector of shape ``(D,)``, bound as a typed vector.
     metric_type : MetricType
     k : int
         Maximum number of results.
@@ -358,7 +365,7 @@ def query_concept_filter_metadata(
 
 def get_distance(
     embedding_table: type[PGEmbeddingTable],
-    text_embedding: Union[list[float], ColumnElement],
+    text_embedding: Union[ndarray, ColumnElement],
     metric: MetricType,
 ) -> ColumnElement:
     """Return a SQLAlchemy distance expression for the given metric.
@@ -369,8 +376,8 @@ def get_distance(
         ORM class whose ``embedding`` column is used. The column itself
         isn't declared on ``PGEmbeddingTable`` (its type depends on
         dimensionality), hence ``getattr``.
-    text_embedding : list[float] or ColumnElement
-        Query vector.
+    text_embedding : ndarray or ColumnElement
+        Query vector of shape ``(D,)``.
     metric : MetricType
 
     Returns

@@ -158,6 +158,8 @@ results = reader.get_nearest_concepts(
 # results: tuple[tuple[NearestConceptMatch, ...], ...], one inner tuple per query row
 ```
 
+Embedding arrays are `EmbeddingArray`s: 2-D arrays of shape `(N, D)`, with one vector per row and `D` the model's dimensionality. Every entry point (upsert, backend and FAISS queries, embedding-model output) converts them to float32 and raises `ValueError` for a 1-D array, a wrong width, or NaN or infinite values. A single query vector must be passed as a one-row matrix, for example `vector[None, :]`.
+
 ### Query similar concepts
 
 Find neighbours of concepts that are already embedded, without fetching and

@@ -43,8 +43,10 @@ from omop_emb.model_registry import (
 )
 from omop_emb.utils.cdm import streamed
 from omop_emb.utils.embedding_utils import (
+    EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
+    as_embedding_array,
 )
 from omop_emb.utils.errors import (
     EmbeddingBackendConfigurationError,
@@ -109,7 +111,7 @@ class EmbeddingStoreReader(Protocol):
 
     def get_embeddings_by_concept_ids(
         self, *, model_name: str, concept_ids: Sequence[int]
-    ) -> Mapping[int, Sequence[float]]: ...
+    ) -> Mapping[int, ndarray]: ...
 
     def get_concept_filter_metadata(
         self, *, model_name: str, concept_ids: Sequence[int]
@@ -124,7 +126,7 @@ class EmbeddingStoreReader(Protocol):
         *,
         model_name: str,
         metric_type: MetricType,
-        query_embeddings: ndarray,
+        query_embeddings: EmbeddingArray,
         concept_filter: EmbeddingConceptFilter | None = None,
         k: int = ...,
     ) -> tuple[tuple[NearestConceptMatch, ...], ...]: ...
@@ -724,7 +726,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         *,
         model_name: str,
         records: Sequence[ConceptEmbeddingRecord],
-        embeddings: ndarray,
+        embeddings: EmbeddingArray,
     ) -> None:
         """Insert or update embeddings for a set of concepts.
 
@@ -734,15 +736,25 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             Canonical model name including tag.
         records : Sequence[ConceptEmbeddingRecord]
             Concept metadata rows aligned with ``embeddings``.
-        embeddings : ndarray
-            Float32 array of shape ``(N, D)`` where ``N = len(records)`` and
-            ``D`` is the registered dimensionality.
+        embeddings : EmbeddingArray
+            Array of shape ``(N, D)`` where ``N = len(records)`` and ``D`` is
+            the registered dimensionality. Converted to float32.
+
+        Raises
+        ------
+        ValueError
+            If ``embeddings`` is not 2-D, has the wrong dimensionality or
+            contains NaN or infinite values, or its row count differs from
+            ``len(records)``.
         """
-        return self._upsert_embeddings_impl(
-            model_record=self._registered_record(model_name),
-            records=records,
-            embeddings=embeddings,
-        )
+        record = self._registered_record(model_name)
+        array = as_embedding_array(embeddings, record.dimensions)
+        if len(records) != array.shape[0]:
+            raise ValueError(
+                f"Number of records ({len(records)}) does not match "
+                f"number of embeddings ({array.shape[0]})."
+            )
+        return self._upsert_embeddings_impl(model_record=record, records=records, embeddings=array)
 
     @abstractmethod
     def _upsert_embeddings_impl(
@@ -750,7 +762,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         *,
         model_record: EmbeddingModelRecord,
         records: Sequence[ConceptEmbeddingRecord],
-        embeddings: ndarray,
+        embeddings: EmbeddingArray,
     ) -> None: ...
 
     @writes
@@ -800,7 +812,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         self,
         *,
         model_name: str,
-        batches: Iterable[tuple[Sequence[ConceptEmbeddingRecord], ndarray]],
+        batches: Iterable[tuple[Sequence[ConceptEmbeddingRecord], EmbeddingArray]],
         total_n_batches: int | None = None,
     ) -> None:
         """Upsert embeddings in multiple batches, delegating to ``upsert_embeddings``.
@@ -809,7 +821,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        batches : Iterable[tuple[Sequence[ConceptEmbeddingRecord], ndarray]]
+        batches : Iterable[tuple[Sequence[ConceptEmbeddingRecord], EmbeddingArray]]
             Iterable of ``(records, embeddings)`` pairs.
         total_n_batches : Optional[int]
             Total number of batches for the progress bar.
@@ -837,7 +849,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         *,
         model_name: str,
         concept_ids: Sequence[int],
-    ) -> Mapping[int, Sequence[float]]:
+    ) -> Mapping[int, ndarray]:
         """Retrieve stored embeddings for the given concept IDs.
 
         Parameters
@@ -849,8 +861,8 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
 
         Returns
         -------
-        Mapping[int, Sequence[float]]
-            Mapping from concept ID to embedding vector.
+        Mapping[int, ndarray]
+            Mapping from concept ID to its float32 embedding vector.
 
         Raises
         ------
@@ -867,14 +879,14 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         self,
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
-    ) -> Mapping[int, Sequence[float]]: ...
+    ) -> Mapping[int, ndarray]: ...
 
     def get_nearest_concepts(
         self,
         *,
         model_name: str,
         metric_type: MetricType,
-        query_embeddings: ndarray,
+        query_embeddings: EmbeddingArray,
         concept_filter: EmbeddingConceptFilter | None = None,
         k: int = DEFAULT_K_NEAREST,
     ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
@@ -887,9 +899,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         metric_type : MetricType
             Distance metric for the KNN query. Must match the HNSW metric
             exactly, or be any backend-supported metric for FLAT.
-        query_embeddings : ndarray
-            Float32 array of shape ``(Q, D)`` where ``Q`` is the number of
-            queries and ``D`` is the registered dimensionality.
+        query_embeddings : EmbeddingArray
+            Array of shape ``(Q, D)`` where ``Q`` is the number of queries and
+            ``D`` is the registered dimensionality. Converted to float32.
         concept_filter : EmbeddingConceptFilter, optional
             Constraints applied during retrieval (domain, vocabulary, standard
             flag, concept ID allowlist, result limit).
@@ -902,13 +914,20 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             Shape ``(Q, <=K)``. Outer tuple is one entry per query vector;
             inner tuple contains up to ``k`` matches ordered by similarity
             descending.
+
+        Raises
+        ------
+        ValueError
+            If ``query_embeddings`` is not 2-D, has the wrong dimensionality or
+            contains NaN or infinite values, or the metric is incompatible
+            with the model.
         """
         record = self._registered_record(model_name)
         self._check_query_metric(record, metric_type)
         return self._get_nearest_concepts_impl(
             model_record=record,
             metric_type=metric_type,
-            query_embeddings=query_embeddings,
+            query_embeddings=as_embedding_array(query_embeddings, record.dimensions),
             concept_filter=concept_filter,
             k=k,
         )
@@ -919,7 +938,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         *,
         model_record: EmbeddingModelRecord,
         metric_type: MetricType,
-        query_embeddings: ndarray,
+        query_embeddings: EmbeddingArray,
         concept_filter: EmbeddingConceptFilter | None = None,
         k: int = DEFAULT_K_NEAREST,
     ) -> tuple[tuple[NearestConceptMatch, ...], ...]: ...
@@ -1065,65 +1084,6 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
     def _get_embedding_count_by_vocabulary_impl(
         self, *, model_record: EmbeddingModelRecord
     ) -> Mapping[str, int]: ...
-
-    # ------------------------------------------------------------------
-    # Validation helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def validate_embeddings(embeddings: ndarray, dimensions: int) -> None:
-        """Validate that ``embeddings`` has the expected shape.
-
-        Parameters
-        ----------
-        embeddings : ndarray
-            Array to validate.
-        dimensions : int
-            Expected number of columns (embedding dimensionality).
-
-        Raises
-        ------
-        ValueError
-            If ``embeddings`` is not 2-D or its column count does not match
-            ``dimensions``.
-        """
-        if embeddings.ndim != 2:
-            raise ValueError(f"Expected 2D array, got ndim={embeddings.ndim}.")
-        if embeddings.shape[1] != dimensions:
-            raise ValueError(
-                f"Embedding dimensionality ({embeddings.shape[1]}) does not match "
-                f"model configuration ({dimensions})."
-            )
-
-    @staticmethod
-    def validate_embeddings_and_records(
-        embeddings: ndarray,
-        records: Sequence[ConceptEmbeddingRecord],
-        dimensions: int,
-    ) -> None:
-        """Validate that ``embeddings`` and ``records`` are aligned and well-shaped.
-
-        Parameters
-        ----------
-        embeddings : ndarray
-            Array of shape ``(N, D)``.
-        records : Sequence[ConceptEmbeddingRecord]
-            Concept metadata rows. Must have ``len(records) == N``.
-        dimensions : int
-            Expected embedding dimensionality ``D``.
-
-        Raises
-        ------
-        ValueError
-            If ``embeddings`` fails shape validation or its row count does not
-            match ``len(records)``.
-        """
-        EmbeddingBackend.validate_embeddings(embeddings, dimensions=dimensions)
-        if len(records) != embeddings.shape[0]:
-            raise ValueError(
-                f"Number of records ({len(records)}) does not match "
-                f"number of embeddings ({embeddings.shape[0]})."
-            )
 
 
 def _extensions_for(backend_type: BackendType, *, writable: bool) -> Sequence[Callable[[Any, Any], None]]:

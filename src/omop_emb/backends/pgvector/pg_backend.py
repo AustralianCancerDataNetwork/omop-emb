@@ -321,30 +321,32 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                     text(f"SET LOCAL hnsw.ef_search = {int(model_record.index_config.ef_search)}")
                 )
 
-            ann_rows = query_nearest_concept_ids(
-                session=session,
-                embedding_table=table,
-                query_embeddings=query_embeddings.tolist(),
-                metric_type=metric_type,
-                k=k,
-                concept_filter=concept_filter,
-            )
+            ann_rows = [
+                query_nearest_concept_ids(
+                    session=session,
+                    embedding_table=table,
+                    query_embedding=query_embedding,
+                    metric_type=metric_type,
+                    k=k,
+                    concept_filter=concept_filter,
+                )
+                for query_embedding in query_embeddings.tolist()
+            ]
 
-        results: list[list[NearestConceptMatch]] = [
-            [] for _ in range(len(query_embeddings))
-        ]
-        for row in ann_rows:
-            similarity = get_similarity_from_distance(float(row.distance), metric_type)
-            results[row.q_id].append(
+        results = [
+            [
                 NearestConceptMatch(
                     concept_id=int(row.concept_id),
-                    similarity=float(similarity),
+                    similarity=float(get_similarity_from_distance(float(row.distance), metric_type)),
                     domain_id=row.domain_id,
                     vocabulary_id=row.vocabulary_id,
                     is_standard=bool(row.is_standard),
                     is_active=bool(row.is_valid),
                 )
-            )
+                for row in rows
+            ]
+            for rows in ann_rows
+        ]
 
         return tuple(tuple(r) for r in results)
 

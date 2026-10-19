@@ -24,8 +24,7 @@ from oa_configurator import (
     qualified,
     physical_schema_of,
 )
-from sqlalchemy import Engine, Integer, MetaData, Row, Select, func, inspect, literal, select, text
-from sqlalchemy.sql import cast, column, values
+from sqlalchemy import Engine, MetaData, Row, Select, func, inspect, select, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.orm import Session, mapped_column, registry
 
@@ -234,53 +233,43 @@ def query_embeddings_by_ids(
 def query_nearest_concept_ids(
     session: Session,
     embedding_table: type[PGEmbeddingTable],
-    query_embeddings: List[List[float]],
+    query_embedding: List[float],
     metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
 ) -> Sequence[Row]:
-    """Run a pgvector ANN query returning the nearest concept IDs per query.
+    """Run a pgvector ANN query for a single query vector.
+
+    Notes
+    -----
+    Deliberately removed batching of queries for multiple vectors, as batching 
+    the vectors in one statement (a VALUES list joined through a lateral subquery)
+    cast the query text to vector once per stored row and lost the parallel scan.
+    Separate statements for each query vector are faster and scale linearly.
+
 
     Parameters
     ----------
     session : Session
     embedding_table : type[PGEmbeddingTable]
         ORM class for the embedding table.
-    query_embeddings : list[list[float]]
-        List of ``Q`` query vectors, each of length ``D``.
+    query_embedding : list[float]
+        Query vector of length ``D``, bound as a typed vector.
     metric_type : MetricType
     k : int
-        Maximum number of results per query.
+        Maximum number of results.
     concept_filter : EmbeddingConceptFilter, optional
 
     Returns
     -------
     Sequence[Row]
-        Columns are ``q_id`` (int), ``concept_id`` (int),
-        - ``domain_id`` (str),
-        - ``vocabulary_id`` (str),
-        - ``is_standard`` (bool),
-        - ``is_valid`` (bool),
-        - ``distance`` (float).
-        Result shape is ``(Q*K, 7)`` before the caller re-groups by ``q_id``.
-
-    Notes
-    -----
-    Uses a lateral join so all queries are batched in a single round-trip.
+        At most ``k`` rows ordered by distance with columns ``concept_id``,
+        ``domain_id``, ``vocabulary_id``, ``is_standard``, ``is_valid`` and
+        ``distance``.
     """
-    from pgvector.sqlalchemy import Vector  # optional dependency
+    distance = get_distance(embedding_table, query_embedding, metric_type)
 
-    query_data = [(i, q) for i, q in enumerate(query_embeddings)]
-    query_v = values(
-        column("q_id", Integer),
-        column("q_vec", Vector),
-        name="queries",
-    ).data(query_data)
-
-    query_vector_cast = cast(query_v.c.q_vec, Vector)
-    distance = get_distance(embedding_table, query_vector_cast, metric_type)
-
-    inner_stmt = (
+    stmt = (
         select(
             embedding_table.concept_id,
             embedding_table.domain_id,
@@ -294,25 +283,10 @@ def query_nearest_concept_ids(
     )
 
     if concept_filter is not None:
-        inner_stmt = apply_concept_filter_where(
-            inner_stmt, inspect(embedding_table).columns, concept_filter, dialect=Dialect.POSTGRESQL
+        stmt = apply_concept_filter_where(
+            stmt, inspect(embedding_table).columns, concept_filter, dialect=Dialect.POSTGRESQL
         )
 
-    lateral_subq = inner_stmt.lateral("top_k")
-
-    stmt = (
-        select(
-            query_v.c.q_id,
-            lateral_subq.c.concept_id,
-            lateral_subq.c.domain_id,
-            lateral_subq.c.vocabulary_id,
-            lateral_subq.c.is_standard,
-            lateral_subq.c.is_valid,
-            lateral_subq.c.distance,
-        )
-        .select_from(query_v)
-        .join(lateral_subq, literal(True))
-    )
     return session.execute(stmt).all()
 
 

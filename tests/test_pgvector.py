@@ -59,6 +59,32 @@ class TestPGVectorBackend(SharedBackendTests):
         )
         assert {m.concept_id: m.similarity for m in results[0]} == pytest.approx(L2_SIMILARITY, abs=1e-5)
 
+    def test_query_vectors_run_as_separate_statements(self, backend: PGVectorEmbeddingBackend):
+        """Each query vector gets its own ordered statement and the same result as a lone query."""
+        upsert_all(backend)
+        queries = CONCEPT_EMBEDDINGS[[0, 1, 2]]
+        statements: list[str] = []
+
+        def capture(_connection, _cursor, statement, _parameters, _context, _many):
+            statements.append(statement.lower())
+
+        sa_event.listen(backend.emb_engine, "before_cursor_execute", capture)
+        try:
+            batched = backend.get_nearest_concepts(
+                model_name=MODEL_NAME, metric_type=MetricType.COSINE, query_embeddings=queries, k=3
+            )
+        finally:
+            sa_event.remove(backend.emb_engine, "before_cursor_execute", capture)
+
+        selects = [s for s in statements if "order by" in s]
+        assert len(selects) == len(queries)
+        assert not any("lateral" in s for s in selects)
+        for i, query in enumerate(queries):
+            alone = backend.get_nearest_concepts(
+                model_name=MODEL_NAME, metric_type=MetricType.COSINE, query_embeddings=query[None, :], k=3
+            )
+            assert batched[i] == alone[0]
+
 
 @pytest.mark.pgvector
 @pytest.mark.integration

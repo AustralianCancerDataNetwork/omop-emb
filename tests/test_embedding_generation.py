@@ -125,12 +125,12 @@ class TestGenerateEmbeddings:
 
     def test_raises_on_non_2d_result(self):
         backend = _mock_model_backend(vectors=[0.1, 0.2, 0.3])  # ty: ignore[invalid-argument-type] - purposefully wrong shape
-        with pytest.raises(ValueError, match="2-D"):
+        with pytest.raises(RuntimeError, match="2-D"):
             EmbeddingReaderInterface.generate_embeddings(backend, "hello", role=EmbeddingRole.DOCUMENT)
 
     def test_raises_on_non_finite_result(self):
         backend = _mock_model_backend(vectors=[[0.1, float("nan")]])
-        with pytest.raises(ValueError, match="NaN or infinite"):
+        with pytest.raises(RuntimeError, match="NaN or infinite"):
             EmbeddingReaderInterface.generate_embeddings(backend, "hello", role=EmbeddingRole.DOCUMENT)
 
     def test_returns_float32(self):

@@ -280,6 +280,34 @@ def test_filtered_population_reports_out_of_scope_rows_apart_from_stale_rows() -
     assert plan.prunable_ids == frozenset({2, 3})
 
 
+def test_concept_deprecated_after_embedding_is_out_of_scope_not_stale() -> None:
+    resolved = sqlite_cdm_database()
+    engine, _ = resolved.create_engines()
+    cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
+    Concept.__table__.create(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            insert(Concept),
+            [_concept(1), _concept(2, invalid_reason="D", standard_concept=None)],
+        )
+
+    class Store:
+        initialized = True
+
+        def iter_stored_embeddings(self, _model_name: str, *, batch_size: int = 10_000):
+            return (
+                ConceptEmbeddingRecord(1, "Condition", "SNOMED", True, True),
+                ConceptEmbeddingRecord(2, "Condition", "SNOMED", True, True),
+                ConceptEmbeddingRecord(3, "Condition", "SNOMED", True, True),
+            )
+
+    plan = plan_population(cdm_sessions, Store(), model_name="test-model")
+
+    assert plan.out_of_scope_ids == frozenset({2})
+    assert plan.stale_ids == frozenset({3})
+    assert plan.prunable_ids == frozenset({2, 3})
+
+
 def test_population_scope_defaults_to_valid_concepts_only() -> None:
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()

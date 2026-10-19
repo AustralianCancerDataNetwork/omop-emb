@@ -12,7 +12,7 @@ from omop_llm import build_model_backend_from_resolved
 from tqdm import tqdm
 
 from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
-from omop_emb.backends.index_config import index_config_from_index_type
+from omop_emb.backends.index_config import FlatIndexConfig, index_config_from_index_type
 from omop_emb.config import (
     IndexType,
     MetricType,
@@ -166,6 +166,15 @@ def add_embeddings(
             rich_help_panel="Concept Filters",
         ),
     ] = None,
+    metric_type: Annotated[
+        MetricType,
+        typer.Option(
+            "--metric-type",
+            help="Distance metric of a new model's table. Locked in for FLAT on sqlite-vec. "
+            "Ignored for FLAT on pgvector, which takes the metric per query, and for a model that is already registered.",
+            rich_help_panel="Index Options",
+        ),
+    ] = MetricType.COSINE,
 ):
     """Bulk generate and store embeddings for OMOP concepts.
 
@@ -189,6 +198,7 @@ def add_embeddings(
             domains=domains,
             vocabularies=vocabularies,
             num_embeddings=num_embeddings,
+            metric_type=metric_type,
         )
 
 
@@ -203,6 +213,7 @@ def _add_embeddings(
     domains: list[str] | None,
     vocabularies: list[str] | None,
     num_embeddings: int | None,
+    metric_type: MetricType = MetricType.COSINE,
 ) -> None:
     """Embed every concept matching the filters that lacks a current embedding."""
     # Ingestion runs no queries, so the interface's metric is never used here.
@@ -216,7 +227,7 @@ def _add_embeddings(
     check_concept_cdm(cdm_sessions)
 
     try:
-        embedding_writer.register_model()
+        embedding_writer.register_model(index_config=FlatIndexConfig(metric_type=metric_type))
 
         # Filter concepts
         concept_filter = CDMConceptFilter(
@@ -462,6 +473,7 @@ def add_embeddings_with_index(
         vocabularies=vocabularies,
         domains=domains,
         num_embeddings=num_embeddings,
+        metric_type=metric_type,
     )
 
     create_index(

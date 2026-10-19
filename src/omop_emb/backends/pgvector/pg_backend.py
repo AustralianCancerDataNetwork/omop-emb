@@ -333,7 +333,10 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         """Set the HNSW scan parameters for the current transaction.
 
         With pgvector 0.8.0 or newer the index keeps scanning until ``k`` rows
-        pass the filter, so ``ef_search`` is used as configured. Older versions
+        pass the filter, so ``ef_search`` is used as configured. Filtered
+        queries scan in ``strict_order``, which returns rows in exact distance
+        order. Unfiltered queries use ``relaxed_order``, which recalls more
+        when ``k`` exceeds ``ef_search`` and is sorted by the caller. Older versions
         stop at ``ef_search`` candidates, so it is raised to at least ``k``
         (capped at 1000) and a filtered query logs a one-time warning that its
         results may be incomplete.
@@ -350,7 +353,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             Whether the query carries a concept filter.
         """
         if self._supports_iterative_scan:
-            session.execute(text("SET LOCAL hnsw.iterative_scan = relaxed_order"))
+            scan_order = "strict_order" if filtered else "relaxed_order"
+            session.execute(text(f"SET LOCAL hnsw.iterative_scan = {scan_order}"))
         else:
             ef_search = min(max(ef_search, k), self._MAX_EF_SEARCH)
             if filtered and not self._filtered_hnsw_warned:

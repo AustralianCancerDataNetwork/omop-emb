@@ -88,9 +88,11 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     -----
     - Only the ``FLAT`` index type is supported. Each model is locked to one
       metric (L2, cosine or L1, cosine by default), declared on its vec0 table
-      and recorded in the registry. ``rebuild_index`` with another metric, or
-      on a table created without a declared metric, recreates the table from
-      the stored vectors.
+      and recorded in the registry. ``rebuild_index`` recreates the table from
+      the stored vectors when the metric differs, the table was created
+      without a declared metric, or ``vacuum`` is set. Recreation compacts the
+      chunks that deleted rows left partly empty, which ``VACUUM`` alone does
+      not.
     - vec0 is a SQLite virtual table type the SQLAlchemy ORM cannot map, but
       it accepts ordinary SQL once created. ``_table_cache`` therefore stores
       a Core :class:`~sqlalchemy.Table` used for every query except the initial 
@@ -178,7 +180,8 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         metric_type = index_config.metric_type
         if metric_type is None:
             raise ValueError("sqlite-vec needs a metric_type for the table.")
-        if declared_metric(self.emb_engine, model_record.storage_identifier) != metric_type:
+        metric_changed = declared_metric(self.emb_engine, model_record.storage_identifier) != metric_type
+        if metric_changed or vacuum:
             count = recreate_vec0(
                 self.emb_engine,
                 model_record.storage_identifier,

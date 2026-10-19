@@ -187,6 +187,15 @@ class TestL2Correctness:
         by_id = {r.concept_id: r.similarity for r in results[0]}
         assert by_id[concept_id] == pytest.approx(expected_sim, abs=1e-5)
 
+    def test_non_contiguous_query_is_searched_and_left_unchanged(self, faiss_l2: FAISSCache):
+        query = np.asfortranarray(np.array([[2.0, 0.0], [4.0, 0.0]], dtype=np.float32))
+        assert not query.flags.c_contiguous
+        results = faiss_l2.search(
+            query, k=1, metric_type=MetricType.L2, index_config=FlatIndexConfig()
+        )
+        assert [r[0].concept_id for r in results] == [3, 4]
+        assert query.tolist() == [[2.0, 0.0], [4.0, 0.0]]
+
 
 # ---------------------------------------------------------------------------
 # Cross-backend parity: FAISS vs SQLiteVec

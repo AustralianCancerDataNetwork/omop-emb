@@ -226,10 +226,9 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
 
         Raises
         ------
-        ValueError
-            If the model returns something other than a finite 2-D array.
         RuntimeError
-            If the model returns a different number of vectors than texts.
+            If the model returns something other than a finite 2-D array, or a
+            different number of vectors than texts.
         """
         if isinstance(text, str):
             text_tuple: Tuple[str, ...] = (text,)
@@ -238,7 +237,11 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
 
         vectors = model_backend.embed_texts(list(text_tuple), role=role, batch_size=batch_size)
 
-        result = as_embedding_array(vectors)
+        try:
+            result = as_embedding_array(vectors)
+        except ValueError as exc:
+            # Adhere to the shape of consumers of this interface
+            raise RuntimeError(str(exc)) from exc
         if result.shape[0] != len(text_tuple):
             raise RuntimeError(f"Expected {len(text_tuple)} embeddings, got {result.shape[0]}")
         return result

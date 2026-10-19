@@ -513,9 +513,9 @@ class FAISSCache:
         from omop_emb.utils.embedding_utils import get_similarity_from_distance
 
         index = self._load_index(metric_type, index_config)
-        # A C-ordered copy as FAISS needs that layout, and normalize_L2 works in place.
-        query = np.array(as_embedding_array(query_embeddings, index.d), order="C")
+        query = np.ascontiguousarray(as_embedding_array(query_embeddings, index.d))
         if metric_type == MetricType.COSINE:
+            query = query.copy()  # normalize_L2 works in place
             faiss.normalize_L2(query)
 
         params = None

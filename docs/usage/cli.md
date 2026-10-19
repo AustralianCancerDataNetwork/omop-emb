@@ -59,6 +59,12 @@ omop-emb embeddings add-embeddings [OPTIONS]
 | `--domain` | | `None` | Restrict to specific OMOP domains (repeatable). |
 | `--num-embeddings` | `-n` | `None` | Cap on total concepts processed (useful for testing). |
 
+**Index Options**
+
+| Option | Default | Description |
+|---|---|---|
+| `--metric-type` | `cosine` | Metric of a new model's table. Locked in for `flat` on sqlite-vec; ignored for `flat` on pgvector and for a model that is already registered. See [Metrics](backend-selection.md#metrics). |
+
 | Option | Short | Description |
 |---|---|---|
 | `--verbose` | `-v` | Increase log verbosity (pass twice for DEBUG). |
@@ -73,18 +79,16 @@ Ingest embeddings and immediately build an index in one step. Equivalent to runn
 omop-emb embeddings add-embeddings-with-index [OPTIONS]
 ```
 
-Accepts all options from `add-embeddings`, plus:
+Accepts all options from `add-embeddings` (its `--metric-type` also applies to the index), plus:
 
 **Index Options**
 
 | Option | Default | Description |
 |---|---|---|
 | `--index-type` | `flat` | Index to build after ingestion (`flat` or `hnsw`). |
-| `--metric-type` | `cosine` | Distance metric. Locked in for `hnsw` and for `flat` on sqlite-vec; ignored for `flat` on pgvector. See [Metrics](backend-selection.md#metrics). |
 | `--index-hnsw-num-neighbors` | `None` | HNSW graph connectivity (`M`). |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
-| `--vacuum` / `--no-vacuum` | `--vacuum` | Maintenance after the rebuild. pgvector runs `VACUUM (ANALYZE)` on the table, which reclaims dead space and refreshes planner statistics. sqlite-vec runs `VACUUM` on the database file after recreating a table, which needs free disk space for a second copy of the data. Use `--no-vacuum` to skip it. |
 
 ---
 
@@ -199,6 +203,7 @@ omop-emb maintenance rebuild-index --model <CANONICAL_NAME> [OPTIONS]
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
+| `--vacuum` / `--no-vacuum` | `--vacuum` | Maintenance after the rebuild. pgvector runs `VACUUM (ANALYZE)` on the table, which reclaims dead space and refreshes planner statistics. sqlite-vec recreates the table from the stored vectors, which compacts the space deleted rows left behind, and then runs `VACUUM` on the database file. Both need free disk space for a second copy of the data. Use `--no-vacuum` to skip it. |
 
 | Option | Short | Description |
 |---|---|---|

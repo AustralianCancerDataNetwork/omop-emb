@@ -166,15 +166,19 @@ def plan_population(
         else:
             accumulator.metadata_changed.add(concept_id)
 
+    in_cdm = _existing_concept_ids(
+        cdm_session_factory,
+        [cid for cid, item in stored.items() if _stored_matches_scope(item, scope)],
+    )
     for concept_id, item in stored.items():
         accumulator = accumulators.setdefault(
             item.vocabulary_id,
             _VocabularyAccumulator(),
         )
-        if _stored_matches_scope(item, scope):
-            accumulator.stale.add(concept_id)
-        else:
+        if concept_id in in_cdm or not _stored_matches_scope(item, scope):
             accumulator.out_of_scope.add(concept_id)
+        else:
+            accumulator.stale.add(concept_id)
 
     return EmbeddingPopulationPlan(
         model_name=model_name,
@@ -207,6 +211,26 @@ def _iter_current_concepts(
     )
     with cdm_session_factory() as session:
         yield from session.execute(streamed(statement, batch_size))
+
+
+def _existing_concept_ids(
+    cdm_session_factory: CDMSessionFactory,
+    concept_ids: list[int],
+    chunk_size: int = 5_000,
+) -> set[int]:
+    """Return the subset of ``concept_ids`` that exist in the CDM, whatever their scope."""
+    found: set[int] = set()
+    if not concept_ids:
+        return found
+    with cdm_session_factory() as session:
+        for start in range(0, len(concept_ids), chunk_size):
+            chunk = concept_ids[start : start + chunk_size]
+            found.update(
+                session.execute(
+                    select(Concept.concept_id).where(Concept.concept_id.in_(chunk))
+                ).scalars()
+            )
+    return found
 
 
 def _stored_matches_scope(item: ConceptEmbeddingRecord, scope: PopulationScope) -> bool:

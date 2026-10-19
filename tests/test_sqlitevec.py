@@ -175,7 +175,7 @@ class TestSQLiteVecMetricTable:
         assert results[0][0].concept_id == ASPIRIN_ID
         assert results[0][0].similarity == pytest.approx(1.0, abs=1e-6)
 
-    def test_rebuild_index_leaves_cosine_table_untouched(
+    def test_rebuild_index_without_vacuum_leaves_cosine_table_untouched(
         self, svec_backend: SQLiteVecEmbeddingBackend
     ):
         """An already-cosine table keeps its rows and is neither recreated nor vacuumed."""
@@ -190,7 +190,9 @@ class TestSQLiteVecMetricTable:
 
         sa.event.listen(svec_backend.emb_engine, "before_cursor_execute", capture)
         try:
-            svec_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
+            svec_backend.rebuild_index(
+                model_name=MODEL_NAME, index_config=FlatIndexConfig(), vacuum=False
+            )
         finally:
             sa.event.remove(svec_backend.emb_engine, "before_cursor_execute", capture)
 
@@ -427,6 +429,40 @@ class TestSQLiteVecVacuum:
             assert backend.get_embedding_count(model_name=MODEL_NAME) == 600
         finally:
             backend.emb_engine.dispose()
+
+
+    def test_rebuild_compacts_a_table_after_rows_were_deleted(self, tmp_path):
+        """Scattered deletes leave vec0 chunks partly empty, so only a recreation shrinks the file."""
+        backend = self._file_backend(tmp_path)
+        try:
+            register_flat(backend, dimensions=64)
+            ids = list(range(1, 4001))
+            backend.upsert_embeddings(
+                model_name=MODEL_NAME,
+                records=[ConceptEmbeddingRecord(i, "Condition", "SNOMED", True, True) for i in ids],
+                embeddings=np.random.default_rng(0).normal(size=(len(ids), 64)).astype(np.float32),
+            )
+            backend.delete_embeddings(model_name=MODEL_NAME, concept_ids=ids[::2])
+            with backend.emb_engine.connect() as conn:
+                conn.exec_driver_sql("VACUUM")
+            before = self._size(backend)
+
+            backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig(), vacuum=False)
+            assert self._size(backend) == before
+            backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
+
+            assert backend.get_embedding_count(model_name=MODEL_NAME) == 2000
+            assert self._size(backend) < before * 0.8
+        finally:
+            backend.emb_engine.dispose()
+
+    @staticmethod
+    def _size(backend: SQLiteVecEmbeddingBackend) -> int:
+        with backend.emb_engine.connect() as conn:
+            pages = int(conn.exec_driver_sql("PRAGMA page_count").scalar_one())
+            free = int(conn.exec_driver_sql("PRAGMA freelist_count").scalar_one())
+            size = int(conn.exec_driver_sql("PRAGMA page_size").scalar_one())
+        return (pages - free) * size
 
 
 @pytest.mark.unit

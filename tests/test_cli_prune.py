@@ -17,6 +17,7 @@ from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.cli import cli_embeddings, cli_maintenance
+from omop_emb.config import MetricType
 
 from .conftest import EMBEDDING_DIM, sqlite_cdm_database, sqlite_resolved_vector_store
 
@@ -157,13 +158,14 @@ def test_add_embeddings_skips_invalid_concepts_unless_asked(
     monkeypatch, include_invalid, require_active
 ) -> None:
     seen = []
+    registered = []
 
     class FakeWriter:
         def __init__(self, **_kwargs):
             pass
 
-        def register_model(self):
-            pass
+        def register_model(self, index_config=None):
+            registered.append(index_config)
 
         def count_concepts_requiring_embedding(self, *, concept_filter):
             seen.append(concept_filter)
@@ -188,3 +190,39 @@ def test_add_embeddings_skips_invalid_concepts_unless_asked(
     )
 
     assert [f.require_active for f in seen] == [require_active]
+    assert registered == [FlatIndexConfig(metric_type=MetricType.COSINE)]
+
+
+def test_add_embeddings_registers_the_requested_metric(monkeypatch) -> None:
+    registered = []
+
+    class FakeWriter:
+        def __init__(self, **_kwargs):
+            pass
+
+        def register_model(self, index_config=None):
+            registered.append(index_config)
+
+        def count_concepts_requiring_embedding(self, *, concept_filter):
+            return 0
+
+        def get_concepts_requiring_embedding_batched(self, **_kwargs):
+            return iter(())
+
+    monkeypatch.setattr(cli_embeddings, "EmbeddingWriterInterface", FakeWriter)
+    monkeypatch.setattr(cli_embeddings, "check_concept_cdm", lambda _sessions: None)
+
+    cli_embeddings._add_embeddings(
+        backend=None,
+        cdm_sessions=None,
+        resolved_model=None,
+        batch_size=10,
+        standard_only=False,
+        include_invalid=False,
+        domains=None,
+        vocabularies=None,
+        num_embeddings=None,
+        metric_type=MetricType.L2,
+    )
+
+    assert registered == [FlatIndexConfig(metric_type=MetricType.L2)]

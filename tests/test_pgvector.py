@@ -247,6 +247,20 @@ class TestPGVectorHNSWBackend:
         assert len(matches) == 4
         assert similarities == sorted(similarities, reverse=True)
 
+    def test_filtered_query_scans_in_strict_order(self, pg_backend: PGVectorEmbeddingBackend):
+        if not pg_backend._supports_iterative_scan:
+            pytest.skip("pgvector below 0.8.0")
+        upsert_all(pg_backend)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
+
+        with captured_statements(pg_backend.emb_engine) as statements:
+            matches = self._hnsw_query(pg_backend, k=2, filtered=True)
+
+        assert "set local hnsw.iterative_scan = strict_order" in statements
+        assert "set local hnsw.iterative_scan = relaxed_order" not in statements
+        similarities = [m.similarity for m in matches]
+        assert similarities == sorted(similarities, reverse=True)
+
     def test_filtered_query_returns_k_rows_after_a_smaller_one(
         self, pg_backend: PGVectorEmbeddingBackend
     ):

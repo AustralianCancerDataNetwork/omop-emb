@@ -6,6 +6,9 @@ Set TEST_DB_HOST and TEST_DB_PORT to enable these tests.
 
 from __future__ import annotations
 
+import logging
+from contextlib import contextmanager
+
 import numpy as np
 import pytest
 
@@ -23,6 +26,7 @@ from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 from omop_emb.config import IndexType, MetricType
 from omop_emb.model_registry import RegistryManager, registry_reader_engine
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 from .conftest import (
     CONCEPT_EMBEDDINGS,
@@ -84,6 +88,20 @@ class TestPGVectorBackend(SharedBackendTests):
                 model_name=MODEL_NAME, metric_type=MetricType.COSINE, query_embeddings=query[None, :], k=3
             )
             assert batched[i] == alone[0]
+
+
+@contextmanager
+def captured_statements(engine):
+    statements: list[str] = []
+
+    def capture(_connection, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement.strip().lower())
+
+    sa_event.listen(engine, "before_cursor_execute", capture)
+    try:
+        yield statements
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", capture)
 
 
 @pytest.mark.pgvector
@@ -202,6 +220,74 @@ class TestPGVectorHNSWBackend:
 
         assert f"set local hnsw.ef_search = {self.HNSW_CONFIG.ef_search}" in statements
         assert ef_search_after == "40"
+
+    def _hnsw_query(self, backend: PGVectorEmbeddingBackend, *, k: int, filtered: bool):
+        return backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            query_embeddings=QUERY_EMBEDDING,
+            concept_filter=EmbeddingConceptFilter(domains=("Condition",)) if filtered else None,
+            k=k,
+        )[0]
+
+    def test_iterative_scan_is_enabled_and_results_are_sorted(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        """Where pgvector supports it, the HNSW scan is iterative and rows come back ordered by similarity."""
+        if not pg_backend._supports_iterative_scan:
+            pytest.skip("pgvector below 0.8.0")
+        upsert_all(pg_backend)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
+
+        with captured_statements(pg_backend.emb_engine) as statements:
+            matches = self._hnsw_query(pg_backend, k=4, filtered=False)
+
+        assert "set local hnsw.iterative_scan = relaxed_order" in statements
+        similarities = [m.similarity for m in matches]
+        assert len(matches) == 4
+        assert similarities == sorted(similarities, reverse=True)
+
+    def test_filtered_query_returns_k_rows_after_a_smaller_one(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        """The effective ef_search does not stay at the value of an earlier, smaller k."""
+        upsert_all(pg_backend)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
+
+        assert len(self._hnsw_query(pg_backend, k=1, filtered=True)) == 1
+        assert len(self._hnsw_query(pg_backend, k=2, filtered=True)) == 2
+
+    @pytest.mark.parametrize("k,expected_ef_search", [(1, 8), (50, 50), (5000, 1000)])
+    def test_without_iterative_scan_ef_search_covers_k(
+        self, pg_backend: PGVectorEmbeddingBackend, monkeypatch, k: int, expected_ef_search: int
+    ):
+        """On pgvector below 0.8.0, ef_search is max(configured, k) capped at 1000, with no iterative scan."""
+        upsert_all(pg_backend)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
+        monkeypatch.setattr(pg_backend, "_supports_iterative_scan", False)
+
+        with captured_statements(pg_backend.emb_engine) as statements:
+            self._hnsw_query(pg_backend, k=k, filtered=False)
+
+        assert f"set local hnsw.ef_search = {expected_ef_search}" in statements
+        assert not any("iterative_scan" in s for s in statements)
+
+    def test_without_iterative_scan_filtered_queries_warn_once(
+        self, pg_backend: PGVectorEmbeddingBackend, monkeypatch, caplog
+    ):
+        upsert_all(pg_backend)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
+        monkeypatch.setattr(pg_backend, "_supports_iterative_scan", False)
+        monkeypatch.setattr(pg_backend, "_filtered_hnsw_warned", False)
+
+        with caplog.at_level(logging.WARNING, logger="omop_emb.backends.pgvector.pg_backend"):
+            self._hnsw_query(pg_backend, k=1, filtered=False)
+            assert not caplog.records
+            self._hnsw_query(pg_backend, k=1, filtered=True)
+            self._hnsw_query(pg_backend, k=1, filtered=True)
+
+        assert len(caplog.records) == 1
+        assert "pgvector below 0.8.0" in caplog.records[0].getMessage()
 
     def test_hnsw_search_returns_correct_top1(
         self, pg_backend: PGVectorEmbeddingBackend

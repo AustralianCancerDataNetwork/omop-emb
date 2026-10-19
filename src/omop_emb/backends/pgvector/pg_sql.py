@@ -290,6 +290,14 @@ def query_nearest_concept_ids(
     return session.execute(stmt).all()
 
 
+def installed_pgvector_version(session: Session) -> tuple[int, ...]:
+    """Return the installed ``vector`` extension version, e.g. ``(0, 8, 2)``."""
+    version = session.execute(
+        text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+    ).scalar_one()
+    return tuple(int(part) for part in version.split("."))
+
+
 def query_concept_ids_matching_filter(
     session: Session,
     embedding_table: type[PGEmbeddingTable],

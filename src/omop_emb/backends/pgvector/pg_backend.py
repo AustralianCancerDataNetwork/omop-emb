@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from functools import cached_property
 from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
@@ -13,6 +14,7 @@ from oa_configurator import (
     qualified,
 )
 from sqlalchemy import inspect, select, text
+from sqlalchemy.orm import Session
 
 try:
     from pgvector.sqlalchemy import Vector  # noqa: F401
@@ -34,6 +36,7 @@ from omop_emb.backends.pgvector.pg_sql import (
     create_pg_embedding_table,
     drop_pg_embedding_table,
     hnsw_index_ddl,
+    installed_pgvector_version,
     pg_embedding_table_descriptor,
     q_all_concept_ids,
     q_embedding_count_by_vocabulary,
@@ -107,6 +110,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     writable : bool, optional
         Forwarded to ``EmbeddingBackend``.
     """
+    # Instance variables
+    _MAX_EF_SEARCH = 1000
+    _filtered_hnsw_warned = False
 
     # ------------------------------------------------------------------
     # Backend identity
@@ -302,6 +308,46 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             )
         return result
 
+    @cached_property
+    def _supports_iterative_scan(self) -> bool:
+        "Iterative index scans were added in pgvector 0.8.0"
+        with self.emb_session_factory() as session:
+            return installed_pgvector_version(session) >= (0, 8, 0)
+
+    def _configure_hnsw_scan(
+        self, session: Session, *, ef_search: int, k: int, filtered: bool
+    ) -> None:
+        """Set the HNSW scan parameters for the current transaction.
+
+        With pgvector 0.8.0 or newer the index keeps scanning until ``k`` rows
+        pass the filter, so ``ef_search`` is used as configured. Older versions
+        stop at ``ef_search`` candidates, so it is raised to at least ``k``
+        (capped at 1000) and a filtered query logs a one-time warning that its
+        results may be incomplete.
+
+        Parameters
+        ----------
+        session : Session
+            Session whose open transaction receives the settings.
+        ef_search : int
+            Configured ``ef_search`` of the model.
+        k : int
+            Number of neighbours requested.
+        filtered : bool
+            Whether the query carries a concept filter.
+        """
+        if self._supports_iterative_scan:
+            session.execute(text("SET LOCAL hnsw.iterative_scan = relaxed_order"))
+        else:
+            ef_search = min(max(ef_search, k), self._MAX_EF_SEARCH)
+            if filtered and not self._filtered_hnsw_warned:
+                self._filtered_hnsw_warned = True
+                logger.warning(
+                    "Filtered HNSW queries may return fewer than k results on pgvector "
+                    "below 0.8.0. Upgrade the extension to enable iterative index scans."
+                )
+        session.execute(text(f"SET LOCAL hnsw.ef_search = {int(ef_search)}"))
+
     def _get_nearest_concepts_impl(
         self,
         *,
@@ -317,8 +363,11 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
 
         with self.emb_session_factory.begin() as session:
             if isinstance(model_record.index_config, HNSWIndexConfig):
-                session.execute(
-                    text(f"SET LOCAL hnsw.ef_search = {int(model_record.index_config.ef_search)}")
+                self._configure_hnsw_scan(
+                    session,
+                    ef_search=model_record.index_config.ef_search,
+                    k=k,
+                    filtered=concept_filter is not None,
                 )
 
             ann_rows = [
@@ -343,7 +392,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                     is_standard=bool(row.is_standard),
                     is_active=bool(row.is_valid),
                 )
-                for row in rows
+                for row in sorted(rows, key=lambda row: row.distance)
             ]
             for rows in ann_rows
         ]

@@ -88,6 +88,12 @@ omop-emb maintenance rebuild-index --model-name embedding-model --index-type hns
 !!! info "pgvector HNSW"
     HNSW is a SQL `CREATE INDEX USING hnsw` object built by `rebuild_index`. Without it, pgvector falls back to a sequential scan automatically. `ef_search` is read from the registry and applied to each query's transaction. A rebuild leaves exactly the index it describes: switching metric or reverting to FLAT drops the previous HNSW index. Afterwards `rebuild_index` runs `VACUUM (ANALYZE)` on the table by default, which refreshes the statistics the planner uses to choose between the index and an exact scan. On a large table this can take a while; pass `vacuum=False` (CLI: `--no-vacuum`) to skip it.
 
+!!! info "pgvector HNSW and filtered queries"
+    HNSW applies a concept filter after the index returns its candidates, so a selective filter can leave fewer than `k` rows. With pgvector 0.8.0 or newer, `omop-emb` sets `hnsw.iterative_scan = relaxed_order` for each query, which keeps scanning the index until `k` rows pass the filter. Rows are sorted by distance afterwards because this mode only returns them approximately ordered. Older pgvector versions have no iterative scan: `ef_search` is raised to at least `k` (at most 1000, the pgvector limit) and a filtered query logs a one-time warning, since its results can still be incomplete. Upgrade the extension to fix this. For very selective filters at a low `ef_search`, the planner may choose an exact scan over the index.
+
+!!! warning "HNSW builds in containers"
+    A parallel HNSW build can fail with `could not resize shared memory segment ... No space left on device` when the container's `/dev/shm` is small. Either enlarge `/dev/shm` (for example `shm_size` in Docker Compose) or set `max_parallel_maintenance_workers = 0` on the server, which builds serially and takes longer.
+
 !!! warning "pgvector dimension limit"
     The pgvector `vector` column type supports **at most 2,000 dimensions**. Models with more than 2,000 dimensions automatically use the `halfvec` column type (up to 4,000 dimensions). Registering above 4,000 dimensions raises a `ValueError`.
 

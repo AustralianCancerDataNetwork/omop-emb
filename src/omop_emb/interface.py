@@ -795,13 +795,17 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         """Irreversibly delete the model and all associated embeddings."""
         self._backend.delete_model(model_name=self.canonical_model_name)
 
-    def rebuild_index(self, index_config: IndexConfig) -> EmbeddingModelRecord:
+    def rebuild_index(self, index_config: IndexConfig, vacuum: bool = True) -> EmbeddingModelRecord:
         """Build or rebuild the index on the embedding table.
 
         Parameters
         ----------
         index_config : IndexConfig
             New index configuration.
+        vacuum : bool
+            Run the backend's maintenance step after the rebuild
+            (``VACUUM (ANALYZE)`` on pgvector, ``VACUUM`` after a table
+            recreation on sqlite-vec). Default ``True``.
 
         Returns
         -------
@@ -811,6 +815,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         return self._backend.rebuild_index(
             model_name=self.canonical_model_name,
             index_config=index_config,
+            vacuum=vacuum,
         )
 
     # ------------------------------------------------------------------

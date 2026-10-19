@@ -30,6 +30,14 @@ class LegacyRegistryError(EmbeddingBackendError):
     """
 
 
+class LegacyVectorTableError(EmbeddingBackendError):
+    """A sqlite-vec table was created without the cosine metric that queries need.
+
+    Raised instead of rewriting the table on open: recreating it is an
+    explicit ``rebuild-index`` step. No stored vectors are lost.
+    """
+
+
 class ModelRegistrationConflictError(Exception):
     def __init__(self, message: str, conflict_field: str):
         super().__init__(message)

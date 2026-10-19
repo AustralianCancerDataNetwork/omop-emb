@@ -13,6 +13,7 @@ import numpy as np
 from numpy import ndarray
 from oa_configurator import Dialect
 from sqlalchemy import Engine, MetaData, Table, text
+from sqlalchemy.exc import OperationalError
 
 try:
     import sqlite_vec
@@ -38,10 +39,14 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     query_embeddings_by_ids,
     query_has_any,
     query_knn_batch,
+    recreate_vec0_with_cosine,
+    table_declares_cosine,
     table_exists,
     sqlite_vec_table_descriptor,
+    vacuum_database,
 )
 from omop_emb.model_registry import EmbeddingModelRecord
+from omop_emb.utils.errors import LegacyVectorTableError
 from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,
@@ -80,8 +85,9 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
 
     Notes
     -----
-    - Only ``FLAT`` index type is supported. Supports ``L2``, ``COSINE``, and
-    ``L1`` distance metrics.
+    - Only the ``FLAT`` index type and the ``COSINE`` metric are supported. The
+      metric is declared on the vec0 table, so tables created without it must be
+      recreated with ``rebuild_index``.
     - vec0 is a SQLite virtual table type the SQLAlchemy ORM cannot map, but
       it accepts ordinary SQL once created. ``_table_cache`` therefore stores
       a Core :class:`~sqlalchemy.Table` used for every query except the initial 
@@ -117,6 +123,13 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         return table_exists(self.emb_engine, model_record.storage_identifier)
 
     def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> Table:
+        if not table_declares_cosine(self.emb_engine, model_record.storage_identifier):
+            raise LegacyVectorTableError(
+                f"The sqlite-vec table '{model_record.storage_identifier}' for model "
+                f"'{model_record.model_name}' was created without the cosine metric. "
+                "Recreate it from the stored vectors with "
+                f"`omop-emb maintenance rebuild-index --model {model_record.model_name}`."
+            )
         return sqlite_vec_table_descriptor(model_record.storage_identifier, self._sqlite_vec_metadata)
 
     def _create_storage_table(self, model_record: EmbeddingModelRecord) -> Table:
@@ -133,17 +146,32 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
             conn.execute(text(ddl_drop_vec0(model_record.storage_identifier)))
 
     # ------------------------------------------------------------------
-    # Index management (sqlite-vec supports FLAT only)
+    # Index management (sqlite-vec supports FLAT only; rebuild recreates a pre-cosine table)
     # ------------------------------------------------------------------
 
     def _rebuild_index_impl(
-        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig
+        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig, vacuum: bool
     ) -> None:
         if not isinstance(index_config, FlatIndexConfig):
             raise ValueError(
                 f"sqlite-vec only supports FLAT indexes. Got: {type(index_config).__name__}."
             )
-        # vec0 is always a flat scan -> no DDL needed.
+        if not table_declares_cosine(self.emb_engine, model_record.storage_identifier):
+            count = recreate_vec0_with_cosine(
+                self.emb_engine, model_record.storage_identifier, model_record.dimensions
+            )
+            self._table_cache.pop(model_record.storage_identifier, None)
+            logger.info(
+                f"Recreated '{model_record.storage_identifier}' with the cosine metric ({count} rows)."
+            )
+            if vacuum:
+                try:
+                    vacuum_database(self.emb_engine)
+                except OperationalError as exc:
+                    logger.warning(
+                        f"The table was recreated but VACUUM failed ({exc.orig}), so the database file "
+                        "keeps the freed space. Run VACUUM on it once enough disk space is available."
+                    )
 
     def physical_indexes(self, model_name: str) -> tuple[str, ...]:
         """vec0 is always a flat scan; there is no secondary physical index."""
@@ -216,7 +244,6 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 session=session,
                 table=table,
                 query_vectors=[v.astype(np.float32) for v in query_embeddings],
-                metric_type=metric_type,
                 k=k,
                 concept_filter=concept_filter,
             )

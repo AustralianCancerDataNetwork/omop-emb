@@ -83,6 +83,7 @@ Accepts all options from `add-embeddings`, plus:
 | `--index-hnsw-num-neighbors` | `None` | HNSW graph connectivity (`M`). |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
+| `--vacuum` / `--no-vacuum` | `--vacuum` | Maintenance after the rebuild. pgvector runs `VACUUM (ANALYZE)` on the table, which reclaims dead space and refreshes planner statistics. sqlite-vec runs `VACUUM` on the database file after recreating a table, which needs free disk space for a second copy of the data. Use `--no-vacuum` to skip it. |
 
 ---
 

@@ -86,7 +86,7 @@ omop-emb maintenance rebuild-index --model-name embedding-model --index-type hns
 ```
 
 !!! info "pgvector HNSW"
-    HNSW is a SQL `CREATE INDEX USING hnsw` object built by `rebuild_index`. Without it, pgvector falls back to a sequential scan automatically. `ef_search` is read from the registry and applied to each query's transaction. A rebuild leaves exactly the index it describes: switching metric or reverting to FLAT drops the previous HNSW index.
+    HNSW is a SQL `CREATE INDEX USING hnsw` object built by `rebuild_index`. Without it, pgvector falls back to a sequential scan automatically. `ef_search` is read from the registry and applied to each query's transaction. A rebuild leaves exactly the index it describes: switching metric or reverting to FLAT drops the previous HNSW index. Afterwards `rebuild_index` runs `VACUUM (ANALYZE)` on the table by default, which refreshes the statistics the planner uses to choose between the index and an exact scan. On a large table this can take a while; pass `vacuum=False` (CLI: `--no-vacuum`) to skip it.
 
 !!! warning "pgvector dimension limit"
     The pgvector `vector` column type supports **at most 2,000 dimensions**. Models with more than 2,000 dimensions automatically use the `halfvec` column type (up to 4,000 dimensions). Registering above 4,000 dimensions raises a `ValueError`.
@@ -97,8 +97,19 @@ Each backend supports a subset of distance metrics:
 
 | Backend | FLAT | HNSW |
 |---|---|---|
-| sqlite-vec | L2, Cosine, L1 | none |
+| sqlite-vec | Cosine | none |
 | pgvector | L2, Cosine, L1 | L2, Cosine, L1 |
 | FAISS sidecar | L2, Cosine | L2, Cosine |
 
-Stored vectors carry no metric; only queries do. For FLAT models any supported metric can be used per query. For HNSW models the metric is set by `rebuild_index` and queries must use it.
+Stored vectors carry no metric; only queries do. For pgvector FLAT models any supported metric can be used per query. For HNSW models the metric is set by `rebuild_index` and queries must use it.
+
+!!! important "sqlite-vec is cosine only"
+    sqlite-vec answers queries with its native `MATCH` search, which uses the metric declared on the table. omop-emb declares cosine when it creates the table, and queries with any other metric raise. `MATCH` returns at most 4096 results per query, so a larger `k` also raises.
+
+    A table created by an earlier version has no declared metric and raises `LegacyVectorTableError` when it is first queried. Recreate it from the stored vectors once; no data is lost:
+
+    ```bash
+    omop-emb maintenance rebuild-index --model <canonical-model-name>
+    ```
+
+    Recreating a table roughly doubles the database file until `VACUUM` returns the freed pages, and the rebuild runs `VACUUM` afterwards by default. Pass `--no-vacuum` (or `vacuum=False` to `rebuild_index`) to skip it, for example when free disk space is short.

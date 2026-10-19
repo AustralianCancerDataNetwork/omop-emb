@@ -13,14 +13,12 @@ import faiss
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
-from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.config import MetricType
-from omop_emb.model_registry import registry_writer_engine
 from omop_emb.storage import embedding_bundle
 from omop_emb.storage.faiss.faiss_cache import FAISSCache, FAISSCacheMetadata
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
-from .conftest import sqlite_resolved_database
+from .conftest import make_svec_backend, populate
 
 pytest.importorskip("faiss", reason="faiss-cpu not installed")
 
@@ -72,31 +70,6 @@ _L2_RECORDS = [
 # ---------------------------------------------------------------------------
 
 
-def _make_svec_backend(dim: int) -> SQLiteVecEmbeddingBackend:
-    engine = registry_writer_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
-    return SQLiteVecEmbeddingBackend(emb_engine=engine)
-
-
-def _populate_backend(
-    backend: SQLiteVecEmbeddingBackend,
-    *,
-    dim: int,
-    records: list[ConceptEmbeddingRecord],
-    vecs: np.ndarray,
-) -> None:
-    backend.register_model(
-        model_name=_MODEL,
-        provider_type=_PROVIDER,
-        index_config=FlatIndexConfig(),
-        dimensions=dim,
-    )
-    backend.upsert_embeddings(
-        model_name=_MODEL,
-        records=records,
-        embeddings=vecs,
-    )
-
-
 def _build_faiss(
     tmp_path,
     backend: SQLiteVecEmbeddingBackend,
@@ -121,13 +94,8 @@ class TestCosineCorrectness:
 
     @pytest.fixture
     def faiss_cosine(self, tmp_path) -> FAISSCache:
-        backend = _make_svec_backend(_COSINE_DIM)
-        _populate_backend(
-            backend,
-            dim=_COSINE_DIM,
-            records=_COSINE_RECORDS,
-            vecs=_COSINE_VECS,
-        )
+        backend = make_svec_backend()
+        populate(backend, _COSINE_RECORDS, _COSINE_VECS, model_name=_MODEL)
         return _build_faiss(tmp_path, backend, MetricType.COSINE)
 
     def test_identical_vectors_score_one(self, faiss_cosine: FAISSCache):
@@ -183,13 +151,8 @@ class TestL2Correctness:
 
     @pytest.fixture
     def faiss_l2(self, tmp_path) -> FAISSCache:
-        backend = _make_svec_backend(_L2_DIM)
-        _populate_backend(
-            backend,
-            dim=_L2_DIM,
-            records=_L2_RECORDS,
-            vecs=_L2_VECS,
-        )
+        backend = make_svec_backend()
+        populate(backend, _L2_RECORDS, _L2_VECS, model_name=_MODEL)
         return _build_faiss(tmp_path, backend, MetricType.L2)
 
     @pytest.mark.parametrize("concept_id,expected_sim", list(_L2_EXPECTED.items()))
@@ -210,7 +173,7 @@ class TestL2Correctness:
 
 @pytest.mark.unit
 class TestCrossBackendParity:
-    """FAISS and SQLiteVec must return the same similarity scores."""
+    """FAISS and SQLiteVec must return the same cosine similarity scores."""
 
     def _svec_search(
         self,
@@ -228,13 +191,8 @@ class TestCrossBackendParity:
         return {r.concept_id: r.similarity for r in results[0]}
 
     def test_cosine_parity(self, tmp_path):
-        backend = _make_svec_backend(_COSINE_DIM)
-        _populate_backend(
-            backend,
-            dim=_COSINE_DIM,
-            records=_COSINE_RECORDS,
-            vecs=_COSINE_VECS,
-        )
+        backend = make_svec_backend()
+        populate(backend, _COSINE_RECORDS, _COSINE_VECS, model_name=_MODEL)
         cache = _build_faiss(tmp_path, backend, MetricType.COSINE)
 
         svec = self._svec_search(
@@ -253,27 +211,6 @@ class TestCrossBackendParity:
                 f"Concept {cid}: FAISS={faiss_sims[cid]:.6f} SQLiteVec={svec[cid]:.6f}"
             )
 
-    def test_l2_parity(self, tmp_path):
-        backend = _make_svec_backend(_L2_DIM)
-        _populate_backend(
-            backend,
-            dim=_L2_DIM,
-            records=_L2_RECORDS,
-            vecs=_L2_VECS,
-        )
-        cache = _build_faiss(tmp_path, backend, MetricType.L2)
-
-        svec = self._svec_search(backend, _L2_QUERY, k=4, metric_type=MetricType.L2)
-        faiss_results = cache.search(
-            _L2_QUERY, k=4, metric_type=MetricType.L2, index_config=FlatIndexConfig()
-        )
-        faiss_sims = {r.concept_id: r.similarity for r in faiss_results[0]}
-
-        for cid in _L2_IDS:
-            assert faiss_sims[cid] == pytest.approx(svec[cid], abs=1e-4), (
-                f"Concept {cid}: FAISS={faiss_sims[cid]:.6f} SQLiteVec={svec[cid]:.6f}"
-            )
-
 
 # ---------------------------------------------------------------------------
 # Cache identity
@@ -285,13 +222,8 @@ class TestIndexCache:
     """Dict-keyed cache: each (metric_type, index_config) gets its own slot."""
 
     def test_cache_hit_returns_same_object(self, tmp_path):
-        backend = _make_svec_backend(_L2_DIM)
-        _populate_backend(
-            backend,
-            dim=_L2_DIM,
-            records=_L2_RECORDS,
-            vecs=_L2_VECS,
-        )
+        backend = make_svec_backend()
+        populate(backend, _L2_RECORDS, _L2_VECS, model_name=_MODEL)
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
 
         idx_a = cache._load_index(MetricType.L2, FlatIndexConfig())
@@ -302,13 +234,8 @@ class TestIndexCache:
         """Loading a second metric must not evict the first: both should be
         cache hits on subsequent loads, since each (metric, index_config) key
         gets its own slot rather than sharing one single-entry cache."""
-        backend = _make_svec_backend(_COSINE_DIM)
-        _populate_backend(
-            backend,
-            dim=_COSINE_DIM,
-            records=_COSINE_RECORDS,
-            vecs=_COSINE_VECS,
-        )
+        backend = make_svec_backend()
+        populate(backend, _COSINE_RECORDS, _COSINE_VECS, model_name=_MODEL)
 
         # The same raw vectors back both metrics: build both FAISS indices
         # straight from the backend (metric only matters to FAISS).
@@ -342,13 +269,8 @@ class TestHNSWEfSearch:
     """efSearch from HNSWIndexConfig is applied to the loaded index."""
 
     def test_ef_search_applied(self, tmp_path):
-        backend = _make_svec_backend(_COSINE_DIM)
-        _populate_backend(
-            backend,
-            dim=_COSINE_DIM,
-            records=_COSINE_RECORDS,
-            vecs=_COSINE_VECS,
-        )
+        backend = make_svec_backend()
+        populate(backend, _COSINE_RECORDS, _COSINE_VECS, model_name=_MODEL)
 
         index_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=32)
         cache = _build_faiss(
@@ -366,13 +288,8 @@ class TestHNSWEfSearch:
     def test_ef_search_default_overridden(self, tmp_path):
         """Index was built (and serialised) with FAISS default efSearch=16;
         loading with ef_search=64 applies the new value."""
-        backend = _make_svec_backend(_COSINE_DIM)
-        _populate_backend(
-            backend,
-            dim=_COSINE_DIM,
-            records=_COSINE_RECORDS,
-            vecs=_COSINE_VECS,
-        )
+        backend = make_svec_backend()
+        populate(backend, _COSINE_RECORDS, _COSINE_VECS, model_name=_MODEL)
 
         build_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=16)
         cache = _build_faiss(
@@ -395,13 +312,8 @@ class TestCrossMachineCacheReuse:
     backdating the registration timestamp in import_bundle())."""
 
     def test_shipped_cache_is_fresh_after_import(self, tmp_path):
-        source = _make_svec_backend(_COSINE_DIM)
-        _populate_backend(
-            source,
-            dim=_COSINE_DIM,
-            records=_COSINE_RECORDS,
-            vecs=_COSINE_VECS,
-        )
+        source = make_svec_backend()
+        populate(source, _COSINE_RECORDS, _COSINE_VECS, model_name=_MODEL)
 
         _, bundle_path = embedding_bundle.export_bundle(
             backend=source, model_name=_MODEL, output_dir=tmp_path
@@ -410,7 +322,7 @@ class TestCrossMachineCacheReuse:
         index_config = FlatIndexConfig()
         cache = _build_faiss(tmp_path, source, MetricType.COSINE, index_config=index_config)
 
-        target = _make_svec_backend(_COSINE_DIM)
+        target = make_svec_backend()
         embedding_bundle.import_bundle(backend=target, h5_path=bundle_path)
 
         target_record = target.get_registered_model(model_name=_MODEL)
@@ -436,7 +348,7 @@ class TestConceptFilterPrefiltering:
         return zero results here, since the single matching vector is the
         single *worst* match for this query.
         """
-        backend = _make_svec_backend(2)
+        backend = make_svec_backend()
         records = [
             ConceptEmbeddingRecord(
                 concept_id=i, domain_id="Drug" if i == 5 else "Condition",
@@ -471,10 +383,8 @@ class TestConceptFilterPrefiltering:
         """When a backend is passed, matches must carry domain_id/vocabulary_id/
         is_standard/is_active resolved from the embedding table — FAISS itself
         stores only vectors and IDs, so this depends on the metadata lookup."""
-        backend = _make_svec_backend(_L2_DIM)
-        _populate_backend(
-            backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
-        )
+        backend = make_svec_backend()
+        populate(backend, _L2_RECORDS, _L2_VECS, model_name=_MODEL)
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
 
         results = cache.search(
@@ -493,10 +403,8 @@ class TestConceptFilterPrefiltering:
             assert match.is_active == record.is_valid
 
     def test_search_with_filter_requires_backend(self, tmp_path):
-        backend = _make_svec_backend(_L2_DIM)
-        _populate_backend(
-            backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
-        )
+        backend = make_svec_backend()
+        populate(backend, _L2_RECORDS, _L2_VECS, model_name=_MODEL)
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
 
         with pytest.raises(ValueError):
@@ -519,10 +427,8 @@ class TestNoMetadataNpz:
     """build_from_backend() must no longer write a metadata.npz file."""
 
     def test_build_does_not_write_metadata_npz(self, tmp_path):
-        backend = _make_svec_backend(_L2_DIM)
-        _populate_backend(
-            backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
-        )
+        backend = make_svec_backend()
+        populate(backend, _L2_RECORDS, _L2_VECS, model_name=_MODEL)
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
         assert not cache.metadata_path().exists()
         assert list(cache.model_dir.glob("*.npz")) == []
@@ -538,10 +444,8 @@ class TestStalenessAfterUpsert:
     """A cache built before new embeddings are upserted must go stale."""
 
     def test_is_fresh_false_after_later_upsert(self, tmp_path):
-        backend = _make_svec_backend(_L2_DIM)
-        _populate_backend(
-            backend, dim=_L2_DIM, records=_L2_RECORDS, vecs=_L2_VECS,
-        )
+        backend = make_svec_backend()
+        populate(backend, _L2_RECORDS, _L2_VECS, model_name=_MODEL)
         index_config = FlatIndexConfig()
         cache = _build_faiss(tmp_path, backend, MetricType.L2, index_config=index_config)
 

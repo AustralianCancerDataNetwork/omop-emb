@@ -121,6 +121,16 @@ def rebuild_index(
             rich_help_panel="Index Options",
         ),
     ] = None,
+    vacuum: Annotated[
+        bool,
+        typer.Option(
+            "--vacuum/--no-vacuum",
+            help="Run the backend's maintenance step after the rebuild: VACUUM (ANALYZE) on the table "
+            "for pgvector, VACUUM of the database file after a table recreation for sqlite-vec "
+            "(needs free disk space for a second copy of the data).",
+            rich_help_panel="Index Options",
+        ),
+    ] = True,
 ):
 
     if provider_type is not None:
@@ -149,6 +159,7 @@ def rebuild_index(
     backend.rebuild_index(
         model_name=model,
         index_config=index_config,
+        vacuum=vacuum,
     )
     metric_info = (
         f" (metric={metric_type.value})" if index_type == IndexType.HNSW else ""

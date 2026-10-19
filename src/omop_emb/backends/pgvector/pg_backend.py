@@ -10,6 +10,7 @@ from oa_configurator import (
     Role,
     guard_schema_provenance_for,
     physical_schema_of,
+    qualified,
 )
 from sqlalchemy import inspect, select, text
 
@@ -203,9 +204,13 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     # ------------------------------------------------------------------
 
     def _rebuild_index_impl(
-        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig
+        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig, vacuum: bool
     ) -> None:
-        """Drop every physical index on the table, then create the HNSW index index_config describes."""
+        """Drop every physical index on the table, then create the HNSW index index_config describes.
+
+        With ``vacuum``, ``VACUUM (ANALYZE)`` runs on the table afterwards so
+        dead space is reclaimed and the planner sees current statistics.
+        """
         with self.emb_engine.begin() as conn:
             with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
                 for statement in self.drop_index_sql(model_record.model_name):
@@ -215,6 +220,19 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         logger.info(
             f"Rebuilt '{model_record.storage_identifier}' with index type '{index_config.index_type.value}'."
         )
+        if vacuum:
+            self._vacuum_analyze(model_record)
+
+    def _vacuum_analyze(self, model_record: EmbeddingModelRecord) -> None:
+        """Run ``VACUUM (ANALYZE)`` on the model's table; PostgreSQL forbids it inside a transaction."""
+        table = qualified(
+            self.emb_engine,
+            model_record.storage_identifier,
+            physical_schema=physical_schema_of(self.emb_engine),
+        )
+        with self.emb_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
+                conn.execute(text(f"VACUUM (ANALYZE) {table}"))
 
     def physical_indexes(self, model_name: str) -> tuple[str, ...]:
         """Return existing indexes for this model's table without creating or

@@ -14,6 +14,7 @@ pytest.importorskip(
 )
 
 import sqlalchemy as sa
+from sqlalchemy import event as sa_event
 from oa_configurator import Role, physical_schema_of
 from oa_configurator.testing import resolve_with_role_schemas, scoped_test_schema
 
@@ -28,8 +29,12 @@ from .conftest import (
     CONCEPT_RECORDS,
     EMBEDDING_DIM,
     HYPERTENSION_ID,
+    L2_SIMILARITY,
     MODEL_NAME,
     PROVIDER_TYPE,
+    QUERY_EMBEDDING,
+    register_flat,
+    upsert_all,
 )
 from .shared_backend_tests import SharedBackendTests
 
@@ -43,6 +48,17 @@ class TestPGVectorBackend(SharedBackendTests):
     def backend(self, pg_backend: PGVectorEmbeddingBackend):
         return pg_backend
 
+    def test_l2_similarity_values(self, backend: PGVectorEmbeddingBackend):
+        """L2 sim = 1 / (1 + dist), checked on the shared unit-vector dataset."""
+        upsert_all(backend)
+        results = backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            query_embeddings=QUERY_EMBEDDING,
+            k=len(CONCEPT_RECORDS),
+        )
+        assert {m.concept_id: m.similarity for m in results[0]} == pytest.approx(L2_SIMILARITY, abs=1e-5)
+
 
 @pytest.mark.pgvector
 @pytest.mark.integration
@@ -53,30 +69,11 @@ class TestPGVectorHNSWBackend:
         metric_type=MetricType.L2, num_neighbors=4, ef_search=8, ef_construction=16
     )
 
-    def _register_and_upsert(self, backend, *, metric_type=MetricType.L2):
-        """Register with FLAT (required at ingestion time) then upsert data."""
-        backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=FlatIndexConfig(),
-            dimensions=EMBEDDING_DIM,
-        )
-        backend.upsert_embeddings(
-            model_name=MODEL_NAME,
-            records=list(CONCEPT_RECORDS),
-            embeddings=CONCEPT_EMBEDDINGS,
-        )
-
     def test_rebuild_index_keeps_storage_identifier(
         self, pg_backend: PGVectorEmbeddingBackend
     ):
         """Rebuilding from FLAT to HNSW keeps the same physical table name."""
-        r_flat = pg_backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=FlatIndexConfig(),
-            dimensions=EMBEDDING_DIM,
-        )
+        r_flat = register_flat(pg_backend)
         r_hnsw = pg_backend.rebuild_index(
             model_name=MODEL_NAME,
             index_config=self.HNSW_CONFIG,
@@ -89,7 +86,7 @@ class TestPGVectorHNSWBackend:
         self, pg_backend: PGVectorEmbeddingBackend
     ):
         """Switching metric replaces the HNSW index; reverting to FLAT drops it."""
-        self._register_and_upsert(pg_backend)
+        upsert_all(pg_backend)
         table = pg_backend.get_registered_model(model_name=MODEL_NAME).storage_identifier
 
         pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.COSINE))
@@ -104,7 +101,7 @@ class TestPGVectorHNSWBackend:
     def test_rebuild_with_same_metric_applies_new_build_parameters(
         self, pg_backend: PGVectorEmbeddingBackend, pg_engine
     ):
-        self._register_and_upsert(pg_backend)
+        upsert_all(pg_backend)
         table = pg_backend.get_registered_model(model_name=MODEL_NAME).storage_identifier
         for m in (4, 8):
             pg_backend.rebuild_index(
@@ -120,7 +117,7 @@ class TestPGVectorHNSWBackend:
     def test_rebuild_rejects_a_metric_the_backend_cannot_index(
         self, pg_backend: PGVectorEmbeddingBackend
     ):
-        self._register_and_upsert(pg_backend)
+        upsert_all(pg_backend)
         pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
         before = pg_backend.physical_indexes(MODEL_NAME)
         with pytest.raises(ValueError, match="hamming"):
@@ -130,11 +127,32 @@ class TestPGVectorHNSWBackend:
         assert pg_backend.physical_indexes(MODEL_NAME) == before
         assert pg_backend.get_registered_model(model_name=MODEL_NAME).index_config == self.HNSW_CONFIG
 
+    @pytest.mark.parametrize("vacuum,expected", [(True, 1), (False, 0)])
+    def test_rebuild_index_vacuums_the_table_unless_told_not_to(
+        self, pg_backend: PGVectorEmbeddingBackend, vacuum: bool, expected: int
+    ):
+        upsert_all(pg_backend)
+        statements: list[str] = []
+
+        def capture(_connection, _cursor, statement, _parameters, _context, _many):
+            statements.append(statement.strip().lower())
+
+        sa_event.listen(pg_backend.emb_engine, "before_cursor_execute", capture)
+        try:
+            pg_backend.rebuild_index(
+                model_name=MODEL_NAME, index_config=self.HNSW_CONFIG, vacuum=vacuum
+            )
+        finally:
+            sa_event.remove(pg_backend.emb_engine, "before_cursor_execute", capture)
+
+        assert sum(s.startswith("vacuum (analyze)") for s in statements) == expected
+        assert pg_backend.get_registered_model(model_name=MODEL_NAME).index_config == self.HNSW_CONFIG
+
     def test_query_applies_registry_ef_search_to_its_transaction_only(
         self, pg_backend: PGVectorEmbeddingBackend, pg_db
     ):
         """A store that never ran rebuild_index() still applies the registry's ef_search, scoped with SET LOCAL."""
-        self._register_and_upsert(pg_backend)
+        upsert_all(pg_backend)
         pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
 
         statements: list[str] = []
@@ -144,11 +162,11 @@ class TestPGVectorHNSWBackend:
 
         fresh = _open_writer("pgvector", database=pg_db.resolved)
         try:
-            sa.event.listen(fresh.emb_engine, "before_cursor_execute", capture)
+            sa_event.listen(fresh.emb_engine, "before_cursor_execute", capture)
             fresh.get_nearest_concepts(
                 model_name=MODEL_NAME,
                 metric_type=MetricType.L2,
-                query_embeddings=np.array([[-10.0]], dtype=np.float32),
+                query_embeddings=CONCEPT_EMBEDDINGS[[HYPERTENSION_ID - 1]],
                 k=1,
             )
             with fresh.emb_engine.connect() as conn:
@@ -162,7 +180,7 @@ class TestPGVectorHNSWBackend:
     def test_hnsw_search_returns_correct_top1(
         self, pg_backend: PGVectorEmbeddingBackend
     ):
-        self._register_and_upsert(pg_backend)
+        upsert_all(pg_backend)
         pg_backend.rebuild_index(
             model_name=MODEL_NAME,
             index_config=self.HNSW_CONFIG,
@@ -170,7 +188,7 @@ class TestPGVectorHNSWBackend:
         results = pg_backend.get_nearest_concepts(
             model_name=MODEL_NAME,
             metric_type=MetricType.L2,
-            query_embeddings=np.array([[-10.0]], dtype=np.float32),
+            query_embeddings=CONCEPT_EMBEDDINGS[[HYPERTENSION_ID - 1]],
             k=1,
         )
         assert results[0][0].concept_id == HYPERTENSION_ID
@@ -261,12 +279,7 @@ class TestPGVectorNonDefaultSchema:
     ):
         pg_engine = pg_db.committing_engine
         backend, schema = scoped_backend
-        record = backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=FlatIndexConfig(),
-            dimensions=EMBEDDING_DIM,
-        )
+        record = register_flat(backend)
         backend.upsert_embeddings(
             model_name=MODEL_NAME,
             records=list(CONCEPT_RECORDS),
@@ -301,12 +314,7 @@ class TestPGVectorNonDefaultSchema:
     ):
         pg_engine = pg_db.committing_engine
         backend, schema = scoped_backend
-        backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=FlatIndexConfig(),
-            dimensions=EMBEDDING_DIM,
-        )
+        register_flat(backend)
 
         registry = RegistryManager(backend.emb_engine)
         assert registry.registry_available is True
@@ -336,9 +344,7 @@ def test_single_upsert_call_exceeds_the_bind_parameter_limit(pg_backend: PGVecto
     from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 
     n = 12_000
-    pg_backend.register_model(
-        model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
-    )
+    register_flat(pg_backend)
     records = [ConceptEmbeddingRecord(i, "Drug", "RxNorm", True, True) for i in range(n)]
     pg_backend.upsert_embeddings(
         model_name=MODEL_NAME, records=records, embeddings=np.ones((n, EMBEDDING_DIM), dtype=np.float32),
@@ -349,4 +355,4 @@ def test_single_upsert_call_exceeds_the_bind_parameter_limit(pg_backend: PGVecto
     )
     assert pg_backend.get_embedding_count(model_name=MODEL_NAME) == n
     assert pg_backend.get_concept_filter_metadata(model_name=MODEL_NAME, concept_ids=[n - 1])[n - 1] == updated[-1]
-    assert pg_backend.get_embeddings_by_concept_ids(model_name=MODEL_NAME, concept_ids=[0])[0] == [2.0]
+    assert pg_backend.get_embeddings_by_concept_ids(model_name=MODEL_NAME, concept_ids=[0])[0] == [2.0] * EMBEDDING_DIM

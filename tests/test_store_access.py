@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
-import numpy as np
 import pytest
 from oa_configurator import (
     ConnectionConfig,
@@ -24,7 +23,6 @@ from omop_emb.backends import (
     open_vector_store_writer,
 )
 from omop_emb.backends.base_backend import EmbeddingBackend
-from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.config import MetricType
 from omop_emb.model_registry.model_registry_orm import ModelRegistry
@@ -32,7 +30,15 @@ from omop_emb.storage.embedding_bundle import export_bundle
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.utils.errors import ModelRegistrationConflictError, ReadOnlyStoreError
 
-from .conftest import CONCEPT_RECORDS, sqlite_resolved_vector_store
+from .conftest import (
+    ASPIRIN_ID,
+    CONCEPT_EMBEDDINGS,
+    CONCEPT_RECORDS,
+    EMBEDDING_DIM,
+    HYPERTENSION_ID,
+    NON_STANDARD_ID,
+    sqlite_resolved_vector_store,
+)
 
 # Public EmbeddingBackend members that are neither reads nor writes: identity,
 # engine access, constants and static validators.
@@ -47,11 +53,6 @@ _NEITHER = frozenset({
 })
 
 _MODEL = "test-model"
-_RECORDS = (
-    ConceptEmbeddingRecord(1, "Condition", "SNOMED", True, True),
-    ConceptEmbeddingRecord(2, "Drug", "RxNorm", False, True),
-)
-_VECTORS = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
 
 
 def _populated_store(tmp_path):
@@ -62,8 +63,8 @@ def _populate(store):
     with open_vector_store_writer(store) as writer:
         for record in writer.get_registered_models():
             writer.delete_model(model_name=record.model_name)
-        writer.register_model(model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3)
-        writer.upsert_embeddings(model_name=_MODEL, records=list(_RECORDS), embeddings=_VECTORS)
+        writer.register_model(model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM)
+        writer.upsert_embeddings(model_name=_MODEL, records=list(CONCEPT_RECORDS), embeddings=CONCEPT_EMBEDDINGS)
     return store
 
 
@@ -152,18 +153,18 @@ def test_reader_rejects_every_write(tmp_path):
     store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
     with open_vector_store_writer(store) as writer:
         writer.register_model(
-            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=1,
+            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
         )
 
     with open_vector_store_reader(store) as reader:
         backend = reader
         assert isinstance(backend, EmbeddingBackend)
         with pytest.raises(ReadOnlyStoreError):
-            backend.register_model(model_name="other-model", provider_type="ollama", dimensions=1)
+            backend.register_model(model_name="other-model", provider_type="ollama", dimensions=EMBEDDING_DIM)
         with pytest.raises(ReadOnlyStoreError):
             backend.upsert_embeddings(
                 model_name=_MODEL,
-                records=CONCEPT_RECORDS[:1], embeddings=np.zeros((1, 1), dtype=np.float32),
+                records=CONCEPT_RECORDS[:1], embeddings=CONCEPT_EMBEDDINGS[:1],
             )
         with pytest.raises(ReadOnlyStoreError):
             backend.delete_model(model_name=_MODEL)
@@ -181,14 +182,14 @@ def test_one_store_per_model_on_same_sqlite_file(tmp_path, use_path_alias):
             model_name=_MODEL,
             provider_type="ollama",
             index_config=FlatIndexConfig(),
-            dimensions=3,
+            dimensions=EMBEDDING_DIM,
         )
-        first.upsert_embeddings(model_name=_MODEL, records=_RECORDS, embeddings=_VECTORS)
+        first.upsert_embeddings(model_name=_MODEL, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS)
         again = first.register_model(
             model_name=_MODEL,
             provider_type="ollama",
             index_config=FlatIndexConfig(),
-            dimensions=3,
+            dimensions=EMBEDDING_DIM,
         )
         assert again == record_a
     if use_path_alias:
@@ -200,7 +201,7 @@ def test_one_store_per_model_on_same_sqlite_file(tmp_path, use_path_alias):
                 model_name=_MODEL,
                 provider_type="ollama",
                 index_config=FlatIndexConfig(),
-                dimensions=3,
+                dimensions=EMBEDDING_DIM,
             )
         assert str(exc_info.value) == (
             f"Model '{_MODEL}' is already registered by vector store 'store_a' in this database. "
@@ -216,7 +217,7 @@ def test_one_store_per_model_on_same_sqlite_file(tmp_path, use_path_alias):
             model_name=_MODEL,
             provider_type="ollama",
             index_config=FlatIndexConfig(),
-            dimensions=3,
+            dimensions=EMBEDDING_DIM,
         )
 
 
@@ -226,10 +227,10 @@ def test_same_model_can_register_in_different_sqlite_databases(tmp_path):
     )
     with open_vector_store_writer(store_a) as first, open_vector_store_writer(store_b) as second:
         record_a = first.register_model(
-            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3
+            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM
         )
         record_b = second.register_model(
-            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3
+            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM
         )
         assert record_a.storage_identifier != record_b.storage_identifier
 
@@ -244,7 +245,7 @@ def test_concurrent_cross_store_registration_on_sqlite_has_one_winner(tmp_path):
                     model_name=_MODEL,
                     provider_type="ollama",
                     index_config=FlatIndexConfig(),
-                    dimensions=3,
+                    dimensions=EMBEDDING_DIM,
                 )
             except ModelRegistrationConflictError as error:
                 return error
@@ -273,14 +274,14 @@ def test_prerelease_registry_without_model_unique_constraint_still_refuses_secon
             ModelRegistry.__table__.drop(connection)
             table.create(connection)
         writer.register_model(
-            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3
+            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM
         )
 
     with open_vector_store_writer(store_b) as writer, pytest.raises(
         ModelRegistrationConflictError, match="store_a"
     ):
         writer.register_model(
-            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3
+            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM
         )
 
 
@@ -298,7 +299,7 @@ def test_register_model_does_not_read_active_config(tmp_path, monkeypatch):
             model_name=_MODEL,
             provider_type="ollama",
             index_config=FlatIndexConfig(),
-            dimensions=3,
+            dimensions=EMBEDDING_DIM,
         )
     assert registered.model_name == _MODEL
 
@@ -309,6 +310,7 @@ def _assert_every_read_works_without_mutating_sql(store) -> None:
     def capture(_connection, _cursor, statement, _parameters, _context, _many):
         statements.append(statement.strip().lower())
 
+    stored_ids = {r.concept_id for r in CONCEPT_RECORDS}
     with open_vector_store_reader(store) as reader:
         engine = reader.emb_engine  # ty: ignore[unresolved-attribute]
         event.listen(engine, "before_cursor_execute", capture)
@@ -316,27 +318,29 @@ def _assert_every_read_works_without_mutating_sql(store) -> None:
             assert reader.initialized is True
             assert reader.get_registered_model(model_name=_MODEL) is not None
             assert len(reader.get_registered_models()) == 1
-            assert tuple(reader.iter_stored_embeddings(_MODEL)) == _RECORDS
+            assert tuple(reader.iter_stored_embeddings(_MODEL)) == tuple(CONCEPT_RECORDS)
             assert reader.has_any_embeddings(model_name=_MODEL) is True
-            assert reader.get_stored_concept_ids(model_name=_MODEL) == {1, 2}
+            assert reader.get_stored_concept_ids(model_name=_MODEL) == stored_ids
             assert reader.get_stored_concept_ids(
                 model_name=_MODEL,
-                concept_filter=EmbeddingConceptFilter(concept_ids=(1, 2), domains=("Drug",), vocabularies=("RxNorm",)),
-            ) == {2}
-            assert set(reader.get_embeddings_by_concept_ids(model_name=_MODEL, concept_ids=[1, 2])) == {1, 2}
-            assert reader.get_concept_filter_metadata(model_name=_MODEL, concept_ids=[1, 2]) == {
-                r.concept_id: r for r in _RECORDS
+                concept_filter=EmbeddingConceptFilter(
+                    concept_ids=tuple(stored_ids), domains=("Drug",), vocabularies=("RxNorm",)
+                ),
+            ) == {ASPIRIN_ID, NON_STANDARD_ID}
+            assert set(reader.get_embeddings_by_concept_ids(model_name=_MODEL, concept_ids=sorted(stored_ids))) == stored_ids
+            assert reader.get_concept_filter_metadata(model_name=_MODEL, concept_ids=sorted(stored_ids)) == {
+                r.concept_id: r for r in CONCEPT_RECORDS
             }
-            assert reader.get_embedding_count(model_name=_MODEL) == 2
-            assert reader.get_embedding_count_by_vocabulary(model_name=_MODEL) == {"SNOMED": 1, "RxNorm": 1}
+            assert reader.get_embedding_count(model_name=_MODEL) == len(CONCEPT_RECORDS)
+            assert reader.get_embedding_count_by_vocabulary(model_name=_MODEL) == {"SNOMED": 2, "RxNorm": 2}
             matches = reader.get_nearest_concepts(
                 model_name=_MODEL,
                 metric_type=MetricType.COSINE,
-                query_embeddings=_VECTORS[:1],
+                query_embeddings=CONCEPT_EMBEDDINGS[:1],
                 concept_filter=EmbeddingConceptFilter(domains=("Condition",)),
                 k=1,
             )
-            assert matches[0][0].concept_id == 1
+            assert matches[0][0].concept_id == HYPERTENSION_ID
             assert reader.physical_indexes(_MODEL) == ()
         finally:
             event.remove(engine, "before_cursor_execute", capture)
@@ -371,7 +375,7 @@ def test_export_and_faiss_build_run_on_a_reader(tmp_path):
         cache = FAISSCache(model_name=_MODEL, cache_dir=tmp_path / "faiss")
         cache.build_from_backend(reader, MetricType.COSINE, FlatIndexConfig())
 
-    assert meta.row_count == 2
+    assert meta.row_count == len(CONCEPT_RECORDS)
     assert h5_path.exists()
     assert cache.faiss_path(MetricType.COSINE, FlatIndexConfig()).exists()
 
@@ -447,20 +451,20 @@ def test_one_model_name_is_unique_across_schemas_in_one_postgres_database(pg_db)
         try:
             with open_vector_store_writer(store_a) as writer_a:
                 writer_a.register_model(
-                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
                 )
             with open_vector_store_writer(store_b) as writer_b, pytest.raises(
                 ModelRegistrationConflictError, match="store_a"
             ):
                 writer_b.register_model(
-                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
                 )
             with open_vector_store_writer(store_a) as writer_a:
                 writer_a.delete_model(model_name=_MODEL)
             with open_vector_store_writer(store_b) as writer_b:
                 assert writer_b.get_registered_models() == ()
                 writer_b.register_model(
-                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
                 )
                 writer_b.delete_model(model_name=_MODEL)
         finally:
@@ -508,15 +512,15 @@ def test_one_store_per_model_on_one_postgres_registry(pg_db):
         try:
             with open_vector_store_writer(store_a) as writer_a:
                 record_a = writer_a.register_model(
-                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
                 )
                 assert writer_a.register_model(
-                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
                 ) == record_a
             with open_vector_store_writer(store_b) as writer_b:
                 with pytest.raises(ModelRegistrationConflictError) as exc_info:
                     writer_b.register_model(
-                        model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                        model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
                     )
                 assert str(exc_info.value) == (
                     f"Model '{_MODEL}' is already registered by vector store 'store_a' in this database. "
@@ -527,7 +531,7 @@ def test_one_store_per_model_on_one_postgres_registry(pg_db):
                 writer_a.delete_model(model_name=_MODEL)
             with open_vector_store_writer(store_b) as writer_b:
                 record_b = writer_b.register_model(
-                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=3,
+                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
                 )
                 assert record_b.model_name == _MODEL
         finally:

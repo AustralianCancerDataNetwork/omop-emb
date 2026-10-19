@@ -441,6 +441,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         *,
         model_name: str,
         index_config: IndexConfig,
+        vacuum: bool = True,
     ) -> EmbeddingModelRecord:
         """Build or rebuild the index on an existing embedding table.
 
@@ -456,6 +457,11 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             Target index configuration. Pass ``HNSWIndexConfig`` (with
             ``metric_type`` set) to build an HNSW index, or ``FlatIndexConfig()``
             to revert to an exact scan.
+        vacuum : bool
+            Run the backend's maintenance step after the rebuild. pgvector
+            runs ``VACUUM (ANALYZE)`` on the table. sqlite-vec runs ``VACUUM``
+            on the database file after recreating a table, to return the
+            freed space. Default ``True``.
 
         Returns
         -------
@@ -491,7 +497,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                 f"Metric '{index_config.metric_type.value}' is not supported by backend "
                 f"'{self.backend_name}' with index type '{index_config.index_type.value}'."
             )
-        self._rebuild_index_impl(model_record=record, index_config=index_config)
+        self._rebuild_index_impl(model_record=record, index_config=index_config, vacuum=vacuum)
         return self._registry.update_index_config(
             model_name=model_name,
             index_config=index_config,
@@ -499,7 +505,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
 
     @abstractmethod
     def _rebuild_index_impl(
-        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig
+        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig, vacuum: bool
     ) -> None: ...
 
     # ------------------------------------------------------------------

@@ -21,7 +21,7 @@ from omop_emb.model_registry import ModelRegistry
 from omop_emb.population import PopulationScope, plan_population
 from omop_emb.utils.errors import MissingStorageTableError
 
-from .conftest import sqlite_cdm_database, sqlite_resolved_vector_store
+from .conftest import EMBEDDING_DIM, sqlite_cdm_database, sqlite_resolved_vector_store
 
 
 def _concept(concept_id: int, **overrides):
@@ -68,7 +68,7 @@ def test_reader_sees_registered_models_and_stored_embeddings_without_mutating(tm
             model_name="test-model",
             provider_type="ollama",
             index_config=FlatIndexConfig(),
-            dimensions=1,
+            dimensions=EMBEDDING_DIM,
         )
 
     statements: list[str] = []
@@ -106,7 +106,7 @@ def test_dropped_storage_table_raises_instead_of_being_recreated(tmp_path) -> No
             model_name="test-model",
             provider_type="ollama",
             index_config=FlatIndexConfig(),
-            dimensions=1,
+            dimensions=EMBEDDING_DIM,
         )
         with writer.emb_engine.begin() as connection:
             connection.execute(text(f"DROP TABLE {record.storage_identifier}"))

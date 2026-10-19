@@ -16,6 +16,7 @@ from sqlalchemy import (
     Select,
     Table,
     bindparam,
+    column,
     delete,
     func,
     insert,
@@ -28,17 +29,14 @@ from sqlalchemy.orm import Session
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.db_utils import apply_concept_filter_where, in_values
 from omop_emb.backends.embedding_table import CONCEPT_METADATA_COLUMNS, EMBEDDING_COLUMN_NAME
-from omop_emb.config import MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
 
-# Used by q_knn for per-query metric selection via ORDER BY.
-_QUERY_METRIC_FUNC = {
-    MetricType.L2: "vec_distance_l2",
-    MetricType.COSINE: "vec_distance_cosine",
-    MetricType.L1: "vec_distance_l1",
-}
+# Largest k that a vec0 MATCH query accepts.
+MAX_KNN_K = 4096
+
+_COSINE_DECLARATION = "distance_metric=cosine"
 
 
 def table_exists(engine: Engine, table_name: str) -> bool:
@@ -55,6 +53,66 @@ def table_exists(engine: Engine, table_name: str) -> bool:
             ).first()
             is not None
         )
+
+def table_declares_cosine(engine: Engine, table_name: str) -> bool:
+    """Return ``True`` if the vec0 table *table_name* was created with the cosine metric.
+
+    Parameters
+    ----------
+    engine : Engine
+    table_name : str
+
+    Returns
+    -------
+    bool
+        ``False`` for a table created without ``distance_metric=cosine``.
+    """
+    with engine.connect() as conn:
+        ddl = conn.execute(
+            text("SELECT sql FROM sqlite_master WHERE name = :n"), {"n": table_name}
+        ).scalar_one()
+    return _COSINE_DECLARATION in "".join(str(ddl).lower().split())
+
+
+def recreate_vec0_with_cosine(engine: Engine, table_name: str, dimensions: int) -> int:
+    """Recreate a vec0 table with the cosine metric, keeping every stored row.
+
+    Parameters
+    ----------
+    engine : Engine
+        Writable engine.
+    table_name : str
+        Physical table name (the registry ``storage_identifier``).
+    dimensions : int
+        Embedding vector length.
+
+    Returns
+    -------
+    int
+        Number of rows carried over.
+
+    Notes
+    -----
+    A vec0 table cannot be altered or renamed, so rows are copied to a staging
+    table, the original is recreated, and rows are copied back, in one
+    transaction. The transaction is opened explicitly because the sqlite
+    driver does not open one for DDL, so a failure would otherwise leave the
+    staging table behind.
+    """
+    staging = f"{table_name}__rebuild"
+    columns = ", ".join([*(c.name for c in CONCEPT_METADATA_COLUMNS), EMBEDDING_COLUMN_NAME])
+    with engine.begin() as conn:
+        conn.exec_driver_sql("BEGIN IMMEDIATE")
+        conn.execute(text(ddl_drop_vec0(staging)))
+        conn.execute(text(ddl_create_vec0(staging, dimensions)))
+        conn.execute(text(f'INSERT INTO "{staging}"({columns}) SELECT {columns} FROM "{table_name}"'))
+        conn.execute(text(ddl_drop_vec0(table_name)))
+        conn.execute(text(ddl_create_vec0(table_name, dimensions)))
+        conn.execute(text(f'INSERT INTO "{table_name}"({columns}) SELECT {columns} FROM "{staging}"'))
+        count = conn.execute(text(f'SELECT count(*) FROM "{table_name}"')).scalar_one()
+        conn.execute(text(ddl_drop_vec0(staging)))
+    return int(count)
+
 
 def sqlite_vec_table_descriptor(table_name: str, metadata: MetaData) -> Table:
     """Return the Core ``Table`` descriptor for an existing sqlite-vec ``vec0`` table.
@@ -81,8 +139,8 @@ def sqlite_vec_table_descriptor(table_name: str, metadata: MetaData) -> Table:
 def ddl_create_vec0(table_name: str, dimensions: int) -> str:
     """Return DDL to create a vec0 virtual table for the given model.
 
-    The metric is chosen per query via ``vec_distance_*`` functions, so the
-    table carries none.
+    The embedding column declares the cosine metric, which ``MATCH`` queries
+    use. The metric cannot be changed without recreating the table.
 
     Parameters
     ----------
@@ -96,13 +154,26 @@ def ddl_create_vec0(table_name: str, dimensions: int) -> str:
     str
         ``CREATE VIRTUAL TABLE IF NOT EXISTS ...`` statement.
     """
-    embedding_col = f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}]"
+    embedding_col = f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}] {_COSINE_DECLARATION}"
     metadata_cols = ", ".join(f"{c.name} {c.vec0_ddl}" for c in CONCEPT_METADATA_COLUMNS)
 
     return (
         f'CREATE VIRTUAL TABLE IF NOT EXISTS "{table_name}" USING vec0('
         f"{metadata_cols}, {embedding_col})"
     )
+
+
+def vacuum_database(engine: Engine) -> None:
+    """Run ``VACUUM`` so the pages freed by a table recreation shrink the file.
+
+    Parameters
+    ----------
+    engine : Engine
+        Writable engine. ``VACUUM`` needs free disk space for a second copy of
+        the data while it runs and cannot run inside a transaction.
+    """
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.exec_driver_sql("VACUUM")
 
 
 def ddl_drop_vec0(table_name: str) -> str:
@@ -167,34 +238,26 @@ def dml_upsert_rows(
 def _build_knn_stmt(
     table: Table,
     query_vector: ndarray,
-    metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
 ) -> Select:
-    """Build a single-vector KNN statement. Internal; see :func:`query_knn_batch`."""
-    dist_func_name = _QUERY_METRIC_FUNC.get(metric_type)
-    if dist_func_name is None:
-        raise ValueError(
-            f"sqlite-vec does not support metric '{metric_type.value}' for FLAT queries. "
-            f"Supported: {[m.value for m in _QUERY_METRIC_FUNC]}"
-        )
-
-    emb_blob = _embedding_to_blob(query_vector)
-    distance = getattr(func, dist_func_name)(
-        table.c[EMBEDDING_COLUMN_NAME], bindparam("q_emb", emb_blob)
-    ).label("distance")
-
+    """Build a single-vector ``MATCH`` KNN statement. Internal; see :func:`query_knn_batch`."""
     stmt = (
         select(
             table.c.concept_id,
-            distance,
+            column("distance"),
             table.c.domain_id,
             table.c.vocabulary_id,
             table.c.is_standard,
             table.c.is_valid,
         )
-        .order_by(distance)
-        .limit(k)
+        .where(
+            table.c[EMBEDDING_COLUMN_NAME].op("MATCH")(
+                bindparam("q_emb", _embedding_to_blob(query_vector))
+            ),
+            column("k") == k,
+        )
+        .order_by(column("distance"))
     )
 
     if concept_filter is not None:
@@ -207,11 +270,10 @@ def query_knn_batch(
     session: Session,
     table: Table,
     query_vectors: Sequence[ndarray],
-    metric_type: MetricType,
     k: int,
     concept_filter: Optional[EmbeddingConceptFilter] = None,
 ) -> list[Sequence[Row]]:
-    """Run KNN queries against a vec0 table, one per vector in *query_vectors*.
+    """Run cosine KNN queries against a vec0 table, one per vector in *query_vectors*.
 
     Parameters
     ----------
@@ -219,37 +281,36 @@ def query_knn_batch(
     table : Table
     query_vectors : Sequence[ndarray]
         Each a float32 array of shape ``(D,)``.
-    metric_type : MetricType
-        Distance metric. Must be one of the keys in ``_QUERY_METRIC_FUNC``
-        (L2, COSINE, L1).
     k : int
-        Maximum number of results to return per vector.
+        Maximum number of results to return per vector, at most ``MAX_KNN_K``.
     concept_filter : EmbeddingConceptFilter, optional
-        Row-level filters applied in the WHERE clause before ranking.
+        Row-level filters applied during the scan, so ``k`` rows pass the filter.
 
     Returns
     -------
     list[Sequence[Row]]
         One row sequence per query vector. Each row contains ``concept_id``,
         ``distance``, ``domain_id``, ``vocabulary_id``, ``is_standard``, and
-        ``is_valid``, ordered by distance ascending.
+        ``is_valid``, ordered by cosine distance ascending.
 
     Raises
     ------
     ValueError
-        If ``metric_type`` is not supported for per-query distance functions.
+        If ``k`` exceeds ``MAX_KNN_K``.
 
     Notes
     -----
-    Uses ``ORDER BY vec_distance_*(embedding, :emb) LIMIT k`` instead of the
-    vec0 MATCH syntax. For FLAT (full-scan) tables the performance is identical
-    and the metric can be chosen freely at call time. sqlite-vec has no
-    multi-vector batched form (unlike pgvector's lateral join), so each vector
-    is its own statement.
+    Uses the vec0 ``MATCH ... AND k = ?`` form with the metric declared on the
+    table. sqlite-vec has no multi-vector form, so each vector is its own
+    statement.
     """
+    if k > MAX_KNN_K:
+        raise ValueError(
+            f"sqlite-vec returns at most {MAX_KNN_K} results per query. Got k={k}."
+        )
     results: list[Sequence[Row]] = []
     for query_vector in query_vectors:
-        stmt = _build_knn_stmt(table, query_vector, metric_type, k, concept_filter)
+        stmt = _build_knn_stmt(table, query_vector, k, concept_filter)
         results.append(session.execute(stmt).all())
     return results
 

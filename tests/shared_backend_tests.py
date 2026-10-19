@@ -2,8 +2,7 @@
 
 Subclass SharedBackendTests in backend-specific test modules and provide a
 ``backend`` fixture that returns a registered-free instance of the backend
-under test.  The ``metric_type`` fixture defaults to L2; override it in the
-subclass for metric-specific variants.
+under test. Queries use the cosine metric, the one metric every backend supports.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ import numpy as np
 import pytest
 
 from omop_emb.backends.base_backend import EmbeddingBackend
-from omop_emb.backends.index_config import FlatIndexConfig
+from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.config import MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
@@ -20,6 +19,7 @@ from .conftest import (
     ASPIRIN_ID,
     CONCEPT_EMBEDDINGS,
     CONCEPT_RECORDS,
+    COSINE_SIMILARITY,
     DIABETES_ID,
     EMBEDDING_DIM,
     HYPERTENSION_ID,
@@ -27,6 +27,8 @@ from .conftest import (
     NON_STANDARD_ID,
     PROVIDER_TYPE,
     QUERY_EMBEDDING,
+    register_flat,
+    upsert_all,
 )
 
 
@@ -34,43 +36,36 @@ class SharedBackendTests:
     """Mixin class: drop into any backend test class."""
 
     # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _register(self, backend: EmbeddingBackend):
-        return backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=FlatIndexConfig(),
-            dimensions=EMBEDDING_DIM,
-        )
-
-    def _upsert_all(
-        self, backend: EmbeddingBackend, metric_type: MetricType = MetricType.L2
-    ):
-        self._register(backend)
-        backend.upsert_embeddings(
-            model_name=MODEL_NAME,
-            records=list(CONCEPT_RECORDS),
-            embeddings=CONCEPT_EMBEDDINGS,
-        )
-
-    # ------------------------------------------------------------------
     # Registration
     # ------------------------------------------------------------------
 
     def test_register_model(self, backend: EmbeddingBackend):
-        record = self._register(backend)
+        record = register_flat(backend)
         assert record.model_name == MODEL_NAME
         assert record.dimensions == EMBEDDING_DIM
 
     def test_register_model_is_idempotent(self, backend: EmbeddingBackend):
-        r1 = self._register(backend)
-        r2 = self._register(backend)
+        """Re-registering returns the same record: one row and one physical table per model."""
+        r1 = register_flat(backend)
+        r2 = register_flat(backend)
         assert r1.storage_identifier == r2.storage_identifier
+        assert len(backend.get_registered_models(model_name=MODEL_NAME)) == 1
+
+    def test_flat_registration_has_no_metric(self, backend: EmbeddingBackend):
+        """FLAT-registered models have metric_type=None: the metric is supplied at query time."""
+        assert register_flat(backend).metric_type is None
+
+    def test_hnsw_registration_raises(self, backend: EmbeddingBackend):
+        with pytest.raises(ValueError, match="Only FLAT index is allowed at registration"):
+            backend.register_model(
+                model_name=MODEL_NAME,
+                provider_type=PROVIDER_TYPE,
+                index_config=HNSWIndexConfig(metric_type=MetricType.COSINE),
+                dimensions=EMBEDDING_DIM,
+            )
 
     def test_register_model_dimension_conflict_raises(self, backend: EmbeddingBackend):
-        self._register(backend)
+        register_flat(backend)
         with pytest.raises(Exception):
             backend.register_model(
                 model_name=MODEL_NAME,
@@ -83,13 +78,13 @@ class SharedBackendTests:
         assert backend.get_registered_model(model_name=MODEL_NAME) is None, (
             "Model should not be registered before registration"
         )
-        self._register(backend)
+        register_flat(backend)
         assert backend.get_registered_model(model_name=MODEL_NAME) is not None, (
             "Model should be registered after registration"
         )
 
     def test_get_registered_model(self, backend: EmbeddingBackend):
-        self._register(backend)
+        register_flat(backend)
         record = backend.get_registered_model(model_name=MODEL_NAME)
         assert record is not None, (
             "get_registered_model should return a record after registration"
@@ -102,12 +97,7 @@ class SharedBackendTests:
         )
 
     def test_get_registered_models_returns_all(self, backend: EmbeddingBackend):
-        backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=FlatIndexConfig(),
-            dimensions=EMBEDDING_DIM,
-        )
+        register_flat(backend)
         records = backend.get_registered_models(
             model_name=MODEL_NAME, provider_type=PROVIDER_TYPE
         )
@@ -118,27 +108,27 @@ class SharedBackendTests:
     # ------------------------------------------------------------------
 
     def test_upsert_and_has_embeddings(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
+        upsert_all(backend)
         assert backend.has_any_embeddings(
             model_name=MODEL_NAME,
         )
 
     def test_upsert_count_matches(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
+        upsert_all(backend)
         count = backend.get_embedding_count(
             model_name=MODEL_NAME,
         )
         assert count == len(CONCEPT_RECORDS)
 
     def test_get_embedding_count_by_vocabulary(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
+        upsert_all(backend)
         counts = backend.get_embedding_count_by_vocabulary(
             model_name=MODEL_NAME,
         )
         assert counts == {"SNOMED": 2, "RxNorm": 2}
 
     def test_upsert_is_idempotent(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
+        upsert_all(backend)
         backend.upsert_embeddings(
             model_name=MODEL_NAME,
             records=list(CONCEPT_RECORDS),
@@ -154,7 +144,7 @@ class SharedBackendTests:
     # ------------------------------------------------------------------
 
     def test_get_stored_concept_ids_without_filter(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
+        upsert_all(backend)
         stored = backend.get_stored_concept_ids(
             model_name=MODEL_NAME,
         )
@@ -162,24 +152,24 @@ class SharedBackendTests:
         assert stored == expected
 
     def test_get_embeddings_by_concept_ids(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
+        upsert_all(backend)
         result = backend.get_embeddings_by_concept_ids(
             model_name=MODEL_NAME,
             concept_ids=[HYPERTENSION_ID, DIABETES_ID],
         )
         assert set(result.keys()) == {HYPERTENSION_ID, DIABETES_ID}
-        assert np.isclose(result[HYPERTENSION_ID][0], -10.0)
-        assert np.isclose(result[DIABETES_ID][0], 0.0)
+        assert np.allclose(result[HYPERTENSION_ID], CONCEPT_EMBEDDINGS[0], atol=1e-6)
+        assert np.allclose(result[DIABETES_ID], CONCEPT_EMBEDDINGS[1], atol=1e-6)
 
     # ------------------------------------------------------------------
     # KNN: basic
     # ------------------------------------------------------------------
 
     def test_knn_returns_results(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
+        upsert_all(backend)
         results = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
+            metric_type=MetricType.COSINE,
             query_embeddings=QUERY_EMBEDDING,
             k=3,
         )
@@ -190,10 +180,10 @@ class SharedBackendTests:
         """domain_id/vocabulary_id/is_standard/is_active must come back on
         every match, populated straight from the embedding table (no CDM
         engine involved at this layer)."""
-        self._upsert_all(backend)
+        upsert_all(backend)
         results = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
+            metric_type=MetricType.COSINE,
             query_embeddings=QUERY_EMBEDDING,
             k=len(CONCEPT_RECORDS),
         )
@@ -206,11 +196,11 @@ class SharedBackendTests:
             assert match.is_active == record.is_valid
 
     def test_knn_top1_is_closest(self, backend: EmbeddingBackend):
-        # Query [-1] is closest to Diabetes [0] under L2
-        self._upsert_all(backend)
+        # Query [1, 0] is closest to Diabetes (10 degrees)
+        upsert_all(backend)
         results = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
+            metric_type=MetricType.COSINE,
             query_embeddings=QUERY_EMBEDDING,
             k=1,
         )
@@ -218,22 +208,22 @@ class SharedBackendTests:
 
     def test_knn_exact_hypertension_query(self, backend: EmbeddingBackend):
         # Querying exactly the stored vector should return itself first
-        self._upsert_all(backend)
-        query = np.array([[-10.0]], dtype=np.float32)
+        upsert_all(backend)
+        query = CONCEPT_EMBEDDINGS[:1]
         results = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
+            metric_type=MetricType.COSINE,
             query_embeddings=query,
             k=1,
         )
         assert results[0][0].concept_id == HYPERTENSION_ID
 
     def test_knn_batch_queries(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
-        queries = np.array([[-10.0], [10.0]], dtype=np.float32)
+        upsert_all(backend)
+        queries = CONCEPT_EMBEDDINGS[[0, 2]]
         results = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
+            metric_type=MetricType.COSINE,
             query_embeddings=queries,
             k=1,
         )
@@ -246,10 +236,10 @@ class SharedBackendTests:
     # ------------------------------------------------------------------
 
     def test_knn_domain_filter(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
+        upsert_all(backend)
         results = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
+            metric_type=MetricType.COSINE,
             query_embeddings=QUERY_EMBEDDING,
             concept_filter=EmbeddingConceptFilter(domains=("Drug",)),
         )
@@ -259,10 +249,10 @@ class SharedBackendTests:
         assert DIABETES_ID not in returned_ids
 
     def test_knn_vocabulary_filter(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
+        upsert_all(backend)
         results = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
+            metric_type=MetricType.COSINE,
             query_embeddings=QUERY_EMBEDDING,
             concept_filter=EmbeddingConceptFilter(vocabularies=("SNOMED",)),
         )
@@ -272,10 +262,10 @@ class SharedBackendTests:
         assert ASPIRIN_ID not in returned_ids
 
     def test_knn_concept_id_filter(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
+        upsert_all(backend)
         results = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
+            metric_type=MetricType.COSINE,
             query_embeddings=QUERY_EMBEDDING,
             concept_filter=EmbeddingConceptFilter(
                 concept_ids=(HYPERTENSION_ID, ASPIRIN_ID)
@@ -285,10 +275,10 @@ class SharedBackendTests:
         assert returned_ids == {HYPERTENSION_ID, ASPIRIN_ID}
 
     def test_knn_require_standard_filter(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
+        upsert_all(backend)
         results = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
+            metric_type=MetricType.COSINE,
             query_embeddings=QUERY_EMBEDDING,
             concept_filter=EmbeddingConceptFilter(require_standard=True),
         )
@@ -298,39 +288,34 @@ class SharedBackendTests:
 
     def test_knn_k_controls_result_count_with_filter(self, backend: EmbeddingBackend):
         """k is the sole result-count control; EmbeddingConceptFilter has no such field."""
-        self._upsert_all(backend)
+        upsert_all(backend)
         results = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
+            metric_type=MetricType.COSINE,
             query_embeddings=QUERY_EMBEDDING,
             k=1,
             concept_filter=EmbeddingConceptFilter(vocabularies=("SNOMED",)),
         )
         assert len(results[0]) == 1
-        assert results[0][0].concept_id == DIABETES_ID  # nearest SNOMED concept by L2
+        assert results[0][0].concept_id == DIABETES_ID  # nearest SNOMED concept by cosine
 
     # ------------------------------------------------------------------
     # KNN: similarity math
     # ------------------------------------------------------------------
 
-    def test_l2_similarity_values(self, backend: EmbeddingBackend):
-        """L2 sim = 1/(1+dist).  Query=[-1], stored=[-10,0,10,20]."""
-        self._upsert_all(backend)
+    def test_cosine_similarity_values(self, backend: EmbeddingBackend):
+        """Cosine sim = 1 - dist/2 = (1 + cos(angle)) / 2 for the angles in CONCEPT_ANGLES_DEGREES."""
+        upsert_all(backend)
         results = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
-            metric_type=MetricType.L2,
+            metric_type=MetricType.COSINE,
             query_embeddings=QUERY_EMBEDDING,
             k=len(CONCEPT_RECORDS),
         )
-        expected = {
-            HYPERTENSION_ID: 1.0 / (1.0 + 9.0),  # dist=9
-            DIABETES_ID: 1.0 / (1.0 + 1.0),  # dist=1
-            ASPIRIN_ID: 1.0 / (1.0 + 11.0),  # dist=11
-            NON_STANDARD_ID: 1.0 / (1.0 + 21.0),  # dist=21
-        }
+        expected = COSINE_SIMILARITY
         for match in results[0]:
             assert np.isclose(
-                match.similarity, expected[match.concept_id], rtol=1e-4
+                match.similarity, expected[match.concept_id], atol=1e-5
             ), (
                 f"concept_id={match.concept_id}: got {match.similarity}, "
                 f"expected {expected[match.concept_id]}"
@@ -341,7 +326,7 @@ class SharedBackendTests:
     # ------------------------------------------------------------------
 
     def test_get_stored_concept_ids_domain_filter(self, backend: EmbeddingBackend):
-        self._upsert_all(backend)
+        upsert_all(backend)
         matching = backend.get_stored_concept_ids(
             model_name=MODEL_NAME,
             concept_filter=EmbeddingConceptFilter(domains=("Drug",)),
@@ -351,7 +336,7 @@ class SharedBackendTests:
     def test_get_stored_concept_ids_require_standard_filter(
         self, backend: EmbeddingBackend
     ):
-        self._upsert_all(backend)
+        upsert_all(backend)
         matching = backend.get_stored_concept_ids(
             model_name=MODEL_NAME,
             concept_filter=EmbeddingConceptFilter(require_standard=True),
@@ -361,7 +346,7 @@ class SharedBackendTests:
     def test_get_stored_concept_ids_empty_filter_returns_all(
         self, backend: EmbeddingBackend
     ):
-        self._upsert_all(backend)
+        upsert_all(backend)
         matching = backend.get_stored_concept_ids(
             model_name=MODEL_NAME,
             concept_filter=EmbeddingConceptFilter(),
@@ -373,13 +358,13 @@ class SharedBackendTests:
     # ------------------------------------------------------------------
 
     def test_delete_model_removes_registry_entry(self, backend: EmbeddingBackend):
-        self._register(backend)
+        register_flat(backend)
         assert backend.get_registered_model(model_name=MODEL_NAME) is not None
         backend.delete_model(model_name=MODEL_NAME)
         assert backend.get_registered_model(model_name=MODEL_NAME) is None
 
     def test_patch_model_metadata(self, backend: EmbeddingBackend):
-        self._register(backend)
+        register_flat(backend)
         backend.patch_model_metadata(
             model_name=MODEL_NAME,
             key="custom_key",

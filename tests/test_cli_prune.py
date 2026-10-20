@@ -160,7 +160,7 @@ def test_prune_embeddings_compact_runs_when_nothing_is_left_to_prune(pruning_set
 def test_prune_embeddings_compact_needs_apply(pruning_setup) -> None:
     result = runner.invoke(cli_maintenance.app, ["prune-embeddings", "--model", MODEL, "--compact"])
 
-    assert result.exit_code != 0
+    assert result.exit_code == 1
     assert "--compact needs --apply" in result.output
     assert _stored_ids(pruning_setup) == {1, 2, 3}
 

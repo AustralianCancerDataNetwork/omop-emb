@@ -307,7 +307,8 @@ def prune_embeddings(
     model on pgvector still shrinks the index.
     """
     if compact and not apply:
-        raise typer.BadParameter("--compact needs --apply.", param_hint="--compact")
+        typer.echo("--compact needs --apply.")
+        raise typer.Exit(1)
     if provider_type is not None:
         model = canonical_model_name(provider_type, model)
 

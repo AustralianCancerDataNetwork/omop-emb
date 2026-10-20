@@ -126,6 +126,45 @@ def test_prune_embeddings_apply_deletes_and_marks_the_model_updated(pruning_setu
     assert _updated_at(pruning_setup) > updated_at
 
 
+def test_prune_embeddings_apply_hints_at_compact_without_compacting(pruning_setup) -> None:
+    result = runner.invoke(cli_maintenance.app, ["prune-embeddings", "--model", MODEL, "--apply"])
+
+    assert "Pass --compact" in result.output
+    assert "Compacted storage" not in result.output
+
+
+def test_prune_embeddings_compact_deletes_then_compacts(pruning_setup) -> None:
+    result = runner.invoke(
+        cli_maintenance.app, ["prune-embeddings", "--model", MODEL, "--apply", "--compact"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Deleted 2 embeddings" in result.output
+    assert "Compacted storage:" in result.output
+    assert "Pass --compact" not in result.output
+    assert _stored_ids(pruning_setup) == {1}
+
+
+def test_prune_embeddings_compact_runs_when_nothing_is_left_to_prune(pruning_setup) -> None:
+    runner.invoke(cli_maintenance.app, ["prune-embeddings", "--model", MODEL, "--apply"])
+
+    result = runner.invoke(
+        cli_maintenance.app, ["prune-embeddings", "--model", MODEL, "--apply", "--compact"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Nothing to prune." in result.output
+    assert "Compacted storage:" in result.output
+
+
+def test_prune_embeddings_compact_needs_apply(pruning_setup) -> None:
+    result = runner.invoke(cli_maintenance.app, ["prune-embeddings", "--model", MODEL, "--compact"])
+
+    assert result.exit_code != 0
+    assert "--compact needs --apply" in result.output
+    assert _stored_ids(pruning_setup) == {1, 2, 3}
+
+
 def test_prune_embeddings_include_invalid_keeps_invalid_concepts(pruning_setup) -> None:
     result = runner.invoke(
         cli_maintenance.app,

@@ -52,6 +52,7 @@ from omop_emb.utils.cdm import (
     iter_cdm_concepts_for_filter,
 )
 from omop_emb.backends.base_backend import (
+    CompactionResult,
     ConceptEmbeddingRecord,
     EmbeddingBackend,
     EmbeddingModelRecord,
@@ -883,6 +884,10 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         )
         self._backend.refresh_model_updated_at_timestamp(model_name=self.canonical_model_name)
         return deleted
+
+    def compact_storage(self) -> CompactionResult:
+        """Return the disk space held by deleted or rewritten rows, see ``EmbeddingBackend.compact_storage``."""
+        return self._backend.compact_storage(model_name=self.canonical_model_name)
 
     def bulk_upsert_concept_embeddings(
         self,

@@ -57,5 +57,5 @@ omop-emb-db:
 ## Keeping the store small
 
 - Only valid concepts are embedded by default. In one 1.8M-concept store 46% of the rows were invalid, and one retired name alone accounted for 26% of the rows with identical vectors, which also lowered HNSW recall.
-- Remove invalid rows from an existing store with `maintenance prune-embeddings`, then run `rebuild-index` to reclaim the space.
+- Remove invalid rows from an existing store with `maintenance prune-embeddings`, adding `--compact` to return the disk space.
 - Scan time grows with the number of rows, so every pruned row speeds up FLAT queries and FAISS builds.

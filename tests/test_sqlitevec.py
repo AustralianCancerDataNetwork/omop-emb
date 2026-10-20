@@ -16,6 +16,7 @@ from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.backends.sqlitevec import sqlitevec_sql
 from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     MAX_KNN_K,
+    database_size,
     ddl_drop_vec0,
     declared_metric,
     recreate_vec0,
@@ -175,10 +176,10 @@ class TestSQLiteVecMetricTable:
         assert results[0][0].concept_id == ASPIRIN_ID
         assert results[0][0].similarity == pytest.approx(1.0, abs=1e-6)
 
-    def test_rebuild_index_without_vacuum_leaves_cosine_table_untouched(
+    def test_rebuild_index_leaves_an_unchanged_cosine_table_untouched(
         self, svec_backend: SQLiteVecEmbeddingBackend
     ):
-        """An already-cosine table keeps its rows and is neither recreated nor vacuumed."""
+        """An already-cosine table keeps its rows and is neither recreated nor vacuumed, also with vacuum on."""
         register_flat(svec_backend)
         svec_backend.upsert_embeddings(
             model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
@@ -190,9 +191,7 @@ class TestSQLiteVecMetricTable:
 
         sa.event.listen(svec_backend.emb_engine, "before_cursor_execute", capture)
         try:
-            svec_backend.rebuild_index(
-                model_name=MODEL_NAME, index_config=FlatIndexConfig(), vacuum=False
-            )
+            svec_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
         finally:
             sa.event.remove(svec_backend.emb_engine, "before_cursor_execute", capture)
 
@@ -393,7 +392,7 @@ class TestSQLiteVecMetricTable:
 
 @pytest.mark.unit
 class TestSQLiteVecVacuum:
-    """rebuild_index returns the space freed by a table recreation unless told not to."""
+    """A metric-change rebuild vacuums unless told not to. Only compact_storage returns space freed by deletes."""
 
     @staticmethod
     def _file_backend(tmp_path) -> SQLiteVecEmbeddingBackend:
@@ -431,38 +430,105 @@ class TestSQLiteVecVacuum:
             backend.emb_engine.dispose()
 
 
-    def test_rebuild_compacts_a_table_after_rows_were_deleted(self, tmp_path):
+    @staticmethod
+    def _fill(backend: SQLiteVecEmbeddingBackend, n: int = 4000) -> list[int]:
+        register_flat(backend, dimensions=64)
+        ids = list(range(1, n + 1))
+        backend.upsert_embeddings(
+            model_name=MODEL_NAME,
+            records=[ConceptEmbeddingRecord(i, "Condition", "SNOMED", True, True) for i in ids],
+            embeddings=np.random.default_rng(0).normal(size=(len(ids), 64)).astype(np.float32),
+        )
+        return ids
+
+    @staticmethod
+    def _statements(backend: SQLiteVecEmbeddingBackend, call) -> list[str]:
+        statements: list[str] = []
+
+        def capture(_conn, _cursor, statement, *_args):
+            statements.append(statement.strip().upper())
+
+        sa.event.listen(backend.emb_engine, "before_cursor_execute", capture)
+        try:
+            call()
+        finally:
+            sa.event.remove(backend.emb_engine, "before_cursor_execute", capture)
+        return statements
+
+    def test_rebuild_index_does_not_compact_deleted_rows(self, tmp_path):
+        backend = self._file_backend(tmp_path)
+        try:
+            ids = self._fill(backend)
+            backend.delete_embeddings(model_name=MODEL_NAME, concept_ids=ids[::2])
+            before = self._size(backend)
+
+            backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
+
+            assert self._size(backend) == before
+        finally:
+            backend.emb_engine.dispose()
+
+    def test_compact_storage_shrinks_the_file_after_scattered_deletes(self, tmp_path):
         """Scattered deletes leave vec0 chunks partly empty, so only a recreation shrinks the file."""
         backend = self._file_backend(tmp_path)
         try:
-            register_flat(backend, dimensions=64)
-            ids = list(range(1, 4001))
-            backend.upsert_embeddings(
-                model_name=MODEL_NAME,
-                records=[ConceptEmbeddingRecord(i, "Condition", "SNOMED", True, True) for i in ids],
-                embeddings=np.random.default_rng(0).normal(size=(len(ids), 64)).astype(np.float32),
-            )
+            ids = self._fill(backend)
             backend.delete_embeddings(model_name=MODEL_NAME, concept_ids=ids[::2])
             with backend.emb_engine.connect() as conn:
                 conn.exec_driver_sql("VACUUM")
             before = self._size(backend)
 
-            backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig(), vacuum=False)
-            assert self._size(backend) == before
-            backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
+            result = backend.compact_storage(model_name=MODEL_NAME)
 
+            assert result.size_before == before
+            assert result.size_after < before * 0.8
+            assert result.reclaimed == before - result.size_after
             assert backend.get_embedding_count(model_name=MODEL_NAME) == 2000
-            assert self._size(backend) < before * 0.8
+            hits = backend.get_nearest_concepts(
+                model_name=MODEL_NAME,
+                metric_type=MetricType.COSINE,
+                query_embeddings=backend.get_embeddings_by_concept_ids(
+                    model_name=MODEL_NAME, concept_ids=[ids[1]]
+                )[ids[1]][None, :],
+                k=1,
+            )
+            assert hits[0][0].concept_id == ids[1]
+        finally:
+            backend.emb_engine.dispose()
+
+    def test_compact_storage_after_a_plain_ingest_rewrites_nothing(self, tmp_path):
+        backend = self._file_backend(tmp_path)
+        try:
+            self._fill(backend)
+            before = self._size(backend)
+
+            statements = self._statements(backend, lambda: backend.compact_storage(model_name=MODEL_NAME))
+
+            assert self._size(backend) == before
+            assert not any(s.startswith(("VACUUM", "DROP", "CREATE", "INSERT")) for s in statements)
+        finally:
+            backend.emb_engine.dispose()
+
+    def test_compact_storage_vacuums_when_whole_chunks_were_emptied(self, tmp_path):
+        """Emptied chunks free their pages, so a VACUUM suffices and the table is not recreated."""
+        backend = self._file_backend(tmp_path)
+        try:
+            ids = self._fill(backend)
+            backend.delete_embeddings(model_name=MODEL_NAME, concept_ids=ids[:2048])
+            before = self._size(backend)
+
+            statements = self._statements(backend, lambda: backend.compact_storage(model_name=MODEL_NAME))
+
+            assert self._size(backend) < before
+            assert any(s.startswith("VACUUM") for s in statements)
+            assert not any(s.startswith(("DROP", "CREATE")) for s in statements)
+            assert backend.get_embedding_count(model_name=MODEL_NAME) == 4000 - 2048
         finally:
             backend.emb_engine.dispose()
 
     @staticmethod
     def _size(backend: SQLiteVecEmbeddingBackend) -> int:
-        with backend.emb_engine.connect() as conn:
-            pages = int(conn.exec_driver_sql("PRAGMA page_count").scalar_one())
-            free = int(conn.exec_driver_sql("PRAGMA freelist_count").scalar_one())
-            size = int(conn.exec_driver_sql("PRAGMA page_size").scalar_one())
-        return (pages - free) * size
+        return database_size(backend.emb_engine)
 
 
 @pytest.mark.unit

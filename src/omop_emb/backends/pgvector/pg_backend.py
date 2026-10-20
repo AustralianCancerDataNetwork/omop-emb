@@ -24,6 +24,7 @@ except ImportError as _e:
     ) from _e
 
 from omop_emb.backends.base_backend import (
+    CompactionResult,
     ConceptEmbeddingRecord,
     EmbeddingBackend,
     writes,
@@ -221,7 +222,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         """Drop every physical index on the table, then create the HNSW index index_config describes.
 
         With ``vacuum``, ``VACUUM (ANALYZE)`` runs on the table afterwards so
-        dead space is reclaimed and the planner sees current statistics.
+        the planner sees current statistics. It does not shrink the table on
+        disk, see ``compact_storage``.
         """
         with self.emb_engine.begin() as conn:
             with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
@@ -236,15 +238,44 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             self._vacuum_analyze(model_record)
 
     def _vacuum_analyze(self, model_record: EmbeddingModelRecord) -> None:
-        """Run ``VACUUM (ANALYZE)`` on the model's table; PostgreSQL forbids it inside a transaction."""
-        table = qualified(
+        """Run ``VACUUM (ANALYZE)`` on the model's table."""
+        self._run_vacuum(model_record, "ANALYZE")
+
+    def _compact_storage_impl(self, *, model_record: EmbeddingModelRecord) -> CompactionResult:
+        """Run ``VACUUM FULL`` on the model's table, which rewrites it and rebuilds its indexes.
+
+        Plain ``VACUUM`` only makes dead space reusable, so the table keeps its
+        size on disk. ``VACUUM FULL`` holds an exclusive lock on the table.
+        """
+        size_before = self._relation_size(model_record)
+        self._run_vacuum(model_record, "FULL")
+        return CompactionResult(size_before, self._relation_size(model_record))
+
+    def _qualified_table(self, model_record: EmbeddingModelRecord) -> str:
+        return qualified(
             self.emb_engine,
             model_record.storage_identifier,
             physical_schema=physical_schema_of(self.emb_engine),
         )
+
+    def _run_vacuum(self, model_record: EmbeddingModelRecord, options: str) -> None:
+        """Run ``VACUUM`` with *options* on the model's table; PostgreSQL forbids it inside a transaction."""
+        table = self._qualified_table(model_record)
         with self.emb_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
-                conn.execute(text(f"VACUUM (ANALYZE) {table}"))
+                conn.execute(text(f"VACUUM ({options}) {table}"))
+
+    def _relation_size(self, model_record: EmbeddingModelRecord) -> int:
+        """Return the size in bytes of the model's table with its TOAST data and indexes."""
+        table = self._qualified_table(model_record)
+        with self.emb_engine.connect() as conn:
+            with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
+                return int(
+                    conn.execute(
+                        text("SELECT pg_total_relation_size(CAST(:table AS regclass))"),
+                        {"table": table},
+                    ).scalar_one()
+                )
 
     def physical_indexes(self, model_name: str) -> tuple[str, ...]:
         """Return existing indexes for this model's table without creating or
@@ -333,13 +364,13 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         """Set the HNSW scan parameters for the current transaction.
 
         With pgvector 0.8.0 or newer the index keeps scanning until ``k`` rows
-        pass the filter, so ``ef_search`` is used as configured. Filtered
-        queries scan in ``strict_order``, which returns rows in exact distance
-        order. Unfiltered queries use ``relaxed_order``, which recalls more
-        when ``k`` exceeds ``ef_search`` and is sorted by the caller. Older versions
-        stop at ``ef_search`` candidates, so it is raised to at least ``k``
-        (capped at 1000) and a filtered query logs a one-time warning that its
-        results may be incomplete.
+        pass the filter, so ``ef_search`` is used as configured. The scan runs
+        in ``relaxed_order`` and the caller sorts the rows, because
+        ``strict_order`` skips every row closer than the last one it returned
+        and so loses neighbours found in later batches. Older versions stop at
+        ``ef_search`` candidates, so it is raised to at least ``k`` (capped at
+        1000) and a filtered query logs a one-time warning that its results
+        may be incomplete.
 
         Parameters
         ----------
@@ -353,8 +384,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             Whether the query carries a concept filter.
         """
         if self._supports_iterative_scan:
-            scan_order = "strict_order" if filtered else "relaxed_order"
-            session.execute(text(f"SET LOCAL hnsw.iterative_scan = {scan_order}"))
+            session.execute(text("SET LOCAL hnsw.iterative_scan = relaxed_order"))
         else:
             ef_search = min(max(ef_search, k), self._MAX_EF_SEARCH)
             if filtered and not self._filtered_hnsw_warned:

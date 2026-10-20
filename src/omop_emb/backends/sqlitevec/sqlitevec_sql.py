@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import Optional, Sequence
 
@@ -189,7 +190,7 @@ def ddl_create_vec0(table_name: str, dimensions: int, metric_type: MetricType) -
 
 
 def vacuum_database(engine: Engine) -> None:
-    """Run ``VACUUM`` so the pages freed by a table recreation shrink the file.
+    """Run ``VACUUM`` so freed pages shrink the database file.
 
     Parameters
     ----------
@@ -199,6 +200,51 @@ def vacuum_database(engine: Engine) -> None:
     """
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         conn.exec_driver_sql("VACUUM")
+
+
+def database_size(engine: Engine) -> int:
+    """Return the size of the database in bytes (page count times page size)."""
+    with engine.connect() as conn:
+        pages = conn.exec_driver_sql("PRAGMA page_count").scalar_one()
+        page_size = conn.exec_driver_sql("PRAGMA page_size").scalar_one()
+    return int(pages * page_size)
+
+
+def freelist_pages(engine: Engine) -> int:
+    """Return the number of free pages a ``VACUUM`` would give back to the file system."""
+    with engine.connect() as conn:
+        return int(conn.exec_driver_sql("PRAGMA freelist_count").scalar_one())
+
+
+def reclaimable_chunks(engine: Engine, table_name: str) -> int:
+    """Return how many chunks recreating the vec0 table *table_name* would free.
+
+    Parameters
+    ----------
+    engine : Engine
+    table_name : str
+        Physical table name (the registry ``storage_identifier``).
+
+    Returns
+    -------
+    int
+        Chunks held now minus the chunks the live rows need.
+
+    Notes
+    -----
+    vec0 stores rows in fixed-size chunks and does not fill the free slots of
+    an earlier chunk, so deleted rows leave chunks partly empty. A chunk
+    becomes free for ``VACUUM`` only once every row in it is gone. The counts
+    come from vec0's ``_chunks`` and ``_rowids`` shadow tables.
+    """
+    with engine.connect() as conn:
+        chunks, chunk_size = conn.execute(
+            text(f'SELECT count(*), max(size) FROM "{table_name}_chunks"')
+        ).one()
+        rows = conn.execute(text(f'SELECT count(*) FROM "{table_name}_rowids"')).scalar_one()
+    if not chunks:
+        return 0
+    return int(chunks - math.ceil(rows / chunk_size))
 
 
 def ddl_drop_vec0(table_name: str) -> str:

@@ -134,8 +134,8 @@ def rebuild_index(
         typer.Option(
             "--vacuum/--no-vacuum",
             help="Run the backend's maintenance step after the rebuild: VACUUM (ANALYZE) on the table "
-            "for pgvector, VACUUM of the database file after a table recreation for sqlite-vec "
-            "(needs free disk space for a second copy of the data).",
+            "for pgvector to refresh planner statistics, VACUUM of the database file after a metric "
+            "change for sqlite-vec. Does not return space freed by deleted rows, see prune-embeddings --compact.",
             rich_help_panel="Index Options",
         ),
     ] = True,
@@ -288,14 +288,26 @@ def prune_embeddings(
             help="Delete the rows. Without it the command only reports what would be deleted.",
         ),
     ] = False,
+    compact: Annotated[
+        bool,
+        typer.Option(
+            "--compact",
+            help="After deleting, return the disk space held by deleted and rewritten rows. Needs --apply "
+            "and also runs when nothing is left to delete. Rewrites the model's storage: sqlite-vec needs "
+            "free disk space for a second copy, pgvector takes an exclusive lock on the table.",
+        ),
+    ] = False,
 ):
     """Delete stored embeddings of concepts that are no longer in scope.
 
     A row is pruned when its concept is not eligible under the scope (for
     example invalid, non-standard or outside the listed vocabularies and
-    domains) or no longer exists in the CDM. Run ``rebuild-index`` afterwards
-    on HNSW models to reclaim index space.
+    domains) or no longer exists in the CDM. Deleting leaves the space on disk
+    until ``--compact`` returns it. Without it, ``rebuild-index`` on an HNSW
+    model on pgvector still shrinks the index.
     """
+    if compact and not apply:
+        raise typer.BadParameter("--compact needs --apply.", param_hint="--compact")
     if provider_type is not None:
         model = canonical_model_name(provider_type, model)
 
@@ -320,11 +332,28 @@ def prune_embeddings(
 
         with open_vector_store_writer(resolved) as writer:
             prunable = _prune_candidates(writer, cdm_sessions, model, scope)
-            if not prunable:
-                return
-            deleted = writer.delete_embeddings(model_name=model, concept_ids=prunable)
-            writer.refresh_model_updated_at_timestamp(model_name=model)
-        typer.echo(f"Deleted {deleted:,} embeddings from '{model}'.")
+            if prunable:
+                deleted = writer.delete_embeddings(model_name=model, concept_ids=prunable)
+                writer.refresh_model_updated_at_timestamp(model_name=model)
+                typer.echo(f"Deleted {deleted:,} embeddings from '{model}'.")
+            if compact:
+                result = writer.compact_storage(model_name=model)
+                typer.echo(
+                    f"Compacted storage: {_format_bytes(result.size_before)} to "
+                    f"{_format_bytes(result.size_after)}."
+                )
+            elif prunable:
+                typer.echo("Pass --compact to return the freed disk space.")
+
+
+def _format_bytes(size: int) -> str:
+    """Return *size* in bytes as a short string such as ``84.8 MB``."""
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024:
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TB"
 
 
 def _prune_candidates(

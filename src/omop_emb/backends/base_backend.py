@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
 from typing import (
@@ -82,6 +83,27 @@ def writes[B: EmbeddingBackend, **P, R](method: Callable[Concatenate[B, P], R]) 
 # ---------------------------------------------------------------------------
 # Abstract backend
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CompactionResult:
+    """Storage size around a compaction, in bytes.
+
+    Attributes
+    ----------
+    size_before : int
+        Size before compaction: the database file on sqlite-vec, the model
+        table with its indexes on pgvector.
+    size_after : int
+        The same measure after compaction.
+    """
+
+    size_before: int
+    size_after: int
+
+    @property
+    def reclaimed(self) -> int:
+        return max(self.size_before - self.size_after, 0)
 
 
 class EmbeddingStoreReader(Protocol):
@@ -479,9 +501,10 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             FLAT models take the metric per query, so any metric is dropped.
         vacuum : bool
             Run the backend's maintenance step after the rebuild. pgvector
-            runs ``VACUUM (ANALYZE)`` on the table. sqlite-vec runs ``VACUUM``
-            on the database file after recreating a table, to return the
-            freed space. Default ``True``.
+            runs ``VACUUM (ANALYZE)`` on the table to refresh planner
+            statistics. sqlite-vec runs ``VACUUM`` on the database file after
+            recreating a table for a metric change. Neither returns space
+            freed by deleted rows, see ``compact_storage``. Default ``True``.
 
         Returns
         -------
@@ -806,6 +829,30 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
     ) -> int: ...
+
+    @writes
+    def compact_storage(self, *, model_name: str) -> CompactionResult:
+        """Return the disk space held by deleted or rewritten rows of a model.
+
+        Deleting rows, and upserting existing concepts, leaves space that the
+        backend does not hand back on its own. This is the only operation that
+        does. It rewrites the model's storage, so it needs free disk space for
+        a second copy and, on pgvector, an exclusive lock on the table.
+
+        Parameters
+        ----------
+        model_name : str
+            Canonical model name including tag.
+
+        Returns
+        -------
+        CompactionResult
+            Storage size before and after.
+        """
+        return self._compact_storage_impl(model_record=self._registered_record(model_name))
+
+    @abstractmethod
+    def _compact_storage_impl(self, *, model_record: EmbeddingModelRecord) -> CompactionResult: ...
 
     @writes
     def bulk_upsert_embeddings(

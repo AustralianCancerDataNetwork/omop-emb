@@ -23,16 +23,19 @@ except ImportError as _e:
 
 from omop_emb.config import BackendType, MetricType
 from omop_emb.backends.base_backend import (
+    CompactionResult,
     ConceptEmbeddingRecord,
     EmbeddingBackend,
 )
 from omop_emb.backends.index_config import FlatIndexConfig, IndexConfig
 from omop_emb.backends.sqlitevec.sqlitevec_sql import (
+    database_size,
     ddl_create_vec0,
     ddl_drop_vec0,
     declared_metric,
     dml_delete_rows,
     dml_upsert_rows,
+    freelist_pages,
     query_all_concept_ids,
     query_metadata_by_ids,
     query_concept_ids_matching_filter,
@@ -40,6 +43,7 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     query_embeddings_by_ids,
     query_has_any,
     query_knn_batch,
+    reclaimable_chunks,
     recreate_vec0,
     table_exists,
     sqlite_vec_table_descriptor,
@@ -89,10 +93,12 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     - Only the ``FLAT`` index type is supported. Each model is locked to one
       metric (L2, cosine or L1, cosine by default), declared on its vec0 table
       and recorded in the registry. ``rebuild_index`` recreates the table from
-      the stored vectors when the metric differs, the table was created
-      without a declared metric, or ``vacuum`` is set. Recreation compacts the
-      chunks that deleted rows left partly empty, which ``VACUUM`` alone does
-      not.
+      the stored vectors when the metric differs or the table was created
+      without a declared metric.
+    - vec0 stores rows in fixed-size chunks and does not fill the free slots
+      of an earlier chunk, so deleted or rewritten rows leave space that
+      ``VACUUM`` alone does not return. ``compact_storage`` recreates the
+      table to return it.
     - vec0 is a SQLite virtual table type the SQLAlchemy ORM cannot map, but
       it accepts ordinary SQL once created. ``_table_cache`` therefore stores
       a Core :class:`~sqlalchemy.Table` used for every query except the initial 
@@ -180,8 +186,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         metric_type = index_config.metric_type
         if metric_type is None:
             raise ValueError("sqlite-vec needs a metric_type for the table.")
-        metric_changed = declared_metric(self.emb_engine, model_record.storage_identifier) != metric_type
-        if metric_changed or vacuum:
+        if declared_metric(self.emb_engine, model_record.storage_identifier) != metric_type:
             count = recreate_vec0(
                 self.emb_engine,
                 model_record.storage_identifier,
@@ -193,13 +198,35 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
                 f"Recreated '{model_record.storage_identifier}' with the {metric_type.value} metric ({count} rows)."
             )
             if vacuum:
-                try:
-                    vacuum_database(self.emb_engine)
-                except OperationalError as exc:
-                    logger.warning(
-                        f"The table was recreated but VACUUM failed ({exc.orig}), so the database file "
-                        "keeps the freed space. Run VACUUM on it once enough disk space is available."
-                    )
+                self._vacuum_database()
+
+    def _compact_storage_impl(self, *, model_record: EmbeddingModelRecord) -> CompactionResult:
+        """Recreate the table when that frees chunks, then ``VACUUM`` the file if pages are free.
+
+        Deleted rows leave vec0 chunks partly empty and ``VACUUM`` alone does
+        not return them, so the table is recreated from its stored vectors.
+        Nothing is rewritten when the table has no chunk to free.
+        """
+        table_name = model_record.storage_identifier
+        metric_type = declared_metric(self.emb_engine, table_name)
+        if metric_type is None:
+            raise self._legacy_table_error(model_record)
+        size_before = database_size(self.emb_engine)
+        if reclaimable_chunks(self.emb_engine, table_name):
+            recreate_vec0(self.emb_engine, table_name, model_record.dimensions, metric_type)
+            self._table_cache.pop(table_name, None)
+        if freelist_pages(self.emb_engine):
+            self._vacuum_database()
+        return CompactionResult(size_before, database_size(self.emb_engine))
+
+    def _vacuum_database(self) -> None:
+        try:
+            vacuum_database(self.emb_engine)
+        except OperationalError as exc:
+            logger.warning(
+                f"VACUUM failed ({exc.orig}), so the database file keeps the freed space. "
+                "Run VACUUM on it once enough disk space is available."
+            )
 
     def physical_indexes(self, model_name: str) -> tuple[str, ...]:
         """vec0 is always a flat scan; there is no secondary physical index."""

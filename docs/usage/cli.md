@@ -203,7 +203,7 @@ omop-emb maintenance rebuild-index --model <CANONICAL_NAME> [OPTIONS]
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
-| `--vacuum` / `--no-vacuum` | `--vacuum` | Maintenance after the rebuild. pgvector runs `VACUUM (ANALYZE)` on the table, which reclaims dead space and refreshes planner statistics. sqlite-vec recreates the table from the stored vectors, which compacts the space deleted rows left behind, and then runs `VACUUM` on the database file. Both need free disk space for a second copy of the data. Use `--no-vacuum` to skip it. |
+| `--vacuum` / `--no-vacuum` | `--vacuum` | Maintenance after the rebuild. pgvector runs `VACUUM (ANALYZE)` on the table to refresh planner statistics. sqlite-vec runs `VACUUM` on the database file after a metric change, which needs free disk space for a second copy of the data. Neither returns the space deleted rows left behind, see [`prune-embeddings --compact`](#prune-embeddings). Use `--no-vacuum` to skip it. |
 
 | Option | Short | Description |
 |---|---|---|
@@ -241,6 +241,7 @@ omop-emb maintenance prune-embeddings --model <NAME> [OPTIONS]
 | `--model` | `-m` | **required** | Canonical model name. |
 | `--provider-type` | | `None` | Provider used to canonicalize the model name when needed. |
 | `--apply` | | `False` | Delete the rows. Without it the command is a dry run. |
+| `--compact` | | `False` | After deleting, return the disk space held by deleted and rewritten rows. Needs `--apply`. |
 | `--verbose` | `-v` | | Increase log verbosity. |
 
 **Scope**
@@ -253,7 +254,12 @@ omop-emb maintenance prune-embeddings --model <NAME> [OPTIONS]
 | `--domain` | `None` | Keep only these domains (repeatable). |
 
 !!! note "Reclaiming space"
-    Deleted rows leave dead space in the table and, on pgvector HNSW models, in the index. Run `maintenance rebuild-index` afterwards to reclaim it.
+    Deleting rows does not shrink the store on disk. `--compact` rewrites the model's storage to return the space, and also runs when nothing is left to prune, so it can follow earlier prunes or re-embedding (sqlite-vec upserts delete and insert, which leaves the same gaps).
+
+    - sqlite-vec recreates the table from its stored vectors when that frees chunks, then runs `VACUUM` on the database file. It needs free disk space for a second copy, and does nothing when no chunk can be freed.
+    - pgvector runs `VACUUM FULL` on the model's table, which rewrites it and rebuilds its indexes and holds an exclusive lock on it while it runs. Plain `VACUUM` only makes dead space reusable.
+
+    Without `--compact`, `rebuild-index` still shrinks the HNSW index of a pgvector model but not its table.
 
 ---
 

@@ -21,7 +21,7 @@ from sqlalchemy import event as sa_event
 from oa_configurator import Role, physical_schema_of
 from oa_configurator.testing import resolve_with_role_schemas, scoped_test_schema
 
-from omop_emb.backends.base_backend import _open_writer
+from omop_emb.backends.base_backend import ConceptEmbeddingRecord, _open_writer
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 from omop_emb.config import IndexType, MetricType
@@ -37,6 +37,7 @@ from .conftest import (
     MODEL_NAME,
     PROVIDER_TYPE,
     QUERY_EMBEDDING,
+    populate,
     register_flat,
     upsert_all,
 )
@@ -192,6 +193,23 @@ class TestPGVectorHNSWBackend:
         assert sum(s.startswith("vacuum (analyze)") for s in statements) == expected
         assert pg_backend.get_registered_model(model_name=MODEL_NAME).index_config == self.HNSW_CONFIG
 
+    def test_compact_storage_shrinks_the_table_after_deletes(self, pg_backend: PGVectorEmbeddingBackend):
+        """Plain VACUUM leaves the table size alone, VACUUM FULL gives the deleted rows' space back."""
+        ids = list(range(1, 3001))
+        populate(
+            pg_backend,
+            [ConceptEmbeddingRecord(i, "Condition", "SNOMED", True, True) for i in ids],
+            np.random.default_rng(0).normal(size=(len(ids), EMBEDDING_DIM)).astype(np.float32),
+        )
+        pg_backend.delete_embeddings(model_name=MODEL_NAME, concept_ids=ids[:2700])
+
+        with captured_statements(pg_backend.emb_engine) as statements:
+            result = pg_backend.compact_storage(model_name=MODEL_NAME)
+
+        assert any(s.startswith("vacuum (full)") for s in statements)
+        assert result.size_after < result.size_before
+        assert pg_backend.get_embedding_count(model_name=MODEL_NAME) == 300
+
     def test_query_applies_registry_ef_search_to_its_transaction_only(
         self, pg_backend: PGVectorEmbeddingBackend, pg_db
     ):
@@ -230,8 +248,9 @@ class TestPGVectorHNSWBackend:
             k=k,
         )[0]
 
-    def test_iterative_scan_is_enabled_and_results_are_sorted(
-        self, pg_backend: PGVectorEmbeddingBackend
+    @pytest.mark.parametrize("filtered", [False, True])
+    def test_iterative_scan_is_relaxed_and_results_are_sorted(
+        self, pg_backend: PGVectorEmbeddingBackend, filtered: bool
     ):
         """Where pgvector supports it, the HNSW scan is iterative and rows come back ordered by similarity."""
         if not pg_backend._supports_iterative_scan:
@@ -240,25 +259,12 @@ class TestPGVectorHNSWBackend:
         pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
 
         with captured_statements(pg_backend.emb_engine) as statements:
-            matches = self._hnsw_query(pg_backend, k=4, filtered=False)
+            matches = self._hnsw_query(pg_backend, k=2, filtered=filtered)
 
         assert "set local hnsw.iterative_scan = relaxed_order" in statements
+        assert "set local hnsw.iterative_scan = strict_order" not in statements
         similarities = [m.similarity for m in matches]
-        assert len(matches) == 4
-        assert similarities == sorted(similarities, reverse=True)
-
-    def test_filtered_query_scans_in_strict_order(self, pg_backend: PGVectorEmbeddingBackend):
-        if not pg_backend._supports_iterative_scan:
-            pytest.skip("pgvector below 0.8.0")
-        upsert_all(pg_backend)
-        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
-
-        with captured_statements(pg_backend.emb_engine) as statements:
-            matches = self._hnsw_query(pg_backend, k=2, filtered=True)
-
-        assert "set local hnsw.iterative_scan = strict_order" in statements
-        assert "set local hnsw.iterative_scan = relaxed_order" not in statements
-        similarities = [m.similarity for m in matches]
+        assert len(matches) == 2
         assert similarities == sorted(similarities, reverse=True)
 
     def test_filtered_query_returns_k_rows_after_a_smaller_one(

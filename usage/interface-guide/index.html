@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://AustralianCancerDataNetwork.github.io/omop-emb/usage/interface-guide/">
       
       
-        <link rel="prev" href="../backend-selection/">
+        <link rel="prev" href="../performance/">
       
       
         <link rel="next" href="../asymmetric-embeddings/">
@@ -435,6 +435,34 @@
     
   
     Embedding Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Guide
   
 
     
@@ -1234,7 +1262,7 @@
 </tr>
 </tbody>
 </table>
-<p><code>EmbeddingStoreReader</code> is a <code>Protocol</code> listing every read: registry lookups (<code>get_registered_model()</code>, <code>get_registered_models()</code>), stored data (<code>iter_stored_embeddings()</code>, <code>has_any_embeddings()</code>, <code>get_stored_concept_ids()</code>, <code>get_embeddings_by_concept_ids()</code>, <code>get_concept_filter_metadata()</code>, the counts), <code>get_nearest_concepts()</code>, and index inspection (<code>physical_indexes()</code>, <code>drop_index_sql()</code>). Both backends satisfy it, and <code>EmbeddingReaderInterface</code>, <code>export_bundle()</code> and <code>FAISSCache.build_from_backend()</code> accept it. Only <code>get_nearest_concepts()</code> takes a <code>metric_type</code>; nothing stored depends on one. A store that was never set up reports an empty registry instead of being created by being looked at. On pgvector the <code>vector</code> extension must already exist in the database; the writer creates it.</p>
+<p><code>EmbeddingStoreReader</code> is a <code>Protocol</code> listing every read: registry lookups (<code>get_registered_model()</code>, <code>get_registered_models()</code>), stored data (<code>iter_stored_embeddings()</code>, <code>has_any_embeddings()</code>, <code>get_stored_concept_ids()</code>, <code>get_embeddings_by_concept_ids()</code>, <code>get_concept_filter_metadata()</code>, the counts), <code>get_nearest_concepts()</code>, and index inspection (<code>physical_indexes()</code>, <code>drop_index_sql()</code>). Both backends satisfy it, and <code>EmbeddingReaderInterface</code>, <code>export_bundle()</code> and <code>FAISSCache.build_from_backend()</code> accept it. Only <code>get_nearest_concepts()</code> takes a <code>metric_type</code>; stored vectors do not depend on one, but a model locked to a metric accepts queries with that metric only. A store that was never set up reports an empty registry instead of being created by being looked at. On pgvector the <code>vector</code> extension must already exist in the database; the writer creates it.</p>
 <hr />
 <h2 id="embeddingwriterinterface">EmbeddingWriterInterface</h2>
 <h3 id="creating-the-interface">Creating the interface</h3>
@@ -1329,6 +1357,7 @@
 <span class="p">)</span>
 <span class="c1"># results: tuple[tuple[NearestConceptMatch, ...], ...], one inner tuple per query row</span>
 </code></pre></div>
+<p>Embedding arrays are <code>EmbeddingArray</code>s: 2-D arrays of shape <code>(N, D)</code>, with one vector per row and <code>D</code> the model's dimensionality. Every entry point (upsert, backend and FAISS queries, embedding-model output) converts them to float32 and raises <code>ValueError</code> for a 1-D array, a wrong width, or NaN or infinite values. A single query vector must be passed as a one-row matrix, for example <code>vector[None, :]</code>.</p>
 <h3 id="query-similar-concepts">Query similar concepts</h3>
 <p>Find neighbours of concepts that are already embedded, without fetching and
 passing a raw vector yourself. The query concept is excluded from its own

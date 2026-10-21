@@ -16,7 +16,7 @@
         <link rel="prev" href="../configuration/">
       
       
-        <link rel="next" href="../interface-guide/">
+        <link rel="next" href="../performance/">
       
       
         
@@ -574,6 +574,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../interface-guide/" class="md-nav__link">
         
   
@@ -860,7 +888,7 @@
 <span class="n">backend_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;pgvector&quot;</span><span class="w">    </span><span class="c1"># or &quot;sqlitevec&quot;</span>
 <span class="n">database</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;emb_db&quot;</span>
 </code></pre></div>
-<p>See <a href="../configuration/">Configuration Reference</a> for the full field list, both backends' setup.</p>
+<p>See <a href="../configuration/">Configuration Reference</a> for the full field list, both backends' setup, and the <a href="../performance/">Performance Guide</a> for which backend to pick at which size and what to tune.</p>
 <h2 id="index-types">Index types</h2>
 <p>Each primary backend supports index types controlled by an <code>IndexConfig</code> object.</p>
 <div class="admonition important">
@@ -930,7 +958,15 @@ omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index
 </code></pre></div>
 <div class="admonition info">
 <p class="admonition-title">pgvector HNSW</p>
-<p>HNSW is a SQL <code>CREATE INDEX USING hnsw</code> object built by <code>rebuild_index</code>. Without it, pgvector falls back to a sequential scan automatically. <code>ef_search</code> is read from the registry and applied to each query's transaction. A rebuild leaves exactly the index it describes: switching metric or reverting to FLAT drops the previous HNSW index.</p>
+<p>HNSW is a SQL <code>CREATE INDEX USING hnsw</code> object built by <code>rebuild_index</code>. Without it, pgvector falls back to a sequential scan automatically. <code>ef_search</code> is read from the registry and applied to each query's transaction. A rebuild leaves exactly the index it describes: switching metric or reverting to FLAT drops the previous HNSW index. Afterwards <code>rebuild_index</code> runs <code>VACUUM (ANALYZE)</code> on the table by default, which refreshes the statistics the planner uses to choose between the index and an exact scan. On a large table this can take a while; pass <code>vacuum=False</code> (CLI: <code>--no-vacuum</code>) to skip it.</p>
+</div>
+<div class="admonition info">
+<p class="admonition-title">pgvector HNSW and filtered queries</p>
+<p>HNSW applies a concept filter after the index returns its candidates, so a selective filter can leave fewer than <code>k</code> rows. With pgvector 0.8.0 or newer, <code>omop-emb</code> sets <code>hnsw.iterative_scan</code> for each query, which keeps scanning the index until <code>k</code> rows pass the filter. The scan runs in <code>relaxed_order</code> and the rows are sorted by distance afterwards, because <code>strict_order</code> skips every row closer than the last one it returned and so loses neighbours found in later batches. Older pgvector versions have no iterative scan: <code>ef_search</code> is raised to at least <code>k</code> (at most 1000, the pgvector limit) and a filtered query logs a one-time warning, since its results can still be incomplete. Upgrade the extension to fix this. For very selective filters at a low <code>ef_search</code>, the planner may choose an exact scan over the index.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">HNSW builds in containers</p>
+<p>A parallel HNSW build can fail with <code>could not resize shared memory segment ... No space left on device</code> when the container's <code>/dev/shm</code> is small. Either enlarge <code>/dev/shm</code> (for example <code>shm_size</code> in Docker Compose) or set <code>max_parallel_maintenance_workers = 0</code> on the server, which builds serially and takes longer.</p>
 </div>
 <div class="admonition warning">
 <p class="admonition-title">pgvector dimension limit</p>
@@ -964,7 +1000,21 @@ omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index
 </tr>
 </tbody>
 </table>
-<p>Stored vectors carry no metric; only queries do. For FLAT models any supported metric can be used per query. For HNSW models the metric is set by <code>rebuild_index</code> and queries must use it.</p>
+<p>Stored vectors carry no metric. A model carries one only when its backend needs it, and queries must then use exactly that metric.</p>
+<ul>
+<li><strong>pgvector FLAT</strong> computes the distance from the raw vectors, so queries choose any supported metric. A metric given for a FLAT model is ignored.</li>
+<li><strong>pgvector HNSW</strong> is locked to the metric it was built with. Change it with <code>rebuild_index</code>.</li>
+<li><strong>sqlite-vec</strong> declares the metric on the table, because its native <code>MATCH</code> search uses it. Every model is locked to one metric, cosine unless given <code>FlatIndexConfig(metric_type=...)</code>. Querying with another metric raises.</li>
+</ul>
+<div class="admonition important">
+<p class="admonition-title">Changing the metric of a sqlite-vec model</p>
+<p><code>rebuild_index</code> with another metric recreates the table from the stored vectors, so nothing is re-embedded:</p>
+<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index<span class="w"> </span>--model<span class="w"> </span>&lt;canonical-model-name&gt;<span class="w"> </span>--metric-type<span class="w"> </span>l2
+</code></pre></div>
+<p>Without <code>--metric-type</code> the metric is cosine. <code>MATCH</code> returns at most 4096 results per query, so a larger <code>k</code> raises.</p>
+<p>A table created by an earlier version has no declared metric and raises <code>LegacyVectorTableError</code> when it is first used. The same command without <code>--metric-type</code> recreates it with cosine.</p>
+<p>Deleted rows leave space that <code>VACUUM</code> alone does not return, because vec0 stores rows in chunks and does not refill the free slots of an earlier one. <code>maintenance prune-embeddings --apply --compact</code> recreates the table to return it.</p>
+</div>
 
 
 

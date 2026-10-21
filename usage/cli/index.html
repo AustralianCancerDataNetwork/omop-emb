@@ -453,6 +453,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../interface-guide/" class="md-nav__link">
         
   
@@ -679,6 +707,17 @@
     <span class="md-ellipsis">
       
         delete-model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prune-embeddings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        prune-embeddings
       
     </span>
   </a>
@@ -933,6 +972,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#prune-embeddings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        prune-embeddings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#export" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1128,7 +1178,7 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
   <code>pip install "omop-emb[pgvector]"</code>.</li>
 <li><strong>Configured via oa-configurator</strong>: <code>omop-config configure omop_emb</code> (see <a href="../../getting-started/configuration/">Getting Started: Configuration</a>). Resolves <code>cdm_db</code>, <code>embedding_model_name</code>, and <code>vector_store_name</code>.</li>
 <li><strong>OMOP CDM</strong> (<code>cdm_db</code>): required only for concept ingestion
-  (<code>add-embeddings</code>, <code>add-embeddings-with-index</code>) and for enriching <code>search</code> results with concept names. Not required for <code>list-models</code>, <code>rebuild-index</code>, <code>delete-model</code>, or diagnostics.</li>
+  (<code>add-embeddings</code>, <code>add-embeddings-with-index</code>), for <code>prune-embeddings</code>, and for enriching <code>search</code> results with concept names. Not required for <code>list-models</code>, <code>rebuild-index</code>, <code>delete-model</code>, or diagnostics.</li>
 </ul>
 <hr />
 <h2 id="embeddings-group"><code>embeddings</code> group</h2>
@@ -1179,6 +1229,12 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 <td>Embed only standard concepts (<code>standard_concept = 'S'</code>).</td>
 </tr>
 <tr>
+<td><code>--include-invalid</code></td>
+<td></td>
+<td><code>False</code></td>
+<td>Also embed invalid concepts (<code>invalid_reason</code> of <code>D</code> or <code>U</code>). They are skipped by default.</td>
+</tr>
+<tr>
 <td><code>--vocabulary</code></td>
 <td></td>
 <td><code>None</code></td>
@@ -1195,6 +1251,23 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 <td><code>-n</code></td>
 <td><code>None</code></td>
 <td>Cap on total concepts processed (useful for testing).</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Index Options</strong></p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--metric-type</code></td>
+<td><code>cosine</code></td>
+<td>Metric of a new model's table. Locked in for <code>flat</code> on sqlite-vec; ignored for <code>flat</code> on pgvector and for a model that is already registered. See <a href="../backend-selection/#metrics">Metrics</a>.</td>
 </tr>
 </tbody>
 </table>
@@ -1219,7 +1292,7 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 <p>Ingest embeddings and immediately build an index in one step. Equivalent to running <code>add-embeddings</code> followed by <code>create-index</code>.</p>
 <div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>add-embeddings-with-index<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
-<p>Accepts all options from <code>add-embeddings</code>, plus:</p>
+<p>Accepts all options from <code>add-embeddings</code> (its <code>--metric-type</code> also applies to the index), plus:</p>
 <p><strong>Index Options</strong></p>
 <table>
 <thead>
@@ -1234,11 +1307,6 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 <td><code>--index-type</code></td>
 <td><code>flat</code></td>
 <td>Index to build after ingestion (<code>flat</code> or <code>hnsw</code>).</td>
-</tr>
-<tr>
-<td><code>--metric-type</code></td>
-<td><code>cosine</code></td>
-<td>Distance metric. Required and locked in for <code>hnsw</code>.</td>
 </tr>
 <tr>
 <td><code>--index-hnsw-num-neighbors</code></td>
@@ -1299,7 +1367,7 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 <tr>
 <td><code>--metric-type</code></td>
 <td><code>cosine</code></td>
-<td>Distance metric. Required and locked in for <code>hnsw</code>.</td>
+<td>Distance metric. Locked in for <code>hnsw</code> and for <code>flat</code> on sqlite-vec; ignored for <code>flat</code> on pgvector. See <a href="../backend-selection/#metrics">Metrics</a>.</td>
 </tr>
 <tr>
 <td><code>--index-hnsw-num-neighbors</code></td>
@@ -1528,7 +1596,7 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 <tr>
 <td><code>--metric-type</code></td>
 <td><code>cosine</code></td>
-<td>Distance metric (required and locked in for <code>hnsw</code>).</td>
+<td>Distance metric. Locked in for <code>hnsw</code> and for <code>flat</code> on sqlite-vec, where another metric recreates the table from the stored vectors. Ignored for <code>flat</code> on pgvector. See <a href="../backend-selection/#metrics">Metrics</a>.</td>
 </tr>
 <tr>
 <td><code>--index-hnsw-num-neighbors</code></td>
@@ -1544,6 +1612,11 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 <td><code>--index-ef-construction</code></td>
 <td><code>None</code></td>
 <td>HNSW build quality parameter.</td>
+</tr>
+<tr>
+<td><code>--vacuum</code> / <code>--no-vacuum</code></td>
+<td><code>--vacuum</code></td>
+<td>Maintenance after the rebuild. pgvector runs <code>VACUUM (ANALYZE)</code> on the table to refresh planner statistics. sqlite-vec runs <code>VACUUM</code> on the database file after a metric change, which needs free disk space for a second copy of the data. Neither returns the space deleted rows left behind, see <a href="#prune-embeddings"><code>prune-embeddings --compact</code></a>. Use <code>--no-vacuum</code> to skip it.</td>
 </tr>
 </tbody>
 </table>
@@ -1605,9 +1678,97 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 </tbody>
 </table>
 <hr />
+<h3 id="prune-embeddings"><code>prune-embeddings</code></h3>
+<p>Remove stored embeddings whose concept is outside the given scope or no longer exists in the CDM. By default the scope is all valid concepts, so invalid concepts embedded earlier are removed. Without <code>--apply</code> the command only reports what would be deleted. Applying a prune also marks the model as updated, so FAISS caches built before it report as stale.</p>
+<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>maintenance<span class="w"> </span>prune-embeddings<span class="w"> </span>--model<span class="w"> </span>&lt;NAME&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Short</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--model</code></td>
+<td><code>-m</code></td>
+<td><strong>required</strong></td>
+<td>Canonical model name.</td>
+</tr>
+<tr>
+<td><code>--provider-type</code></td>
+<td></td>
+<td><code>None</code></td>
+<td>Provider used to canonicalize the model name when needed.</td>
+</tr>
+<tr>
+<td><code>--apply</code></td>
+<td></td>
+<td><code>False</code></td>
+<td>Delete the rows. Without it the command is a dry run.</td>
+</tr>
+<tr>
+<td><code>--compact</code></td>
+<td></td>
+<td><code>False</code></td>
+<td>After deleting, return the disk space held by deleted and rewritten rows. Needs <code>--apply</code>.</td>
+</tr>
+<tr>
+<td><code>--verbose</code></td>
+<td><code>-v</code></td>
+<td></td>
+<td>Increase log verbosity.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Scope</strong></p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--include-invalid</code></td>
+<td><code>False</code></td>
+<td>Keep invalid concepts instead of pruning them.</td>
+</tr>
+<tr>
+<td><code>--standard-only</code></td>
+<td><code>False</code></td>
+<td>Keep only standard concepts.</td>
+</tr>
+<tr>
+<td><code>--vocabulary</code></td>
+<td><code>None</code></td>
+<td>Keep only these vocabularies (repeatable).</td>
+</tr>
+<tr>
+<td><code>--domain</code></td>
+<td><code>None</code></td>
+<td>Keep only these domains (repeatable).</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Reclaiming space</p>
+<p>Deleting rows does not shrink the store on disk. <code>--compact</code> rewrites the model's storage to return the space, and also runs when nothing is left to prune, so it can follow earlier prunes or re-embedding (sqlite-vec upserts delete and insert, which leaves the same gaps).</p>
+<ul>
+<li>sqlite-vec recreates the table from its stored vectors when that frees chunks, then runs <code>VACUUM</code> on the database file. It needs free disk space for a second copy, and does nothing when no chunk can be freed.</li>
+<li>pgvector runs <code>VACUUM FULL</code> on the model's table, which rewrites it and rebuilds its indexes and holds an exclusive lock on it while it runs. Plain <code>VACUUM</code> only makes dead space reusable.</li>
+</ul>
+<p>Without <code>--compact</code>, <code>rebuild-index</code> still shrinks the HNSW index of a pgvector model but not its table.</p>
+</div>
+<hr />
 <h3 id="export"><code>export</code></h3>
 <p>Stream all embeddings for one model from the primary backend into a single, self-describing HDF5 bundle (raw vectors, never normalized, plus concept metadata). This is the lossless source of truth for backup/restore and for migrating raw embeddings to another backend (see <code>import</code>). Peak memory stays close to one batch's worth regardless of table size.</p>
-<p>Stored vectors carry no metric, so the bundle has none; an HNSW index's metric travels inside its <code>index_config</code>. Bundles are written as schema version 2. Version 1 bundles, which also stored a <code>metric_type</code>, still import. Export opens the store read-only. The output filename is derived from the model's storage identifier, not a literal path you choose.</p>
+<p>Stored vectors carry no metric. A model locked to one (HNSW, or sqlite-vec) carries it inside its <code>index_config</code>, and a backend that does not lock FLAT models (pgvector) drops it on import. Bundles are written as schema version 2. Version 1 bundles, which also stored a <code>metric_type</code>, still import. Export opens the store read-only. The output filename is derived from the model's storage identifier, not a literal path you choose.</p>
 <div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>maintenance<span class="w"> </span><span class="nb">export</span><span class="w"> </span>--model<span class="w"> </span>&lt;NAME&gt;<span class="w"> </span>--output-dir<span class="w"> </span>&lt;DIR&gt;<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div>
 <table>

@@ -22,7 +22,7 @@ class PopulationScope:
     """The exact CDM predicate used by a population plan."""
 
     standard_only: bool = False
-    valid_only: bool = False
+    valid_only: bool = True
     vocabularies: tuple[str, ...] = ()
     domains: tuple[str, ...] = ()
 
@@ -48,6 +48,7 @@ class VocabularyPopulationPlan:
     stale_ids: frozenset[int]
     metadata_changed_ids: frozenset[int]
     changed_source_text_ids: frozenset[int] = frozenset()
+    out_of_scope_ids: frozenset[int] = frozenset()
 
     @property
     def pending_ids(self) -> frozenset[int]:
@@ -91,6 +92,15 @@ class EmbeddingPopulationPlan:
         return _union(row.changed_source_text_ids for row in self.rows)
 
     @property
+    def out_of_scope_ids(self) -> frozenset[int]:
+        return _union(row.out_of_scope_ids for row in self.rows)
+
+    @property
+    def prunable_ids(self) -> frozenset[int]:
+        """Stored IDs that are stale or outside the scope."""
+        return self.stale_ids | self.out_of_scope_ids
+
+    @property
     def pending_ids(self) -> frozenset[int]:
         return (
             self.missing_ids | self.metadata_changed_ids | self.changed_source_text_ids
@@ -104,6 +114,7 @@ class _VocabularyAccumulator:
     missing: set[int] = field(default_factory=set)
     stale: set[int] = field(default_factory=set)
     metadata_changed: set[int] = field(default_factory=set)
+    out_of_scope: set[int] = field(default_factory=set)
 
     def freeze(self, vocabulary: str) -> VocabularyPopulationPlan:
         return VocabularyPopulationPlan(
@@ -113,6 +124,7 @@ class _VocabularyAccumulator:
             missing_ids=frozenset(self.missing),
             stale_ids=frozenset(self.stale),
             metadata_changed_ids=frozenset(self.metadata_changed),
+            out_of_scope_ids=frozenset(self.out_of_scope),
         )
 
 
@@ -154,14 +166,19 @@ def plan_population(
         else:
             accumulator.metadata_changed.add(concept_id)
 
+    in_cdm = _existing_concept_ids(
+        cdm_session_factory,
+        [cid for cid, item in stored.items() if _stored_matches_scope(item, scope)],
+    )
     for concept_id, item in stored.items():
-        if not _stored_matches_scope(item, scope):
-            continue
         accumulator = accumulators.setdefault(
             item.vocabulary_id,
             _VocabularyAccumulator(),
         )
-        accumulator.stale.add(concept_id)
+        if concept_id in in_cdm or not _stored_matches_scope(item, scope):
+            accumulator.out_of_scope.add(concept_id)
+        else:
+            accumulator.stale.add(concept_id)
 
     return EmbeddingPopulationPlan(
         model_name=model_name,
@@ -194,6 +211,26 @@ def _iter_current_concepts(
     )
     with cdm_session_factory() as session:
         yield from session.execute(streamed(statement, batch_size))
+
+
+def _existing_concept_ids(
+    cdm_session_factory: CDMSessionFactory,
+    concept_ids: list[int],
+    chunk_size: int = 5_000,
+) -> set[int]:
+    """Return the subset of ``concept_ids`` that exist in the CDM, whatever their scope."""
+    found: set[int] = set()
+    if not concept_ids:
+        return found
+    with cdm_session_factory() as session:
+        for start in range(0, len(concept_ids), chunk_size):
+            chunk = concept_ids[start : start + chunk_size]
+            found.update(
+                session.execute(
+                    select(Concept.concept_id).where(Concept.concept_id.in_(chunk))
+                ).scalars()
+            )
+    return found
 
 
 def _stored_matches_scope(item: ConceptEmbeddingRecord, scope: PopulationScope) -> bool:

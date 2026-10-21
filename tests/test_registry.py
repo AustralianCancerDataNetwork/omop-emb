@@ -117,6 +117,17 @@ class TestRegistryManager:
         assert r_hnsw.index_type == IndexType.HNSW
         assert r_hnsw.metric_type == MetricType.COSINE
 
+    def test_flat_model_can_carry_a_metric(self, registry: RegistryManager):
+        record = registry.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FlatIndexConfig(metric_type=MetricType.L1),
+            dimensions=EMBEDDING_DIM,
+        )
+        assert record.index_type == IndexType.FLAT
+        assert record.metric_type == MetricType.L1
+        assert registry.get_registered_models(model_name=MODEL_NAME)[0].metric_type == MetricType.L1
+
     def test_storage_name_excludes_index_type(self, registry: RegistryManager):
         record = registry.register_model(
             model_name=MODEL_NAME,

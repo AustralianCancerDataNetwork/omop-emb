@@ -128,6 +128,16 @@ class TestGenerateEmbeddings:
         with pytest.raises(RuntimeError, match="2-D"):
             EmbeddingReaderInterface.generate_embeddings(backend, "hello", role=EmbeddingRole.DOCUMENT)
 
+    def test_raises_on_non_finite_result(self):
+        backend = _mock_model_backend(vectors=[[0.1, float("nan")]])
+        with pytest.raises(RuntimeError, match="NaN or infinite"):
+            EmbeddingReaderInterface.generate_embeddings(backend, "hello", role=EmbeddingRole.DOCUMENT)
+
+    def test_returns_float32(self):
+        backend = _mock_model_backend(vectors=[[0.1, 0.2]])
+        result = EmbeddingReaderInterface.generate_embeddings(backend, "hello", role=EmbeddingRole.DOCUMENT)
+        assert result.dtype == np.float32
+
     def test_raises_on_row_count_mismatch(self):
         backend = _mock_model_backend(vectors=[[0.1, 0.2]])  # 1 row for 2 texts
         with pytest.raises(RuntimeError, match="Expected 2 embeddings"):
@@ -275,3 +285,21 @@ def test_population_batches_include_missing_and_metadata_changed_concepts():
     )
 
     assert tuple(tuple(batch) for batch in batches) == ((2, 3),)
+
+
+@pytest.mark.unit
+def test_delete_concept_embeddings_deletes_then_marks_the_model_updated():
+    storage = _mock_storage_backend()
+    storage.delete_embeddings.return_value = 2
+    with patch("omop_emb.interface.build_model_backend_from_resolved") as mock_build:
+        mock_build.return_value = _mock_model_backend(model="model:v1")
+        writer = EmbeddingWriterInterface(
+            backend=storage,
+            metric_type=MetricType.COSINE,
+            resolved_model=_make_resolved_model(),
+        )
+
+    assert writer.delete_concept_embeddings([1, 2]) == 2
+
+    storage.delete_embeddings.assert_called_once_with(model_name="model:v1", concept_ids=[1, 2])
+    storage.refresh_model_updated_at_timestamp.assert_called_once_with(model_name="model:v1")

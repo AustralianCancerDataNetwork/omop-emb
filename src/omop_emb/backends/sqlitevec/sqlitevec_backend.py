@@ -9,10 +9,10 @@ from __future__ import annotations
 import logging
 from typing import Mapping, Optional, Sequence, Tuple
 
-import numpy as np
 from numpy import ndarray
 from oa_configurator import Dialect
 from sqlalchemy import Engine, MetaData, Table, text
+from sqlalchemy.exc import OperationalError
 
 try:
     import sqlite_vec
@@ -23,26 +23,36 @@ except ImportError as _e:
 
 from omop_emb.config import BackendType, MetricType
 from omop_emb.backends.base_backend import (
+    CompactionResult,
     ConceptEmbeddingRecord,
     EmbeddingBackend,
 )
 from omop_emb.backends.index_config import FlatIndexConfig, IndexConfig
 from omop_emb.backends.sqlitevec.sqlitevec_sql import (
+    database_size,
     ddl_create_vec0,
     ddl_drop_vec0,
+    declared_metric,
+    dml_delete_rows,
     dml_upsert_rows,
+    freelist_pages,
     query_all_concept_ids,
-    query_concept_filter_metadata,
+    query_metadata_by_ids,
     query_concept_ids_matching_filter,
     query_embedding_count_by_vocabulary,
     query_embeddings_by_ids,
     query_has_any,
     query_knn_batch,
+    reclaimable_chunks,
+    recreate_vec0,
     table_exists,
     sqlite_vec_table_descriptor,
+    vacuum_database,
 )
 from omop_emb.model_registry import EmbeddingModelRecord
+from omop_emb.utils.errors import LegacyVectorTableError
 from omop_emb.utils.embedding_utils import (
+    EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
     get_similarity_from_distance,
@@ -80,8 +90,15 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
 
     Notes
     -----
-    - Only ``FLAT`` index type is supported. Supports ``L2``, ``COSINE``, and
-    ``L1`` distance metrics.
+    - Only the ``FLAT`` index type is supported. Each model is locked to one
+      metric (L2, cosine or L1, cosine by default), declared on its vec0 table
+      and recorded in the registry. ``rebuild_index`` recreates the table from
+      the stored vectors when the metric differs or the table was created
+      without a declared metric.
+    - vec0 stores rows in fixed-size chunks and does not fill the free slots
+      of an earlier chunk, so deleted or rewritten rows leave space that
+      ``VACUUM`` alone does not return. ``compact_storage`` recreates the
+      table to return it.
     - vec0 is a SQLite virtual table type the SQLAlchemy ORM cannot map, but
       it accepts ordinary SQL once created. ``_table_cache`` therefore stores
       a Core :class:`~sqlalchemy.Table` used for every query except the initial 
@@ -109,6 +126,10 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     def dialect(self) -> str:
         return Dialect.SQLITE
 
+    @property
+    def default_flat_metric(self) -> MetricType:
+        return MetricType.COSINE
+
     # ------------------------------------------------------------------
     # Storage table management
     # ------------------------------------------------------------------
@@ -116,13 +137,32 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     def _storage_table_exists(self, model_record: EmbeddingModelRecord) -> bool:
         return table_exists(self.emb_engine, model_record.storage_identifier)
 
+    def _legacy_table_error(self, model_record: EmbeddingModelRecord) -> LegacyVectorTableError:
+        declared = declared_metric(self.emb_engine, model_record.storage_identifier)
+        registered = model_record.metric_type
+        return LegacyVectorTableError(
+            f"The sqlite-vec table '{model_record.storage_identifier}' for model "
+            f"'{model_record.model_name}' declares metric '{declared.value if declared else 'none'}' "
+            f"but the registry has '{registered.value if registered else 'none'}'. "
+            "Recreate it from the stored vectors with "
+            f"`omop-emb maintenance rebuild-index --model {model_record.model_name}` "
+            "(add `--metric-type` to choose the metric, cosine by default)."
+        )
+
     def _get_storage_table_descriptor(self, model_record: EmbeddingModelRecord) -> Table:
+        declared = declared_metric(self.emb_engine, model_record.storage_identifier)
+        if declared is None or declared != model_record.metric_type:
+            raise self._legacy_table_error(model_record)
         return sqlite_vec_table_descriptor(model_record.storage_identifier, self._sqlite_vec_metadata)
 
     def _create_storage_table(self, model_record: EmbeddingModelRecord) -> Table:
+        metric_type = model_record.metric_type
+        if metric_type is None:
+            raise self._legacy_table_error(model_record)
         ddl = ddl_create_vec0(
             table_name=model_record.storage_identifier,
             dimensions=model_record.dimensions,
+            metric_type=metric_type,
         )
         with self.emb_engine.begin() as conn:
             conn.execute(text(ddl))
@@ -133,17 +173,60 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
             conn.execute(text(ddl_drop_vec0(model_record.storage_identifier)))
 
     # ------------------------------------------------------------------
-    # Index management (sqlite-vec supports FLAT only)
+    # Index management (sqlite-vec supports FLAT only; rebuild recreates a table whose metric differs)
     # ------------------------------------------------------------------
 
     def _rebuild_index_impl(
-        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig
+        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig, vacuum: bool
     ) -> None:
         if not isinstance(index_config, FlatIndexConfig):
             raise ValueError(
                 f"sqlite-vec only supports FLAT indexes. Got: {type(index_config).__name__}."
             )
-        # vec0 is always a flat scan -> no DDL needed.
+        metric_type = index_config.metric_type
+        if metric_type is None:
+            raise ValueError("sqlite-vec needs a metric_type for the table.")
+        if declared_metric(self.emb_engine, model_record.storage_identifier) != metric_type:
+            count = recreate_vec0(
+                self.emb_engine,
+                model_record.storage_identifier,
+                model_record.dimensions,
+                metric_type,
+            )
+            self._table_cache.pop(model_record.storage_identifier, None)
+            logger.info(
+                f"Recreated '{model_record.storage_identifier}' with the {metric_type.value} metric ({count} rows)."
+            )
+            if vacuum:
+                self._vacuum_database()
+
+    def _compact_storage_impl(self, *, model_record: EmbeddingModelRecord) -> CompactionResult:
+        """Recreate the table when that frees chunks, then ``VACUUM`` the file if pages are free.
+
+        Deleted rows leave vec0 chunks partly empty and ``VACUUM`` alone does
+        not return them, so the table is recreated from its stored vectors.
+        Nothing is rewritten when the table has no chunk to free.
+        """
+        table_name = model_record.storage_identifier
+        metric_type = declared_metric(self.emb_engine, table_name)
+        if metric_type is None:
+            raise self._legacy_table_error(model_record)
+        size_before = database_size(self.emb_engine)
+        if reclaimable_chunks(self.emb_engine, table_name):
+            recreate_vec0(self.emb_engine, table_name, model_record.dimensions, metric_type)
+            self._table_cache.pop(table_name, None)
+        if freelist_pages(self.emb_engine):
+            self._vacuum_database()
+        return CompactionResult(size_before, database_size(self.emb_engine))
+
+    def _vacuum_database(self) -> None:
+        try:
+            vacuum_database(self.emb_engine)
+        except OperationalError as exc:
+            logger.warning(
+                f"VACUUM failed ({exc.orig}), so the database file keeps the freed space. "
+                "Run VACUUM on it once enough disk space is available."
+            )
 
     def physical_indexes(self, model_name: str) -> tuple[str, ...]:
         """vec0 is always a flat scan; there is no secondary physical index."""
@@ -158,21 +241,26 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         *,
         model_record: EmbeddingModelRecord,
         records: Sequence[ConceptEmbeddingRecord],
-        embeddings: ndarray,
+        embeddings: EmbeddingArray,
     ) -> None:
-        self.validate_embeddings_and_records(
-            embeddings=embeddings,
-            records=records,
-            dimensions=model_record.dimensions,
-        )
         table = self._storage_table(model_record)
         with self.emb_session_factory.begin() as session:
             dml_upsert_rows(
                 session=session,
                 table=table,
                 records=records,
-                embeddings=embeddings.astype(np.float32),
+                embeddings=embeddings,
             )
+
+    def _delete_embeddings_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+    ) -> int:
+        table = self._storage_table(model_record)
+        with self.emb_session_factory.begin() as session:
+            return dml_delete_rows(session=session, table=table, concept_ids=concept_ids)
 
     # ------------------------------------------------------------------
     # Core read operations
@@ -182,7 +270,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         self,
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
-    ) -> Mapping[int, Sequence[float]]:
+    ) -> Mapping[int, ndarray]:
         if not concept_ids:
             return {}
         table = self._storage_table(model_record)
@@ -204,19 +292,16 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         *,
         model_record: EmbeddingModelRecord,
         metric_type: MetricType,
-        query_embeddings: ndarray,
+        query_embeddings: EmbeddingArray,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
-        self.validate_embeddings(query_embeddings, model_record.dimensions)
-
         table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             batches = query_knn_batch(
                 session=session,
                 table=table,
-                query_vectors=[v.astype(np.float32) for v in query_embeddings],
-                metric_type=metric_type,
+                query_vectors=list(query_embeddings),
                 k=k,
                 concept_filter=concept_filter,
             )
@@ -262,13 +347,8 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         if not concept_ids:
             return {}
         table = self._storage_table(model_record)
-        concept_filter = EmbeddingConceptFilter(concept_ids=tuple(concept_ids))
         with self.emb_session_factory() as session:
-            rows = query_concept_filter_metadata(
-                session=session,
-                table=table,
-                concept_filter=concept_filter,
-            )
+            rows = query_metadata_by_ids(session=session, table=table, concept_ids=concept_ids)
         return {
             int(row[0]): ConceptEmbeddingRecord(
                 concept_id=int(row[0]),

@@ -12,7 +12,7 @@ from omop_llm import build_model_backend_from_resolved
 from tqdm import tqdm
 
 from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
-from omop_emb.backends.index_config import index_config_from_index_type
+from omop_emb.backends.index_config import FlatIndexConfig, index_config_from_index_type
 from omop_emb.config import (
     IndexType,
     MetricType,
@@ -133,6 +133,14 @@ def add_embeddings(
             rich_help_panel="Concept Filters",
         ),
     ] = False,
+    include_invalid: Annotated[
+        bool,
+        typer.Option(
+            "--include-invalid",
+            help="Also embed invalid concepts (invalid_reason 'D' or 'U'). Skipped by default.",
+            rich_help_panel="Concept Filters",
+        ),
+    ] = False,
     vocabularies: Annotated[
         list[str] | None,
         typer.Option(
@@ -158,6 +166,15 @@ def add_embeddings(
             rich_help_panel="Concept Filters",
         ),
     ] = None,
+    metric_type: Annotated[
+        MetricType,
+        typer.Option(
+            "--metric-type",
+            help="Distance metric of a new model's table. Locked in for FLAT on sqlite-vec. "
+            "Ignored for FLAT on pgvector, which takes the metric per query, and for a model that is already registered.",
+            rich_help_panel="Index Options",
+        ),
+    ] = MetricType.COSINE,
 ):
     """Bulk generate and store embeddings for OMOP concepts.
 
@@ -177,9 +194,11 @@ def add_embeddings(
             resolved_model=resolved_model,
             batch_size=batch_size,
             standard_only=standard_only,
+            include_invalid=include_invalid,
             domains=domains,
             vocabularies=vocabularies,
             num_embeddings=num_embeddings,
+            metric_type=metric_type,
         )
 
 
@@ -190,9 +209,11 @@ def _add_embeddings(
     resolved_model: ResolvedModel,
     batch_size: int,
     standard_only: bool,
+    include_invalid: bool,
     domains: list[str] | None,
     vocabularies: list[str] | None,
     num_embeddings: int | None,
+    metric_type: MetricType = MetricType.COSINE,
 ) -> None:
     """Embed every concept matching the filters that lacks a current embedding."""
     # Ingestion runs no queries, so the interface's metric is never used here.
@@ -206,11 +227,12 @@ def _add_embeddings(
     check_concept_cdm(cdm_sessions)
 
     try:
-        embedding_writer.register_model()
+        embedding_writer.register_model(index_config=FlatIndexConfig(metric_type=metric_type))
 
         # Filter concepts
         concept_filter = CDMConceptFilter(
             require_standard=standard_only,
+            require_active=not include_invalid,
             domains=tuple(domains) if domains else None,
             vocabularies=tuple(vocabularies) if vocabularies else None,
         )
@@ -266,7 +288,8 @@ def create_index(
         MetricType,
         typer.Option(
             "--metric-type",
-            help="Distance metric. Required and locked in when --index-type is HNSW.",
+            help="Distance metric. Locked in for HNSW and for FLAT on sqlite-vec. "
+            "Ignored for FLAT on pgvector, which takes the metric per query.",
             rich_help_panel="Index Options",
         ),
     ] = MetricType.COSINE,
@@ -326,12 +349,10 @@ def create_index(
         num_neighbors=index_hnsw_num_neighbors,
         ef_search=index_hnsw_ef_search,
         ef_construction=index_hnsw_ef_construction,
-        metric_type=metric_type if index_type == IndexType.HNSW else None,
+        metric_type=metric_type,
     )
-    embedding_writer.rebuild_index(index_config=index_config)
-    metric_info = (
-        f" (metric={metric_type.value})" if index_type == IndexType.HNSW else ""
-    )
+    record = embedding_writer.rebuild_index(index_config=index_config)
+    metric_info = f" (metric={record.metric_type.value})" if record.metric_type else ""
     typer.echo(f"Index ({index_type.value}) built for '{embedding_writer.canonical_model_name}'{metric_info}.")
 
 
@@ -341,7 +362,8 @@ def add_embeddings_with_index(
         MetricType,
         typer.Option(
             "--metric-type",
-            help="Distance metric for the index. Locked in when --index-type is HNSW.",
+            help="Distance metric. Locked in for HNSW and for FLAT on sqlite-vec. "
+            "Ignored for FLAT on pgvector, which takes the metric per query.",
             rich_help_panel="Index Options",
         ),
     ] = MetricType.COSINE,
@@ -377,6 +399,14 @@ def add_embeddings_with_index(
         typer.Option(
             "--standard-only",
             help="Only embed OMOP standard concepts (standard_concept in 'S' or 'C').",
+            rich_help_panel="Concept Filters",
+        ),
+    ] = False,
+    include_invalid: Annotated[
+        bool,
+        typer.Option(
+            "--include-invalid",
+            help="Also embed invalid concepts (invalid_reason 'D' or 'U'). Skipped by default.",
             rich_help_panel="Concept Filters",
         ),
     ] = False,
@@ -439,9 +469,11 @@ def add_embeddings_with_index(
         batch_size=batch_size,
         model_name=model_name,
         standard_only=standard_only,
+        include_invalid=include_invalid,
         vocabularies=vocabularies,
         domains=domains,
         num_embeddings=num_embeddings,
+        metric_type=metric_type,
     )
 
     create_index(

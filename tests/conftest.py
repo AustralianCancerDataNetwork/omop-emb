@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 import pytest
 import sqlalchemy as sa
@@ -18,11 +20,12 @@ from oa_configurator import (
     StackConfig,
 )
 
-from omop_emb.backends.base_backend import ConceptEmbeddingRecord
+from omop_emb.backends.base_backend import ConceptEmbeddingRecord, EmbeddingBackend
+from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
-from omop_emb.config import MODEL_REGISTRY_SCHEMA, REGISTRY_SCHEMA_KEY, OmopEmbConfig
-from omop_emb.model_registry import ensure_registry_table
+from omop_emb.config import MODEL_REGISTRY_SCHEMA, OmopEmbConfig, REGISTRY_SCHEMA_KEY
+from omop_emb.model_registry import ensure_registry_table, registry_writer_engine
 
 
 def sqlite_resolved_database(database_name: str = ":memory:") -> ResolvedDatabase:
@@ -103,37 +106,90 @@ def duckdb_test_resolver(database_name: str = ":memory:") -> Resolver:
 
 MODEL_NAME = "test-model:v1"
 PROVIDER_TYPE = "ollama"
-EMBEDDING_DIM = 1
+EMBEDDING_DIM = 2
 
-# Fixed 1-D embeddings: Hypertension=-10, Diabetes=0, Aspirin=+10
-# This makes L2 and cosine tests fully deterministic.
-CONCEPT_RECORDS: tuple[ConceptEmbeddingRecord, ...] = (
-    ConceptEmbeddingRecord(
-        concept_id=1, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True, is_valid=True
-    ),
-    ConceptEmbeddingRecord(
-        concept_id=2, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True, is_valid=True
-    ),
-    ConceptEmbeddingRecord(
-        concept_id=3, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True, is_valid=True
-    ),
-    ConceptEmbeddingRecord(
-        concept_id=4, domain_id="Drug", vocabulary_id="RxNorm", is_standard=False, is_valid=True
-    ),
-)
-
-CONCEPT_EMBEDDINGS = np.array([[-10.0], [0.0], [10.0], [20.0]], dtype=np.float32)
-
-# Kept for backward compat with tests that reference by name
 HYPERTENSION_ID = 1
 DIABETES_ID = 2
 ASPIRIN_ID = 3
 NON_STANDARD_ID = 4
 
-# Query vector used for similarity math tests: [-1.0]
-# L2 distances from [-1]: Hypertension=9, Diabetes=1, Aspirin=11, NonStandard=21
-# L2 similarities:        0.1,            0.5,        ~0.083,      ~0.045
-QUERY_EMBEDDING = np.array([[-1.0]], dtype=np.float32)
+CONCEPT_RECORDS: tuple[ConceptEmbeddingRecord, ...] = (
+    ConceptEmbeddingRecord(
+        concept_id=HYPERTENSION_ID, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True, is_valid=True
+    ),
+    ConceptEmbeddingRecord(
+        concept_id=DIABETES_ID, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True, is_valid=True
+    ),
+    ConceptEmbeddingRecord(
+        concept_id=ASPIRIN_ID, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True, is_valid=True
+    ),
+    ConceptEmbeddingRecord(
+        concept_id=NON_STANDARD_ID, domain_id="Drug", vocabulary_id="RxNorm", is_standard=False, is_valid=True
+    ),
+)
+
+# Unit vectors at known angles from QUERY_EMBEDDING.
+# On unit vectors cosine and L2 rank identically
+CONCEPT_ANGLES_DEGREES = {
+    HYPERTENSION_ID: 40.0,
+    DIABETES_ID: 10.0,
+    ASPIRIN_ID: 80.0,
+    NON_STANDARD_ID: 120.0,
+}
+
+
+def _unit_vector(degrees: float) -> list[float]:
+    angle = np.radians(degrees)
+    return [float(np.cos(angle)), float(np.sin(angle))]
+
+
+CONCEPT_EMBEDDINGS = np.array(
+    [_unit_vector(CONCEPT_ANGLES_DEGREES[r.concept_id]) for r in CONCEPT_RECORDS], dtype=np.float32
+)
+QUERY_EMBEDDING = np.array([[1.0, 0.0]], dtype=np.float32)
+
+# Similarity of QUERY_EMBEDDING to each concept as omop-emb reports it.
+# cosine: 1 - distance / 2 = (1 + cos(angle)) / 2. L2: 1 / (1 + distance), distance = 2 sin(angle / 2).
+COSINE_SIMILARITY = {
+    concept_id: float((1.0 + np.cos(np.radians(angle))) / 2.0)
+    for concept_id, angle in CONCEPT_ANGLES_DEGREES.items()
+}
+L2_SIMILARITY = {
+    concept_id: float(1.0 / (1.0 + 2.0 * np.sin(np.radians(angle) / 2.0)))
+    for concept_id, angle in CONCEPT_ANGLES_DEGREES.items()
+}
+
+
+def register_flat(backend: EmbeddingBackend, dimensions: int = EMBEDDING_DIM, model_name: str = MODEL_NAME):
+    """Register *model_name* on *backend* with a FLAT index."""
+    return backend.register_model(
+        model_name=model_name,
+        provider_type=PROVIDER_TYPE,
+        index_config=FlatIndexConfig(),
+        dimensions=dimensions,
+    )
+
+
+def populate(
+    backend: EmbeddingBackend,
+    records: Sequence[ConceptEmbeddingRecord],
+    vectors: np.ndarray,
+    model_name: str = MODEL_NAME,
+) -> None:
+    """Register *model_name* with the dimension of *vectors* and store *records* with *vectors*."""
+    register_flat(backend, dimensions=vectors.shape[1], model_name=model_name)
+    backend.upsert_embeddings(model_name=model_name, records=list(records), embeddings=vectors)
+
+
+def upsert_all(backend: EmbeddingBackend) -> None:
+    """Register MODEL_NAME and store CONCEPT_RECORDS with CONCEPT_EMBEDDINGS."""
+    populate(backend, CONCEPT_RECORDS, CONCEPT_EMBEDDINGS)
+
+
+def make_svec_backend() -> SQLiteVecEmbeddingBackend:
+    """A fresh in-memory sqlite-vec backend, for tests that need more than one."""
+    engine = registry_writer_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
+    return SQLiteVecEmbeddingBackend(emb_engine=engine)
 
 
 # ---------------------------------------------------------------------------

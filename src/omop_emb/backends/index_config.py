@@ -28,8 +28,8 @@ class IndexConfig(ABC):
     index_type : IndexType
         Index structure (FLAT or HNSW).
     metric_type : MetricType or None
-        Distance metric locked to this index. ``None`` for FLAT, which
-        supports any metric at query time.
+        Distance metric the model is locked to. ``None`` for FLAT without a
+        metric, which leaves the metric to the query.
     """
 
     index_type: IndexType
@@ -173,20 +173,17 @@ class FlatIndexConfig(IndexConfig):
     ----------
     index_type : IndexType
         Always ``IndexType.FLAT``.
-    metric_type : None
-        FLAT supports all metrics; the caller supplies the metric at query
-        time. Setting this to a non-``None`` value raises ``ValueError``.
+    metric_type : MetricType or None
+        Backends that fix the metric on the table (sqlite-vec) lock the model
+        to it and default to cosine. Backends that compute distances from the
+        raw vectors (pgvector) drop it, so queries choose the metric.
     """
 
     index_type: IndexType = IndexType.FLAT
     metric_type: Optional[MetricType] = None
 
     def _validate_metric_type_after_init(self) -> None:
-        if self.metric_type is not None:
-            raise ValueError(
-                "FLAT index is an exact scan and does not take a metric_type. "
-                f"Got: {self.metric_type}."
-            )
+        """FLAT accepts any metric or none."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -255,7 +252,7 @@ def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexC
     """
     index_type = parse_index_type(index_type)
     if index_type == IndexType.FLAT:
-        return FlatIndexConfig()
+        return FlatIndexConfig.from_kwargs(metric_type=kwargs.get("metric_type"))
     if index_type == IndexType.HNSW:
         return HNSWIndexConfig.from_kwargs(**kwargs)
     raise ValueError(f"No IndexConfig defined for index type {index_type!r}.")
@@ -289,7 +286,8 @@ def index_config_from_dict(
     """
     index_type = parse_index_type(index_type)
     if index_type == IndexType.FLAT:
-        return FlatIndexConfig()
+        metric = (config_dict or {}).get("metric_type")
+        return FlatIndexConfig(metric_type=MetricType(metric) if metric else None)
     if index_type == IndexType.HNSW:
         if not config_dict:
             raise ValueError(

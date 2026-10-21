@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
 from typing import (
@@ -28,6 +29,7 @@ from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig, IndexConfig
 from omop_emb.config import (
     BackendType,
+    IndexType,
     MetricType,
     get_supported_index_types_for_backend,
     is_index_type_supported_for_backend,
@@ -42,8 +44,10 @@ from omop_emb.model_registry import (
 )
 from omop_emb.utils.cdm import streamed
 from omop_emb.utils.embedding_utils import (
+    EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
+    as_embedding_array,
 )
 from omop_emb.utils.errors import (
     EmbeddingBackendConfigurationError,
@@ -81,6 +85,27 @@ def writes[B: EmbeddingBackend, **P, R](method: Callable[Concatenate[B, P], R]) 
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class CompactionResult:
+    """Storage size around a compaction, in bytes.
+
+    Attributes
+    ----------
+    size_before : int
+        Size before compaction: the database file on sqlite-vec, the model
+        table with its indexes on pgvector.
+    size_after : int
+        The same measure after compaction.
+    """
+
+    size_before: int
+    size_after: int
+
+    @property
+    def reclaimed(self) -> int:
+        return max(self.size_before - self.size_after, 0)
+
+
 class EmbeddingStoreReader(Protocol):
     """Read-only view of an embedding store, as returned by open_vector_store_reader()."""
 
@@ -108,7 +133,7 @@ class EmbeddingStoreReader(Protocol):
 
     def get_embeddings_by_concept_ids(
         self, *, model_name: str, concept_ids: Sequence[int]
-    ) -> Mapping[int, Sequence[float]]: ...
+    ) -> Mapping[int, ndarray]: ...
 
     def get_concept_filter_metadata(
         self, *, model_name: str, concept_ids: Sequence[int]
@@ -123,7 +148,7 @@ class EmbeddingStoreReader(Protocol):
         *,
         model_name: str,
         metric_type: MetricType,
-        query_embeddings: ndarray,
+        query_embeddings: EmbeddingArray,
         concept_filter: EmbeddingConceptFilter | None = None,
         k: int = ...,
     ) -> tuple[tuple[NearestConceptMatch, ...], ...]: ...
@@ -175,6 +200,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
     """
 
     DEFAULT_K_NEAREST = 10
+    _DELETE_CHUNK_SIZE = 100_000
 
     def __init__(
         self,
@@ -210,6 +236,17 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
     @abstractmethod
     def dialect(self) -> str:
         """SQL dialect this backend requires, matching ``emb_engine.dialect.name``."""
+        ...
+
+    @property
+    @abstractmethod
+    def default_flat_metric(self) -> MetricType | None:
+        """Metric a FLAT model takes when none is given.
+
+        ``None`` for backends that compute distances from the raw vectors, whose
+        FLAT models carry no metric. A metric for backends that lock it on the
+        table.
+        """
         ...
 
     @property
@@ -359,14 +396,15 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             If the model is already registered with a different dimensionality.
         ValueError
             If ``metadata`` contains a reserved key, or if ``index_config`` is
-            not ``FlatIndexConfig()`` (non-FLAT indexes may only be built
-            after registration, not at registration time).
+            not a FLAT config (non-FLAT indexes may only be built after
+            registration, not at registration time), or its metric is
+            unsupported by the backend.
         """
 
         if index_config is None:
             index_config = FlatIndexConfig()
 
-        if index_config != FlatIndexConfig():
+        if index_config.index_type != IndexType.FLAT:
             # non-flat index is super expensive to continuously ingest so we don't
             # allow it at the moment
             raise ValueError(
@@ -374,6 +412,8 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                 "To use a non-FLAT index, register the model first, ingest the data and then build the index.\n"
                 "See the CLI documentation for details."
             )
+        index_config = self._normalized_flat_metric(index_config)
+        self._validate_index_config(index_config)
 
         preexisting = bool(self._registry.get_registered_models(model_name=model_name))
         record = self._registry.register_model(
@@ -441,6 +481,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         *,
         model_name: str,
         index_config: IndexConfig,
+        vacuum: bool = True,
     ) -> EmbeddingModelRecord:
         """Build or rebuild the index on an existing embedding table.
 
@@ -455,7 +496,15 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         index_config : IndexConfig
             Target index configuration. Pass ``HNSWIndexConfig`` (with
             ``metric_type`` set) to build an HNSW index, or ``FlatIndexConfig()``
-            to revert to an exact scan.
+            to revert to an exact scan. On sqlite-vec a ``FlatIndexConfig``
+            locks the model to its metric (cosine if none is given); pgvector
+            FLAT models take the metric per query, so any metric is dropped.
+        vacuum : bool
+            Run the backend's maintenance step after the rebuild. pgvector
+            runs ``VACUUM (ANALYZE)`` on the table to refresh planner
+            statistics. sqlite-vec runs ``VACUUM`` on the database file after
+            recreating a table for a metric change. Neither returns space
+            freed by deleted rows, see ``compact_storage``. Default ``True``.
 
         Returns
         -------
@@ -471,10 +520,38 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         Notes
         -----
         Afterwards the table carries exactly the index ``index_config`` describes:
-        any other physical index on it is dropped. HNSW queries then must use
-        ``index_config.metric_type``.
+        any other physical index on it is dropped. Queries then must use
+        ``index_config.metric_type`` when it is set.
         """
         record = self._registered_record(model_name)
+        index_config = self._normalized_flat_metric(index_config)
+        self._validate_index_config(index_config)
+        self._rebuild_index_impl(model_record=record, index_config=index_config, vacuum=vacuum)
+        return self._registry.update_index_config(
+            model_name=model_name,
+            index_config=index_config,
+        )
+
+    def _normalized_flat_metric(self, index_config: IndexConfig) -> IndexConfig:
+        """Return a FLAT config with the metric its backend calls for.
+
+        Backends with a ``default_flat_metric`` lock the metric on the table,
+        so their FLAT models keep the given metric or take that default. The
+        others compute distances from the raw vectors, so their FLAT models
+        carry no metric. Other index types are returned unchanged.
+        """
+        if index_config.index_type != IndexType.FLAT:
+            return index_config
+        if self.default_flat_metric is None:
+            metric_type = None
+        else:
+            metric_type = index_config.metric_type or self.default_flat_metric
+        if metric_type == index_config.metric_type:
+            return index_config
+        return FlatIndexConfig(metric_type=metric_type)
+
+    def _validate_index_config(self, index_config: IndexConfig) -> None:
+        """Raise ``ValueError`` if the backend supports neither the index type nor its metric."""
         if not is_index_type_supported_for_backend(
             backend=self.backend_type, index=index_config.index_type
         ):
@@ -491,15 +568,10 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                 f"Metric '{index_config.metric_type.value}' is not supported by backend "
                 f"'{self.backend_name}' with index type '{index_config.index_type.value}'."
             )
-        self._rebuild_index_impl(model_record=record, index_config=index_config)
-        return self._registry.update_index_config(
-            model_name=model_name,
-            index_config=index_config,
-        )
 
     @abstractmethod
     def _rebuild_index_impl(
-        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig
+        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig, vacuum: bool
     ) -> None: ...
 
     # ------------------------------------------------------------------
@@ -677,7 +749,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         *,
         model_name: str,
         records: Sequence[ConceptEmbeddingRecord],
-        embeddings: ndarray,
+        embeddings: EmbeddingArray,
     ) -> None:
         """Insert or update embeddings for a set of concepts.
 
@@ -687,15 +759,25 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             Canonical model name including tag.
         records : Sequence[ConceptEmbeddingRecord]
             Concept metadata rows aligned with ``embeddings``.
-        embeddings : ndarray
-            Float32 array of shape ``(N, D)`` where ``N = len(records)`` and
-            ``D`` is the registered dimensionality.
+        embeddings : EmbeddingArray
+            Array of shape ``(N, D)`` where ``N = len(records)`` and ``D`` is
+            the registered dimensionality. Converted to float32.
+
+        Raises
+        ------
+        ValueError
+            If ``embeddings`` is not 2-D, has the wrong dimensionality or
+            contains NaN or infinite values, or its row count differs from
+            ``len(records)``.
         """
-        return self._upsert_embeddings_impl(
-            model_record=self._registered_record(model_name),
-            records=records,
-            embeddings=embeddings,
-        )
+        record = self._registered_record(model_name)
+        array = as_embedding_array(embeddings, record.dimensions)
+        if len(records) != array.shape[0]:
+            raise ValueError(
+                f"Number of records ({len(records)}) does not match "
+                f"number of embeddings ({array.shape[0]})."
+            )
+        return self._upsert_embeddings_impl(model_record=record, records=records, embeddings=array)
 
     @abstractmethod
     def _upsert_embeddings_impl(
@@ -703,15 +785,81 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         *,
         model_record: EmbeddingModelRecord,
         records: Sequence[ConceptEmbeddingRecord],
-        embeddings: ndarray,
+        embeddings: EmbeddingArray,
     ) -> None: ...
+
+    @writes
+    def delete_embeddings(
+        self,
+        *,
+        model_name: str,
+        concept_ids: Sequence[int],
+    ) -> int:
+        """Delete the stored embeddings of the given concepts.
+
+        Concept IDs without a stored embedding are ignored. The deletion runs
+        in chunks of ``_DELETE_CHUNK_SIZE`` IDs, one transaction each.
+
+        Parameters
+        ----------
+        model_name : str
+            Canonical model name including tag.
+        concept_ids : Sequence[int]
+            OMOP concept IDs whose embeddings are removed.
+
+        Returns
+        -------
+        int
+            Number of embedding rows deleted.
+        """
+        model_record = self._registered_record(model_name)
+        ids = list(concept_ids)
+        return sum(
+            self._delete_embeddings_impl(
+                model_record=model_record,
+                concept_ids=ids[start : start + self._DELETE_CHUNK_SIZE],
+            )
+            for start in range(0, len(ids), self._DELETE_CHUNK_SIZE)
+        )
+
+    @abstractmethod
+    def _delete_embeddings_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+    ) -> int: ...
+
+    @writes
+    def compact_storage(self, *, model_name: str) -> CompactionResult:
+        """Return the disk space held by deleted or rewritten rows of a model.
+
+        Deleting rows, and upserting existing concepts, leaves space that the
+        backend does not hand back on its own. This is the only operation that
+        does. It rewrites the model's storage, so it needs free disk space for
+        a second copy and, on pgvector, an exclusive lock on the table.
+
+        Parameters
+        ----------
+        model_name : str
+            Canonical model name including tag.
+
+        Returns
+        -------
+        CompactionResult
+            Storage size before and after.
+        """
+        return self._compact_storage_impl(model_record=self._registered_record(model_name))
+
+    @abstractmethod
+    def _compact_storage_impl(self, *, model_record: EmbeddingModelRecord) -> CompactionResult: ...
 
     @writes
     def bulk_upsert_embeddings(
         self,
         *,
         model_name: str,
-        batches: Iterable[tuple[Sequence[ConceptEmbeddingRecord], ndarray]],
+        batches: Iterable[tuple[Sequence[ConceptEmbeddingRecord], EmbeddingArray]],
         total_n_batches: int | None = None,
     ) -> None:
         """Upsert embeddings in multiple batches, delegating to ``upsert_embeddings``.
@@ -720,7 +868,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         ----------
         model_name : str
             Canonical model name including tag.
-        batches : Iterable[tuple[Sequence[ConceptEmbeddingRecord], ndarray]]
+        batches : Iterable[tuple[Sequence[ConceptEmbeddingRecord], EmbeddingArray]]
             Iterable of ``(records, embeddings)`` pairs.
         total_n_batches : Optional[int]
             Total number of batches for the progress bar.
@@ -748,7 +896,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         *,
         model_name: str,
         concept_ids: Sequence[int],
-    ) -> Mapping[int, Sequence[float]]:
+    ) -> Mapping[int, ndarray]:
         """Retrieve stored embeddings for the given concept IDs.
 
         Parameters
@@ -760,8 +908,8 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
 
         Returns
         -------
-        Mapping[int, Sequence[float]]
-            Mapping from concept ID to embedding vector.
+        Mapping[int, ndarray]
+            Mapping from concept ID to its float32 embedding vector.
 
         Raises
         ------
@@ -778,14 +926,14 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         self,
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
-    ) -> Mapping[int, Sequence[float]]: ...
+    ) -> Mapping[int, ndarray]: ...
 
     def get_nearest_concepts(
         self,
         *,
         model_name: str,
         metric_type: MetricType,
-        query_embeddings: ndarray,
+        query_embeddings: EmbeddingArray,
         concept_filter: EmbeddingConceptFilter | None = None,
         k: int = DEFAULT_K_NEAREST,
     ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
@@ -798,9 +946,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         metric_type : MetricType
             Distance metric for the KNN query. Must match the HNSW metric
             exactly, or be any backend-supported metric for FLAT.
-        query_embeddings : ndarray
-            Float32 array of shape ``(Q, D)`` where ``Q`` is the number of
-            queries and ``D`` is the registered dimensionality.
+        query_embeddings : EmbeddingArray
+            Array of shape ``(Q, D)`` where ``Q`` is the number of queries and
+            ``D`` is the registered dimensionality. Converted to float32.
         concept_filter : EmbeddingConceptFilter, optional
             Constraints applied during retrieval (domain, vocabulary, standard
             flag, concept ID allowlist, result limit).
@@ -813,13 +961,20 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             Shape ``(Q, <=K)``. Outer tuple is one entry per query vector;
             inner tuple contains up to ``k`` matches ordered by similarity
             descending.
+
+        Raises
+        ------
+        ValueError
+            If ``query_embeddings`` is not 2-D, has the wrong dimensionality or
+            contains NaN or infinite values, or the metric is incompatible
+            with the model.
         """
         record = self._registered_record(model_name)
         self._check_query_metric(record, metric_type)
         return self._get_nearest_concepts_impl(
             model_record=record,
             metric_type=metric_type,
-            query_embeddings=query_embeddings,
+            query_embeddings=as_embedding_array(query_embeddings, record.dimensions),
             concept_filter=concept_filter,
             k=k,
         )
@@ -830,7 +985,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         *,
         model_record: EmbeddingModelRecord,
         metric_type: MetricType,
-        query_embeddings: ndarray,
+        query_embeddings: EmbeddingArray,
         concept_filter: EmbeddingConceptFilter | None = None,
         k: int = DEFAULT_K_NEAREST,
     ) -> tuple[tuple[NearestConceptMatch, ...], ...]: ...
@@ -976,65 +1131,6 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
     def _get_embedding_count_by_vocabulary_impl(
         self, *, model_record: EmbeddingModelRecord
     ) -> Mapping[str, int]: ...
-
-    # ------------------------------------------------------------------
-    # Validation helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def validate_embeddings(embeddings: ndarray, dimensions: int) -> None:
-        """Validate that ``embeddings`` has the expected shape.
-
-        Parameters
-        ----------
-        embeddings : ndarray
-            Array to validate.
-        dimensions : int
-            Expected number of columns (embedding dimensionality).
-
-        Raises
-        ------
-        ValueError
-            If ``embeddings`` is not 2-D or its column count does not match
-            ``dimensions``.
-        """
-        if embeddings.ndim != 2:
-            raise ValueError(f"Expected 2D array, got ndim={embeddings.ndim}.")
-        if embeddings.shape[1] != dimensions:
-            raise ValueError(
-                f"Embedding dimensionality ({embeddings.shape[1]}) does not match "
-                f"model configuration ({dimensions})."
-            )
-
-    @staticmethod
-    def validate_embeddings_and_records(
-        embeddings: ndarray,
-        records: Sequence[ConceptEmbeddingRecord],
-        dimensions: int,
-    ) -> None:
-        """Validate that ``embeddings`` and ``records`` are aligned and well-shaped.
-
-        Parameters
-        ----------
-        embeddings : ndarray
-            Array of shape ``(N, D)``.
-        records : Sequence[ConceptEmbeddingRecord]
-            Concept metadata rows. Must have ``len(records) == N``.
-        dimensions : int
-            Expected embedding dimensionality ``D``.
-
-        Raises
-        ------
-        ValueError
-            If ``embeddings`` fails shape validation or its row count does not
-            match ``len(records)``.
-        """
-        EmbeddingBackend.validate_embeddings(embeddings, dimensions=dimensions)
-        if len(records) != embeddings.shape[0]:
-            raise ValueError(
-                f"Number of records ({len(records)}) does not match "
-                f"number of embeddings ({embeddings.shape[0]})."
-            )
 
 
 def _extensions_for(backend_type: BackendType, *, writable: bool) -> Sequence[Callable[[Any, Any], None]]:

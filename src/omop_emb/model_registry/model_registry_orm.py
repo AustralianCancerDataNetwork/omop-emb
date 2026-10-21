@@ -72,8 +72,8 @@ class ModelRegistry(ModelRegistryBase):
     index_type : IndexType
         Active index type. Synced from ``index_config``. Default ``FLAT``.
     metric_type : MetricType or None
-        Distance metric locked by the index. ``None`` for FLAT (any metric
-        accepted at query time).
+        Distance metric the model is locked to. ``None`` for a FLAT model
+        without a metric (any metric accepted at query time).
     index_config : dict or None
         JSON serialisation of the active ``IndexConfig``. Written by the
         ``@validates`` hook whenever an ``IndexConfig`` object is assigned.
@@ -181,18 +181,11 @@ class ModelRegistry(ModelRegistryBase):
         if index_config.index_type is None:
             raise ValueError("index_config must have a non-null index_type.")
 
-        if index_config.index_type == IndexType.FLAT:
-            if index_config.metric_type is not None:
-                raise ValueError(
-                    "FLAT index does not take a metric_type. "
-                    "Set metric_type to None for FLAT indices."
-                )
-        else:
-            if index_config.metric_type is None:
-                raise ValueError(
-                    f"{index_config.index_type} index requires a metric_type "
-                    "(e.g. MetricType.COSINE)."
-                )
+        if index_config.index_type != IndexType.FLAT and index_config.metric_type is None:
+            raise ValueError(
+                f"{index_config.index_type} index requires a metric_type "
+                "(e.g. MetricType.COSINE)."
+            )
 
         self.index_type = index_config.index_type
         self.metric_type = index_config.metric_type

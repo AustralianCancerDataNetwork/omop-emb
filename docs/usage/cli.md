@@ -28,7 +28,7 @@ Run `omop-emb <group> --help` to list commands within a group.
   `pip install "omop-emb[pgvector]"`.
 - **Configured via oa-configurator**: `omop-config configure omop_emb` (see [Getting Started: Configuration](../getting-started/configuration.md)). Resolves `cdm_db`, `embedding_model_name`, and `vector_store_name`.
 - **OMOP CDM** (`cdm_db`): required only for concept ingestion
-  (`add-embeddings`, `add-embeddings-with-index`) and for enriching `search` results with concept names. Not required for `list-models`, `rebuild-index`, `delete-model`, or diagnostics.
+  (`add-embeddings`, `add-embeddings-with-index`), for `prune-embeddings`, and for enriching `search` results with concept names. Not required for `list-models`, `rebuild-index`, `delete-model`, or diagnostics.
 
 ---
 
@@ -54,9 +54,16 @@ omop-emb embeddings add-embeddings [OPTIONS]
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--standard-only` | | `False` | Embed only standard concepts (`standard_concept = 'S'`). |
+| `--include-invalid` | | `False` | Also embed invalid concepts (`invalid_reason` of `D` or `U`). They are skipped by default. |
 | `--vocabulary` | | `None` | Restrict to specific OMOP vocabularies (repeatable). |
 | `--domain` | | `None` | Restrict to specific OMOP domains (repeatable). |
 | `--num-embeddings` | `-n` | `None` | Cap on total concepts processed (useful for testing). |
+
+**Index Options**
+
+| Option | Default | Description |
+|---|---|---|
+| `--metric-type` | `cosine` | Metric of a new model's table. Locked in for `flat` on sqlite-vec; ignored for `flat` on pgvector and for a model that is already registered. See [Metrics](backend-selection.md#metrics). |
 
 | Option | Short | Description |
 |---|---|---|
@@ -72,14 +79,13 @@ Ingest embeddings and immediately build an index in one step. Equivalent to runn
 omop-emb embeddings add-embeddings-with-index [OPTIONS]
 ```
 
-Accepts all options from `add-embeddings`, plus:
+Accepts all options from `add-embeddings` (its `--metric-type` also applies to the index), plus:
 
 **Index Options**
 
 | Option | Default | Description |
 |---|---|---|
 | `--index-type` | `flat` | Index to build after ingestion (`flat` or `hnsw`). |
-| `--metric-type` | `cosine` | Distance metric. Required and locked in for `hnsw`. |
 | `--index-hnsw-num-neighbors` | `None` | HNSW graph connectivity (`M`). |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
@@ -105,7 +111,7 @@ omop-emb embeddings create-index [OPTIONS]
 | Option | Default | Description |
 |---|---|---|
 | `--index-type` | `flat` | `flat` or `hnsw`. |
-| `--metric-type` | `cosine` | Distance metric. Required and locked in for `hnsw`. |
+| `--metric-type` | `cosine` | Distance metric. Locked in for `hnsw` and for `flat` on sqlite-vec; ignored for `flat` on pgvector. See [Metrics](backend-selection.md#metrics). |
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
@@ -193,10 +199,11 @@ omop-emb maintenance rebuild-index --model <CANONICAL_NAME> [OPTIONS]
 | Option | Default | Description |
 |---|---|---|
 | `--index-type` | `flat` | `flat` or `hnsw`. |
-| `--metric-type` | `cosine` | Distance metric (required and locked in for `hnsw`). |
+| `--metric-type` | `cosine` | Distance metric. Locked in for `hnsw` and for `flat` on sqlite-vec, where another metric recreates the table from the stored vectors. Ignored for `flat` on pgvector. See [Metrics](backend-selection.md#metrics). |
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
+| `--vacuum` / `--no-vacuum` | `--vacuum` | Maintenance after the rebuild. pgvector runs `VACUUM (ANALYZE)` on the table to refresh planner statistics. sqlite-vec runs `VACUUM` on the database file after a metric change, which needs free disk space for a second copy of the data. Neither returns the space deleted rows left behind, see [`prune-embeddings --compact`](#prune-embeddings). Use `--no-vacuum` to skip it. |
 
 | Option | Short | Description |
 |---|---|---|
@@ -221,11 +228,46 @@ omop-emb maintenance delete-model --model <NAME> [OPTIONS]
 
 ---
 
+### `prune-embeddings`
+
+Remove stored embeddings whose concept is outside the given scope or no longer exists in the CDM. By default the scope is all valid concepts, so invalid concepts embedded earlier are removed. Without `--apply` the command only reports what would be deleted. Applying a prune also marks the model as updated, so FAISS caches built before it report as stale.
+
+```bash
+omop-emb maintenance prune-embeddings --model <NAME> [OPTIONS]
+```
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--model` | `-m` | **required** | Canonical model name. |
+| `--provider-type` | | `None` | Provider used to canonicalize the model name when needed. |
+| `--apply` | | `False` | Delete the rows. Without it the command is a dry run. |
+| `--compact` | | `False` | After deleting, return the disk space held by deleted and rewritten rows. Needs `--apply`. |
+| `--verbose` | `-v` | | Increase log verbosity. |
+
+**Scope**
+
+| Option | Default | Description |
+|---|---|---|
+| `--include-invalid` | `False` | Keep invalid concepts instead of pruning them. |
+| `--standard-only` | `False` | Keep only standard concepts. |
+| `--vocabulary` | `None` | Keep only these vocabularies (repeatable). |
+| `--domain` | `None` | Keep only these domains (repeatable). |
+
+!!! note "Reclaiming space"
+    Deleting rows does not shrink the store on disk. `--compact` rewrites the model's storage to return the space, and also runs when nothing is left to prune, so it can follow earlier prunes or re-embedding (sqlite-vec upserts delete and insert, which leaves the same gaps).
+
+    - sqlite-vec recreates the table from its stored vectors when that frees chunks, then runs `VACUUM` on the database file. It needs free disk space for a second copy, and does nothing when no chunk can be freed.
+    - pgvector runs `VACUUM FULL` on the model's table, which rewrites it and rebuilds its indexes and holds an exclusive lock on it while it runs. Plain `VACUUM` only makes dead space reusable.
+
+    Without `--compact`, `rebuild-index` still shrinks the HNSW index of a pgvector model but not its table.
+
+---
+
 ### `export`
 
 Stream all embeddings for one model from the primary backend into a single, self-describing HDF5 bundle (raw vectors, never normalized, plus concept metadata). This is the lossless source of truth for backup/restore and for migrating raw embeddings to another backend (see `import`). Peak memory stays close to one batch's worth regardless of table size.
 
-Stored vectors carry no metric, so the bundle has none; an HNSW index's metric travels inside its `index_config`. Bundles are written as schema version 2. Version 1 bundles, which also stored a `metric_type`, still import. Export opens the store read-only. The output filename is derived from the model's storage identifier, not a literal path you choose.
+Stored vectors carry no metric. A model locked to one (HNSW, or sqlite-vec) carries it inside its `index_config`, and a backend that does not lock FLAT models (pgvector) drops it on import. Bundles are written as schema version 2. Version 1 bundles, which also stored a `metric_type`, still import. Export opens the store read-only. The output filename is derived from the model's storage identifier, not a literal path you choose.
 
 ```bash
 omop-emb maintenance export --model <NAME> --output-dir <DIR> [OPTIONS]

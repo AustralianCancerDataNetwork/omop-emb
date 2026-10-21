@@ -209,6 +209,7 @@ def _registry_engine(
     database: ResolvedDatabase,
     *,
     extensions: Sequence[Callable[[Any, Any], None]],
+    connect_args: dict[str, Any] | None = None,
     register_claims: bool,
 ) -> Engine:
     """Engine carrying the registry's reserved schema claim, registered or only checked.
@@ -220,6 +221,11 @@ def _registry_engine(
         Connect-event callables forwarded to ``database.create_engine()`` for
         any database extension the backend needs on every physical connection
         (see ``ResolvedDatabase.create_engine``).
+    connect_args : dict, optional
+        Forwarded to ``sqlalchemy.create_engine()``. For a connect-time flag a
+        backend needs on every physical connection (e.g. DuckDB's native
+        ``read_only``) rather than something set via a connect-event
+        callable after connecting.
     register_claims : bool, optional
         Forwarded to ``database.create_engine()``. False checks the registry
         claim without writing it.
@@ -234,6 +240,7 @@ def _registry_engine(
             )
         ],
         extensions=extensions,
+        connect_args=connect_args or {},
         register_claims=register_claims,
     )
 
@@ -242,6 +249,7 @@ def registry_reader_engine(
     database: ResolvedDatabase,
     *,
     extensions: Sequence[Callable[[Any, Any], None]] = (),
+    connect_args: dict[str, Any] | None = None,
 ) -> Engine:
     """Build a read-only engine mapped to the registry schema.
 
@@ -259,13 +267,17 @@ def registry_reader_engine(
         Connect-event callables forwarded to ``database.create_engine()`` for
         any database extension the backend needs on every physical connection
         (see ``ResolvedDatabase.create_engine``).
+    connect_args : dict, optional
+        Forwarded to ``database.create_engine()`` for a connect-time flag a
+        backend needs on every physical connection (e.g. DuckDB's native
+        ``read_only``).
 
     Raises
     ------
     MisplacedRegistryError
         If the registry schema has no registry table but another schema does.
     """
-    engine = _registry_engine(database, extensions=extensions, register_claims=False)
+    engine = _registry_engine(database, extensions=extensions, connect_args=connect_args, register_claims=False)
     with engine.connect() as connection:
         _reject_incompatible_registry(
             connection, registry_schema=resolve_registry_physical_schema(connection)
@@ -277,13 +289,14 @@ def registry_writer_engine(
     database: ResolvedDatabase,
     *,
     extensions: Sequence[Callable[[Any, Any], None]] = (),
+    connect_args: dict[str, Any] | None = None,
 ) -> Engine:
     """Claim the registry schema and ensure its table exists. The writable path.
 
     Call before constructing a RegistryManager/EmbeddingBackend that needs to
     be able to write. Both classes themselves never claim schemas or run DDL.
     """
-    engine = _registry_engine(database, extensions=extensions, register_claims=True)
+    engine = _registry_engine(database, extensions=extensions, connect_args=connect_args, register_claims=True)
     ensure_registry_table(engine)
     return engine
 

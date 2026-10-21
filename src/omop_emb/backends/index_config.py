@@ -207,8 +207,8 @@ class HNSWIndexConfig(IndexConfig):
 
     Notes
     -----
-    Supported by pgvector and FAISS backends only. sqlite-vec does not
-    support HNSW.
+    Supported by pgvector, DuckDB VSS, and FAISS backends. sqlite-vec does
+    not support HNSW.
     """
 
     metric_type: MetricType

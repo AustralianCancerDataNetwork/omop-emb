@@ -92,7 +92,7 @@ def rebuild_index(
         IndexType,
         typer.Option(
             "--index-type",
-            help="Index type to build (FLAT = exact scan, HNSW = approximate; pgvector only).",
+            help="Index type to build (FLAT = exact scan, HNSW = approximate; pgvector and duckdbvss only).",
             rich_help_panel="Index Options",
         ),
     ] = IndexType.FLAT,

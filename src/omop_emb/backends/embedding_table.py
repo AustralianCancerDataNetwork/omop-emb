@@ -149,3 +149,15 @@ class PGEmbeddingTable(ConceptEmbeddingMixin, EmbeddingTableBase):
     """
 
     __abstract__ = True
+
+
+class DuckDBVSSEmbeddingTable(ConceptEmbeddingMixin, EmbeddingTableBase):
+    """Abstract base for DuckDB VSS embedding tables.
+
+    Concrete per-model subclasses come from
+    :func:`~omop_emb.backends.duckdbvss.duckdbvss_sql.duckdbvss_embedding_table_descriptor`,
+    which adds the ``embedding`` column (a fixed-size ``FLOAT[N]`` array,
+    size depends on dimensionality, so it can't be declared statically here).
+    """
+
+    __abstract__ = True

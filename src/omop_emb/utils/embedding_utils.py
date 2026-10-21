@@ -3,6 +3,8 @@ from dataclasses import dataclass, asdict
 from typing import Optional, overload
 import logging
 
+import numpy as np
+from numpy.typing import ArrayLike, NDArray
 from sqlalchemy import func
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -15,6 +17,44 @@ from omop_emb.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+EmbeddingArray = NDArray[np.float32]
+"""Float32 array of shape ``(N, D)``: one row per vector, ``D`` the embedding dimensionality."""
+
+
+def as_embedding_array(embeddings: ArrayLike, dimensions: Optional[int] = None) -> EmbeddingArray:
+    """Return embeddings as a finite float32 array of shape ``(N, D)``.
+
+    Parameters
+    ----------
+    embeddings : array-like
+        One vector per row. Other dtypes are converted to float32.
+    dimensions : int, optional
+        Expected ``D``. Not checked when omitted.
+
+    Returns
+    -------
+    EmbeddingArray
+        The input itself when it already is a float32 array.
+
+    Raises
+    ------
+    ValueError
+        If the array is not 2-D, its column count differs from ``dimensions``,
+        or it contains NaN or infinite values.
+    """
+    with np.errstate(over="ignore"):  # an overflowing value becomes infinity and is rejected below
+        array = np.asarray(embeddings, dtype=np.float32)
+    if array.ndim != 2:
+        raise ValueError(f"Expected a 2-D array of shape (N, D), got shape {array.shape}.")
+    if dimensions is not None and array.shape[1] != dimensions:
+        raise ValueError(
+            f"Embedding dimensionality ({array.shape[1]}) does not match "
+            f"model configuration ({dimensions})."
+        )
+    if not np.isfinite(array).all():
+        raise ValueError("Embeddings contain NaN or infinite values.")
+    return array
 
 
 @dataclass(frozen=True)

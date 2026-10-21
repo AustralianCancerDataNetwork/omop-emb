@@ -283,6 +283,7 @@ SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[
     BackendType, Dict[IndexType, Tuple[MetricType, ...]]
 ] = {
     # https://alexgarcia.xyz/sqlite-vec/features/vec0.html
+    # The metric is declared on the vec0 column, so each table is locked to one of them.
     BackendType.SQLITEVEC: {
         IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1),
     },

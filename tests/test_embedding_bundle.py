@@ -17,12 +17,10 @@ import pytest
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
-from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.config import MetricType
-from omop_emb.model_registry import registry_writer_engine
 from omop_emb.storage import embedding_bundle
 
-from .conftest import sqlite_resolved_database
+from .conftest import make_svec_backend, populate
 
 pytest.importorskip("h5py", reason="h5py not installed")
 
@@ -30,33 +28,14 @@ _MODEL = "test-bundle-model:v1"
 _PROVIDER = "ollama"
 
 
-def _make_backend() -> SQLiteVecEmbeddingBackend:
-    engine = registry_writer_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
-    return SQLiteVecEmbeddingBackend(emb_engine=engine)
-
-
-def _populate(
-    backend: SQLiteVecEmbeddingBackend,
-    *,
-    dim: int,
-    ids: list[int],
-    vecs: np.ndarray,
-) -> None:
-    backend.register_model(
-        model_name=_MODEL,
-        provider_type=_PROVIDER,
-        index_config=FlatIndexConfig(),
-        dimensions=dim,
-    )
+def _populate(backend: SQLiteVecEmbeddingBackend, *, dim: int, ids: list[int], vecs: np.ndarray) -> None:
     records = [
         ConceptEmbeddingRecord(
             concept_id=i, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True, is_valid=True
         )
         for i in ids
     ]
-    backend.upsert_embeddings(
-        model_name=_MODEL, records=records, embeddings=vecs
-    )
+    populate(backend, records, vecs, model_name=_MODEL)
 
 
 @pytest.mark.unit
@@ -73,7 +52,7 @@ class TestBundleRoundTrip:
             [[3.0, 0.0, 0.0], [0.0, 5.0, 0.0], [1.0, 1.0, 1.0]], dtype=np.float32
         )
 
-        backend = _make_backend()
+        backend = make_svec_backend()
         _populate(backend, dim=dim, ids=ids, vecs=vecs)
 
         meta, bundle_path = embedding_bundle.export_bundle(
@@ -83,7 +62,7 @@ class TestBundleRoundTrip:
         )
         assert meta.row_count == len(ids)
 
-        target_backend = _make_backend()
+        target_backend = make_svec_backend()
         imported = embedding_bundle.import_bundle(backend=target_backend, h5_path=bundle_path)
         assert imported == len(ids)
 
@@ -102,14 +81,14 @@ class TestBundleRoundTrip:
         ids = [10, 20]
         vecs = np.array([[7.0, -2.0], [0.5, 0.5]], dtype=np.float32)
 
-        backend = _make_backend()
+        backend = make_svec_backend()
         _populate(backend, dim=dim, ids=ids, vecs=vecs)
 
         _, bundle_path = embedding_bundle.export_bundle(
             backend=backend, model_name=_MODEL, output_dir=tmp_path
         )
 
-        target_backend = _make_backend()
+        target_backend = make_svec_backend()
         embedding_bundle.import_bundle(backend=target_backend, h5_path=bundle_path)
 
         roundtripped = target_backend.get_embeddings_by_concept_ids(
@@ -125,7 +104,7 @@ class TestBundleRoundTrip:
         ids = [1]
         vecs = np.array([[1.0, 2.0]], dtype=np.float32)
 
-        backend = _make_backend()
+        backend = make_svec_backend()
         _populate(backend, dim=dim, ids=ids, vecs=vecs)
 
         _, bundle_path = embedding_bundle.export_bundle(
@@ -156,7 +135,7 @@ class TestBundleRoundTrip:
         ids = [1]
         vecs = np.array([[1.0, 2.0]], dtype=np.float32)
 
-        backend = _make_backend()
+        backend = make_svec_backend()
         _populate(backend, dim=dim, ids=ids, vecs=vecs)
 
         _, bundle_path = embedding_bundle.export_bundle(
@@ -185,14 +164,14 @@ class TestBundleRoundTrip:
         ids = [1]
         vecs = np.array([[1.0, 2.0]], dtype=np.float32)
 
-        source_backend = _make_backend()
+        source_backend = make_svec_backend()
         _populate(source_backend, dim=dim, ids=ids, vecs=vecs)
 
         meta, bundle_path = embedding_bundle.export_bundle(
             backend=source_backend, model_name=_MODEL, output_dir=tmp_path
         )
 
-        target_backend = _make_backend()
+        target_backend = make_svec_backend()
         embedding_bundle.import_bundle(backend=target_backend, h5_path=bundle_path)
 
         record = target_backend.get_registered_model(model_name=_MODEL)
@@ -210,7 +189,7 @@ class TestImportRebuildIndex:
         self, tmp_path, monkeypatch
     ):
         dim = 2
-        backend = _make_backend()
+        backend = make_svec_backend()
         _populate(
             backend,
             dim=dim,
@@ -221,7 +200,7 @@ class TestImportRebuildIndex:
             backend=backend, model_name=_MODEL, output_dir=tmp_path
         )
 
-        target_backend = _make_backend()
+        target_backend = make_svec_backend()
         calls = []
         original_rebuild_index = target_backend.rebuild_index
 
@@ -235,11 +214,11 @@ class TestImportRebuildIndex:
             backend=target_backend, h5_path=bundle_path, rebuild_index=True
         )
 
-        assert calls == [(_MODEL, FlatIndexConfig())]
+        assert calls == [(_MODEL, FlatIndexConfig(metric_type=MetricType.COSINE))]
 
     def test_rebuild_index_false_by_default_skips_backend_call(self, tmp_path, monkeypatch):
         dim = 2
-        backend = _make_backend()
+        backend = make_svec_backend()
         _populate(
             backend,
             dim=dim,
@@ -250,7 +229,7 @@ class TestImportRebuildIndex:
             backend=backend, model_name=_MODEL, output_dir=tmp_path
         )
 
-        target_backend = _make_backend()
+        target_backend = make_svec_backend()
         calls = []
         monkeypatch.setattr(
             target_backend, "rebuild_index", lambda **kwargs: calls.append(kwargs)
@@ -270,7 +249,7 @@ class TestImportBackdatesRegistration:
 
     def test_new_registration_uses_bundles_exported_at(self, tmp_path):
         dim = 2
-        backend = _make_backend()
+        backend = make_svec_backend()
         _populate(
             backend,
             dim=dim,
@@ -287,7 +266,7 @@ class TestImportBackdatesRegistration:
         with h5py.File(bundle_path, "r+") as f:
             f.attrs[embedding_bundle.ATTR_EXPORTED_AT] = fake_exported_at
 
-        target_backend = _make_backend()
+        target_backend = make_svec_backend()
         embedding_bundle.import_bundle(backend=target_backend, h5_path=bundle_path)
 
         record = target_backend.get_registered_model(model_name=_MODEL)
@@ -300,7 +279,7 @@ class TestImportBackdatesRegistration:
 @pytest.mark.unit
 class TestExportNaming:
     def test_filename_derived_from_storage_identifier(self, tmp_path):
-        backend = _make_backend()
+        backend = make_svec_backend()
         _populate(backend, dim=2, ids=[1], vecs=np.array([[1.0, 0.0]], dtype=np.float32))
 
         record = backend.get_registered_model(model_name=_MODEL)
@@ -313,7 +292,7 @@ class TestExportNaming:
 
 
 def _bundle(tmp_path) -> Path:
-    backend = _make_backend()
+    backend = make_svec_backend()
     _populate(backend, dim=2, ids=[1], vecs=np.array([[1.0, 0.0]], dtype=np.float32))
     _, bundle_path = embedding_bundle.export_bundle(backend=backend, model_name=_MODEL, output_dir=tmp_path)
     return bundle_path
@@ -341,7 +320,7 @@ class TestBundleSchemaVersions:
     def test_version_1_flat_bundle_imports(self, tmp_path):
         bundle_path = _bundle(tmp_path)
         _as_v1(bundle_path, metric_type="cosine")
-        assert embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path) == 1
+        assert embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path) == 1
 
     def test_version_1_hnsw_bundle_with_matching_metric_reads(self, tmp_path):
         bundle_path = _bundle(tmp_path)
@@ -354,28 +333,28 @@ class TestBundleSchemaVersions:
         bundle_path = _bundle(tmp_path)
         _as_v1(bundle_path, metric_type="cosine", index_config=_HNSW_L2)
         with pytest.raises(embedding_bundle.BundleCorruptionError, match="built for 'l2'"):
-            embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path)
+            embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path)
 
     def test_version_1_bundle_without_metric_raises(self, tmp_path):
         bundle_path = _bundle(tmp_path)
         with h5py.File(bundle_path, "a") as f:
             f.attrs[embedding_bundle.ATTR_SCHEMA_VERSION] = 1
         with pytest.raises(embedding_bundle.BundleCorruptionError, match="metric_type"):
-            embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path)
+            embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path)
 
     def test_missing_schema_version_raises(self, tmp_path):
         bundle_path = _bundle(tmp_path)
         with h5py.File(bundle_path, "a") as f:
             del f.attrs[embedding_bundle.ATTR_SCHEMA_VERSION]
         with pytest.raises(embedding_bundle.BundleCorruptionError, match="schema_version"):
-            embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path)
+            embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path)
 
     def test_unsupported_schema_version_raises(self, tmp_path):
         bundle_path = _bundle(tmp_path)
         with h5py.File(bundle_path, "a") as f:
             f.attrs[embedding_bundle.ATTR_SCHEMA_VERSION] = 3
         with pytest.raises(embedding_bundle.UnsupportedBundleVersionError, match="version 3"):
-            embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path)
+            embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path)
 
 
 @pytest.mark.unit
@@ -385,7 +364,7 @@ class TestBundleSchemaValidation:
 
     def _make_bundle(self, tmp_path):
         dim = 2
-        backend = _make_backend()
+        backend = make_svec_backend()
         _populate(
             backend,
             dim=dim,
@@ -403,7 +382,7 @@ class TestBundleSchemaValidation:
             del f[embedding_bundle.VOCABULARY_IDS]
 
         with pytest.raises(embedding_bundle.BundleCorruptionError):
-            embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path)
+            embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path)
 
     def test_missing_attr_raises_corruption_error(self, tmp_path):
         bundle_path = self._make_bundle(tmp_path)
@@ -411,7 +390,7 @@ class TestBundleSchemaValidation:
             del f.attrs[embedding_bundle.ATTR_ROW_COUNT]
 
         with pytest.raises(embedding_bundle.BundleCorruptionError):
-            embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path)
+            embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path)
 
     def test_inconsistent_row_count_raises_corruption_error(self, tmp_path):
         bundle_path = self._make_bundle(tmp_path)
@@ -419,4 +398,4 @@ class TestBundleSchemaValidation:
             f.attrs[embedding_bundle.ATTR_ROW_COUNT] = 999
 
         with pytest.raises(embedding_bundle.BundleCorruptionError):
-            embedding_bundle.import_bundle(backend=_make_backend(), h5_path=bundle_path)
+            embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path)

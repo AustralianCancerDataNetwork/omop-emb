@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from functools import cached_property
 from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
@@ -10,8 +11,10 @@ from oa_configurator import (
     Role,
     guard_schema_provenance_for,
     physical_schema_of,
+    qualified,
 )
 from sqlalchemy import inspect, select, text
+from sqlalchemy.orm import Session
 
 try:
     from pgvector.sqlalchemy import Vector  # noqa: F401
@@ -21,6 +24,7 @@ except ImportError as _e:
     ) from _e
 
 from omop_emb.backends.base_backend import (
+    CompactionResult,
     ConceptEmbeddingRecord,
     EmbeddingBackend,
     writes,
@@ -31,8 +35,10 @@ from omop_emb.backends.embedding_table import (
 from omop_emb.backends.index_config import HNSWIndexConfig, IndexConfig
 from omop_emb.backends.pgvector.pg_sql import (
     create_pg_embedding_table,
+    delete_embedding_rows,
     drop_pg_embedding_table,
     hnsw_index_ddl,
+    installed_pgvector_version,
     pg_embedding_table_descriptor,
     q_all_concept_ids,
     q_embedding_count_by_vocabulary,
@@ -46,6 +52,7 @@ from omop_emb.backends.pgvector.pg_sql import (
 from omop_emb.config import BackendType, MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
+    EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
     get_similarity_from_distance,
@@ -106,6 +113,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     writable : bool, optional
         Forwarded to ``EmbeddingBackend``.
     """
+    # Instance variables
+    _MAX_EF_SEARCH = 1000
+    _filtered_hnsw_warned = False
 
     # ------------------------------------------------------------------
     # Backend identity
@@ -118,6 +128,10 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     @property
     def dialect(self) -> str:
         return Dialect.POSTGRESQL
+
+    @property
+    def default_flat_metric(self) -> None:
+        return None
 
     # ------------------------------------------------------------------
     # Storage table management
@@ -203,9 +217,14 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     # ------------------------------------------------------------------
 
     def _rebuild_index_impl(
-        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig
+        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig, vacuum: bool
     ) -> None:
-        """Drop every physical index on the table, then create the HNSW index index_config describes."""
+        """Drop every physical index on the table, then create the HNSW index index_config describes.
+
+        With ``vacuum``, ``VACUUM (ANALYZE)`` runs on the table afterwards so
+        the planner sees current statistics. It does not shrink the table on
+        disk, see ``compact_storage``.
+        """
         with self.emb_engine.begin() as conn:
             with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
                 for statement in self.drop_index_sql(model_record.model_name):
@@ -215,6 +234,48 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         logger.info(
             f"Rebuilt '{model_record.storage_identifier}' with index type '{index_config.index_type.value}'."
         )
+        if vacuum:
+            self._vacuum_analyze(model_record)
+
+    def _vacuum_analyze(self, model_record: EmbeddingModelRecord) -> None:
+        """Run ``VACUUM (ANALYZE)`` on the model's table."""
+        self._run_vacuum(model_record, "ANALYZE")
+
+    def _compact_storage_impl(self, *, model_record: EmbeddingModelRecord) -> CompactionResult:
+        """Run ``VACUUM FULL`` on the model's table, which rewrites it and rebuilds its indexes.
+
+        Plain ``VACUUM`` only makes dead space reusable, so the table keeps its
+        size on disk. ``VACUUM FULL`` holds an exclusive lock on the table.
+        """
+        size_before = self._relation_size(model_record)
+        self._run_vacuum(model_record, "FULL")
+        return CompactionResult(size_before, self._relation_size(model_record))
+
+    def _qualified_table(self, model_record: EmbeddingModelRecord) -> str:
+        return qualified(
+            self.emb_engine,
+            model_record.storage_identifier,
+            physical_schema=physical_schema_of(self.emb_engine),
+        )
+
+    def _run_vacuum(self, model_record: EmbeddingModelRecord, options: str) -> None:
+        """Run ``VACUUM`` with *options* on the model's table; PostgreSQL forbids it inside a transaction."""
+        table = self._qualified_table(model_record)
+        with self.emb_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
+                conn.execute(text(f"VACUUM ({options}) {table}"))
+
+    def _relation_size(self, model_record: EmbeddingModelRecord) -> int:
+        """Return the size in bytes of the model's table with its TOAST data and indexes."""
+        table = self._qualified_table(model_record)
+        with self.emb_engine.connect() as conn:
+            with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
+                return int(
+                    conn.execute(
+                        text("SELECT pg_total_relation_size(CAST(:table AS regclass))"),
+                        {"table": table},
+                    ).scalar_one()
+                )
 
     def physical_indexes(self, model_name: str) -> tuple[str, ...]:
         """Return existing indexes for this model's table without creating or
@@ -241,13 +302,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         *,
         model_record: EmbeddingModelRecord,
         records: Sequence[ConceptEmbeddingRecord],
-        embeddings: ndarray,
+        embeddings: EmbeddingArray,
     ) -> None:
-        self.validate_embeddings_and_records(
-            embeddings=embeddings,
-            records=records,
-            dimensions=model_record.dimensions,
-        )
         table = self._storage_table(model_record)
         try:
             with self.emb_session_factory.begin() as session:
@@ -263,6 +319,18 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             )
             raise
 
+    def _delete_embeddings_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+    ) -> int:
+        table = self._storage_table(model_record)
+        with self.emb_session_factory.begin() as session:
+            return delete_embedding_rows(
+                session=session, embedding_table=table, concept_ids=concept_ids
+            )
+
     # ------------------------------------------------------------------
     # Core read operations
     # ------------------------------------------------------------------
@@ -271,7 +339,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         self,
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
-    ) -> Mapping[int, Sequence[float]]:
+    ) -> Mapping[int, ndarray]:
         if not concept_ids:
             return {}
         table = self._storage_table(model_record)
@@ -284,49 +352,95 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             )
         return result
 
+    @cached_property
+    def _supports_iterative_scan(self) -> bool:
+        "Iterative index scans were added in pgvector 0.8.0"
+        with self.emb_session_factory() as session:
+            return installed_pgvector_version(session) >= (0, 8, 0)
+
+    def _configure_hnsw_scan(
+        self, session: Session, *, ef_search: int, k: int, filtered: bool
+    ) -> None:
+        """Set the HNSW scan parameters for the current transaction.
+
+        With pgvector 0.8.0 or newer the index keeps scanning until ``k`` rows
+        pass the filter, so ``ef_search`` is used as configured. The scan runs
+        in ``relaxed_order`` and the caller sorts the rows, because
+        ``strict_order`` skips every row closer than the last one it returned
+        and so loses neighbours found in later batches. Older versions stop at
+        ``ef_search`` candidates, so it is raised to at least ``k`` (capped at
+        1000) and a filtered query logs a one-time warning that its results
+        may be incomplete.
+
+        Parameters
+        ----------
+        session : Session
+            Session whose open transaction receives the settings.
+        ef_search : int
+            Configured ``ef_search`` of the model.
+        k : int
+            Number of neighbours requested.
+        filtered : bool
+            Whether the query carries a concept filter.
+        """
+        if self._supports_iterative_scan:
+            session.execute(text("SET LOCAL hnsw.iterative_scan = relaxed_order"))
+        else:
+            ef_search = min(max(ef_search, k), self._MAX_EF_SEARCH)
+            if filtered and not self._filtered_hnsw_warned:
+                self._filtered_hnsw_warned = True
+                logger.warning(
+                    "Filtered HNSW queries may return fewer than k results on pgvector "
+                    "below 0.8.0. Upgrade the extension to enable iterative index scans."
+                )
+        session.execute(text(f"SET LOCAL hnsw.ef_search = {int(ef_search)}"))
+
     def _get_nearest_concepts_impl(
         self,
         *,
         model_record: EmbeddingModelRecord,
         metric_type: MetricType,
-        query_embeddings: ndarray,
+        query_embeddings: EmbeddingArray,
         concept_filter: Optional[EmbeddingConceptFilter] = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
     ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
-        self.validate_embeddings(query_embeddings, model_record.dimensions)
-
         table = self._storage_table(model_record)
 
         with self.emb_session_factory.begin() as session:
             if isinstance(model_record.index_config, HNSWIndexConfig):
-                session.execute(
-                    text(f"SET LOCAL hnsw.ef_search = {int(model_record.index_config.ef_search)}")
+                self._configure_hnsw_scan(
+                    session,
+                    ef_search=model_record.index_config.ef_search,
+                    k=k,
+                    filtered=concept_filter is not None,
                 )
 
-            ann_rows = query_nearest_concept_ids(
-                session=session,
-                embedding_table=table,
-                query_embeddings=query_embeddings.tolist(),
-                metric_type=metric_type,
-                k=k,
-                concept_filter=concept_filter,
-            )
+            ann_rows = [
+                query_nearest_concept_ids(
+                    session=session,
+                    embedding_table=table,
+                    query_embedding=query_embedding,
+                    metric_type=metric_type,
+                    k=k,
+                    concept_filter=concept_filter,
+                )
+                for query_embedding in query_embeddings
+            ]
 
-        results: list[list[NearestConceptMatch]] = [
-            [] for _ in range(len(query_embeddings))
-        ]
-        for row in ann_rows:
-            similarity = get_similarity_from_distance(float(row.distance), metric_type)
-            results[row.q_id].append(
+        results = [
+            [
                 NearestConceptMatch(
                     concept_id=int(row.concept_id),
-                    similarity=float(similarity),
+                    similarity=float(get_similarity_from_distance(float(row.distance), metric_type)),
                     domain_id=row.domain_id,
                     vocabulary_id=row.vocabulary_id,
                     is_standard=bool(row.is_standard),
                     is_active=bool(row.is_valid),
                 )
-            )
+                for row in sorted(rows, key=lambda row: row.distance)
+            ]
+            for rows in ann_rows
+        ]
 
         return tuple(tuple(r) for r in results)
 

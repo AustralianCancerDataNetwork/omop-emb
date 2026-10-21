@@ -20,7 +20,7 @@ backend_type = "pgvector"    # or "sqlitevec"
 database     = "emb_db"
 ```
 
-See [Configuration Reference](configuration.md) for the full field list, both backends' setup.
+See [Configuration Reference](configuration.md) for the full field list, both backends' setup, and the [Performance Guide](performance.md) for which backend to pick at which size and what to tune.
 
 ## Index types
 
@@ -86,7 +86,13 @@ omop-emb maintenance rebuild-index --model-name embedding-model --index-type hns
 ```
 
 !!! info "pgvector HNSW"
-    HNSW is a SQL `CREATE INDEX USING hnsw` object built by `rebuild_index`. Without it, pgvector falls back to a sequential scan automatically. `ef_search` is read from the registry and applied to each query's transaction. A rebuild leaves exactly the index it describes: switching metric or reverting to FLAT drops the previous HNSW index.
+    HNSW is a SQL `CREATE INDEX USING hnsw` object built by `rebuild_index`. Without it, pgvector falls back to a sequential scan automatically. `ef_search` is read from the registry and applied to each query's transaction. A rebuild leaves exactly the index it describes: switching metric or reverting to FLAT drops the previous HNSW index. Afterwards `rebuild_index` runs `VACUUM (ANALYZE)` on the table by default, which refreshes the statistics the planner uses to choose between the index and an exact scan. On a large table this can take a while; pass `vacuum=False` (CLI: `--no-vacuum`) to skip it.
+
+!!! info "pgvector HNSW and filtered queries"
+    HNSW applies a concept filter after the index returns its candidates, so a selective filter can leave fewer than `k` rows. With pgvector 0.8.0 or newer, `omop-emb` sets `hnsw.iterative_scan` for each query, which keeps scanning the index until `k` rows pass the filter. The scan runs in `relaxed_order` and the rows are sorted by distance afterwards, because `strict_order` skips every row closer than the last one it returned and so loses neighbours found in later batches. Older pgvector versions have no iterative scan: `ef_search` is raised to at least `k` (at most 1000, the pgvector limit) and a filtered query logs a one-time warning, since its results can still be incomplete. Upgrade the extension to fix this. For very selective filters at a low `ef_search`, the planner may choose an exact scan over the index.
+
+!!! warning "HNSW builds in containers"
+    A parallel HNSW build can fail with `could not resize shared memory segment ... No space left on device` when the container's `/dev/shm` is small. Either enlarge `/dev/shm` (for example `shm_size` in Docker Compose) or set `max_parallel_maintenance_workers = 0` on the server, which builds serially and takes longer.
 
 !!! warning "pgvector dimension limit"
     The pgvector `vector` column type supports **at most 2,000 dimensions**. Models with more than 2,000 dimensions automatically use the `halfvec` column type (up to 4,000 dimensions). Registering above 4,000 dimensions raises a `ValueError`.
@@ -101,4 +107,21 @@ Each backend supports a subset of distance metrics:
 | pgvector | L2, Cosine, L1 | L2, Cosine, L1 |
 | FAISS sidecar | L2, Cosine | L2, Cosine |
 
-Stored vectors carry no metric; only queries do. For FLAT models any supported metric can be used per query. For HNSW models the metric is set by `rebuild_index` and queries must use it.
+Stored vectors carry no metric. A model carries one only when its backend needs it, and queries must then use exactly that metric.
+
+- **pgvector FLAT** computes the distance from the raw vectors, so queries choose any supported metric. A metric given for a FLAT model is ignored.
+- **pgvector HNSW** is locked to the metric it was built with. Change it with `rebuild_index`.
+- **sqlite-vec** declares the metric on the table, because its native `MATCH` search uses it. Every model is locked to one metric, cosine unless given `FlatIndexConfig(metric_type=...)`. Querying with another metric raises.
+
+!!! important "Changing the metric of a sqlite-vec model"
+    `rebuild_index` with another metric recreates the table from the stored vectors, so nothing is re-embedded:
+
+    ```bash
+    omop-emb maintenance rebuild-index --model <canonical-model-name> --metric-type l2
+    ```
+
+    Without `--metric-type` the metric is cosine. `MATCH` returns at most 4096 results per query, so a larger `k` raises.
+
+    A table created by an earlier version has no declared metric and raises `LegacyVectorTableError` when it is first used. The same command without `--metric-type` recreates it with cosine.
+
+    Deleted rows leave space that `VACUUM` alone does not return, because vec0 stores rows in chunks and does not refill the free slots of an earlier one. `maintenance prune-embeddings --apply --compact` recreates the table to return it.

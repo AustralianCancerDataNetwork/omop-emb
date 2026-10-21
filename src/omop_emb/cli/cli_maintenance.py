@@ -7,14 +7,21 @@ import typer
 from oa_configurator import Resolver
 from omop_llm.providers import canonical_model_name
 
-from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
+from omop_emb.backends import (
+    EmbeddingStoreReader,
+    open_vector_store_reader,
+    open_vector_store_writer,
+)
 from omop_emb.backends.index_config import index_config_from_index_type
 from omop_emb.config import (
     IndexType,
     MetricType,
     OmopEmbConfig,
+    open_cdm_sessions,
 )
+from omop_emb.population import PopulationScope, plan_population
 from omop_emb.storage import embedding_bundle
+from omop_emb.utils.cdm import CDMSessionFactory
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(help="Maintenance and management commands for omop-emb.")
@@ -93,7 +100,8 @@ def rebuild_index(
         MetricType,
         typer.Option(
             "--metric-type",
-            help="Distance metric. Required and locked in when --index-type is HNSW.",
+            help="Distance metric. Locked in for HNSW and for FLAT on sqlite-vec. "
+            "Ignored for FLAT on pgvector, which takes the metric per query.",
             rich_help_panel="Index Options",
         ),
     ] = MetricType.COSINE,
@@ -121,6 +129,16 @@ def rebuild_index(
             rich_help_panel="Index Options",
         ),
     ] = None,
+    vacuum: Annotated[
+        bool,
+        typer.Option(
+            "--vacuum/--no-vacuum",
+            help="Run the backend's maintenance step after the rebuild: VACUUM (ANALYZE) on the table "
+            "for pgvector to refresh planner statistics, VACUUM of the database file after a metric "
+            "change for sqlite-vec. Does not return space freed by deleted rows, see prune-embeddings --compact.",
+            rich_help_panel="Index Options",
+        ),
+    ] = True,
 ):
 
     if provider_type is not None:
@@ -144,15 +162,14 @@ def rebuild_index(
         num_neighbors=index_hnsw_num_neighbors,
         ef_search=index_hnsw_ef_search,
         ef_construction=index_hnsw_ef_construction,
-        metric_type=metric_type if index_type == IndexType.HNSW else None,
+        metric_type=metric_type,
     )
-    backend.rebuild_index(
+    record = backend.rebuild_index(
         model_name=model,
         index_config=index_config,
+        vacuum=vacuum,
     )
-    metric_info = (
-        f" (metric={metric_type.value})" if index_type == IndexType.HNSW else ""
-    )
+    metric_info = f" (metric={record.metric_type.value})" if record.metric_type else ""
     typer.echo(f"Rebuilt {index_type.value} index for '{model}'{metric_info}.")
 
 
@@ -210,6 +227,154 @@ def delete_model(
 
     backend.delete_model(model_name=model)
     typer.echo(f"Deleted model '{model}'.")
+
+
+@app.command(
+    name="prune-embeddings",
+    help="Remove stored embeddings that fall outside the given scope (dry run unless --apply).",
+)
+def prune_embeddings(
+    model: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            "-m",
+            help="Canonical model name to prune.",
+        ),
+    ],
+    provider_type: Annotated[
+        Optional[str],
+        typer.Option(
+            "--provider-type",
+            help="Embedding provider type. Used to canonicalize the model name if provided.",
+        ),
+    ] = None,
+    standard_only: Annotated[
+        bool,
+        typer.Option(
+            "--standard-only",
+            help="Keep only OMOP standard concepts (standard_concept in 'S' or 'C').",
+            rich_help_panel="Scope",
+        ),
+    ] = False,
+    include_invalid: Annotated[
+        bool,
+        typer.Option(
+            "--include-invalid",
+            help="Keep invalid concepts (invalid_reason 'D' or 'U'). Pruned by default.",
+            rich_help_panel="Scope",
+        ),
+    ] = False,
+    vocabularies: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--vocabulary",
+            help="Keep only concepts from specific OMOP vocabularies. Repeat to add multiple.",
+            rich_help_panel="Scope",
+        ),
+    ] = None,
+    domains: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--domain",
+            help="Keep only concepts from specific OMOP domains. Repeat to add multiple.",
+            rich_help_panel="Scope",
+        ),
+    ] = None,
+    apply: Annotated[
+        bool,
+        typer.Option(
+            "--apply",
+            help="Delete the rows. Without it the command only reports what would be deleted.",
+        ),
+    ] = False,
+    compact: Annotated[
+        bool,
+        typer.Option(
+            "--compact",
+            help="After deleting, return the disk space held by deleted and rewritten rows. Needs --apply "
+            "and also runs when nothing is left to delete. Rewrites the model's storage: sqlite-vec needs "
+            "free disk space for a second copy, pgvector takes an exclusive lock on the table.",
+        ),
+    ] = False,
+):
+    """Delete stored embeddings of concepts that are no longer in scope.
+
+    A row is pruned when its concept is not eligible under the scope (for
+    example invalid, non-standard or outside the listed vocabularies and
+    domains) or no longer exists in the CDM. Deleting leaves the space on disk
+    until ``--compact`` returns it. Without it, ``rebuild-index`` on an HNSW
+    model on pgvector still shrinks the index.
+    """
+    if compact and not apply:
+        typer.echo("--compact needs --apply.")
+        raise typer.Exit(1)
+    if provider_type is not None:
+        model = canonical_model_name(provider_type, model)
+
+    cfg = OmopEmbConfig.get_config()
+    resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    scope = PopulationScope(
+        standard_only=standard_only,
+        valid_only=not include_invalid,
+        vocabularies=tuple(vocabularies or ()),
+        domains=tuple(domains or ()),
+    )
+
+    with open_cdm_sessions() as cdm_sessions:
+        if not apply:
+            with open_vector_store_reader(resolved) as store:
+                prunable = _prune_candidates(store, cdm_sessions, model, scope)
+            if prunable:
+                typer.echo(
+                    f"Dry run: {len(prunable):,} embeddings would be deleted. Pass --apply to delete them."
+                )
+            return
+
+        with open_vector_store_writer(resolved) as writer:
+            prunable = _prune_candidates(writer, cdm_sessions, model, scope)
+            if prunable:
+                deleted = writer.delete_embeddings(model_name=model, concept_ids=prunable)
+                writer.refresh_model_updated_at_timestamp(model_name=model)
+                typer.echo(f"Deleted {deleted:,} embeddings from '{model}'.")
+            if compact:
+                result = writer.compact_storage(model_name=model)
+                typer.echo(
+                    f"Compacted storage: {_format_bytes(result.size_before)} to "
+                    f"{_format_bytes(result.size_after)}."
+                )
+            elif prunable:
+                typer.echo("Pass --compact to return the freed disk space.")
+
+
+def _format_bytes(size: int) -> str:
+    """Return *size* in bytes as a short string such as ``84.8 MB``."""
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024:
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TB"
+
+
+def _prune_candidates(
+    store: EmbeddingStoreReader,
+    cdm_sessions: CDMSessionFactory,
+    model: str,
+    scope: PopulationScope,
+) -> list[int]:
+    """Print the pruning summary for model and return the concept IDs to delete."""
+    if store.get_registered_model(model_name=model) is None:
+        typer.echo(f"No registered model found for '{model}'.")
+        raise typer.Exit(1)
+    plan = plan_population(cdm_sessions, store, model_name=model, scope=scope)
+    kept = len(plan.compatible_ids | plan.metadata_changed_ids)
+    typer.echo(f"Embeddings kept: {kept:,}")
+    typer.echo(f"Outside the scope: {len(plan.out_of_scope_ids):,}")
+    typer.echo(f"Concept no longer in the CDM: {len(plan.stale_ids):,}")
+    if not plan.prunable_ids:
+        typer.echo("Nothing to prune.")
+    return sorted(plan.prunable_ids)
 
 
 @app.command(

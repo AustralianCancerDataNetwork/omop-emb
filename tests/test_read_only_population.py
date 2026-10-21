@@ -21,7 +21,7 @@ from omop_emb.model_registry import ModelRegistry
 from omop_emb.population import PopulationScope, plan_population
 from omop_emb.utils.errors import MissingStorageTableError
 
-from .conftest import sqlite_cdm_database, sqlite_resolved_vector_store
+from .conftest import EMBEDDING_DIM, sqlite_cdm_database, sqlite_resolved_vector_store
 
 
 def _concept(concept_id: int, **overrides):
@@ -68,7 +68,7 @@ def test_reader_sees_registered_models_and_stored_embeddings_without_mutating(tm
             model_name="test-model",
             provider_type="ollama",
             index_config=FlatIndexConfig(),
-            dimensions=1,
+            dimensions=EMBEDDING_DIM,
         )
 
     statements: list[str] = []
@@ -106,7 +106,7 @@ def test_dropped_storage_table_raises_instead_of_being_recreated(tmp_path) -> No
             model_name="test-model",
             provider_type="ollama",
             index_config=FlatIndexConfig(),
-            dimensions=1,
+            dimensions=EMBEDDING_DIM,
         )
         with writer.emb_engine.begin() as connection:
             connection.execute(text(f"DROP TABLE {record.storage_identifier}"))
@@ -242,7 +242,7 @@ def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:
     assert plan.missing_ids == frozenset({1})
 
 
-def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:
+def test_filtered_population_reports_out_of_scope_rows_apart_from_stale_rows() -> None:
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()
     cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
@@ -263,6 +263,7 @@ def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:
             return (
                 ConceptEmbeddingRecord(1, "Condition", "SNOMED", True, True),
                 ConceptEmbeddingRecord(2, "Drug", "RxNorm", True, True),
+                ConceptEmbeddingRecord(3, "Condition", "SNOMED", True, True),
             )
 
     plan = plan_population(
@@ -272,9 +273,74 @@ def test_filtered_population_does_not_mark_out_of_scope_rows_stale() -> None:
         scope=PopulationScope(vocabularies=("SNOMED",)),
     )
 
-    assert tuple(row.vocabulary for row in plan.rows) == ("SNOMED",)
+    assert tuple(row.vocabulary for row in plan.rows) == ("RxNorm", "SNOMED")
     assert plan.compatible_ids == frozenset({1})
-    assert plan.stale_ids == frozenset()
+    assert plan.stale_ids == frozenset({3})
+    assert plan.out_of_scope_ids == frozenset({2})
+    assert plan.prunable_ids == frozenset({2, 3})
+
+
+def test_concept_deprecated_after_embedding_is_out_of_scope_not_stale() -> None:
+    resolved = sqlite_cdm_database()
+    engine, _ = resolved.create_engines()
+    cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
+    Concept.__table__.create(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            insert(Concept),
+            [_concept(1), _concept(2, invalid_reason="D", standard_concept=None)],
+        )
+
+    class Store:
+        initialized = True
+
+        def iter_stored_embeddings(self, _model_name: str, *, batch_size: int = 10_000):
+            return (
+                ConceptEmbeddingRecord(1, "Condition", "SNOMED", True, True),
+                ConceptEmbeddingRecord(2, "Condition", "SNOMED", True, True),
+                ConceptEmbeddingRecord(3, "Condition", "SNOMED", True, True),
+            )
+
+    plan = plan_population(cdm_sessions, Store(), model_name="test-model")
+
+    assert plan.out_of_scope_ids == frozenset({2})
+    assert plan.stale_ids == frozenset({3})
+    assert plan.prunable_ids == frozenset({2, 3})
+
+
+def test_population_scope_defaults_to_valid_concepts_only() -> None:
+    resolved = sqlite_cdm_database()
+    engine, _ = resolved.create_engines()
+    cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
+    Concept.__table__.create(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            insert(Concept),
+            [_concept(1), _concept(2, invalid_reason="D", standard_concept=None)],
+        )
+
+    class Store:
+        initialized = True
+
+        def iter_stored_embeddings(self, _model_name: str, *, batch_size: int = 10_000):
+            return (
+                ConceptEmbeddingRecord(1, "Condition", "SNOMED", True, True),
+                ConceptEmbeddingRecord(2, "Condition", "SNOMED", False, False),
+            )
+
+    assert PopulationScope().valid_only is True
+    plan = plan_population(cdm_sessions, Store(), model_name="test-model")
+    assert plan.eligible_ids == frozenset({1})
+    assert plan.out_of_scope_ids == frozenset({2})
+
+    keep_invalid = plan_population(
+        cdm_sessions,
+        Store(),
+        model_name="test-model",
+        scope=PopulationScope(valid_only=False),
+    )
+    assert keep_invalid.eligible_ids == frozenset({1, 2})
+    assert keep_invalid.prunable_ids == frozenset()
 
 
 def test_metadata_change_is_pending() -> None:

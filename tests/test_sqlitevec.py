@@ -9,19 +9,35 @@ import numpy as np
 import pytest
 import sqlalchemy as sa
 
-from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
+from omop_emb.backends.base_backend import ConceptEmbeddingRecord
+from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
+from omop_emb.backends.sqlitevec import sqlitevec_sql
+from omop_emb.backends.sqlitevec.sqlitevec_sql import (
+    MAX_KNN_K,
+    database_size,
+    ddl_drop_vec0,
+    declared_metric,
+    recreate_vec0,
+)
 from omop_emb.config import MetricType
 from omop_emb.model_registry import RegistryManager, registry_writer_engine
 from omop_emb.model_registry.model_registry_orm import ModelRegistry
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from omop_emb.utils.errors import LegacyVectorTableError
 
 from .conftest import (
+    ASPIRIN_ID,
+    DIABETES_ID,
+    L2_SIMILARITY,
+    CONCEPT_EMBEDDINGS,
     CONCEPT_RECORDS,
     EMBEDDING_DIM,
     MODEL_NAME,
     PROVIDER_TYPE,
     QUERY_EMBEDDING,
+    register_flat,
     sqlite_resolved_database,
 )
 from .shared_backend_tests import SharedBackendTests
@@ -40,106 +56,12 @@ class TestSQLiteVecEmbeddingBackend(SharedBackendTests):
 class TestSQLiteVecSpecific:
     """SQLiteVec-specific behaviour not covered by the shared suite."""
 
-    def test_hnsw_registration_raises(self, svec_backend: SQLiteVecEmbeddingBackend):
-        with pytest.raises(
-            ValueError, match="Only FLAT index is allowed at registration"
-        ):
-            svec_backend.register_model(
-                model_name=MODEL_NAME,
-                provider_type=PROVIDER_TYPE,
-                index_config=HNSWIndexConfig(metric_type=MetricType.COSINE),
-                dimensions=EMBEDDING_DIM,
-            )
-
-    def test_flat_registration_has_no_metric(
-        self, svec_backend: SQLiteVecEmbeddingBackend
-    ):
-        """FLAT-registered models have metric_type=None: metric is supplied at query time."""
-        record = svec_backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=FlatIndexConfig(),
-            dimensions=EMBEDDING_DIM,
-        )
-        assert record.metric_type is None
-
-    def test_flat_model_accepts_cosine_metric_at_query_time(
-        self, svec_backend: SQLiteVecEmbeddingBackend
-    ):
-        """FLAT models accept any metric at query time; sqlite-vec uses L2 internally.
-
-        The vec0 table is created with L2 (FLAT default). Querying with COSINE is
-        valid per the decorator, but distances are L2-based. The ordering is still
-        correct: [-10] is closer to query [-1] than [+10] under both metrics.
-        """
-        from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-
-        nonzero_records = [
-            ConceptEmbeddingRecord(
-                concept_id=1,
-                domain_id="Condition",
-                vocabulary_id="SNOMED",
-                is_standard=True,
-                is_valid=True,
-            ),
-            ConceptEmbeddingRecord(
-                concept_id=3,
-                domain_id="Drug",
-                vocabulary_id="RxNorm",
-                is_standard=True,
-                is_valid=True,
-            ),
-        ]
-        nonzero_embeddings = np.array([[-10.0], [10.0]], dtype=np.float32)
-
-        svec_backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=FlatIndexConfig(),
-            dimensions=EMBEDDING_DIM,
-        )
-        svec_backend.upsert_embeddings(
-            model_name=MODEL_NAME,
-            records=nonzero_records,
-            embeddings=nonzero_embeddings,
-        )
-        results = svec_backend.get_nearest_concepts(
-            model_name=MODEL_NAME,
-            metric_type=MetricType.COSINE,
-            query_embeddings=QUERY_EMBEDDING,
-            k=2,
-        )
-        concept_ids_in_order = [r.concept_id for r in results[0]]
-        # [-10] is closer to query [-1] than [+10] under both L2 and cosine
-        assert concept_ids_in_order[0] == 1  # Hypertension
-        assert concept_ids_in_order[1] == 3  # Aspirin
-        # Similarities are in valid range
-        for match in results[0]:
-            assert 0.0 <= match.similarity <= 1.0
-
-    def test_one_table_per_model(self, svec_backend: SQLiteVecEmbeddingBackend):
-        """One row and one physical table per model: metric is not part of the key."""
-        r1 = svec_backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=FlatIndexConfig(),
-            dimensions=EMBEDDING_DIM,
-        )
-        r2 = svec_backend.register_model(
-            model_name=MODEL_NAME,
-            provider_type=PROVIDER_TYPE,
-            index_config=FlatIndexConfig(),
-            dimensions=EMBEDDING_DIM,
-        )
-        assert r1.storage_identifier == r2.storage_identifier
-        assert len(svec_backend.get_registered_models(model_name=MODEL_NAME)) == 1
-
     def test_existing_old_style_storage_identifier_keeps_working(
         self, svec_backend: SQLiteVecEmbeddingBackend, monkeypatch
     ):
         model_name = "old-style-model"
         storage_identifier = "emb_old_style_model"
-        vector = np.linspace(0.0, 1.0, EMBEDDING_DIM, dtype=np.float32).reshape(1, -1)
+        vector = CONCEPT_EMBEDDINGS[:1]
         with svec_backend._registry.emb_session_factory.begin() as session:
             session.add(
                 ModelRegistry(
@@ -148,7 +70,7 @@ class TestSQLiteVecSpecific:
                     provider_type=PROVIDER_TYPE,
                     storage_identifier=storage_identifier,
                     dimensions=EMBEDDING_DIM,
-                    index_config=FlatIndexConfig(),
+                    index_config=FlatIndexConfig(metric_type=MetricType.COSINE),
                     details={},
                 )
             )
@@ -188,11 +110,504 @@ class TestSQLiteVecSpecific:
             sqlite_resolved_database(db_file), extensions=[_load_sqlite_vec]
         )
         backend = SQLiteVecEmbeddingBackend(emb_engine=engine)
-        record = backend.register_model(
+        assert register_flat(backend).model_name == MODEL_NAME
+        backend.emb_engine.dispose()
+
+
+def _make_pre_cosine_table(backend: SQLiteVecEmbeddingBackend, record, vectors: np.ndarray) -> None:
+    """Replace the storage table with one created without a declared metric."""
+    table = record.storage_identifier
+    with backend.emb_engine.begin() as conn:
+        conn.execute(sa.text(ddl_drop_vec0(table)))
+        conn.execute(
+            sa.text(
+                f'CREATE VIRTUAL TABLE "{table}" USING vec0(concept_id INTEGER PRIMARY KEY, '
+                "domain_id TEXT METADATA, vocabulary_id TEXT METADATA, "
+                "is_standard BOOLEAN METADATA, is_valid BOOLEAN METADATA DEFAULT 1, "
+                f"embedding FLOAT[{vectors.shape[1]}])"
+            )
+        )
+        for i, vector in enumerate(vectors, start=1):
+            conn.execute(
+                sa.text(
+                    f'INSERT INTO "{table}"(concept_id, domain_id, vocabulary_id, is_standard, is_valid, embedding) '
+                    "VALUES (:i, 'Condition', 'SNOMED', 1, 1, :v)"
+                ),
+                {"i": i, "v": vector.astype(np.float32).tobytes()},
+            )
+    backend._table_cache.clear()
+
+
+@pytest.mark.unit
+class TestSQLiteVecMetricTable:
+    """The vec0 table declares the metric the model is registered with, which MATCH queries rely on."""
+
+    def test_pre_cosine_table_raises_with_rebuild_instruction(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
+        record = register_flat(svec_backend)
+        _make_pre_cosine_table(svec_backend, record, CONCEPT_EMBEDDINGS)
+        with pytest.raises(LegacyVectorTableError, match="rebuild-index"):
+            svec_backend.get_nearest_concepts(
+                model_name=MODEL_NAME,
+                metric_type=MetricType.COSINE,
+                query_embeddings=QUERY_EMBEDDING,
+                k=1,
+            )
+
+    def test_rebuild_index_recreates_pre_cosine_table_keeping_rows(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
+        record = register_flat(svec_backend)
+        _make_pre_cosine_table(svec_backend, record, CONCEPT_EMBEDDINGS)
+        concept_ids = [r.concept_id for r in CONCEPT_RECORDS]
+
+        svec_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
+
+        assert svec_backend.get_embedding_count(model_name=MODEL_NAME) == len(CONCEPT_RECORDS)
+        stored = svec_backend.get_embeddings_by_concept_ids(model_name=MODEL_NAME, concept_ids=concept_ids)
+        assert np.allclose([stored[i] for i in concept_ids], CONCEPT_EMBEDDINGS)
+        results = svec_backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.COSINE,
+            query_embeddings=CONCEPT_EMBEDDINGS[[ASPIRIN_ID - 1]],
+            k=1,
+        )
+        assert results[0][0].concept_id == ASPIRIN_ID
+        assert results[0][0].similarity == pytest.approx(1.0, abs=1e-6)
+
+    def test_rebuild_index_leaves_an_unchanged_cosine_table_untouched(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
+        """An already-cosine table keeps its rows and is neither recreated nor vacuumed, also with vacuum on."""
+        register_flat(svec_backend)
+        svec_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+        )
+        statements: list[str] = []
+
+        def capture(_conn, _cursor, statement, *_args):
+            statements.append(statement.strip().upper())
+
+        sa.event.listen(svec_backend.emb_engine, "before_cursor_execute", capture)
+        try:
+            svec_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
+        finally:
+            sa.event.remove(svec_backend.emb_engine, "before_cursor_execute", capture)
+
+        assert svec_backend.get_embedding_count(model_name=MODEL_NAME) == len(CONCEPT_RECORDS)
+        assert not any(s.startswith(("VACUUM", "DROP", "CREATE")) for s in statements)
+
+    @pytest.mark.parametrize("fail_at", range(1, 9))
+    def test_failed_recreate_leaves_original_table_intact(
+        self, svec_backend: SQLiteVecEmbeddingBackend, fail_at: int
+    ):
+        """A failure at any statement rolls everything back: original rows, no staging table."""
+        record = register_flat(svec_backend)
+        _make_pre_cosine_table(svec_backend, record, CONCEPT_EMBEDDINGS)
+        table = record.storage_identifier
+        seen = []
+
+        def fail_on_nth_statement(conn, cursor, statement, parameters, context, executemany):
+            if statement.strip().upper().startswith("BEGIN"):
+                return
+            seen.append(statement)
+            if len(seen) == fail_at:
+                raise RuntimeError("injected failure")
+
+        sa.event.listen(svec_backend.emb_engine, "before_cursor_execute", fail_on_nth_statement)
+        try:
+            with pytest.raises(RuntimeError, match="injected failure"):
+                recreate_vec0(svec_backend.emb_engine, table, EMBEDDING_DIM, MetricType.COSINE)
+        finally:
+            sa.event.remove(svec_backend.emb_engine, "before_cursor_execute", fail_on_nth_statement)
+
+        assert declared_metric(svec_backend.emb_engine, table) is None
+        assert not sa.inspect(svec_backend.emb_engine).has_table(f"{table}__rebuild")
+        with svec_backend.emb_engine.connect() as conn:
+            assert conn.execute(sa.text(f'SELECT count(*) FROM "{table}"')).scalar_one() == len(CONCEPT_RECORDS)
+        assert recreate_vec0(svec_backend.emb_engine, table, EMBEDDING_DIM, MetricType.COSINE) == len(CONCEPT_RECORDS)
+        assert declared_metric(svec_backend.emb_engine, table) == MetricType.COSINE
+
+    def test_registration_locks_cosine_by_default(self, svec_backend: SQLiteVecEmbeddingBackend):
+        record = register_flat(svec_backend)
+        assert record.metric_type == MetricType.COSINE
+        assert declared_metric(svec_backend.emb_engine, record.storage_identifier) == MetricType.COSINE
+
+    @pytest.mark.parametrize("metric", [MetricType.L2, MetricType.L1])
+    def test_registration_with_another_metric_locks_the_model_to_it(
+        self, svec_backend: SQLiteVecEmbeddingBackend, metric: MetricType
+    ):
+        record = svec_backend.register_model(
             model_name=MODEL_NAME,
             provider_type=PROVIDER_TYPE,
-            index_config=FlatIndexConfig(),
+            index_config=FlatIndexConfig(metric_type=metric),
             dimensions=EMBEDDING_DIM,
         )
-        assert record.model_name == MODEL_NAME
-        backend.emb_engine.dispose()
+        assert record.metric_type == metric
+        assert declared_metric(svec_backend.emb_engine, record.storage_identifier) == metric
+        svec_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+        )
+        (matches,) = svec_backend.get_nearest_concepts(
+            model_name=MODEL_NAME, metric_type=metric, query_embeddings=QUERY_EMBEDDING, k=4
+        )
+        assert matches[0].concept_id == DIABETES_ID
+        similarities = [m.similarity for m in matches]
+        assert similarities == sorted(similarities, reverse=True)
+        other = MetricType.COSINE
+        with pytest.raises(ValueError, match=f"indexed with metric '{metric.value}'"):
+            svec_backend.get_nearest_concepts(
+                model_name=MODEL_NAME, metric_type=other, query_embeddings=QUERY_EMBEDDING, k=1
+            )
+
+    def test_l2_similarity_values(self, svec_backend: SQLiteVecEmbeddingBackend):
+        svec_backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FlatIndexConfig(metric_type=MetricType.L2),
+            dimensions=EMBEDDING_DIM,
+        )
+        svec_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+        )
+        (matches,) = svec_backend.get_nearest_concepts(
+            model_name=MODEL_NAME, metric_type=MetricType.L2, query_embeddings=QUERY_EMBEDDING, k=4
+        )
+        for match in matches:
+            assert match.similarity == pytest.approx(L2_SIMILARITY[match.concept_id], abs=1e-5)
+
+    def test_registering_an_unsupported_metric_raises(self, svec_backend: SQLiteVecEmbeddingBackend):
+        with pytest.raises(ValueError, match="not supported"):
+            svec_backend.register_model(
+                model_name=MODEL_NAME,
+                provider_type=PROVIDER_TYPE,
+                index_config=FlatIndexConfig(metric_type=MetricType.HAMMING),
+                dimensions=EMBEDDING_DIM,
+            )
+
+    def test_rebuild_index_switches_the_metric_keeping_rows(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
+        register_flat(svec_backend)
+        svec_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+        )
+
+        record = svec_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=FlatIndexConfig(metric_type=MetricType.L2)
+        )
+
+        assert record.metric_type == MetricType.L2
+        assert declared_metric(svec_backend.emb_engine, record.storage_identifier) == MetricType.L2
+        assert svec_backend.get_embedding_count(model_name=MODEL_NAME) == len(CONCEPT_RECORDS)
+        (matches,) = svec_backend.get_nearest_concepts(
+            model_name=MODEL_NAME, metric_type=MetricType.L2, query_embeddings=QUERY_EMBEDDING, k=1
+        )
+        assert matches[0].concept_id == DIABETES_ID
+        with pytest.raises(ValueError, match="indexed with metric 'l2'"):
+            svec_backend.get_nearest_concepts(
+                model_name=MODEL_NAME,
+                metric_type=MetricType.COSINE,
+                query_embeddings=QUERY_EMBEDDING,
+                k=1,
+            )
+
+    def test_rebuild_index_without_a_metric_uses_cosine(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
+        svec_backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FlatIndexConfig(metric_type=MetricType.L1),
+            dimensions=EMBEDDING_DIM,
+        )
+        record = svec_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
+        assert record.metric_type == MetricType.COSINE
+        assert declared_metric(svec_backend.emb_engine, record.storage_identifier) == MetricType.COSINE
+
+    def test_registry_row_without_a_metric_raises_then_rebuilds_to_cosine(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
+        """A row registered before models carried a metric points at a table that declares cosine."""
+        register_flat(svec_backend)
+        svec_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+        )
+        svec_backend._registry.update_index_config(
+            model_name=MODEL_NAME, index_config=FlatIndexConfig()
+        )
+        svec_backend._table_cache.clear()
+
+        with pytest.raises(LegacyVectorTableError, match="rebuild-index"):
+            svec_backend.get_embedding_count(model_name=MODEL_NAME)
+
+        record = svec_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
+        assert record.metric_type == MetricType.COSINE
+        assert svec_backend.get_embedding_count(model_name=MODEL_NAME) == len(CONCEPT_RECORDS)
+
+    def test_k_above_match_limit_raises(self, svec_backend: SQLiteVecEmbeddingBackend):
+        register_flat(svec_backend)
+        with pytest.raises(ValueError, match=str(MAX_KNN_K)):
+            svec_backend.get_nearest_concepts(
+                model_name=MODEL_NAME,
+                metric_type=MetricType.COSINE,
+                query_embeddings=QUERY_EMBEDDING,
+                k=MAX_KNN_K + 1,
+            )
+
+    def test_selective_filter_still_returns_k_rows(self, svec_backend: SQLiteVecEmbeddingBackend):
+        """The filter applies during the scan, so k matching rows come back even
+        when matching rows are a small share of the table."""
+        register_flat(svec_backend)
+        rng = np.random.default_rng(0)
+        n = 400
+        records = [
+            ConceptEmbeddingRecord(
+                concept_id=i,
+                domain_id="Condition" if i % 20 == 0 else "Drug",
+                vocabulary_id="SNOMED",
+                is_standard=True,
+                is_valid=True,
+            )
+            for i in range(1, n + 1)
+        ]
+        svec_backend.upsert_embeddings(
+            model_name=MODEL_NAME,
+            records=records,
+            embeddings=rng.normal(size=(n, EMBEDDING_DIM)).astype(np.float32),
+        )
+        results = svec_backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.COSINE,
+            query_embeddings=QUERY_EMBEDDING,
+            k=10,
+            concept_filter=EmbeddingConceptFilter(domains=("Condition",)),
+        )
+        assert len(results[0]) == 10
+        assert {m.domain_id for m in results[0]} == {"Condition"}
+        similarities = [m.similarity for m in results[0]]
+        assert similarities == sorted(similarities, reverse=True)
+
+
+@pytest.mark.unit
+class TestSQLiteVecVacuum:
+    """A metric-change rebuild vacuums unless told not to. Only compact_storage returns space freed by deletes."""
+
+    @staticmethod
+    def _file_backend(tmp_path) -> SQLiteVecEmbeddingBackend:
+        engine = registry_writer_engine(
+            sqlite_resolved_database(str(tmp_path / "vacuum.db")), extensions=[_load_sqlite_vec]
+        )
+        return SQLiteVecEmbeddingBackend(emb_engine=engine)
+
+    @staticmethod
+    def _freelist(backend: SQLiteVecEmbeddingBackend) -> int:
+        with backend.emb_engine.connect() as conn:
+            return int(conn.exec_driver_sql("PRAGMA freelist_count").scalar_one())
+
+    def _rebuild_pre_cosine(self, tmp_path, **kwargs) -> SQLiteVecEmbeddingBackend:
+        backend = self._file_backend(tmp_path)
+        record = register_flat(backend, dimensions=64)
+        _make_pre_cosine_table(backend, record, np.random.default_rng(0).normal(size=(600, 64)))
+        backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig(), **kwargs)
+        return backend
+
+    def test_vacuum_is_the_default_and_returns_freed_pages(self, tmp_path):
+        backend = self._rebuild_pre_cosine(tmp_path)
+        try:
+            assert self._freelist(backend) == 0
+            assert backend.get_embedding_count(model_name=MODEL_NAME) == 600
+        finally:
+            backend.emb_engine.dispose()
+
+    def test_vacuum_false_keeps_the_freed_pages(self, tmp_path):
+        backend = self._rebuild_pre_cosine(tmp_path, vacuum=False)
+        try:
+            assert self._freelist(backend) > 0
+            assert backend.get_embedding_count(model_name=MODEL_NAME) == 600
+        finally:
+            backend.emb_engine.dispose()
+
+
+    @staticmethod
+    def _fill(backend: SQLiteVecEmbeddingBackend, n: int = 4000) -> list[int]:
+        register_flat(backend, dimensions=64)
+        ids = list(range(1, n + 1))
+        backend.upsert_embeddings(
+            model_name=MODEL_NAME,
+            records=[ConceptEmbeddingRecord(i, "Condition", "SNOMED", True, True) for i in ids],
+            embeddings=np.random.default_rng(0).normal(size=(len(ids), 64)).astype(np.float32),
+        )
+        return ids
+
+    @staticmethod
+    def _statements(backend: SQLiteVecEmbeddingBackend, call) -> list[str]:
+        statements: list[str] = []
+
+        def capture(_conn, _cursor, statement, *_args):
+            statements.append(statement.strip().upper())
+
+        sa.event.listen(backend.emb_engine, "before_cursor_execute", capture)
+        try:
+            call()
+        finally:
+            sa.event.remove(backend.emb_engine, "before_cursor_execute", capture)
+        return statements
+
+    def test_rebuild_index_does_not_compact_deleted_rows(self, tmp_path):
+        backend = self._file_backend(tmp_path)
+        try:
+            ids = self._fill(backend)
+            backend.delete_embeddings(model_name=MODEL_NAME, concept_ids=ids[::2])
+            before = self._size(backend)
+
+            backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
+
+            assert self._size(backend) == before
+        finally:
+            backend.emb_engine.dispose()
+
+    def test_compact_storage_shrinks_the_file_after_scattered_deletes(self, tmp_path):
+        """Scattered deletes leave vec0 chunks partly empty, so only a recreation shrinks the file."""
+        backend = self._file_backend(tmp_path)
+        try:
+            ids = self._fill(backend)
+            backend.delete_embeddings(model_name=MODEL_NAME, concept_ids=ids[::2])
+            with backend.emb_engine.connect() as conn:
+                conn.exec_driver_sql("VACUUM")
+            before = self._size(backend)
+
+            result = backend.compact_storage(model_name=MODEL_NAME)
+
+            assert result.size_before == before
+            assert result.size_after < before * 0.8
+            assert result.reclaimed == before - result.size_after
+            assert backend.get_embedding_count(model_name=MODEL_NAME) == 2000
+            hits = backend.get_nearest_concepts(
+                model_name=MODEL_NAME,
+                metric_type=MetricType.COSINE,
+                query_embeddings=backend.get_embeddings_by_concept_ids(
+                    model_name=MODEL_NAME, concept_ids=[ids[1]]
+                )[ids[1]][None, :],
+                k=1,
+            )
+            assert hits[0][0].concept_id == ids[1]
+        finally:
+            backend.emb_engine.dispose()
+
+    def test_compact_storage_after_a_plain_ingest_rewrites_nothing(self, tmp_path):
+        backend = self._file_backend(tmp_path)
+        try:
+            self._fill(backend)
+            before = self._size(backend)
+
+            statements = self._statements(backend, lambda: backend.compact_storage(model_name=MODEL_NAME))
+
+            assert self._size(backend) == before
+            assert not any(s.startswith(("VACUUM", "DROP", "CREATE", "INSERT")) for s in statements)
+        finally:
+            backend.emb_engine.dispose()
+
+    def test_compact_storage_vacuums_when_whole_chunks_were_emptied(self, tmp_path):
+        """Emptied chunks free their pages, so a VACUUM suffices and the table is not recreated."""
+        backend = self._file_backend(tmp_path)
+        try:
+            ids = self._fill(backend)
+            backend.delete_embeddings(model_name=MODEL_NAME, concept_ids=ids[:2048])
+            before = self._size(backend)
+
+            statements = self._statements(backend, lambda: backend.compact_storage(model_name=MODEL_NAME))
+
+            assert self._size(backend) < before
+            assert any(s.startswith("VACUUM") for s in statements)
+            assert not any(s.startswith(("DROP", "CREATE")) for s in statements)
+            assert backend.get_embedding_count(model_name=MODEL_NAME) == 4000 - 2048
+        finally:
+            backend.emb_engine.dispose()
+
+    @staticmethod
+    def _size(backend: SQLiteVecEmbeddingBackend) -> int:
+        return database_size(backend.emb_engine)
+
+
+@pytest.mark.unit
+class TestSQLiteVecConceptIdLookups:
+    """Short ID lists use one equality lookup per ID, longer ones one scan, with identical results."""
+
+    IDS = [r.concept_id for r in CONCEPT_RECORDS]
+
+    @pytest.fixture(params=[0, 100], ids=["scan", "point-lookups"])
+    def backend(self, request, svec_backend: SQLiteVecEmbeddingBackend, monkeypatch):
+        monkeypatch.setattr(sqlitevec_sql, "POINT_LOOKUP_MAX", request.param)
+        register_flat(svec_backend)
+        svec_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+        )
+        return svec_backend
+
+    def test_embeddings_by_ids_skip_missing_and_duplicate_ids(self, backend):
+        table = backend._storage_table(backend.get_registered_model(model_name=MODEL_NAME))
+        with backend.emb_session_factory() as session:
+            found = sqlitevec_sql.query_embeddings_by_ids(
+                session, table, [self.IDS[0], self.IDS[0], 999_999, self.IDS[2]]
+            )
+        assert set(found) == {self.IDS[0], self.IDS[2]}
+        assert np.allclose(found[self.IDS[2]], CONCEPT_EMBEDDINGS[2])
+
+    def test_embeddings_by_ids_raises_for_missing_ids(self, backend):
+        with pytest.raises(ValueError, match="999999"):
+            backend.get_embeddings_by_concept_ids(
+                model_name=MODEL_NAME, concept_ids=[self.IDS[0], 999_999]
+            )
+
+    def test_metadata_by_ids_ignore_missing_ids(self, backend):
+        found = backend.get_concept_filter_metadata(
+            model_name=MODEL_NAME, concept_ids=[self.IDS[1], 999_999]
+        )
+        assert found == {self.IDS[1]: CONCEPT_RECORDS[1]}
+
+    def test_delete_counts_existing_rows_only(self, backend):
+        deleted = backend.delete_embeddings(
+            model_name=MODEL_NAME, concept_ids=[self.IDS[0], self.IDS[1], 999_999]
+        )
+        assert deleted == 2
+        assert backend.get_stored_concept_ids(model_name=MODEL_NAME) == set(self.IDS[2:])
+
+    def test_upsert_replaces_rows_without_duplicating_them(self, backend):
+        backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=CONCEPT_RECORDS[:2], embeddings=CONCEPT_EMBEDDINGS[:2]
+        )
+        assert backend.get_embedding_count(model_name=MODEL_NAME) == len(CONCEPT_RECORDS)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "limit, expected_statements, scans",
+    [(100, 3, False), (2, 1, True)],
+    ids=["short list: one lookup per id", "long list: one scan"],
+)
+def test_concept_id_lookup_statement_shape(
+    svec_backend: SQLiteVecEmbeddingBackend, monkeypatch, limit, expected_statements, scans
+):
+    monkeypatch.setattr(sqlitevec_sql, "POINT_LOOKUP_MAX", limit)
+    register_flat(svec_backend)
+    svec_backend.upsert_embeddings(
+        model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+    )
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, *_args):
+        statements.append(statement.lower())
+
+    sa.event.listen(svec_backend.emb_engine, "before_cursor_execute", capture)
+    try:
+        svec_backend.get_concept_filter_metadata(
+            model_name=MODEL_NAME, concept_ids=[r.concept_id for r in CONCEPT_RECORDS[:3]]
+        )
+    finally:
+        sa.event.remove(svec_backend.emb_engine, "before_cursor_execute", capture)
+
+    lookups = [s for s in statements if "select" in s and "concept_id" in s]
+    assert len(lookups) == expected_statements
+    assert all("json_each" in s for s in lookups) is scans

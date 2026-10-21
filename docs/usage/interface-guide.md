@@ -33,7 +33,7 @@ store = open_vector_store_reader(resolved)    # EmbeddingStoreReader
 | Write methods | allowed | raise `ReadOnlyStoreError` |
 | Database connection | read-write | read-only (PostgreSQL `READ ONLY` transactions, SQLite `query_only`) |
 
-`EmbeddingStoreReader` is a `Protocol` listing every read: registry lookups (`get_registered_model()`, `get_registered_models()`), stored data (`iter_stored_embeddings()`, `has_any_embeddings()`, `get_stored_concept_ids()`, `get_embeddings_by_concept_ids()`, `get_concept_filter_metadata()`, the counts), `get_nearest_concepts()`, and index inspection (`physical_indexes()`, `drop_index_sql()`). Both backends satisfy it, and `EmbeddingReaderInterface`, `export_bundle()` and `FAISSCache.build_from_backend()` accept it. Only `get_nearest_concepts()` takes a `metric_type`; nothing stored depends on one. A store that was never set up reports an empty registry instead of being created by being looked at. On pgvector the `vector` extension must already exist in the database; the writer creates it.
+`EmbeddingStoreReader` is a `Protocol` listing every read: registry lookups (`get_registered_model()`, `get_registered_models()`), stored data (`iter_stored_embeddings()`, `has_any_embeddings()`, `get_stored_concept_ids()`, `get_embeddings_by_concept_ids()`, `get_concept_filter_metadata()`, the counts), `get_nearest_concepts()`, and index inspection (`physical_indexes()`, `drop_index_sql()`). Both backends satisfy it, and `EmbeddingReaderInterface`, `export_bundle()` and `FAISSCache.build_from_backend()` accept it. Only `get_nearest_concepts()` takes a `metric_type`; stored vectors do not depend on one, but a model locked to a metric accepts queries with that metric only. A store that was never set up reports an empty registry instead of being created by being looked at. On pgvector the `vector` extension must already exist in the database; the writer creates it.
 
 ---
 
@@ -157,6 +157,8 @@ results = reader.get_nearest_concepts(
 )
 # results: tuple[tuple[NearestConceptMatch, ...], ...], one inner tuple per query row
 ```
+
+Embedding arrays are `EmbeddingArray`s: 2-D arrays of shape `(N, D)`, with one vector per row and `D` the model's dimensionality. Every entry point (upsert, backend and FAISS queries, embedding-model output) converts them to float32 and raises `ValueError` for a 1-D array, a wrong width, or NaN or infinite values. A single query vector must be passed as a one-row matrix, for example `vector[None, :]`.
 
 ### Query similar concepts
 

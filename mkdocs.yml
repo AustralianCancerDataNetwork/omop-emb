@@ -34,6 +34,7 @@ nav:
       - "oa-configurator Setup": getting-started/configuration.md
       - "Environment Variables": usage/configuration.md
       - Embedding Storage: usage/backend-selection.md
+      - Performance Guide: usage/performance.md
       - Interfaces: usage/interface-guide.md
       - Asymmetric Embeddings: usage/asymmetric-embeddings.md
       - "CLI Reference": usage/cli.md

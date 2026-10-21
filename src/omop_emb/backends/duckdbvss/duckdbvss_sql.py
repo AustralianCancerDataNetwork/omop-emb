@@ -16,6 +16,7 @@ import logging
 import typing
 from collections.abc import Sequence
 
+import numpy as np
 from numpy import ndarray
 from oa_configurator import (
     Dialect,
@@ -207,8 +208,8 @@ def query_embeddings_by_ids(
     session: Session,
     embedding_table: type[DuckDBVSSEmbeddingTable],
     concept_ids: Sequence[int],
-) -> dict[int, list[float]]:
-    """Fetch embedding vectors for concept_ids, keyed by concept ID; absent IDs are omitted."""
+) -> dict[int, ndarray]:
+    """Fetch float32 embedding vectors for concept_ids, keyed by concept ID; absent IDs are omitted."""
     from omop_emb.backends.db_utils import in_values
 
     columns = inspect(embedding_table).columns
@@ -217,7 +218,7 @@ def query_embeddings_by_ids(
             in_values(columns.concept_id, concept_ids, dialect=Dialect.DUCKDB)
         )
     ).all()
-    return {int(row[0]): list(row[1]) for row in rows}
+    return {int(row[0]): np.asarray(row[1], dtype=np.float32) for row in rows}
 
 
 # ---------------------------------------------------------------------------

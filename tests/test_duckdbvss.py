@@ -29,6 +29,7 @@ from .conftest import (
     HYPERTENSION_ID,
     MODEL_NAME,
     PROVIDER_TYPE,
+    QUERY_EMBEDDING,
 )
 from .shared_backend_tests import SharedBackendTests
 
@@ -124,10 +125,10 @@ class TestDuckDBVSSHNSWBackend:
         results = duckdbvss_backend.get_nearest_concepts(
             model_name=MODEL_NAME,
             metric_type=MetricType.L2,
-            query_embeddings=np.array([[-10.0]], dtype=np.float32),
+            query_embeddings=QUERY_EMBEDDING,
             k=1,
         )
-        assert results[0][0].concept_id == HYPERTENSION_ID
+        assert results[0][0].concept_id == DIABETES_ID
 
     def _knn_uses_hnsw_index(self, duckdbvss_backend: DuckDBVSSEmbeddingBackend, *, table_ref: str) -> bool:
         """EXPLAIN a KNN query shaped like _build_knn_stmt's real one
@@ -137,7 +138,7 @@ class TestDuckDBVSSHNSWBackend:
         with duckdbvss_backend.emb_engine.connect() as conn:
             conn.execute(text("SET hnsw_enable_experimental_persistence = true"))
             plan_rows = conn.execute(
-                text(f"EXPLAIN SELECT concept_id, array_distance(embedding, [-10.0]::FLOAT[1]) AS distance FROM {table_ref} ORDER BY distance LIMIT 1")
+                text(f"EXPLAIN SELECT concept_id, array_distance(embedding, [1.0, 0.0]::FLOAT[{EMBEDDING_DIM}]) AS distance FROM {table_ref} ORDER BY distance LIMIT 1")
             ).fetchall()
         return any("HNSW Index:" in row[1] for row in plan_rows)
 
@@ -253,7 +254,7 @@ class TestDuckDBVSSCompactionAndDelete:
         self._register_and_upsert(duckdbvss_backend)
         record = duckdbvss_backend.get_registered_model(model_name=MODEL_NAME)
 
-        size_before, size_after = duckdbvss_backend._compact_storage_impl(model_record=record)
+        result = duckdbvss_backend._compact_storage_impl(model_record=record)
 
-        assert size_before >= 0
-        assert size_after >= 0
+        assert result.size_before >= 0
+        assert result.size_after >= 0

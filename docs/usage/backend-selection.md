@@ -8,6 +8,7 @@
 |---|---|---|---|
 | **sqlite-vec** | `sqlitevec` | nothing extra | File or in-memory (`database_name = ":memory:"` on the underlying connection). |
 | **pgvector** | `pgvector` | `omop-emb[pgvector]` + PostgreSQL | Scales to large corpora. HNSW indexing and `halfvec` storage. |
+| **DuckDB VSS** | `duckdbvss` | `omop-emb[duckdbvss]` | File or in-memory, single process, no server. HNSW indexing via the `vss` extension (`INSTALL vss` needs network access once, then it's cached locally). |
 
 !!! note "FAISS is a sidecar, not a backend"
     FAISS (`omop-emb[faiss-cpu]`) is a read-acceleration layer that sits on top of sqlite-vec or pgvector. It is not a primary backend and has no `backend_type` of its own. See the [CLI reference](cli.md#build-faiss-cache) for how to export and use FAISS indices.
@@ -43,7 +44,7 @@ Use FLAT when the corpus is small (tens of thousands of concepts) or when exact 
 
 ### HNSW
 
-Hierarchical Navigable Small World graph. Approximate nearest-neighbour search with sub-linear query time. Supported by pgvector only; **not** supported by sqlite-vec.
+Hierarchical Navigable Small World graph. Approximate nearest-neighbour search with sub-linear query time. Supported **only** by `pgvector` and DuckDB VSS.
 
 | Parameter | Default | Effect |
 |---|---|---|
@@ -91,6 +92,9 @@ omop-emb maintenance rebuild-index --model-name embedding-model --index-type hns
 !!! info "pgvector HNSW and filtered queries"
     HNSW applies a concept filter after the index returns its candidates, so a selective filter can leave fewer than `k` rows. With pgvector 0.8.0 or newer, `omop-emb` sets `hnsw.iterative_scan` for each query, which keeps scanning the index until `k` rows pass the filter. The scan runs in `relaxed_order` and the rows are sorted by distance afterwards, because `strict_order` skips every row closer than the last one it returned and so loses neighbours found in later batches. Older pgvector versions have no iterative scan: `ef_search` is raised to at least `k` (at most 1000, the pgvector limit) and a filtered query logs a one-time warning, since its results can still be incomplete. Upgrade the extension to fix this. For very selective filters at a low `ef_search`, the planner may choose an exact scan over the index.
 
+!!! warning "DuckDB VSS HNSW and filtered queries"
+    DuckDB's built-in `vss` extension applies a concept filter after the index returns its candidates, the same way pgvector does, but with no `iterative_scan`-equivalent at all: raising `ef_search` has no effect on a filtered query, confirmed empirically up to `ef_search=20000` on a 300k-row table (always short, never returning `k` rows). `omop-emb` works around this by materializing the filtered rows into a CTE before computing distance, which stops DuckDB's optimizer from using the index and forces an exact scan over just the filtered subset instead. This is always correct, but always pays the exact-scan cost for a filtered query; there is no faster, index-accelerated path today. See the [Performance Guide](performance.md) for measured latency. A community fork, [`hnsw_acorn`](https://duckdb.org/community_extensions/extensions/hnsw_acorn), adds predicate-aware index traversal; not adopted here, since it's a single-maintainer fork distributed outside DuckDB's own extension.
+
 !!! warning "HNSW builds in containers"
     A parallel HNSW build can fail with `could not resize shared memory segment ... No space left on device` when the container's `/dev/shm` is small. Either enlarge `/dev/shm` (for example `shm_size` in Docker Compose) or set `max_parallel_maintenance_workers = 0` on the server, which builds serially and takes longer.
 
@@ -105,6 +109,7 @@ Each backend supports a subset of distance metrics:
 |---|---|---|
 | sqlite-vec | L2, Cosine, L1 | none |
 | pgvector | L2, Cosine, L1 | L2, Cosine, L1 |
+| DuckDB VSS | L2, Cosine | L2, Cosine |
 | FAISS sidecar | L2, Cosine | L2, Cosine |
 
 Stored vectors carry no metric. A model carries one only when its backend needs it, and queries must then use exactly that metric.
@@ -112,6 +117,7 @@ Stored vectors carry no metric. A model carries one only when its backend needs 
 - **pgvector FLAT** computes the distance from the raw vectors, so queries choose any supported metric. A metric given for a FLAT model is ignored.
 - **pgvector HNSW** is locked to the metric it was built with. Change it with `rebuild_index`.
 - **sqlite-vec** declares the metric on the table, because its native `MATCH` search uses it. Every model is locked to one metric, cosine unless given `FlatIndexConfig(metric_type=...)`. Querying with another metric raises.
+- **DuckDB VSS FLAT** & **DuckDB VSS HNSW**  same as `pgevctor`. 
 
 !!! important "Changing the metric of a sqlite-vec model"
     `rebuild_index` with another metric recreates the table from the stored vectors, so nothing is re-embedded:

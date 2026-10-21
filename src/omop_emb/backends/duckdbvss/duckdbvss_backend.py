@@ -22,11 +22,13 @@ from oa_configurator import (
     Role,
     guard_schema_provenance_for,
     physical_schema_of,
+    qualified,
 )
 from sqlalchemy import inspect, select, text
 from sqlalchemy.engine import make_url
 
 from omop_emb.backends.base_backend import (
+    CompactionResult,
     ConceptEmbeddingRecord,
     EmbeddingBackend,
 )
@@ -51,6 +53,7 @@ from omop_emb.backends.index_config import HNSWIndexConfig, IndexConfig
 from omop_emb.config import BackendType, MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
+    EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
     get_similarity_from_distance,
@@ -165,36 +168,45 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
     # ------------------------------------------------------------------
 
     def _rebuild_index_impl(
-        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig
+        self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig, vacuum: bool
     ) -> None:
-        """Drop every physical index on the table, then create the HNSW index index_config describes."""
+        """Drop every physical index on the table, then create the HNSW index index_config describes.
+
+        With ``vacuum``, ``ANALYZE`` runs on the table afterwards so the
+        planner sees current statistics. It does not reclaim disk space,
+        see ``compact_storage``.
+        """
+        table_ref = qualified(
+            self.emb_engine, model_record.storage_identifier, physical_schema=physical_schema_of(self.emb_engine)
+        )
         with self.emb_engine.begin() as conn:
             with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
                 for statement in self.drop_index_sql(model_record.model_name):
                     conn.execute(text(statement))
                 if isinstance(index_config, HNSWIndexConfig):
                     conn.execute(text(hnsw_index_ddl(self.emb_engine, model_record, index_config)))
+                if vacuum:
+                    conn.execute(text(f"ANALYZE {table_ref}"))
         logger.info(
             f"Rebuilt '{model_record.storage_identifier}' with index type '{index_config.index_type.value}'."
         )
 
-    def _compact_storage_impl(self, *, model_record: EmbeddingModelRecord) -> tuple[int, int]:
-        """Checkpoint the database, returning (size_before, size_after) in bytes.
+    def _compact_storage_impl(self, *, model_record: EmbeddingModelRecord) -> CompactionResult:
+        """Checkpoint the database; this is the only reclaim DuckDB offers here.
 
         DuckDB only merges a row group's blocks once roughly a quarter of
         its rows are deleted, and never shrinks the file itself. Database copy
-        would allow shrinking but writes a new file including other schemas 
-        and is therefore out of scope. 
+        would allow shrinking but writes a new file including other schemas
+        and is therefore out of scope.
 
-        To comply with the interface, this method returns the database size before 
-        and after the checkpoint. Only a database's very first checkpoint ever
-        can read as a jump from 0, since blocks aren't accounted for until something 
+        A database's very first checkpoint ever can read as a jump from 0 in
+        the returned sizes, since blocks aren't accounted for until something
         checkpoints them.
         """
         size_before = database_block_bytes(self.emb_engine)
         with self.emb_engine.begin() as conn:
             conn.execute(text("CHECKPOINT"))
-        return size_before, database_block_bytes(self.emb_engine)
+        return CompactionResult(size_before, database_block_bytes(self.emb_engine))
 
     def physical_indexes(self, model_name: str) -> tuple[str, ...]:
         """Return existing indexes for this model's table without creating or
@@ -221,21 +233,22 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
         *,
         model_record: EmbeddingModelRecord,
         records: Sequence[ConceptEmbeddingRecord],
-        embeddings: ndarray,
+        embeddings: EmbeddingArray,
     ) -> None:
-        self.validate_embeddings_and_records(
-            embeddings=embeddings,
-            records=records,
-            dimensions=model_record.dimensions,
-        )
         table = self._storage_table(model_record)
-        with self.emb_session_factory.begin() as session:
-            upsert_embedding_rows(
-                session=session,
-                records=records,
-                embeddings=embeddings,
-                registered_table=table,
+        try:
+            with self.emb_session_factory.begin() as session:
+                upsert_embedding_rows(
+                    session=session,
+                    records=records,
+                    embeddings=embeddings,
+                    registered_table=table,
+                )
+        except Exception as exc:
+            logger.error(
+                "Failed to upsert embeddings for '%s': %s", model_record.model_name, exc
             )
+            raise
 
     def _delete_embeddings_impl(
         self,
@@ -255,7 +268,7 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
         self,
         model_record: EmbeddingModelRecord,
         concept_ids: Sequence[int],
-    ) -> Mapping[int, Sequence[float]]:
+    ) -> Mapping[int, ndarray]:
         if not concept_ids:
             return {}
         table = self._storage_table(model_record)
@@ -273,12 +286,10 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
         *,
         model_record: EmbeddingModelRecord,
         metric_type: MetricType,
-        query_embeddings: ndarray,
+        query_embeddings: EmbeddingArray,
         concept_filter: EmbeddingConceptFilter | None = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
     ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
-        self.validate_embeddings(query_embeddings, model_record.dimensions)
-
         table = self._storage_table(model_record)
 
         with self.emb_session_factory() as session:

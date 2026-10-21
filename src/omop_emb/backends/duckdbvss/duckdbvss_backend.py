@@ -32,6 +32,8 @@ from omop_emb.backends.base_backend import (
 )
 from omop_emb.backends.duckdbvss.duckdbvss_sql import (
     create_duckdbvss_embedding_table,
+    database_block_bytes,
+    delete_embedding_rows,
     drop_duckdbvss_embedding_table,
     duckdbvss_embedding_table_descriptor,
     hnsw_index_ddl,
@@ -111,6 +113,18 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
     -----
     KNN queries run one statement per query vector: DuckDB has no
     lateral-join equivalent of pgvector's multi-vector batching.
+
+    A filtered KNN query against an HNSW-indexed table always exact-scans
+    the filtered rows instead of using the index (see
+    ``duckdbvss_sql._build_filtered_exact_scan_stmt``): DuckDB's built-in
+    ``vss`` extension returns too few rows, often zero, on filtered queries
+    regardless of ``ef_search``, with no tunable fix.
+
+    Compaction only runs ``CHECKPOINT``: DuckDB has no table-scoped
+    reclaim, and the only thing that shrinks the file (``COPY FROM
+    DATABASE`` to a fresh one) rewrites the whole physical file, which can
+    host more than one schema's data here, so it's out of scope for
+    compacting a single model's table.
     """
 
     @property
@@ -120,6 +134,11 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
     @property
     def dialect(self) -> str:
         return Dialect.DUCKDB
+
+    @property
+    def default_flat_metric(self) -> None:
+        """``None``: FLAT queries choose their metric per query, as on pgvector."""
+        return None
 
     # ------------------------------------------------------------------
     # Storage table management
@@ -158,6 +177,24 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
         logger.info(
             f"Rebuilt '{model_record.storage_identifier}' with index type '{index_config.index_type.value}'."
         )
+
+    def _compact_storage_impl(self, *, model_record: EmbeddingModelRecord) -> tuple[int, int]:
+        """Checkpoint the database, returning (size_before, size_after) in bytes.
+
+        DuckDB only merges a row group's blocks once roughly a quarter of
+        its rows are deleted, and never shrinks the file itself. Database copy
+        would allow shrinking but writes a new file including other schemas 
+        and is therefore out of scope. 
+
+        To comply with the interface, this method returns the database size before 
+        and after the checkpoint. Only a database's very first checkpoint ever
+        can read as a jump from 0, since blocks aren't accounted for until something 
+        checkpoints them.
+        """
+        size_before = database_block_bytes(self.emb_engine)
+        with self.emb_engine.begin() as conn:
+            conn.execute(text("CHECKPOINT"))
+        return size_before, database_block_bytes(self.emb_engine)
 
     def physical_indexes(self, model_name: str) -> tuple[str, ...]:
         """Return existing indexes for this model's table without creating or
@@ -199,6 +236,16 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
                 embeddings=embeddings,
                 registered_table=table,
             )
+
+    def _delete_embeddings_impl(
+        self,
+        *,
+        model_record: EmbeddingModelRecord,
+        concept_ids: Sequence[int],
+    ) -> int:
+        table = self._storage_table(model_record)
+        with self.emb_session_factory.begin() as session:
+            return delete_embedding_rows(session=session, embedding_table=table, concept_ids=concept_ids)
 
     # ------------------------------------------------------------------
     # Core read operations
@@ -246,6 +293,7 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
                 k=k,
                 dimensions=model_record.dimensions,
                 concept_filter=concept_filter,
+                exact_scan_if_filtered=isinstance(model_record.index_config, HNSWIndexConfig),
             )
 
         results = [

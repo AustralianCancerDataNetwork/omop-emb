@@ -14,13 +14,17 @@ pytest.importorskip(
     "duckdb_sqlalchemy", reason="omop-emb[duckdbvss] not installed: skipping duckdbvss tests"
 )
 
+from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.duckdbvss.duckdbvss_backend import DuckDBVSSEmbeddingBackend
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.config import IndexType, MetricType
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 from .conftest import (
+    ASPIRIN_ID,
     CONCEPT_EMBEDDINGS,
     CONCEPT_RECORDS,
+    DIABETES_ID,
     EMBEDDING_DIM,
     HYPERTENSION_ID,
     MODEL_NAME,
@@ -156,3 +160,100 @@ class TestDuckDBVSSHNSWBackend:
 
         duckdbvss_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
         assert self._knn_uses_hnsw_index(duckdbvss_backend, table_ref=table_ref) is False
+
+    def test_filtered_hnsw_query_returns_full_k(
+        self, duckdbvss_backend: DuckDBVSSEmbeddingBackend
+    ):
+        """Regression guard: DuckDB's built-in vss extension returns too few
+        rows, often zero, on a filtered top-k query against an HNSW index,
+        regardless of ef_search (confirmed empirically up to ef_search=20000
+        on a 50k-row table: no effect at all). The backend must route a
+        filtered HNSW query around the index instead of trusting it."""
+        dim = 16
+        n = 400
+        rng = np.random.default_rng(0)
+        records = [
+            ConceptEmbeddingRecord(
+                concept_id=i,
+                domain_id="Condition",
+                vocabulary_id="RARE" if i % 50 == 0 else "COMMON",
+                is_standard=True,
+                is_valid=True,
+            )
+            for i in range(n)
+        ]
+        embeddings = rng.normal(size=(n, dim)).astype(np.float32)
+
+        duckdbvss_backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FlatIndexConfig(),
+            dimensions=dim,
+        )
+        duckdbvss_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=records, embeddings=embeddings
+        )
+        duckdbvss_backend.rebuild_index(
+            model_name=MODEL_NAME,
+            index_config=HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=16),
+        )
+
+        query = rng.normal(size=(1, dim)).astype(np.float32)
+        results = duckdbvss_backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.COSINE,
+            query_embeddings=query,
+            concept_filter=EmbeddingConceptFilter(vocabularies=("RARE",)),
+            k=5,
+        )
+        assert len(results[0]) == 5
+        assert all(r.vocabulary_id == "RARE" for r in results[0])
+
+
+@pytest.mark.duckdbvss
+@pytest.mark.db_dialect
+class TestDuckDBVSSCompactionAndDelete:
+    """DuckDB VSS-specific delete and compaction behaviour."""
+
+    def _register_and_upsert(self, backend):
+        backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FlatIndexConfig(),
+            dimensions=EMBEDDING_DIM,
+        )
+        backend.upsert_embeddings(
+            model_name=MODEL_NAME,
+            records=list(CONCEPT_RECORDS),
+            embeddings=CONCEPT_EMBEDDINGS,
+        )
+
+    def test_delete_embeddings_impl_removes_rows(
+        self, duckdbvss_backend: DuckDBVSSEmbeddingBackend
+    ):
+        self._register_and_upsert(duckdbvss_backend)
+        record = duckdbvss_backend.get_registered_model(model_name=MODEL_NAME)
+
+        deleted = duckdbvss_backend._delete_embeddings_impl(
+            model_record=record, concept_ids=[HYPERTENSION_ID, DIABETES_ID]
+        )
+
+        assert deleted == 2
+        remaining = duckdbvss_backend.get_stored_concept_ids(model_name=MODEL_NAME)
+        assert HYPERTENSION_ID not in remaining
+        assert DIABETES_ID not in remaining
+        assert ASPIRIN_ID in remaining
+
+    def test_compact_storage_impl_checkpoints_without_crashing(
+        self, duckdbvss_backend: DuckDBVSSEmbeddingBackend
+    ):
+        """Whether CHECKPOINT frees any blocks depends on how the deletes
+        happen to fall across row groups, and a database's very first
+        checkpoint can read as a jump from 0."""
+        self._register_and_upsert(duckdbvss_backend)
+        record = duckdbvss_backend.get_registered_model(model_name=MODEL_NAME)
+
+        size_before, size_after = duckdbvss_backend._compact_storage_impl(model_record=record)
+
+        assert size_before >= 0
+        assert size_after >= 0

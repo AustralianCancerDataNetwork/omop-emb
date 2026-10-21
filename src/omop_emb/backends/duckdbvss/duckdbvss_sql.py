@@ -25,15 +25,16 @@ from oa_configurator import (
     qualified,
 )
 from sqlalchemy import (
-    REAL, 
-    Engine, 
-    MetaData, 
-    Row, 
-    Select, 
-    Table, 
-    func, 
-    inspect, 
-    select
+    REAL,
+    Engine,
+    MetaData,
+    Row,
+    Select,
+    Table,
+    func,
+    inspect,
+    select,
+    text,
 )
 from sqlalchemy.orm import Session, mapped_column, registry
 from sqlalchemy.schema import DropTable
@@ -160,6 +161,36 @@ def upsert_embedding_rows(
     )
 
 
+def delete_embedding_rows(
+    session: Session,
+    embedding_table: type[DuckDBVSSEmbeddingTable],
+    concept_ids: Sequence[int],
+) -> int:
+    """Delete rows for concept_ids; returns the number of rows deleted."""
+    from sqlalchemy import delete
+
+    from omop_emb.backends.db_utils import in_values
+
+    columns = inspect(embedding_table).columns
+    result = session.execute(
+        delete(embedding_table).where(
+            in_values(columns.concept_id, concept_ids, dialect=Dialect.DUCKDB)
+        )
+    )
+    return int(result.rowcount)  # ty: ignore[unresolved-attribute]
+
+
+def database_block_bytes(engine: Engine) -> int:
+    """Blocks DuckDB has allocated on disk for engine's database, in bytes.
+
+    ``0`` for an in-memory database, which has no on-disk footprint.
+    """
+    with engine.connect() as conn:
+        row = conn.execute(text("PRAGMA database_size")).mappings().first()
+    assert row is not None
+    return int(row["total_blocks"]) * int(row["block_size"])
+
+
 def q_all_concept_ids(embedding_table: type[DuckDBVSSEmbeddingTable]) -> Select:
     """Build a SELECT for all concept IDs in an embedding table."""
     return select(embedding_table.concept_id)
@@ -195,7 +226,7 @@ def query_embeddings_by_ids(
 
 
 def get_distance(
-    embedding_table: type[DuckDBVSSEmbeddingTable],
+    embedding_col: ColumnElement,
     query_vector: list[float],
     metric: MetricType,
     dimensions: int,
@@ -204,7 +235,9 @@ def get_distance(
 
     Parameters
     ----------
-    embedding_table : type[DuckDBVSSEmbeddingTable]
+    embedding_col : ColumnElement
+        The embedding column to compare against, either the mapped table's
+        own column or a CTE's projection of it.
     query_vector : list[float]
     metric : MetricType
     dimensions : int
@@ -222,9 +255,58 @@ def get_distance(
             f"DuckDB VSS does not support metric '{metric.value}'. "
             f"Supported: {[m.value for m in _DISTANCE_FUNC]}"
         )
-    embedding_col = getattr(embedding_table, EMBEDDING_COLUMN_NAME)
     query_param = cast(query_vector, FixedArray(REAL, dimensions))
     return getattr(func, func_name)(embedding_col, query_param)
+
+
+def _build_filtered_exact_scan_stmt(
+    embedding_table: type[DuckDBVSSEmbeddingTable],
+    query_vector: list[float],
+    metric_type: MetricType,
+    k: int,
+    dimensions: int,
+    concept_filter: EmbeddingConceptFilter,
+) -> Select:
+    """Exact-scan KNN over only the rows satisfying concept_filter.
+
+    Materializing the filtered rows into a CTE first stops DuckDB's optimizer
+    from rewriting the query into an ``HNSW_INDEX_SCAN``. Without this, the filter
+    is applied after the index already picked its candidates, resulting in less
+    or no rows returned.
+
+    Cost scales with the size of the filtered set.
+
+    Notes
+    -----
+    Alternative: https://duckdb.org/community_extensions/extensions/hnsw_acorn
+
+    """
+    columns = inspect(embedding_table).columns
+    base = select(
+        embedding_table.concept_id,
+        embedding_table.domain_id,
+        embedding_table.vocabulary_id,
+        embedding_table.is_standard,
+        embedding_table.is_valid,
+        getattr(embedding_table, EMBEDDING_COLUMN_NAME),
+    )
+    base = apply_concept_filter_where(base, columns, concept_filter, dialect=Dialect.DUCKDB)
+    filtered = base.cte("filtered_embeddings").prefix_with("MATERIALIZED")
+    distance = get_distance(
+        filtered.c[EMBEDDING_COLUMN_NAME], query_vector, metric_type, dimensions
+    ).label("distance")
+    return (
+        select(
+            filtered.c.concept_id,
+            distance,
+            filtered.c.domain_id,
+            filtered.c.vocabulary_id,
+            filtered.c.is_standard,
+            filtered.c.is_valid,
+        )
+        .order_by(distance)
+        .limit(k)
+    )
 
 
 def _build_knn_stmt(
@@ -234,9 +316,36 @@ def _build_knn_stmt(
     k: int,
     dimensions: int,
     concept_filter: EmbeddingConceptFilter | None = None,
+    exact_scan_if_filtered: bool = False,
 ) -> Select:
-    """Build a single-vector KNN statement. Internal; see :func:`query_knn_batch`."""
-    distance = get_distance(embedding_table, query_vector, metric_type, dimensions).label("distance")
+    """Build a single-vector KNN statement. Internal; see :func:`query_knn_batch`.
+
+    Parameters
+    ----------
+    embedding_table : type[DuckDBVSSEmbeddingTable]
+        The mapped table class to query.
+    query_vector : list[float]
+        The query vector to find nearest neighbors for.
+    metric_type : MetricType
+        The distance metric to use for the KNN query.
+    k : int
+        The number of nearest neighbors to return.
+    dimensions : int
+        The dimensionality of the embedding vectors.
+    concept_filter : EmbeddingConceptFilter | None, optional
+        If provided, only return neighbors whose concept IDs satisfy this filter.
+    exact_scan_if_filtered : bool, optional
+        If ``True`` and *concept_filter* is provided, route the query through
+        :func:`_build_filtered_exact_scan_stmt` to avoid a DuckDB VSS bug
+        that can return fewer than ``k`` rows on a filtered query with HNSW
+        index.
+    """
+    if concept_filter is not None and exact_scan_if_filtered:
+        return _build_filtered_exact_scan_stmt(
+            embedding_table, query_vector, metric_type, k, dimensions, concept_filter
+        )
+    embedding_col = getattr(embedding_table, EMBEDDING_COLUMN_NAME)
+    distance = get_distance(embedding_col, query_vector, metric_type, dimensions).label("distance")
     stmt = (
         select(
             embedding_table.concept_id,
@@ -264,6 +373,7 @@ def query_knn_batch(
     k: int,
     dimensions: int,
     concept_filter: EmbeddingConceptFilter | None = None,
+    exact_scan_if_filtered: bool = False,
 ) -> list[Sequence[Row]]:
     """Run KNN queries against a DuckDB VSS table, one per vector in *query_vectors*.
 
@@ -277,7 +387,13 @@ def query_knn_batch(
     results: list[Sequence[Row]] = []
     for query_vector in query_vectors:
         stmt = _build_knn_stmt(
-            embedding_table, query_vector.tolist(), metric_type, k, dimensions, concept_filter
+            embedding_table,
+            query_vector.tolist(),
+            metric_type,
+            k,
+            dimensions,
+            concept_filter,
+            exact_scan_if_filtered,
         )
         results.append(session.execute(stmt).all())
     return results

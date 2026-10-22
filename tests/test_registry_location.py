@@ -86,7 +86,7 @@ def test_reader_refuses_a_registry_left_in_another_schema(pg_db, monkeypatch) ->
     guaranteed-empty schema so the proper location is genuinely absent for
     this test, regardless of what the shared test database's real
     omop_emb_registry schema already holds from other tests."""
-    import omop_emb.model_registry.model_registry_orm as model_registry_orm
+    from omop_emb.model_registry import model_registry_orm
 
     with (
         isolated_test_schema(
@@ -105,7 +105,7 @@ def test_reader_refuses_a_registry_left_in_another_schema(pg_db, monkeypatch) ->
 
 
 def test_reader_passes_when_the_registry_is_correctly_placed(pg_db, monkeypatch) -> None:
-    import omop_emb.model_registry.model_registry_orm as model_registry_orm
+    from omop_emb.model_registry import model_registry_orm
 
     with isolated_test_schema(
         pg_db.committing_engine, prefix="emb_registry_proper"

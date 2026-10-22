@@ -5,8 +5,8 @@ from unittest.mock import Mock, patch
 import pytest
 from oa_configurator.resolver import ResolvedModel, ResolvedProvider
 
-from omop_emb.config import MetricType
 from omop_emb.backends.index_config import FlatIndexConfig
+from omop_emb.config import MetricType
 from omop_emb.model_registry.model_registry_manager import RegistryManager
 
 

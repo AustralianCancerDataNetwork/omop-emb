@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from functools import cached_property
-from typing import Mapping, Optional, Sequence, Tuple
 
 from numpy import ndarray
 from oa_configurator import (
@@ -166,9 +166,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         model_name: str,
         dimensions: int,
         provider_type: str,
-        index_config: Optional[IndexConfig] = None,
-        metadata: Optional[Mapping[str, object]] = None,
-        registered_at: Optional[datetime] = None,
+        index_config: IndexConfig | None = None,
+        metadata: Mapping[str, object] | None = None,
+        registered_at: datetime | None = None,
     ) -> EmbeddingModelRecord:
         """Register a model, validating pgvector dimensionality limits.
 
@@ -401,9 +401,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         model_record: EmbeddingModelRecord,
         metric_type: MetricType,
         query_embeddings: EmbeddingArray,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        concept_filter: EmbeddingConceptFilter | None = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
         table = self._storage_table(model_record)
 
         with self.emb_session_factory.begin() as session:

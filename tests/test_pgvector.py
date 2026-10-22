@@ -15,9 +15,9 @@ import pytest
 pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests")
 
 import sqlalchemy as sa
-from sqlalchemy import event as sa_event
 from oa_configurator import Role, physical_schema_of
 from oa_configurator.testing import resolve_with_role_schemas, scoped_test_schema
+from sqlalchemy import event as sa_event
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord, _open_writer
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig

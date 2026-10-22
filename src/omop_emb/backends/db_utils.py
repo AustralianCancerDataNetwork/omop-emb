@@ -1,7 +1,8 @@
 """Backend-agnostic database utilities shared across storage backends."""
 
 import json
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from oa_configurator import Dialect
 from sqlalchemy import Column, ColumnElement, Integer, Select, any_, bindparam, func, select
@@ -75,7 +76,7 @@ def apply_concept_filter_where(
             in_values(columns.vocabulary_id, concept_filter.vocabularies, dialect=dialect)
         )
     if concept_filter.require_standard:
-        stmt = stmt.where(columns.is_standard == True)  # noqa: E712
+        stmt = stmt.where(columns.is_standard == True)
     if concept_filter.require_active:
-        stmt = stmt.where(columns.is_valid == True)  # noqa: E712
+        stmt = stmt.where(columns.is_valid == True)
     return stmt

@@ -7,16 +7,15 @@ from collections.abc import Sequence
 import numpy as np
 import pytest
 import sqlalchemy as sa
-
 from oa_configurator import (
     CDMDatabaseConfig,
     ConnectionConfig,
+    Dialect,
     GenericDatabaseConfig,
     ResolvedCDMDatabase,
-    Dialect,
-    Resolver,
     ResolvedDatabase,
     ResolvedVectorStore,
+    Resolver,
     SchemaClaim,
     StackConfig,
 )
@@ -25,7 +24,7 @@ from omop_emb.backends.base_backend import ConceptEmbeddingRecord, EmbeddingBack
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
-from omop_emb.config import MODEL_REGISTRY_SCHEMA, OmopEmbConfig, REGISTRY_SCHEMA_KEY
+from omop_emb.config import MODEL_REGISTRY_SCHEMA, REGISTRY_SCHEMA_KEY, OmopEmbConfig
 from omop_emb.model_registry import ensure_registry_table, registry_writer_engine
 
 

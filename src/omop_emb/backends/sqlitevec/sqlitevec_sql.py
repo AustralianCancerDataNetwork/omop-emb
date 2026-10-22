@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import re
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 from numpy import ndarray
@@ -13,6 +13,7 @@ from oa_configurator import Dialect
 from sqlalchemy import (
     Column,
     Engine,
+    LargeBinary,
     MetaData,
     Row,
     Select,
@@ -24,7 +25,6 @@ from sqlalchemy import (
     insert,
     select,
     text,
-    LargeBinary,
 )
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -74,7 +74,7 @@ def table_exists(engine: Engine, table_name: str) -> bool:
         )
 
 
-def declared_metric(engine: Engine, table_name: str) -> Optional[MetricType]:
+def declared_metric(engine: Engine, table_name: str) -> MetricType | None:
     """Return the metric the vec0 table *table_name* declares on its embedding column.
 
     Parameters
@@ -341,7 +341,7 @@ def _build_knn_stmt(
     table: Table,
     query_vector: ndarray,
     k: int,
-    concept_filter: Optional[EmbeddingConceptFilter] = None,
+    concept_filter: EmbeddingConceptFilter | None = None,
 ) -> Select:
     """Build a single-vector ``MATCH`` KNN statement. Internal; see :func:`query_knn_batch`."""
     stmt = (
@@ -373,7 +373,7 @@ def query_knn_batch(
     table: Table,
     query_vectors: Sequence[ndarray],
     k: int,
-    concept_filter: Optional[EmbeddingConceptFilter] = None,
+    concept_filter: EmbeddingConceptFilter | None = None,
 ) -> list[Sequence[Row]]:
     """Run KNN queries against a vec0 table, one per vector in *query_vectors*, in the table's metric.
 

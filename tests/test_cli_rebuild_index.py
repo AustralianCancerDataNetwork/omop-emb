@@ -11,7 +11,7 @@ from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.cli import cli_maintenance
 from omop_emb.config import MetricType
 
-from .conftest import MODEL_NAME, PROVIDER_TYPE, EMBEDDING_DIM, sqlite_resolved_vector_store
+from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE, sqlite_resolved_vector_store
 
 runner = CliRunner()
 

@@ -6,10 +6,10 @@ in-memory SQLiteVec backend and assert expected similarity scores.
 
 from __future__ import annotations
 
+import faiss
 import numpy as np
 import pytest
 
-import faiss
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend

@@ -11,9 +11,8 @@ import sqlalchemy as sa
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
-from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
+from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, sqlitevec_sql
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
-from omop_emb.backends.sqlitevec import sqlitevec_sql
 from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     MAX_KNN_K,
     database_size,
@@ -29,11 +28,11 @@ from omop_emb.utils.errors import LegacyVectorTableError
 
 from .conftest import (
     ASPIRIN_ID,
-    DIABETES_ID,
-    L2_SIMILARITY,
     CONCEPT_EMBEDDINGS,
     CONCEPT_RECORDS,
+    DIABETES_ID,
     EMBEDDING_DIM,
+    L2_SIMILARITY,
     MODEL_NAME,
     PROVIDER_TYPE,
     QUERY_EMBEDDING,

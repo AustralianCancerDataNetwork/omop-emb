@@ -37,12 +37,12 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib.metadata import version as _pkg_version
 from itertools import batched
 from pathlib import Path
-from typing import Iterator, Sequence
 
 import h5py
 import numpy as np
@@ -147,7 +147,7 @@ class BundleMetadata:
     exported_at: str
 
     @classmethod
-    def from_h5_attrs(cls, attrs: "h5py.AttributeManager") -> "BundleMetadata":
+    def from_h5_attrs(cls, attrs: h5py.AttributeManager) -> BundleMetadata:
         """Read the attributes of a bundle of any supported schema version.
 
         Raises
@@ -175,7 +175,7 @@ class BundleMetadata:
         )
 
 
-def _schema_version(attrs: "h5py.AttributeManager") -> int:
+def _schema_version(attrs: h5py.AttributeManager) -> int:
     """Return the bundle's schema version, raising if it is missing or unsupported."""
     version = int(get_required_attribute(attrs, ATTR_SCHEMA_VERSION))
     if version not in SUPPORTED_SCHEMA_VERSIONS:
@@ -186,7 +186,7 @@ def _schema_version(attrs: "h5py.AttributeManager") -> int:
     return version
 
 
-def _check_v1_metric(attrs: "h5py.AttributeManager", index_config: IndexConfig) -> None:
+def _check_v1_metric(attrs: h5py.AttributeManager, index_config: IndexConfig) -> None:
     """Check a version 1 bundle's metric_type against its index_config.
 
     Version 1 wrote the HNSW metric, or ``cosine`` as a placeholder for FLAT.
@@ -204,7 +204,7 @@ def _check_v1_metric(attrs: "h5py.AttributeManager", index_config: IndexConfig) 
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+    return datetime.now(tz=UTC).isoformat()
 
 
 @dataclass(frozen=True)
@@ -254,7 +254,7 @@ def stream_embedding_batches(
         )
 
 
-def validate_bundle(f: "h5py.File") -> None:
+def validate_bundle(f: h5py.File) -> None:
     """Raise :class:`BundleCorruptionError` if *f* doesn't match the bundle schema."""
     _schema_version(f.attrs)
     missing_attrs = [a for a in REQUIRED_ATTRS if a not in f.attrs]
@@ -287,9 +287,9 @@ def validate_bundle(f: "h5py.File") -> None:
 def export_bundle(
     backend: EmbeddingStoreReader,
     model_name: str,
-    output_dir: "Path | str",
+    output_dir: Path | str,
     batch_size: int = 100_000,
-) -> "tuple[BundleMetadata, Path]":
+) -> tuple[BundleMetadata, Path]:
     """Stream every embedding for *model_name* into one HDF5 bundle.
 
     Raw, never-normalized vectors are written directly into a chunked,
@@ -415,7 +415,7 @@ def export_bundle(
 
 def import_bundle(
     backend: EmbeddingBackend,
-    h5_path: "Path | str",
+    h5_path: Path | str,
     force: bool = False,
     batch_size: int = 10_000,
     rebuild_index: bool = False,

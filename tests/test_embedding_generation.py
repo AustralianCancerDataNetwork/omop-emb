@@ -16,15 +16,15 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pytest
 from oa_configurator.resolver import ResolvedModel, ResolvedProvider
-from sqlalchemy import insert
-
 from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_alchemy.cross_database import cdm_sessionmaker
+from sqlalchemy import insert
+
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.config import MetricType
 from omop_emb.interface import (
-    EmbeddingRole,
     EmbeddingReaderInterface,
+    EmbeddingRole,
     EmbeddingWriterInterface,
 )
 

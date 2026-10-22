@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import inspect
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields, is_dataclass
 from enum import Enum
-from typing import Any, Callable, Optional, Self, cast, get_type_hints
+from typing import Any, Self, cast, get_type_hints
 
 from omop_emb.config import IndexType, MetricType, parse_index_type
 
@@ -33,7 +34,7 @@ class IndexConfig(ABC):
     """
 
     index_type: IndexType
-    metric_type: Optional[MetricType]
+    metric_type: MetricType | None
 
     def __post_init__(self) -> None:
         self._validate_metric_type_after_init()
@@ -167,7 +168,7 @@ class FlatIndexConfig(IndexConfig):
     """
 
     index_type: IndexType = IndexType.FLAT
-    metric_type: Optional[MetricType] = None
+    metric_type: MetricType | None = None
 
     def _validate_metric_type_after_init(self) -> None:
         """FLAT accepts any metric or none."""
@@ -244,7 +245,7 @@ def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexC
 
 
 def index_config_from_dict(
-    index_type: IndexType | str, config_dict: Optional[dict[str, Any]]
+    index_type: IndexType | str, config_dict: dict[str, Any] | None
 ) -> IndexConfig:
     """Reconstruct an ``IndexConfig`` from its serialised ``to_dict()`` form.
 

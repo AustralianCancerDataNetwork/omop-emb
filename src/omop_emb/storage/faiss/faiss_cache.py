@@ -35,11 +35,11 @@ import json
 import logging
 import math
 import re
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 from collections import OrderedDict
-from typing import Mapping, Optional, Tuple
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 
 import numpy as np
 from tqdm import tqdm
@@ -52,18 +52,18 @@ except ImportError as _faiss_err:
         "Install it with: pip install omop-emb[faiss-cpu]"
     ) from _faiss_err
 
-from omop_emb.config import MetricType, IndexType
+from omop_emb.backends.base_backend import EmbeddingStoreReader
+from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
+from omop_emb.backends.index_config import IndexConfig, index_config_from_dict
+from omop_emb.config import IndexType, MetricType
+from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
+from omop_emb.storage.embedding_bundle import stream_embedding_batches
 from omop_emb.utils.embedding_utils import (
     EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
     as_embedding_array,
 )
-from omop_emb.backends.base_backend import EmbeddingStoreReader
-from omop_emb.backends.index_config import IndexConfig, index_config_from_dict
-from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
-from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
-from omop_emb.storage.embedding_bundle import stream_embedding_batches
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +159,7 @@ def _index_key(metric_type: MetricType, index_config: IndexConfig) -> str:
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+    return datetime.now(tz=UTC).isoformat()
 
 
 @dataclass(frozen=True)
@@ -204,7 +204,7 @@ class FAISSCacheMetadata:
         )
 
     @classmethod
-    def from_json(cls, text: str) -> "FAISSCacheMetadata":
+    def from_json(cls, text: str) -> FAISSCacheMetadata:
         """Deserialise from the sidecar's JSON text.
 
         Raises
@@ -265,7 +265,7 @@ class FAISSCache:
     def __init__(
         self,
         model_name: str,
-        cache_dir: "Path | str",
+        cache_dir: Path | str,
         max_cached_indices: int = 2,
         max_cached_filters: int = 4,
     ) -> None:
@@ -273,12 +273,8 @@ class FAISSCache:
         self._cache_dir = Path(cache_dir).expanduser().resolve()
         self._max_cached_indices = max_cached_indices
         self._max_cached_filters = max_cached_filters
-        self._index_cache: OrderedDict[Tuple[MetricType, IndexConfig], "faiss.Index"] = (
-            OrderedDict()
-        )
-        self._filter_cache: OrderedDict[EmbeddingConceptFilter, Optional[np.ndarray]] = (
-            OrderedDict()
-        )
+        self._index_cache: OrderedDict[tuple[MetricType, IndexConfig], faiss.Index] = OrderedDict()
+        self._filter_cache: OrderedDict[EmbeddingConceptFilter, np.ndarray | None] = OrderedDict()
 
     # ------------------------------------------------------------------
     # Paths
@@ -357,7 +353,7 @@ class FAISSCache:
         index_config: IndexConfig,
     ) -> dict:
         """Return a summary dict describing the staleness state of one index."""
-        meta: Optional[FAISSCacheMetadata] = None
+        meta: FAISSCacheMetadata | None = None
         json_path = self.json_path(metric_type, index_config)
         if json_path.exists():
             try:
@@ -473,9 +469,9 @@ class FAISSCache:
         metric_type: MetricType,
         index_config: IndexConfig,
         *,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
-        backend: Optional[EmbeddingStoreReader] = None,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+        concept_filter: EmbeddingConceptFilter | None = None,
+        backend: EmbeddingStoreReader | None = None,
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
         """Search a specific FAISS index for nearest concepts.
 
         All ``EmbeddingConceptFilter`` fields are applied as true pre-filters
@@ -577,8 +573,8 @@ class FAISSCache:
         self,
         concept_filter: EmbeddingConceptFilter,
         backend: EmbeddingStoreReader,
-        index: "faiss.Index",
-    ) -> Optional[np.ndarray]:
+        index: faiss.Index,
+    ) -> np.ndarray | None:
         """Get selector IDs for a given concept filter to supply to
         FAISS ``SearchParameters.sel``.  Returns ``None`` if the filter matches
         everything (no selector needed).

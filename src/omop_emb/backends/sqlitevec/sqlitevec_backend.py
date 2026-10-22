@@ -7,7 +7,7 @@ the registry table share the same file and SQLAlchemy engine.
 from __future__ import annotations
 
 import logging
-from typing import Mapping, Optional, Sequence, Tuple
+from collections.abc import Mapping, Sequence
 
 from numpy import ndarray
 from oa_configurator import Dialect
@@ -21,7 +21,6 @@ except ImportError as _e:
         "sqlite-vec is not installed. Install it with: pip install sqlite-vec"
     ) from _e
 
-from omop_emb.config import BackendType, MetricType
 from omop_emb.backends.base_backend import (
     CompactionResult,
     ConceptEmbeddingRecord,
@@ -37,26 +36,27 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     dml_upsert_rows,
     freelist_pages,
     query_all_concept_ids,
-    query_metadata_by_ids,
     query_concept_ids_matching_filter,
     query_embedding_count_by_vocabulary,
     query_embeddings_by_ids,
     query_has_any,
     query_knn_batch,
+    query_metadata_by_ids,
     reclaimable_chunks,
     recreate_vec0,
-    table_exists,
     sqlite_vec_table_descriptor,
+    table_exists,
     vacuum_database,
 )
+from omop_emb.config import BackendType, MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
-from omop_emb.utils.errors import LegacyVectorTableError
 from omop_emb.utils.embedding_utils import (
     EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
     get_similarity_from_distance,
 )
+from omop_emb.utils.errors import LegacyVectorTableError
 
 logger = logging.getLogger(__name__)
 
@@ -297,9 +297,9 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         model_record: EmbeddingModelRecord,
         metric_type: MetricType,
         query_embeddings: EmbeddingArray,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        concept_filter: EmbeddingConceptFilter | None = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
         table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             batches = query_knn_batch(

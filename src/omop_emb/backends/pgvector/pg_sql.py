@@ -14,7 +14,7 @@ from __future__ import annotations
 import functools
 import logging
 import typing
-from typing import Optional, Sequence, Union
+from collections.abc import Sequence
 
 import numpy as np
 from numpy import ndarray
@@ -22,16 +22,14 @@ from oa_configurator import (
     Dialect,
     Role,
     guard_schema_provenance_for,
-    qualified,
     physical_schema_of,
+    qualified,
 )
 from sqlalchemy import Engine, MetaData, Row, Select, delete, func, inspect, select, text
-from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.orm import Session, mapped_column, registry
+from sqlalchemy.sql.elements import ColumnElement
 
-from omop_emb.config import MetricType
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.index_config import HNSWIndexConfig
 from omop_emb.backends.db_utils import apply_concept_filter_where, in_values
 from omop_emb.backends.embedding_table import (
     EMBEDDING_COLUMN_NAME,
@@ -39,6 +37,8 @@ from omop_emb.backends.embedding_table import (
     EmbeddingTableBase,
     PGEmbeddingTable,
 )
+from omop_emb.backends.index_config import HNSWIndexConfig
+from omop_emb.config import MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, vector_column_type_for_dimensions
 
@@ -263,7 +263,7 @@ def query_nearest_concept_ids(
     query_embedding: ndarray,
     metric_type: MetricType,
     k: int,
-    concept_filter: Optional[EmbeddingConceptFilter] = None,
+    concept_filter: EmbeddingConceptFilter | None = None,
 ) -> Sequence[Row]:
     """Run a pgvector ANN query for a single query vector.
 
@@ -370,7 +370,7 @@ def query_concept_filter_metadata(
 
 def get_distance(
     embedding_table: type[PGEmbeddingTable],
-    text_embedding: Union[ndarray, ColumnElement],
+    text_embedding: ndarray | ColumnElement,
     metric: MetricType,
 ) -> ColumnElement:
     """Return a SQLAlchemy distance expression for the given metric.
@@ -429,15 +429,16 @@ def pg_embedding_table_descriptor(model_record: EmbeddingModelRecord) -> type[PG
     )
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _cached_pg_embedding_table_descriptor(
     tablename: str, dimensions: int
 ) -> type[PGEmbeddingTable]:
+    from pgvector.sqlalchemy import HALFVEC, VECTOR  # optional dependency
+
     from omop_emb.utils.embedding_utils import (
         VectorColumnType,
         vector_column_type_for_dimensions,
     )
-    from pgvector.sqlalchemy import VECTOR, HALFVEC  # optional dependency
 
     col_type = vector_column_type_for_dimensions(dimensions)
     descriptor_registry = registry(metadata=MetaData())

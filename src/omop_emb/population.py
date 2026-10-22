@@ -7,10 +7,9 @@ from dataclasses import dataclass, field
 from itertools import chain
 from typing import Literal
 
-from sqlalchemy import Row, select
-
 from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_alchemy.cdm.query import ConceptFilter
+from sqlalchemy import Row, select
 
 from omop_emb.backends.base_backend import EmbeddingStoreReader
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord

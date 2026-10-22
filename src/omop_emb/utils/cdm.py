@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, Iterator, Optional
+from collections.abc import Callable, Iterator
 
+from omop_alchemy.cdm.model.vocabulary import Concept
 from sqlalchemy import Row, Select, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_emb.utils.embedding_utils import CDMConceptFilter
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def check_concept_cdm(cdm_session_factory: CDMSessionFactory) -> None:
 
 
 def fetch_cdm_concepts_for_filter(
-    concept_filter: Optional[CDMConceptFilter],
+    concept_filter: CDMConceptFilter | None,
     cdm_session_factory: CDMSessionFactory,
 ) -> dict[int, Row]:
     """Return CDM rows matching *concept_filter*, keyed by concept_id.
@@ -77,7 +77,7 @@ def fetch_cdm_concepts_for_filter(
 
 
 def iter_cdm_concepts_for_filter(
-    concept_filter: Optional[CDMConceptFilter],
+    concept_filter: CDMConceptFilter | None,
     cdm_session_factory: CDMSessionFactory,
     chunk_size: int = 5_000,
 ) -> Iterator[Row]:
@@ -95,7 +95,7 @@ def iter_cdm_concepts_for_filter(
 
 
 def count_missing_concepts(
-    concept_filter: Optional[CDMConceptFilter],
+    concept_filter: CDMConceptFilter | None,
     cdm_session_factory: CDMSessionFactory,
     embedded_ids: set[int],
     chunk_size: int = 10_000,

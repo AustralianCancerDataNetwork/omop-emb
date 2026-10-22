@@ -305,7 +305,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
             batches = query_knn_batch(
                 session=session,
                 table=table,
-                query_vectors=list(query_embeddings),
+                query_embeddings=query_embeddings,
                 k=k,
                 concept_filter=concept_filter,
             )

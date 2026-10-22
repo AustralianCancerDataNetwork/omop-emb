@@ -7,6 +7,8 @@ under test. Queries use the cosine metric, the one metric every backend supports
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -190,15 +192,22 @@ class SharedBackendTests:
 
     def test_float64_embeddings_are_accepted_and_stored_as_float32(self, backend: EmbeddingBackend):
         register_flat(backend)
+        # Deliberately off the declared float32 type: the backend converts on the way in.
+        float64_embeddings: Any = CONCEPT_EMBEDDINGS.astype(np.float64)
+        float64_query: Any = QUERY_EMBEDDING.astype(np.float64)
         backend.upsert_embeddings(
-            model_name=MODEL_NAME,
-            records=list(CONCEPT_RECORDS),
-            embeddings=CONCEPT_EMBEDDINGS.astype(np.float64),
+            model_name=MODEL_NAME, records=list(CONCEPT_RECORDS), embeddings=float64_embeddings
         )
+        stored = backend.get_embeddings_by_concept_ids(
+            model_name=MODEL_NAME, concept_ids=[record.concept_id for record in CONCEPT_RECORDS]
+        )
+        for record, expected in zip(CONCEPT_RECORDS, CONCEPT_EMBEDDINGS, strict=True):
+            assert stored[record.concept_id].dtype == np.float32
+            assert np.array_equal(stored[record.concept_id], expected)
         (matches,) = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
             metric_type=MetricType.COSINE,
-            query_embeddings=QUERY_EMBEDDING.astype(np.float64),
+            query_embeddings=float64_query,
             k=1,
         )
         assert matches[0].concept_id == DIABETES_ID

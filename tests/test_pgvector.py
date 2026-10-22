@@ -69,7 +69,7 @@ class TestPGVectorBackend(SharedBackendTests):
     def test_query_vectors_run_as_separate_statements(self, backend: PGVectorEmbeddingBackend):
         """Each query vector gets its own ordered statement and the same result as a lone query."""
         upsert_all(backend)
-        queries = CONCEPT_EMBEDDINGS[[0, 1, 2]]
+        queries = CONCEPT_EMBEDDINGS[:3]
         statements: list[str] = []
 
         def capture(_connection, _cursor, statement, _parameters, _context, _many):
@@ -86,11 +86,11 @@ class TestPGVectorBackend(SharedBackendTests):
         selects = [s for s in statements if "order by" in s]
         assert len(selects) == len(queries)
         assert not any("lateral" in s for s in selects)
-        for i, query in enumerate(queries):
+        for i in range(len(queries)):
             alone = backend.get_nearest_concepts(
                 model_name=MODEL_NAME,
                 metric_type=MetricType.COSINE,
-                query_embeddings=query[None, :],
+                query_embeddings=queries[i : i + 1],
                 k=3,
             )
             assert batched[i] == alone[0]

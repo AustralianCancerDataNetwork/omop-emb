@@ -33,7 +33,7 @@ from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.db_utils import apply_concept_filter_where, in_values
 from omop_emb.backends.embedding_table import CONCEPT_METADATA_COLUMNS, EMBEDDING_COLUMN_NAME
 from omop_emb.config import MetricType
-from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from omop_emb.utils.embedding_utils import EmbeddingArray, EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
 
@@ -343,7 +343,10 @@ def _build_knn_stmt(
     k: int,
     concept_filter: EmbeddingConceptFilter | None = None,
 ) -> Select:
-    """Build a single-vector ``MATCH`` KNN statement. Internal; see :func:`query_knn_batch`."""
+    """Build a single-vector ``MATCH`` KNN statement. Internal; see :func:`query_knn_batch`.
+
+    ``query_vector`` is one float32 row of shape ``(D,)``.
+    """
     stmt = (
         select(
             table.c.concept_id,
@@ -371,18 +374,18 @@ def _build_knn_stmt(
 def query_knn_batch(
     session: Session,
     table: Table,
-    query_vectors: Sequence[ndarray],
+    query_embeddings: EmbeddingArray,
     k: int,
     concept_filter: EmbeddingConceptFilter | None = None,
 ) -> list[Sequence[Row]]:
-    """Run KNN queries against a vec0 table, one per vector in *query_vectors*, in the table's metric.
+    """Run KNN queries against a vec0 table, one per row of *query_embeddings*, in the table's metric.
 
     Parameters
     ----------
     session : Session
     table : Table
-    query_vectors : Sequence[ndarray]
-        Each a float32 array of shape ``(D,)``.
+    query_embeddings : EmbeddingArray
+        Float32 array of shape ``(N, D)``, one query vector per row.
     k : int
         Maximum number of results to return per vector, at most ``MAX_KNN_K``.
     concept_filter : EmbeddingConceptFilter, optional
@@ -391,7 +394,7 @@ def query_knn_batch(
     Returns
     -------
     list[Sequence[Row]]
-        One row sequence per query vector. Each row contains ``concept_id``,
+        One row sequence per row of *query_embeddings*. Each row contains ``concept_id``,
         ``distance``, ``domain_id``, ``vocabulary_id``, ``is_standard``, and
         ``is_valid``, ordered by distance ascending.
 
@@ -409,7 +412,7 @@ def query_knn_batch(
     if k > MAX_KNN_K:
         raise ValueError(f"sqlite-vec returns at most {MAX_KNN_K} results per query. Got k={k}.")
     results: list[Sequence[Row]] = []
-    for query_vector in query_vectors:
+    for query_vector in query_embeddings:
         stmt = _build_knn_stmt(table, query_vector, k, concept_filter)
         results.append(session.execute(stmt).all())
     return results

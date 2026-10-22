@@ -56,12 +56,12 @@ faiss-cpu = [
 dev = [
     "oa-configurator[postgres]>=2.0.0,<3",
     "omop-emb[faiss-cpu,pgvector]",
-    "ty>=0.0.59",
+    "ty==0.0.90",
     "pytest>=9.0.3",  # CVE-2025-71176
     "pytest-cov>=7.0.0",
     "rich>=14.2.0",
     "pygments>=2.20.0",  # CVE-2026-4539
-    "ruff>=0.14.10",
+    "ruff==0.17.1",
     "mkdocs<2.0",
     "mkdocs-material",
     "mkdocstrings[python]",
@@ -107,3 +107,6 @@ filterwarnings = [
     "ignore:datetime\\.datetime\\.utcfromtimestamp\\(\\) is deprecated:DeprecationWarning:dateutil.tz.tz",
     "ignore:builtin type .* has no __module__ attribute:DeprecationWarning",
 ]
+
+[tool.ruff]
+line-length = 100

@@ -56,7 +56,7 @@ from omop_emb.utils.embedding_utils import (
     NearestConceptMatch,
     get_similarity_from_distance,
 )
-from omop_emb.utils.errors import LegacyVectorTableError
+from omop_emb.utils.errors import LegacyVectorTableError, UnsupportedIndexConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +184,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig, vacuum: bool
     ) -> None:
         if not isinstance(index_config, FlatIndexConfig):
-            raise ValueError(
+            raise UnsupportedIndexConfigError(
                 f"sqlite-vec only supports FLAT indexes. Got: {type(index_config).__name__}."
             )
         metric_type = index_config.metric_type

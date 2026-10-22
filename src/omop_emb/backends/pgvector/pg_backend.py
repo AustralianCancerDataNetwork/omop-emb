@@ -224,12 +224,14 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         the planner sees current statistics. It does not shrink the table on
         disk, see ``compact_storage``.
         """
-        with self.emb_engine.begin() as conn:
-            with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
-                for statement in self.drop_index_sql(model_record.model_name):
-                    conn.execute(text(statement))
-                if isinstance(index_config, HNSWIndexConfig):
-                    conn.execute(text(hnsw_index_ddl(self.emb_engine, model_record, index_config)))
+        with (
+            self.emb_engine.begin() as conn,
+            guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY),
+        ):
+            for statement in self.drop_index_sql(model_record.model_name):
+                conn.execute(text(statement))
+            if isinstance(index_config, HNSWIndexConfig):
+                conn.execute(text(hnsw_index_ddl(self.emb_engine, model_record, index_config)))
         logger.info(
             f"Rebuilt '{model_record.storage_identifier}' with index type '{index_config.index_type.value}'."
         )
@@ -260,21 +262,25 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     def _run_vacuum(self, model_record: EmbeddingModelRecord, options: str) -> None:
         """Run ``VACUUM`` with *options* on the model's table; PostgreSQL forbids it inside a transaction."""
         table = self._qualified_table(model_record)
-        with self.emb_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
-                conn.execute(text(f"VACUUM ({options}) {table}"))
+        with (
+            self.emb_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn,
+            guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY),
+        ):
+            conn.execute(text(f"VACUUM ({options}) {table}"))
 
     def _relation_size(self, model_record: EmbeddingModelRecord) -> int:
         """Return the size in bytes of the model's table with its TOAST data and indexes."""
         table = self._qualified_table(model_record)
-        with self.emb_engine.connect() as conn:
-            with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
-                return int(
-                    conn.execute(
-                        text("SELECT pg_total_relation_size(CAST(:table AS regclass))"),
-                        {"table": table},
-                    ).scalar_one()
-                )
+        with (
+            self.emb_engine.connect() as conn,
+            guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY),
+        ):
+            return int(
+                conn.execute(
+                    text("SELECT pg_total_relation_size(CAST(:table AS regclass))"),
+                    {"table": table},
+                ).scalar_one()
+            )
 
     def physical_indexes(self, model_name: str) -> tuple[str, ...]:
         """Return existing indexes for this model's table without creating or

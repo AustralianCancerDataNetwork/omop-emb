@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import pytest
@@ -240,6 +241,12 @@ def pg_db(request):
         yield db
 
 
+def drop_all_models(backend: EmbeddingBackend[Any]) -> None:
+    """Delete every model registered on *backend*, dropping its embedding table."""
+    for record in backend.get_registered_models():
+        backend.delete_model(model_name=record.model_name)
+
+
 @pytest.fixture
 def pg_backend(pg_db):
     """Function-scoped PGVectorEmbeddingBackend with a clean registry per test,
@@ -252,16 +259,12 @@ def pg_backend(pg_db):
 
     yield backend
 
-    # Tear down: remove all models registered during the test
-    for record in backend.get_registered_models():
-        try:
-            backend.delete_model(model_name=record.model_name)
-        except Exception:
-            pass
-
-    # Remove the tables from the ORM cache
-    EmbeddingTableBase.metadata.clear()
-    EmbeddingTableBase.registry._class_registry.clear()
+    try:
+        drop_all_models(backend)
+    finally:
+        # Remove the tables from the ORM cache
+        EmbeddingTableBase.metadata.clear()
+        EmbeddingTableBase.registry._class_registry.clear()
     backend.emb_engine.dispose()
 
 

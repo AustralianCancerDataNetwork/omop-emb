@@ -55,6 +55,7 @@ from omop_emb.utils.errors import (
     MissingStorageTableError,
     ReadOnlyStoreError,
     UnknownEmbeddingBackendError,
+    UnsupportedIndexConfigError,
 )
 
 logger = logging.getLogger(__name__)
@@ -396,11 +397,12 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         ------
         ModelRegistrationConflictError
             If the model is already registered with a different dimensionality.
+        UnsupportedIndexConfigError
+            If the backend does not support the index type or its metric.
         ValueError
             If ``metadata`` contains a reserved key, or if ``index_config`` is
             not a FLAT config (non-FLAT indexes may only be built after
-            registration, not at registration time), or its metric is
-            unsupported by the backend.
+            registration, not at registration time).
         """
 
         if index_config is None:
@@ -516,8 +518,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         Raises
         ------
         ValueError
-            If the model is not registered, or the index type or metric is
-            unsupported by the backend.
+            If the model is not registered.
+        UnsupportedIndexConfigError
+            If the backend does not support the index type or its metric.
 
         Notes
         -----
@@ -553,12 +556,12 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         return FlatIndexConfig(metric_type=metric_type)
 
     def _validate_index_config(self, index_config: IndexConfig) -> None:
-        """Raise ``ValueError`` if the backend supports neither the index type nor its metric."""
+        """Raise ``UnsupportedIndexConfigError`` if the backend supports neither the index type nor its metric."""
         if not is_index_type_supported_for_backend(
             backend=self.backend_type, index=index_config.index_type
         ):
             supported = get_supported_index_types_for_backend(self.backend_type)
-            raise ValueError(
+            raise UnsupportedIndexConfigError(
                 f"Index type '{index_config.index_type.value}' is not supported by "
                 f"backend '{self.backend_name}'. "
                 f"Supported: {[idx.value for idx in supported]}."
@@ -571,7 +574,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                 metric=index_config.metric_type,
             )
         ):
-            raise ValueError(
+            raise UnsupportedIndexConfigError(
                 f"Metric '{index_config.metric_type.value}' is not supported by backend "
                 f"'{self.backend_name}' with index type '{index_config.index_type.value}'."
             )

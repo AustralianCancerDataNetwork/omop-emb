@@ -5,12 +5,14 @@ In-memory SQLite: no external service required.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import numpy as np
 import pytest
 import sqlalchemy as sa
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.index_config import FlatIndexConfig
+from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend, sqlitevec_sql
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
 from omop_emb.backends.sqlitevec.sqlitevec_sql import (
@@ -24,7 +26,7 @@ from omop_emb.config import MetricType
 from omop_emb.model_registry import RegistryManager, registry_writer_engine
 from omop_emb.model_registry.model_registry_orm import ModelRegistry
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
-from omop_emb.utils.errors import LegacyVectorTableError
+from omop_emb.utils.errors import LegacyVectorTableError, UnsupportedIndexConfigError
 
 from .conftest import (
     ASPIRIN_ID,
@@ -287,12 +289,27 @@ class TestSQLiteVecMetricTable:
     def test_registering_an_unsupported_metric_raises(
         self, svec_backend: SQLiteVecEmbeddingBackend
     ):
-        with pytest.raises(ValueError, match="not supported"):
+        with pytest.raises(UnsupportedIndexConfigError, match="not supported"):
             svec_backend.register_model(
                 model_name=MODEL_NAME,
                 provider_type=PROVIDER_TYPE,
                 index_config=FlatIndexConfig(metric_type=MetricType.HAMMING),
                 dimensions=EMBEDDING_DIM,
+            )
+
+    def test_rebuilding_with_an_unsupported_index_type_raises(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
+        svec_backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FlatIndexConfig(),
+            dimensions=EMBEDDING_DIM,
+        )
+        with pytest.raises(UnsupportedIndexConfigError, match="not supported"):
+            svec_backend.rebuild_index(
+                model_name=MODEL_NAME,
+                index_config=HNSWIndexConfig(metric_type=MetricType.COSINE),
             )
 
     def test_rebuild_index_switches_the_metric_keeping_rows(
@@ -549,7 +566,7 @@ class TestSQLiteVecVacuum:
 class TestSQLiteVecConceptIdLookups:
     """Short ID lists use one equality lookup per ID, longer ones one scan, with identical results."""
 
-    IDS = [r.concept_id for r in CONCEPT_RECORDS]
+    IDS: ClassVar[list[int]] = [r.concept_id for r in CONCEPT_RECORDS]
 
     @pytest.fixture(params=[0, 100], ids=["scan", "point-lookups"])
     def backend(self, request, svec_backend: SQLiteVecEmbeddingBackend, monkeypatch):

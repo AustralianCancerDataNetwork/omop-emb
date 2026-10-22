@@ -1,17 +1,15 @@
 """Diagnostics for omop-emb CLI."""
 
-import logging
-
 import sqlalchemy as sa
 import typer
 from oa_configurator import Resolver
 from omop_alchemy.cdm.model.vocabulary import Concept
+from sqlalchemy.exc import SQLAlchemyError
 
 from omop_emb.backends import open_vector_store_reader
 from omop_emb.config import OmopEmbConfig, open_cdm_sessions
 from omop_emb.utils.errors import MissingStorageTableError
 
-logger = logging.getLogger(__name__)
 app = typer.Typer(help="Diagnostics for embedding storage and retrieval.")
 
 
@@ -29,7 +27,7 @@ def health_check():
             typer.echo(f"CDM: {cfg.cdm_db} | concept table reachable.")
         except RuntimeError as exc:
             typer.echo(f"CDM: not configured ({exc})")
-        except Exception as exc:
+        except (SQLAlchemyError, OSError) as exc:
             typer.echo(f"CDM: connection failed. {exc}")
 
         records = store.get_registered_models()

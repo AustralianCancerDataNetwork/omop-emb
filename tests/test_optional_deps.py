@@ -56,9 +56,11 @@ def test_pg_backend_missing_pgvector_install_hint():
     """Directly importing pg_backend without pgvector raises with the install hint."""
     saved = _evict_pgvector_modules()
     try:
-        with patch.dict(sys.modules, {"pgvector": None, "pgvector.sqlalchemy": None}):
-            with pytest.raises(ImportError, match=r"pip install omop-emb\[pgvector\]"):
-                importlib.import_module("omop_emb.backends.pgvector.pg_backend")
+        with (
+            patch.dict(sys.modules, {"pgvector": None, "pgvector.sqlalchemy": None}),
+            pytest.raises(ImportError, match=r"pip install omop-emb\[pgvector\]"),
+        ):
+            importlib.import_module("omop_emb.backends.pgvector.pg_backend")
     finally:
         sys.modules.update(saved)
 
@@ -67,9 +69,11 @@ def test_pgvector_subpackage_missing_pgvector_install_hint():
     """Directly importing omop_emb.backends.pgvector without pgvector raises with the install hint."""
     saved = _evict_pgvector_modules()
     try:
-        with patch.dict(sys.modules, {"pgvector": None, "pgvector.sqlalchemy": None}):
-            with pytest.raises(ImportError, match=r"pip install omop-emb\[pgvector\]"):
-                importlib.import_module("omop_emb.backends.pgvector")
+        with (
+            patch.dict(sys.modules, {"pgvector": None, "pgvector.sqlalchemy": None}),
+            pytest.raises(ImportError, match=r"pip install omop-emb\[pgvector\]"),
+        ):
+            importlib.import_module("omop_emb.backends.pgvector")
     finally:
         sys.modules.update(saved)
 
@@ -116,9 +120,11 @@ def test_faiss_cache_module_missing_install_hint():
     """Directly importing faiss_cache without faiss raises with the install hint."""
     saved = _evict_faiss_modules()
     try:
-        with patch.dict(sys.modules, {"faiss": None}):
-            with pytest.raises(ImportError, match=r"pip install omop-emb\[faiss"):
-                importlib.import_module("omop_emb.storage.faiss.faiss_cache")
+        with (
+            patch.dict(sys.modules, {"faiss": None}),
+            pytest.raises(ImportError, match=r"pip install omop-emb\[faiss"),
+        ):
+            importlib.import_module("omop_emb.storage.faiss.faiss_cache")
     finally:
         sys.modules.update(saved)
 

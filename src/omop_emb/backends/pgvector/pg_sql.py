@@ -79,9 +79,11 @@ def create_pg_embedding_table(
 
     """
     table_cls = pg_embedding_table_descriptor(model_record)
-    with engine.begin() as connection:
-        with guard_schema_provenance_for(connection, schema_tag=Role.PRIMARY):
-            EmbeddingTableBase.metadata.create_all(connection, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
+    with (
+        engine.begin() as connection,
+        guard_schema_provenance_for(connection, schema_tag=Role.PRIMARY),
+    ):
+        EmbeddingTableBase.metadata.create_all(connection, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
     return table_cls
 
 
@@ -94,13 +96,15 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
     model_record : EmbeddingModelRecord
     """
     tablename = model_record.storage_identifier
-    with engine.begin() as conn:
-        with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
-            conn.execute(
-                text(
-                    f"DROP TABLE IF EXISTS {qualified(conn, tablename, physical_schema=physical_schema_of(conn))}"
-                )
+    with (
+        engine.begin() as conn,
+        guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY),
+    ):
+        conn.execute(
+            text(
+                f"DROP TABLE IF EXISTS {qualified(conn, tablename, physical_schema=physical_schema_of(conn))}"
             )
+        )
     logger.info(f"Dropped embedding table '{tablename}'.")
 
 

@@ -448,6 +448,9 @@ def import_bundle(
     RuntimeError
         If the backend already has embeddings for this model and
         ``force`` is ``False``.
+    UnsupportedIndexConfigError
+        If ``rebuild_index`` is ``True`` and the backend does not support the
+        bundle's index type or metric.
     """
     h5_path = Path(h5_path).expanduser().resolve()
     if not h5_path.exists():

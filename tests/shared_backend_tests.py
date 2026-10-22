@@ -14,6 +14,7 @@ from omop_emb.backends.base_backend import EmbeddingBackend
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.config import MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from omop_emb.utils.errors import ModelRegistrationConflictError
 
 from .conftest import (
     ASPIRIN_ID,
@@ -66,13 +67,14 @@ class SharedBackendTests:
 
     def test_register_model_dimension_conflict_raises(self, backend: EmbeddingBackend):
         register_flat(backend)
-        with pytest.raises(Exception):
+        with pytest.raises(ModelRegistrationConflictError) as exc_info:
             backend.register_model(
                 model_name=MODEL_NAME,
                 provider_type=PROVIDER_TYPE,
                 index_config=FlatIndexConfig(),
                 dimensions=EMBEDDING_DIM + 1,
             )
+        assert exc_info.value.conflict_field == "dimensions"
 
     def test_get_registered_model_before_and_after_registration(self, backend: EmbeddingBackend):
         assert backend.get_registered_model(model_name=MODEL_NAME) is None, (

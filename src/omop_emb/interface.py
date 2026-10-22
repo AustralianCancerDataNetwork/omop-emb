@@ -133,7 +133,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         self._backend = backend
 
         if not isinstance(metric_type, MetricType):
-            raise ValueError(
+            raise TypeError(
                 f"metric_type must be an instance of MetricType Enum, got {type(metric_type).__name__}"
             )
         self._metric_type = metric_type
@@ -779,6 +779,14 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         Returns
         -------
         EmbeddingModelRecord
+
+        Raises
+        ------
+        UnsupportedIndexConfigError
+            If the backend does not support the index type or its metric.
+        ValueError
+            If ``index_config`` is not a FLAT config, or ``metadata`` contains a
+            reserved key.
         """
         return self._backend.register_model(
             model_name=self.canonical_model_name,
@@ -808,6 +816,11 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         -------
         EmbeddingModelRecord
             Updated registry record.
+
+        Raises
+        ------
+        UnsupportedIndexConfigError
+            If the backend does not support the index type or its metric.
         """
         return self._backend.rebuild_index(
             model_name=self.canonical_model_name,

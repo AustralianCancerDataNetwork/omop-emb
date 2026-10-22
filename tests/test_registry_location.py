@@ -34,9 +34,11 @@ def test_registry_left_in_another_schema_is_refused(pg_db) -> None:
     ):
         primary_schema = scoped.schemas[Role.PRIMARY]
         _create_registry_table(scoped.engine, primary_schema)
-        with scoped.engine.connect() as connection:
-            with pytest.raises(MisplacedRegistryError) as exc_info:
-                _reject_incompatible_registry(connection, registry_schema=registry_schema)
+        with (
+            scoped.engine.connect() as connection,
+            pytest.raises(MisplacedRegistryError) as exc_info,
+        ):
+            _reject_incompatible_registry(connection, registry_schema=registry_schema)
         assert primary_schema in str(exc_info.value)
         assert "SET SCHEMA" in str(exc_info.value)
 

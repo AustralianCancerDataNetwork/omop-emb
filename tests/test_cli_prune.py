@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import date
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pytest
@@ -19,7 +20,13 @@ from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.cli import cli_embeddings, cli_maintenance
 from omop_emb.config import MetricType
 
-from .conftest import EMBEDDING_DIM, sqlite_cdm_database, sqlite_resolved_vector_store
+from .conftest import (
+    EMBEDDING_DIM,
+    registered_model,
+    sqlite_cdm_database,
+    sqlite_resolved_vector_store,
+    table_of,
+)
 
 MODEL = "test-model:v1"
 runner = CliRunner()
@@ -66,7 +73,7 @@ def pruning_setup(tmp_path, monkeypatch):
     cdm = sqlite_cdm_database()
     engine, _ = cdm.create_engines()
     cdm_sessions = cdm_sessionmaker(cdm, primary=engine, vocab=engine)
-    Concept.__table__.create(engine)
+    table_of(Concept).create(engine)
     with engine.begin() as connection:
         connection.execute(
             insert(Concept),
@@ -98,7 +105,7 @@ def _stored_ids(store) -> set[int]:
 
 def _updated_at(store):
     with open_vector_store_reader(store) as reader:
-        return reader.get_registered_model(model_name=MODEL).updated_at
+        return registered_model(reader, MODEL).updated_at
 
 
 def test_prune_embeddings_dry_run_reports_and_deletes_nothing(pruning_setup) -> None:
@@ -216,10 +223,11 @@ def test_add_embeddings_skips_invalid_concepts_unless_asked(
     monkeypatch.setattr(cli_embeddings, "EmbeddingWriterInterface", FakeWriter)
     monkeypatch.setattr(cli_embeddings, "check_concept_cdm", lambda _sessions: None)
 
+    unused: Any = None  # the fake writer ignores the CDM and model arguments
     cli_embeddings._add_embeddings(
         backend=None,
-        cdm_sessions=None,
-        resolved_model=None,
+        cdm_sessions=unused,
+        resolved_model=unused,
         batch_size=10,
         standard_only=False,
         include_invalid=include_invalid,
@@ -251,10 +259,11 @@ def test_add_embeddings_registers_the_requested_metric(monkeypatch) -> None:
     monkeypatch.setattr(cli_embeddings, "EmbeddingWriterInterface", FakeWriter)
     monkeypatch.setattr(cli_embeddings, "check_concept_cdm", lambda _sessions: None)
 
+    unused: Any = None  # the fake writer ignores the CDM and model arguments
     cli_embeddings._add_embeddings(
         backend=None,
-        cdm_sessions=None,
-        resolved_model=None,
+        cdm_sessions=unused,
+        resolved_model=unused,
         batch_size=10,
         standard_only=False,
         include_invalid=False,

@@ -12,6 +12,8 @@ from contextlib import contextmanager
 import numpy as np
 import pytest
 
+from tests.conftest import registered_model
+
 pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests")
 
 import sqlalchemy as sa
@@ -133,7 +135,7 @@ class TestPGVectorHNSWBackend:
     ):
         """Switching metric replaces the HNSW index; reverting to FLAT drops it."""
         upsert_all(pg_backend)
-        table = pg_backend.get_registered_model(model_name=MODEL_NAME).storage_identifier
+        table = registered_model(pg_backend, MODEL_NAME).storage_identifier
 
         pg_backend.rebuild_index(
             model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.COSINE)
@@ -152,7 +154,7 @@ class TestPGVectorHNSWBackend:
         self, pg_backend: PGVectorEmbeddingBackend, pg_engine
     ):
         upsert_all(pg_backend)
-        table = pg_backend.get_registered_model(model_name=MODEL_NAME).storage_identifier
+        table = registered_model(pg_backend, MODEL_NAME).storage_identifier
         for m in (4, 8):
             pg_backend.rebuild_index(
                 model_name=MODEL_NAME,
@@ -176,9 +178,7 @@ class TestPGVectorHNSWBackend:
                 model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.HAMMING)
             )
         assert pg_backend.physical_indexes(MODEL_NAME) == before
-        assert (
-            pg_backend.get_registered_model(model_name=MODEL_NAME).index_config == self.HNSW_CONFIG
-        )
+        assert registered_model(pg_backend, MODEL_NAME).index_config == self.HNSW_CONFIG
 
     @pytest.mark.parametrize("vacuum,expected", [(True, 1), (False, 0)])
     def test_rebuild_index_vacuums_the_table_unless_told_not_to(
@@ -199,9 +199,7 @@ class TestPGVectorHNSWBackend:
             sa_event.remove(pg_backend.emb_engine, "before_cursor_execute", capture)
 
         assert sum(s.startswith("vacuum (analyze)") for s in statements) == expected
-        assert (
-            pg_backend.get_registered_model(model_name=MODEL_NAME).index_config == self.HNSW_CONFIG
-        )
+        assert registered_model(pg_backend, MODEL_NAME).index_config == self.HNSW_CONFIG
 
     def test_compact_storage_shrinks_the_table_after_deletes(
         self, pg_backend: PGVectorEmbeddingBackend

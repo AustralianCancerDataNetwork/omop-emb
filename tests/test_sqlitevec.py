@@ -10,6 +10,7 @@ from typing import ClassVar
 import numpy as np
 import pytest
 import sqlalchemy as sa
+from sqlalchemy import event
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
@@ -192,11 +193,11 @@ class TestSQLiteVecMetricTable:
         def capture(_conn, _cursor, statement, *_args):
             statements.append(statement.strip().upper())
 
-        sa.event.listen(svec_backend.emb_engine, "before_cursor_execute", capture)
+        event.listen(svec_backend.emb_engine, "before_cursor_execute", capture)
         try:
             svec_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
         finally:
-            sa.event.remove(svec_backend.emb_engine, "before_cursor_execute", capture)
+            event.remove(svec_backend.emb_engine, "before_cursor_execute", capture)
 
         assert svec_backend.get_embedding_count(model_name=MODEL_NAME) == len(CONCEPT_RECORDS)
         assert not any(s.startswith(("VACUUM", "DROP", "CREATE")) for s in statements)
@@ -218,12 +219,12 @@ class TestSQLiteVecMetricTable:
             if len(seen) == fail_at:
                 raise RuntimeError("injected failure")
 
-        sa.event.listen(svec_backend.emb_engine, "before_cursor_execute", fail_on_nth_statement)
+        event.listen(svec_backend.emb_engine, "before_cursor_execute", fail_on_nth_statement)
         try:
             with pytest.raises(RuntimeError, match="injected failure"):
                 recreate_vec0(svec_backend.emb_engine, table, EMBEDDING_DIM, MetricType.COSINE)
         finally:
-            sa.event.remove(svec_backend.emb_engine, "before_cursor_execute", fail_on_nth_statement)
+            event.remove(svec_backend.emb_engine, "before_cursor_execute", fail_on_nth_statement)
 
         assert declared_metric(svec_backend.emb_engine, table) is None
         assert not sa.inspect(svec_backend.emb_engine).has_table(f"{table}__rebuild")
@@ -475,11 +476,11 @@ class TestSQLiteVecVacuum:
         def capture(_conn, _cursor, statement, *_args):
             statements.append(statement.strip().upper())
 
-        sa.event.listen(backend.emb_engine, "before_cursor_execute", capture)
+        event.listen(backend.emb_engine, "before_cursor_execute", capture)
         try:
             call()
         finally:
-            sa.event.remove(backend.emb_engine, "before_cursor_execute", capture)
+            event.remove(backend.emb_engine, "before_cursor_execute", capture)
         return statements
 
     def test_rebuild_index_does_not_compact_deleted_rows(self, tmp_path):
@@ -631,13 +632,13 @@ def test_concept_id_lookup_statement_shape(
     def capture(_conn, _cursor, statement, *_args):
         statements.append(statement.lower())
 
-    sa.event.listen(svec_backend.emb_engine, "before_cursor_execute", capture)
+    event.listen(svec_backend.emb_engine, "before_cursor_execute", capture)
     try:
         svec_backend.get_concept_filter_metadata(
             model_name=MODEL_NAME, concept_ids=[r.concept_id for r in CONCEPT_RECORDS[:3]]
         )
     finally:
-        sa.event.remove(svec_backend.emb_engine, "before_cursor_execute", capture)
+        event.remove(svec_backend.emb_engine, "before_cursor_execute", capture)
 
     lookups = [s for s in statements if "select" in s and "concept_id" in s]
     assert len(lookups) == expected_statements

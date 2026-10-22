@@ -29,6 +29,7 @@ from omop_emb.model_registry.model_registry_orm import ModelRegistry
 from omop_emb.storage.embedding_bundle import export_bundle
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.utils.errors import ModelRegistrationConflictError, ReadOnlyStoreError
+from tests.conftest import table_of
 
 from .conftest import (
     ASPIRIN_ID,
@@ -292,7 +293,7 @@ def test_prerelease_registry_without_model_unique_constraint_still_refuses_secon
     _, (store_a, store_b) = _same_database_stores(tmp_path / "prerelease.db")
     with open_vector_store_writer(store_a) as writer:
         engine = writer.emb_engine
-        table = ModelRegistry.__table__.to_metadata(sa.MetaData())
+        table = table_of(ModelRegistry).to_metadata(sa.MetaData())
         for constraint in tuple(table.constraints):
             if (
                 isinstance(constraint, sa.UniqueConstraint)
@@ -300,7 +301,7 @@ def test_prerelease_registry_without_model_unique_constraint_still_refuses_secon
             ):
                 table.constraints.remove(constraint)
         with engine.begin() as connection:
-            ModelRegistry.__table__.drop(connection)
+            table_of(ModelRegistry).drop(connection)
             table.create(connection)
         writer.register_model(
             model_name=_MODEL,

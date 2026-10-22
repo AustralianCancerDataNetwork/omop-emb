@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from typing import Any, Self
 
 import numpy as np
 import pytest
@@ -21,12 +21,28 @@ from oa_configurator import (
     StackConfig,
 )
 
-from omop_emb.backends.base_backend import ConceptEmbeddingRecord, EmbeddingBackend
+from omop_emb.backends.base_backend import (
+    ConceptEmbeddingRecord,
+    EmbeddingBackend,
+    EmbeddingStoreReader,
+)
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
-from omop_emb.config import MODEL_REGISTRY_SCHEMA, REGISTRY_SCHEMA_KEY, OmopEmbConfig
+from omop_emb.config import (
+    MODEL_REGISTRY_SCHEMA,
+    REGISTRY_SCHEMA_KEY,
+    BackendType,
+    MetricType,
+    OmopEmbConfig,
+)
 from omop_emb.model_registry import ensure_registry_table, registry_writer_engine
+from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
+from omop_emb.utils.embedding_utils import (
+    EmbeddingArray,
+    EmbeddingConceptFilter,
+    NearestConceptMatch,
+)
 
 
 def sqlite_resolved_database(database_name: str = ":memory:") -> ResolvedDatabase:
@@ -239,6 +255,123 @@ def pg_db(request):
         request=request,
     ) as db:
         yield db
+
+
+class FakeStoreReader(EmbeddingStoreReader):
+    """An initialized store serving fixed identity records.
+
+    Only what population planning reads is implemented; every other member of the
+    reader interface raises ``NotImplementedError``.
+
+    Parameters
+    ----------
+    records : Iterable[ConceptEmbeddingRecord]
+        Records returned by ``iter_stored_embeddings``.
+    expected_batch_size : int, optional
+        When given, ``iter_stored_embeddings`` asserts it receives this batch size.
+    """
+
+    def __init__(
+        self,
+        records: Iterable[ConceptEmbeddingRecord] = (),
+        *,
+        expected_batch_size: int | None = None,
+    ) -> None:
+        self._records = tuple(records)
+        self._expected_batch_size = expected_batch_size
+
+    @property
+    def initialized(self) -> bool:
+        return True
+
+    def iter_stored_embeddings(
+        self, model_name: str, *, batch_size: int = 10_000
+    ) -> Iterator[ConceptEmbeddingRecord]:
+        if self._expected_batch_size is not None:
+            assert batch_size == self._expected_batch_size
+        return iter(self._records)
+
+    @property
+    def backend_type(self) -> BackendType:
+        raise NotImplementedError
+
+    def get_registered_model(self, *, model_name: str) -> EmbeddingModelRecord | None:
+        raise NotImplementedError
+
+    def get_registered_models(
+        self, *, model_name: str | None = None, provider_type: str | None = None
+    ) -> tuple[EmbeddingModelRecord, ...]:
+        raise NotImplementedError
+
+    def has_any_embeddings(self, *, model_name: str) -> bool:
+        raise NotImplementedError
+
+    def get_stored_concept_ids(
+        self, *, model_name: str, concept_filter: EmbeddingConceptFilter | None = None
+    ) -> set[int]:
+        raise NotImplementedError
+
+    def get_embeddings_by_concept_ids(
+        self, *, model_name: str, concept_ids: Sequence[int]
+    ) -> Mapping[int, np.ndarray]:
+        raise NotImplementedError
+
+    def get_concept_filter_metadata(
+        self, *, model_name: str, concept_ids: Sequence[int]
+    ) -> Mapping[int, ConceptEmbeddingRecord]:
+        raise NotImplementedError
+
+    def get_embedding_count(self, *, model_name: str) -> int:
+        raise NotImplementedError
+
+    def get_embedding_count_by_vocabulary(self, *, model_name: str) -> Mapping[str, int]:
+        raise NotImplementedError
+
+    def get_nearest_concepts(
+        self,
+        *,
+        model_name: str,
+        metric_type: MetricType,
+        query_embeddings: EmbeddingArray,
+        concept_filter: EmbeddingConceptFilter | None = None,
+        k: int = 10,
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
+        raise NotImplementedError
+
+    def physical_indexes(self, model_name: str) -> tuple[str, ...]:
+        raise NotImplementedError
+
+    def drop_index_sql(self, model_name: str) -> tuple[str, ...]:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        raise NotImplementedError
+
+    def __enter__(self) -> Self:
+        raise NotImplementedError
+
+    def __exit__(self, *_exc_info: object) -> None:
+        raise NotImplementedError
+
+
+def require_cdm(resolved: ResolvedDatabase | None) -> ResolvedCDMDatabase:
+    """Narrow a resolved database to the CDM kind the CDM session factory requires."""
+    assert isinstance(resolved, ResolvedCDMDatabase)
+    return resolved
+
+
+def table_of(model: Any) -> sa.Table:
+    """The Table a mapped class is bound to, narrowed from the declarative base's FromClause."""
+    table = model.__table__
+    assert isinstance(table, sa.Table)
+    return table
+
+
+def registered_model(store: Any, model_name: str) -> EmbeddingModelRecord:
+    """The record registered for *model_name* on *store*, which must exist."""
+    record = store.get_registered_model(model_name=model_name)
+    assert record is not None, f"{model_name!r} is not registered"
+    return record
 
 
 def drop_all_models(backend: EmbeddingBackend[Any]) -> None:

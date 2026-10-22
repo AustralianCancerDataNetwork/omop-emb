@@ -54,7 +54,9 @@ def test_rebuild_index_metric_type_changes_the_sqlite_vec_metric(store) -> None:
 
 
 def test_rebuild_index_without_metric_type_uses_cosine(store) -> None:
-    runner.invoke(cli_maintenance.app, ["rebuild-index", "--model", MODEL_NAME, "--metric-type", "l1"])
+    runner.invoke(
+        cli_maintenance.app, ["rebuild-index", "--model", MODEL_NAME, "--metric-type", "l1"]
+    )
     assert _metric(store) == MetricType.L1
 
     result = runner.invoke(cli_maintenance.app, ["rebuild-index", "--model", MODEL_NAME])

@@ -64,7 +64,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def writes[B: EmbeddingBackend, **P, R](method: Callable[Concatenate[B, P], R]) -> Callable[Concatenate[B, P], R]:
+def writes[B: EmbeddingBackend, **P, R](
+    method: Callable[Concatenate[B, P], R],
+) -> Callable[Concatenate[B, P], R]:
     """Mark an EmbeddingBackend method as a write: raises ReadOnlyStoreError on a reader."""
 
     @wraps(method)
@@ -561,8 +563,13 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                 f"backend '{self.backend_name}'. "
                 f"Supported: {[idx.value for idx in supported]}."
             )
-        if index_config.metric_type is not None and not is_supported_index_metric_combination_for_backend(
-            backend=self.backend_type, index=index_config.index_type, metric=index_config.metric_type
+        if (
+            index_config.metric_type is not None
+            and not is_supported_index_metric_combination_for_backend(
+                backend=self.backend_type,
+                index=index_config.index_type,
+                metric=index_config.metric_type,
+            )
         ):
             raise ValueError(
                 f"Metric '{index_config.metric_type.value}' is not supported by backend "
@@ -1013,9 +1020,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         return self._has_any_embeddings_impl(model_record=self._registered_record(model_name))
 
     @abstractmethod
-    def _has_any_embeddings_impl(
-        self, *, model_record: EmbeddingModelRecord
-    ) -> bool: ...
+    def _has_any_embeddings_impl(self, *, model_record: EmbeddingModelRecord) -> bool: ...
 
     def get_stored_concept_ids(
         self,
@@ -1105,7 +1110,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         -------
         int
         """
-        return len(self._get_all_stored_concept_ids_impl(model_record=self._registered_record(model_name)))
+        return len(
+            self._get_all_stored_concept_ids_impl(model_record=self._registered_record(model_name))
+        )
 
     def get_embedding_count_by_vocabulary(
         self,
@@ -1125,7 +1132,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             ``vocabulary_id`` to embedding count, for every vocabulary with at
             least one stored embedding.
         """
-        return self._get_embedding_count_by_vocabulary_impl(model_record=self._registered_record(model_name))
+        return self._get_embedding_count_by_vocabulary_impl(
+            model_record=self._registered_record(model_name)
+        )
 
     @abstractmethod
     def _get_embedding_count_by_vocabulary_impl(
@@ -1133,7 +1142,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
     ) -> Mapping[str, int]: ...
 
 
-def _extensions_for(backend_type: BackendType, *, writable: bool) -> Sequence[Callable[[Any, Any], None]]:
+def _extensions_for(
+    backend_type: BackendType, *, writable: bool
+) -> Sequence[Callable[[Any, Any], None]]:
     """Connect-event callables for backend_type's engine.
 
     The writer path may create the pgvector extension. The reader path runs no
@@ -1166,7 +1177,9 @@ def _parse_backend_type(backend_type: str | BackendType) -> BackendType:
         If backend_type names no known backend.
     """
     try:
-        return parse_backend_type(backend_type.lower() if isinstance(backend_type, str) else backend_type)
+        return parse_backend_type(
+            backend_type.lower() if isinstance(backend_type, str) else backend_type
+        )
     except ValueError as exc:
         raise UnknownEmbeddingBackendError(str(exc)) from exc
 
@@ -1200,8 +1213,7 @@ def _backend_class_for(backend_type: BackendType, *, dialect: str) -> type[Embed
             from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
         except ImportError as exc:
             raise EmbeddingBackendDependencyError(
-                "pgvector backend is not installed. "
-                "Install it with: pip install omop-emb[pgvector]"
+                "pgvector backend is not installed. Install it with: pip install omop-emb[pgvector]"
             ) from exc
         return PGVectorEmbeddingBackend
     else:
@@ -1223,7 +1235,9 @@ def _open_writer(
     backend_cls = _backend_class_for(
         resolved_backend, dialect=make_url(database.connection.url).get_backend_name()
     )
-    emb_engine = registry_writer_engine(database, extensions=_extensions_for(resolved_backend, writable=True))
+    emb_engine = registry_writer_engine(
+        database, extensions=_extensions_for(resolved_backend, writable=True)
+    )
     logger.info(f"Using {resolved_backend.value} backend with engine: {emb_engine.url}")
     return backend_cls(emb_engine=emb_engine)
 
@@ -1251,5 +1265,7 @@ def open_vector_store_reader(resolved: ResolvedVectorStore) -> EmbeddingStoreRea
     backend_cls = _backend_class_for(
         resolved_backend, dialect=make_url(database.connection.url).get_backend_name()
     )
-    emb_engine = registry_reader_engine(database, extensions=_extensions_for(resolved_backend, writable=False))
+    emb_engine = registry_reader_engine(
+        database, extensions=_extensions_for(resolved_backend, writable=False)
+    )
     return backend_cls(emb_engine=emb_engine, writable=False)

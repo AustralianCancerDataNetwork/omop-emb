@@ -55,9 +55,7 @@ def list_models(
         typer.echo("No registered models found.")
         return
 
-    typer.echo(
-        f"{'Model':<40} {'Provider':<10} {'Metric':<8} {'Index':<6} {'Dims':<6} {'Table'}"
-    )
+    typer.echo(f"{'Model':<40} {'Provider':<10} {'Metric':<8} {'Index':<6} {'Dims':<6} {'Table'}")
     typer.echo("-" * 100)
     for r in records:
         index_str = r.index_type.value if r.index_type else "none"
@@ -69,9 +67,7 @@ def list_models(
         )
 
 
-@app.command(
-    name="rebuild-index", help="Build or rebuild the index on an embedding table."
-)
+@app.command(name="rebuild-index", help="Build or rebuild the index on an embedding table.")
 def rebuild_index(
     model: Annotated[
         str,
@@ -522,9 +518,7 @@ def build_faiss_cache(
     )
 
 
-@app.command(
-    name="check-faiss-cache", help="Check whether the FAISS sidecar cache is fresh."
-)
+@app.command(name="check-faiss-cache", help="Check whether the FAISS sidecar cache is fresh.")
 def check_faiss_cache(
     model: Annotated[
         str,

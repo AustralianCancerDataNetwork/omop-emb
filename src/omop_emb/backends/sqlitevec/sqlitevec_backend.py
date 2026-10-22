@@ -101,7 +101,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
       table to return it.
     - vec0 is a SQLite virtual table type the SQLAlchemy ORM cannot map, but
       it accepts ordinary SQL once created. ``_table_cache`` therefore stores
-      a Core :class:`~sqlalchemy.Table` used for every query except the initial 
+      a Core :class:`~sqlalchemy.Table` used for every query except the initial
       ``CREATE VIRTUAL TABLE``.
     """
 
@@ -153,7 +153,9 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         declared = declared_metric(self.emb_engine, model_record.storage_identifier)
         if declared is None or declared != model_record.metric_type:
             raise self._legacy_table_error(model_record)
-        return sqlite_vec_table_descriptor(model_record.storage_identifier, self._sqlite_vec_metadata)
+        return sqlite_vec_table_descriptor(
+            model_record.storage_identifier, self._sqlite_vec_metadata
+        )
 
     def _create_storage_table(self, model_record: EmbeddingModelRecord) -> Table:
         metric_type = model_record.metric_type
@@ -166,7 +168,9 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         )
         with self.emb_engine.begin() as conn:
             conn.execute(text(ddl))
-        return sqlite_vec_table_descriptor(model_record.storage_identifier, self._sqlite_vec_metadata)
+        return sqlite_vec_table_descriptor(
+            model_record.storage_identifier, self._sqlite_vec_metadata
+        )
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
         with self.emb_engine.begin() as conn:
@@ -331,9 +335,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         with self.emb_session_factory() as session:
             return query_has_any(session=session, table=table)
 
-    def _get_all_stored_concept_ids_impl(
-        self, *, model_record: EmbeddingModelRecord
-    ) -> set[int]:
+    def _get_all_stored_concept_ids_impl(self, *, model_record: EmbeddingModelRecord) -> set[int]:
         table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return query_all_concept_ids(session=session, table=table)

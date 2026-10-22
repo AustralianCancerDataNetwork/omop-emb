@@ -103,27 +103,23 @@ class BundleCorruptionError(ValueError):
 class UnsupportedBundleVersionError(BundleCorruptionError):
     """Raised when a bundle's schema_version is not one this omop-emb reads."""
 
+
 def get_required_attribute(attrs: h5py.AttributeManager, attr_name: str) -> str:
     if attr_name not in REQUIRED_ATTRS:
         raise ValueError(f"Internal error: attribute '{attr_name}' is not in REQUIRED_ATTRS.")
     if attr_name not in attrs:
-        raise BundleCorruptionError(
-            f"Bundle is missing required attribute '{attr_name}'."
-        )
+        raise BundleCorruptionError(f"Bundle is missing required attribute '{attr_name}'.")
     return str(attrs[attr_name])
+
 
 def get_required_dataset(f: h5py.File, ds_name: str) -> h5py.Dataset:
     if ds_name not in REQUIRED_DATASETS:
         raise ValueError(f"Internal error: dataset '{ds_name}' is not in REQUIRED_DATASETS.")
     if ds_name not in f:
-        raise BundleCorruptionError(
-            f"Bundle is missing required dataset '{ds_name}'."
-        )
+        raise BundleCorruptionError(f"Bundle is missing required dataset '{ds_name}'.")
     dataset = f[ds_name]
     if not isinstance(dataset, h5py.Dataset):
-        raise BundleCorruptionError(
-            f"Bundle item '{ds_name}' is not a dataset."
-        )
+        raise BundleCorruptionError(f"Bundle item '{ds_name}' is not a dataset.")
     return dataset
 
 
@@ -164,7 +160,9 @@ class BundleMetadata:
         """
         version = _schema_version(attrs)
         index_config_dict = json.loads(get_required_attribute(attrs, ATTR_INDEX_CONFIG))
-        index_config = index_config_from_dict(index_config_dict.get("index_type"), index_config_dict)
+        index_config = index_config_from_dict(
+            index_config_dict.get("index_type"), index_config_dict
+        )
         if version == 1:
             _check_v1_metric(attrs, index_config)
         return cls(
@@ -459,7 +457,9 @@ def import_bundle(
         validate_bundle(f)
         meta = BundleMetadata.from_h5_attrs(f.attrs)
 
-        was_already_registered = backend.get_registered_model(model_name=meta.model_name) is not None
+        was_already_registered = (
+            backend.get_registered_model(model_name=meta.model_name) is not None
+        )
         if not force and was_already_registered:
             existing = backend.get_embedding_count(model_name=meta.model_name)
             if existing > 0:

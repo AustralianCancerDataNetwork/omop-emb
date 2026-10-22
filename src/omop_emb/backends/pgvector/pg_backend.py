@@ -113,6 +113,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     writable : bool, optional
         Forwarded to ``EmbeddingBackend``.
     """
+
     # Instance variables
     _MAX_EF_SEARCH = 1000
     _filtered_hnsw_warned = False
@@ -145,9 +146,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     ) -> type[PGEmbeddingTable]:
         return pg_embedding_table_descriptor(model_record=model_record)
 
-    def _create_storage_table(
-        self, model_record: EmbeddingModelRecord
-    ) -> type[PGEmbeddingTable]:
+    def _create_storage_table(self, model_record: EmbeddingModelRecord) -> type[PGEmbeddingTable]:
         return create_pg_embedding_table(
             engine=self.emb_engine,
             model_record=model_record,
@@ -288,7 +287,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         return tuple(
             str(item["name"])
             for item in inspect(self.emb_engine).get_indexes(
-                record.storage_identifier, schema=physical_schema,
+                record.storage_identifier,
+                schema=physical_schema,
             )
             if str(item["name"]).startswith(expected_prefix)
         )
@@ -314,9 +314,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                     registered_table=table,
                 )
         except Exception as exc:
-            logger.error(
-                "Failed to upsert embeddings for '%s': %s", model_record.model_name, exc
-            )
+            logger.error("Failed to upsert embeddings for '%s': %s", model_record.model_name, exc)
             raise
 
     def _delete_embeddings_impl(
@@ -344,7 +342,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             return {}
         table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
-            result = query_embeddings_by_ids(session=session, embedding_table=table, concept_ids=concept_ids)
+            result = query_embeddings_by_ids(
+                session=session, embedding_table=table, concept_ids=concept_ids
+            )
         missing = set(concept_ids) - set(result.keys())
         if missing:
             raise ValueError(
@@ -431,7 +431,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             [
                 NearestConceptMatch(
                     concept_id=int(row.concept_id),
-                    similarity=float(get_similarity_from_distance(float(row.distance), metric_type)),
+                    similarity=float(
+                        get_similarity_from_distance(float(row.distance), metric_type)
+                    ),
                     domain_id=row.domain_id,
                     vocabulary_id=row.vocabulary_id,
                     is_standard=bool(row.is_standard),
@@ -451,13 +453,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     def _has_any_embeddings_impl(self, *, model_record: EmbeddingModelRecord) -> bool:
         table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
-            return (
-                session.execute(select(table.concept_id).limit(1)).first() is not None
-            )
+            return session.execute(select(table.concept_id).limit(1)).first() is not None
 
-    def _get_all_stored_concept_ids_impl(
-        self, *, model_record: EmbeddingModelRecord
-    ) -> set[int]:
+    def _get_all_stored_concept_ids_impl(self, *, model_record: EmbeddingModelRecord) -> set[int]:
         table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return {row[0] for row in session.execute(q_all_concept_ids(table))}

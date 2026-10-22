@@ -15,9 +15,7 @@ logger = logging.getLogger(__name__)
 app = typer.Typer(help="Diagnostics for embedding storage and retrieval.")
 
 
-@app.command(
-    name="health-check", help="Verify backend connectivity and list registered models."
-)
+@app.command(name="health-check", help="Verify backend connectivity and list registered models.")
 def health_check():
     cfg = OmopEmbConfig.get_config()
     resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)

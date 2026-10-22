@@ -44,7 +44,9 @@ def _concept(concept_id: int, **overrides):
 def test_reader_before_any_write_does_not_create_the_registry(tmp_path) -> None:
     """A store that's never been set up reports an empty registry instead of
     being set up by being looked at."""
-    with open_vector_store_reader(sqlite_resolved_vector_store(str(tmp_path / "test.db"))) as reader:
+    with open_vector_store_reader(
+        sqlite_resolved_vector_store(str(tmp_path / "test.db"))
+    ) as reader:
         assert reader.initialized is False
         assert reader.get_registered_models() == ()
         assert inspect(reader.emb_engine).has_table(ModelRegistry.__tablename__) is False  # ty: ignore[unresolved-attribute]
@@ -88,9 +90,7 @@ def test_reader_sees_registered_models_and_stored_embeddings_without_mutating(tm
 
     assert statements
     assert not any(
-        statement.startswith(
-            ("create ", "alter ", "drop ", "insert ", "update ", "delete ")
-        )
+        statement.startswith(("create ", "alter ", "drop ", "insert ", "update ", "delete "))
         for statement in statements
     )
 
@@ -173,7 +173,8 @@ def test_population_reads_concepts_from_a_separate_vocab_database(tmp_path):
         },
         databases={
             "cdm": CDMDatabaseConfig(
-                connection="primary", vocab_connection="vocab",
+                connection="primary",
+                vocab_connection="vocab",
             ),
         },
     )

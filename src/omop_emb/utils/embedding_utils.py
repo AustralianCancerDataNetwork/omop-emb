@@ -61,9 +61,9 @@ def as_embedding_array(embeddings: ArrayLike, dimensions: Optional[int] = None) 
 class EmbeddingConceptFilter:
     """Search constraints applied during KNN retrieval.
 
-    All fields are optional. Unset fields impose no constraint. 
-    To limit the number of KNN results returned, pass `k` to 
-    `get_nearest_concepts`/`get_similar_concepts`. 
+    All fields are optional. Unset fields impose no constraint.
+    To limit the number of KNN results returned, pass `k` to
+    `get_nearest_concepts`/`get_similar_concepts`.
 
     Notes
     -----

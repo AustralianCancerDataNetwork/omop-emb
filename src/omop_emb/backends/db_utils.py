@@ -65,11 +65,15 @@ def apply_concept_filter_where(
     Select
     """
     if concept_filter.concept_ids is not None:
-        stmt = stmt.where(in_values(columns.concept_id, concept_filter.concept_ids, dialect=dialect))
+        stmt = stmt.where(
+            in_values(columns.concept_id, concept_filter.concept_ids, dialect=dialect)
+        )
     if concept_filter.domains is not None:
         stmt = stmt.where(in_values(columns.domain_id, concept_filter.domains, dialect=dialect))
     if concept_filter.vocabularies is not None:
-        stmt = stmt.where(in_values(columns.vocabulary_id, concept_filter.vocabularies, dialect=dialect))
+        stmt = stmt.where(
+            in_values(columns.vocabulary_id, concept_filter.vocabularies, dialect=dialect)
+        )
     if concept_filter.require_standard:
         stmt = stmt.where(columns.is_standard == True)  # noqa: E712
     if concept_filter.require_active:

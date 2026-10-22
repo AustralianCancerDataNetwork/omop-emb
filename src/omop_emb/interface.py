@@ -111,7 +111,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         ``is_standard``, and ``is_active`` are populated directly from the
         embedding table by the backend.
     model : str
-        Model name that is expected to be canonicalized by the constructor. 
+        Model name that is expected to be canonicalized by the constructor.
         A possibly-canonical name is accepted as we cannot know if canonical or not.
     provider_type : str, optional
         omop-llm provider key. Defaults to ``'ollama'``.
@@ -313,9 +313,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
                     "Pass FlatIndexConfig() for exact search or HNSWIndexConfig(metric_type=...) "
                     "for approximate search."
                 )
-            record = self._backend.get_registered_model(
-                model_name=self.canonical_model_name
-            )
+            record = self._backend.get_registered_model(model_name=self.canonical_model_name)
             if record is not None and self._faiss_cache.is_fresh(
                 record, self._metric_type, faiss_index_config
             ):
@@ -495,9 +493,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         if missing:
             raise ValueError(f"No stored embedding for concept_ids: {missing}")
 
-        vectors = np.asarray(
-            [vectors_by_id[cid] for cid in concept_ids], dtype=np.float64
-        )
+        vectors = np.asarray([vectors_by_id[cid] for cid in concept_ids], dtype=np.float64)
         return np.average(vectors, axis=0, weights=weights)
 
     # ------------------------------------------------------------------
@@ -534,9 +530,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
             cdm_session_factory=self._require_cdm(),
         )
         embedded_ids = self._backend.get_stored_concept_ids(model_name=self.canonical_model_name)
-        return {
-            cid: row for cid, row in all_concepts.items() if cid not in embedded_ids
-        }
+        return {cid: row for cid, row in all_concepts.items() if cid not in embedded_ids}
 
     def count_concepts_without_embedding(
         self,
@@ -687,9 +681,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
             tuple(
                 dc_replace(
                     r,
-                    concept_name=rows[r.concept_id].concept_name
-                    if r.concept_id in rows
-                    else None,
+                    concept_name=rows[r.concept_id].concept_name if r.concept_id in rows else None,
                 )
                 for r in query_results
             )
@@ -935,23 +927,15 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
             ConceptEmbeddingRecord(
                 concept_id=cid,
                 domain_id=concept_meta[cid].domain_id if cid in concept_meta else "",
-                vocabulary_id=concept_meta[cid].vocabulary_id
-                if cid in concept_meta
-                else "",
-                is_standard=bool(concept_meta[cid].is_standard)
-                if cid in concept_meta
-                else False,
-                is_valid=bool(concept_meta[cid].is_valid)
-                if cid in concept_meta
-                else True,
+                vocabulary_id=concept_meta[cid].vocabulary_id if cid in concept_meta else "",
+                is_standard=bool(concept_meta[cid].is_standard) if cid in concept_meta else False,
+                is_valid=bool(concept_meta[cid].is_valid) if cid in concept_meta else True,
             )
             for cid in concept_ids
         ]
 
         # Check registered dimensions
-        record = self._backend.get_registered_model(
-            model_name=self.canonical_model_name
-        )
+        record = self._backend.get_registered_model(model_name=self.canonical_model_name)
         if record is not None and record.dimensions != self.embedding_dim:
             raise ValueError(
                 f"Embedding dimension mismatch: client produces {self.embedding_dim}d "

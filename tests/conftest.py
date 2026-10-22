@@ -78,16 +78,32 @@ NON_STANDARD_ID = 4
 
 CONCEPT_RECORDS: tuple[ConceptEmbeddingRecord, ...] = (
     ConceptEmbeddingRecord(
-        concept_id=HYPERTENSION_ID, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True, is_valid=True
+        concept_id=HYPERTENSION_ID,
+        domain_id="Condition",
+        vocabulary_id="SNOMED",
+        is_standard=True,
+        is_valid=True,
     ),
     ConceptEmbeddingRecord(
-        concept_id=DIABETES_ID, domain_id="Condition", vocabulary_id="SNOMED", is_standard=True, is_valid=True
+        concept_id=DIABETES_ID,
+        domain_id="Condition",
+        vocabulary_id="SNOMED",
+        is_standard=True,
+        is_valid=True,
     ),
     ConceptEmbeddingRecord(
-        concept_id=ASPIRIN_ID, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True, is_valid=True
+        concept_id=ASPIRIN_ID,
+        domain_id="Drug",
+        vocabulary_id="RxNorm",
+        is_standard=True,
+        is_valid=True,
     ),
     ConceptEmbeddingRecord(
-        concept_id=NON_STANDARD_ID, domain_id="Drug", vocabulary_id="RxNorm", is_standard=False, is_valid=True
+        concept_id=NON_STANDARD_ID,
+        domain_id="Drug",
+        vocabulary_id="RxNorm",
+        is_standard=False,
+        is_valid=True,
     ),
 )
 
@@ -123,7 +139,9 @@ L2_SIMILARITY = {
 }
 
 
-def register_flat(backend: EmbeddingBackend, dimensions: int = EMBEDDING_DIM, model_name: str = MODEL_NAME):
+def register_flat(
+    backend: EmbeddingBackend, dimensions: int = EMBEDDING_DIM, model_name: str = MODEL_NAME
+):
     """Register *model_name* on *backend* with a FLAT index."""
     return backend.register_model(
         model_name=model_name,
@@ -178,11 +196,18 @@ def svec_engine(request):
     from oa_configurator.testing import isolated_test_database
 
     with isolated_test_database(
-        OmopEmbConfig, "test_emb_db_sqlite", dialect="sqlite", request=request,
-        schema_claims=[SchemaClaim(
-            schema_tag=REGISTRY_SCHEMA_KEY, physical_schema=MODEL_REGISTRY_SCHEMA,
-            reserved=True, owner="omop_emb",
-        )],
+        OmopEmbConfig,
+        "test_emb_db_sqlite",
+        dialect="sqlite",
+        request=request,
+        schema_claims=[
+            SchemaClaim(
+                schema_tag=REGISTRY_SCHEMA_KEY,
+                physical_schema=MODEL_REGISTRY_SCHEMA,
+                reserved=True,
+                owner="omop_emb",
+            )
+        ],
         extensions=[_load_sqlite_vec],
     ) as db:
         engine = db.connection.engine
@@ -208,7 +233,8 @@ def pg_db(request):
     from oa_configurator.testing import install_postgres_extension, isolated_test_database
 
     with isolated_test_database(
-        OmopEmbConfig, "test_emb_db_pg",
+        OmopEmbConfig,
+        "test_emb_db_pg",
         extensions=[install_postgres_extension("vector")],
         request=request,
     ) as db:

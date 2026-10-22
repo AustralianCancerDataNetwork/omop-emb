@@ -221,7 +221,9 @@ class FAISSCacheMetadata:
             dimensions=int(d.get("dimensions", 0)),
             metric_type=MetricType(d["metric_type"]),
             provider_type=str(d["provider_type"]),
-            index_config=index_config_from_dict(d["index_config"].get("index_type"), d["index_config"]),
+            index_config=index_config_from_dict(
+                d["index_config"].get("index_type"), d["index_config"]
+            ),
             row_count=int(d.get("row_count", -1)),
             exported_at=d.get("exported_at", ""),
         )
@@ -271,8 +273,12 @@ class FAISSCache:
         self._cache_dir = Path(cache_dir).expanduser().resolve()
         self._max_cached_indices = max_cached_indices
         self._max_cached_filters = max_cached_filters
-        self._index_cache: OrderedDict[Tuple[MetricType, IndexConfig], "faiss.Index"] = OrderedDict()
-        self._filter_cache: OrderedDict[EmbeddingConceptFilter, Optional[np.ndarray]] = OrderedDict()
+        self._index_cache: OrderedDict[Tuple[MetricType, IndexConfig], "faiss.Index"] = (
+            OrderedDict()
+        )
+        self._filter_cache: OrderedDict[EmbeddingConceptFilter, Optional[np.ndarray]] = (
+            OrderedDict()
+        )
 
     # ------------------------------------------------------------------
     # Paths
@@ -614,9 +620,7 @@ class FAISSCache:
         from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 
         faiss_metric = (
-            faiss.METRIC_INNER_PRODUCT
-            if metric_type == MetricType.COSINE
-            else faiss.METRIC_L2
+            faiss.METRIC_INNER_PRODUCT if metric_type == MetricType.COSINE else faiss.METRIC_L2
         )
 
         if isinstance(index_config, FlatIndexConfig):
@@ -625,9 +629,7 @@ class FAISSCache:
             return faiss.IndexFlatIP(dimensions)
 
         if isinstance(index_config, HNSWIndexConfig):
-            idx = faiss.IndexHNSWFlat(
-                dimensions, index_config.num_neighbors, faiss_metric
-            )
+            idx = faiss.IndexHNSWFlat(dimensions, index_config.num_neighbors, faiss_metric)
             idx.hnsw.efConstruction = index_config.ef_construction
             return idx
 
@@ -637,9 +639,7 @@ class FAISSCache:
                 if metric_type == MetricType.L2
                 else faiss.IndexFlatIP(dimensions)
             )
-            idx = faiss.IndexIVFFlat(
-                quantizer, dimensions, index_config.n_lists, faiss_metric
-            )
+            idx = faiss.IndexIVFFlat(quantizer, dimensions, index_config.n_lists, faiss_metric)
             idx.train(train_vecs)
             idx.nprobe = index_config.n_probe
             return idx

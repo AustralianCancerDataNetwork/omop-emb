@@ -12,9 +12,7 @@ from contextlib import contextmanager
 import numpy as np
 import pytest
 
-pytest.importorskip(
-    "pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests"
-)
+pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests")
 
 import sqlalchemy as sa
 from sqlalchemy import event as sa_event
@@ -62,7 +60,9 @@ class TestPGVectorBackend(SharedBackendTests):
             query_embeddings=QUERY_EMBEDDING,
             k=len(CONCEPT_RECORDS),
         )
-        assert {m.concept_id: m.similarity for m in results[0]} == pytest.approx(L2_SIMILARITY, abs=1e-5)
+        assert {m.concept_id: m.similarity for m in results[0]} == pytest.approx(
+            L2_SIMILARITY, abs=1e-5
+        )
 
     def test_query_vectors_run_as_separate_statements(self, backend: PGVectorEmbeddingBackend):
         """Each query vector gets its own ordered statement and the same result as a lone query."""
@@ -86,7 +86,10 @@ class TestPGVectorBackend(SharedBackendTests):
         assert not any("lateral" in s for s in selects)
         for i, query in enumerate(queries):
             alone = backend.get_nearest_concepts(
-                model_name=MODEL_NAME, metric_type=MetricType.COSINE, query_embeddings=query[None, :], k=3
+                model_name=MODEL_NAME,
+                metric_type=MetricType.COSINE,
+                query_embeddings=query[None, :],
+                k=3,
             )
             assert batched[i] == alone[0]
 
@@ -114,9 +117,7 @@ class TestPGVectorHNSWBackend:
         metric_type=MetricType.L2, num_neighbors=4, ef_search=8, ef_construction=16
     )
 
-    def test_rebuild_index_keeps_storage_identifier(
-        self, pg_backend: PGVectorEmbeddingBackend
-    ):
+    def test_rebuild_index_keeps_storage_identifier(self, pg_backend: PGVectorEmbeddingBackend):
         """Rebuilding from FLAT to HNSW keeps the same physical table name."""
         r_flat = register_flat(pg_backend)
         r_hnsw = pg_backend.rebuild_index(
@@ -134,10 +135,14 @@ class TestPGVectorHNSWBackend:
         upsert_all(pg_backend)
         table = pg_backend.get_registered_model(model_name=MODEL_NAME).storage_identifier
 
-        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.COSINE))
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.COSINE)
+        )
         assert pg_backend.physical_indexes(MODEL_NAME) == (f"idx_{table}_cosine",)
 
-        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.L2))
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.L2)
+        )
         assert pg_backend.physical_indexes(MODEL_NAME) == (f"idx_{table}_l2",)
 
         pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
@@ -155,7 +160,8 @@ class TestPGVectorHNSWBackend:
             )
         with pg_engine.connect() as conn:
             indexdef = conn.execute(
-                sa.text("SELECT indexdef FROM pg_indexes WHERE indexname = :n"), {"n": f"idx_{table}_l2"}
+                sa.text("SELECT indexdef FROM pg_indexes WHERE indexname = :n"),
+                {"n": f"idx_{table}_l2"},
             ).scalar_one()
         assert "m='8'" in indexdef
 
@@ -170,7 +176,9 @@ class TestPGVectorHNSWBackend:
                 model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.HAMMING)
             )
         assert pg_backend.physical_indexes(MODEL_NAME) == before
-        assert pg_backend.get_registered_model(model_name=MODEL_NAME).index_config == self.HNSW_CONFIG
+        assert (
+            pg_backend.get_registered_model(model_name=MODEL_NAME).index_config == self.HNSW_CONFIG
+        )
 
     @pytest.mark.parametrize("vacuum,expected", [(True, 1), (False, 0)])
     def test_rebuild_index_vacuums_the_table_unless_told_not_to(
@@ -191,9 +199,13 @@ class TestPGVectorHNSWBackend:
             sa_event.remove(pg_backend.emb_engine, "before_cursor_execute", capture)
 
         assert sum(s.startswith("vacuum (analyze)") for s in statements) == expected
-        assert pg_backend.get_registered_model(model_name=MODEL_NAME).index_config == self.HNSW_CONFIG
+        assert (
+            pg_backend.get_registered_model(model_name=MODEL_NAME).index_config == self.HNSW_CONFIG
+        )
 
-    def test_compact_storage_shrinks_the_table_after_deletes(self, pg_backend: PGVectorEmbeddingBackend):
+    def test_compact_storage_shrinks_the_table_after_deletes(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
         """Plain VACUUM leaves the table size alone, VACUUM FULL gives the deleted rows' space back."""
         ids = list(range(1, 3001))
         populate(
@@ -309,9 +321,7 @@ class TestPGVectorHNSWBackend:
         assert len(caplog.records) == 1
         assert "pgvector below 0.8.0" in caplog.records[0].getMessage()
 
-    def test_hnsw_search_returns_correct_top1(
-        self, pg_backend: PGVectorEmbeddingBackend
-    ):
+    def test_hnsw_search_returns_correct_top1(self, pg_backend: PGVectorEmbeddingBackend):
         upsert_all(pg_backend)
         pg_backend.rebuild_index(
             model_name=MODEL_NAME,
@@ -356,13 +366,13 @@ def test_long_provider_model_variants_have_independent_tables_and_indexes(
                 model_name=model_name,
                 index_config=HNSWIndexConfig(metric_type=MetricType.L2),
             )
-        initial_indexes = {
-            name: pg_backend.physical_indexes(name) for name in variants
-        }
+        initial_indexes = {name: pg_backend.physical_indexes(name) for name in variants}
         all_indexes = {indexes[0] for indexes in initial_indexes.values()}
         assert len(all_indexes) == len(variants)
-        assert all(indexes == (f"idx_{records[name].storage_identifier}_l2",)
-                   for name, indexes in initial_indexes.items())
+        assert all(
+            indexes == (f"idx_{records[name].storage_identifier}_l2",)
+            for name, indexes in initial_indexes.items()
+        )
 
         first, *other_variants = variants
         pg_backend.rebuild_index(
@@ -372,13 +382,15 @@ def test_long_provider_model_variants_have_independent_tables_and_indexes(
         assert pg_backend.physical_indexes(first) == (
             f"idx_{records[first].storage_identifier}_cosine",
         )
-        assert all(pg_backend.physical_indexes(name) == initial_indexes[name]
-                   for name in other_variants)
+        assert all(
+            pg_backend.physical_indexes(name) == initial_indexes[name] for name in other_variants
+        )
 
         pg_backend.rebuild_index(model_name=first, index_config=FlatIndexConfig())
         assert pg_backend.physical_indexes(first) == ()
-        assert all(pg_backend.physical_indexes(name) == initial_indexes[name]
-                   for name in other_variants)
+        assert all(
+            pg_backend.physical_indexes(name) == initial_indexes[name] for name in other_variants
+        )
     finally:
         for model_name in records:
             if pg_backend.get_registered_model(model_name=model_name) is not None:
@@ -406,9 +418,7 @@ class TestPGVectorNonDefaultSchema:
             finally:
                 backend.emb_engine.dispose()
 
-    def test_table_and_index_lifecycle_stays_in_the_configured_schema(
-        self, scoped_backend, pg_db
-    ):
+    def test_table_and_index_lifecycle_stays_in_the_configured_schema(self, scoped_backend, pg_db):
         pg_engine = pg_db.committing_engine
         backend, schema = scoped_backend
         record = register_flat(backend)
@@ -421,9 +431,7 @@ class TestPGVectorNonDefaultSchema:
         # table_exists() sees it in the configured schema...
         assert backend._storage_table_exists(record) is True
         # ...and a bare inspector scoped to "public" doesn't.
-        assert sa.inspect(pg_engine).has_table(
-            record.storage_identifier, schema="public"
-        ) is False
+        assert sa.inspect(pg_engine).has_table(record.storage_identifier, schema="public") is False
 
         # Rebuild to HNSW, confirm the index lands in the configured schema,
         # then revert to FLAT, which drops it from that schema.
@@ -441,9 +449,7 @@ class TestPGVectorNonDefaultSchema:
         backend.delete_model(model_name=MODEL_NAME)
         assert backend._storage_table_exists(record) is False
 
-    def test_model_registry_lives_in_its_own_reserved_schema(
-        self, scoped_backend, pg_db
-    ):
+    def test_model_registry_lives_in_its_own_reserved_schema(self, scoped_backend, pg_db):
         pg_engine = pg_db.committing_engine
         backend, schema = scoped_backend
         register_flat(backend)
@@ -479,14 +485,21 @@ def test_single_upsert_call_exceeds_the_bind_parameter_limit(pg_backend: PGVecto
     register_flat(pg_backend)
     records = [ConceptEmbeddingRecord(i, "Drug", "RxNorm", True, True) for i in range(n)]
     pg_backend.upsert_embeddings(
-        model_name=MODEL_NAME, records=records, embeddings=np.ones((n, EMBEDDING_DIM), dtype=np.float32),
+        model_name=MODEL_NAME,
+        records=records,
+        embeddings=np.ones((n, EMBEDDING_DIM), dtype=np.float32),
     )
     updated = [ConceptEmbeddingRecord(i, "Condition", "SNOMED", False, True) for i in range(n)]
     pg_backend.upsert_embeddings(
-        model_name=MODEL_NAME, records=updated, embeddings=np.full((n, EMBEDDING_DIM), 2.0, dtype=np.float32),
+        model_name=MODEL_NAME,
+        records=updated,
+        embeddings=np.full((n, EMBEDDING_DIM), 2.0, dtype=np.float32),
     )
     assert pg_backend.get_embedding_count(model_name=MODEL_NAME) == n
-    assert pg_backend.get_concept_filter_metadata(model_name=MODEL_NAME, concept_ids=[n - 1])[n - 1] == updated[-1]
+    assert (
+        pg_backend.get_concept_filter_metadata(model_name=MODEL_NAME, concept_ids=[n - 1])[n - 1]
+        == updated[-1]
+    )
     assert np.array_equal(
         pg_backend.get_embeddings_by_concept_ids(model_name=MODEL_NAME, concept_ids=[0])[0],
         np.full(EMBEDDING_DIM, 2.0, dtype=np.float32),

@@ -165,7 +165,9 @@ class TestSQLiteVecMetricTable:
         svec_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
 
         assert svec_backend.get_embedding_count(model_name=MODEL_NAME) == len(CONCEPT_RECORDS)
-        stored = svec_backend.get_embeddings_by_concept_ids(model_name=MODEL_NAME, concept_ids=concept_ids)
+        stored = svec_backend.get_embeddings_by_concept_ids(
+            model_name=MODEL_NAME, concept_ids=concept_ids
+        )
         assert np.allclose([stored[i] for i in concept_ids], CONCEPT_EMBEDDINGS)
         results = svec_backend.get_nearest_concepts(
             model_name=MODEL_NAME,
@@ -225,14 +227,20 @@ class TestSQLiteVecMetricTable:
         assert declared_metric(svec_backend.emb_engine, table) is None
         assert not sa.inspect(svec_backend.emb_engine).has_table(f"{table}__rebuild")
         with svec_backend.emb_engine.connect() as conn:
-            assert conn.execute(sa.text(f'SELECT count(*) FROM "{table}"')).scalar_one() == len(CONCEPT_RECORDS)
-        assert recreate_vec0(svec_backend.emb_engine, table, EMBEDDING_DIM, MetricType.COSINE) == len(CONCEPT_RECORDS)
+            assert conn.execute(sa.text(f'SELECT count(*) FROM "{table}"')).scalar_one() == len(
+                CONCEPT_RECORDS
+            )
+        assert recreate_vec0(
+            svec_backend.emb_engine, table, EMBEDDING_DIM, MetricType.COSINE
+        ) == len(CONCEPT_RECORDS)
         assert declared_metric(svec_backend.emb_engine, table) == MetricType.COSINE
 
     def test_registration_locks_cosine_by_default(self, svec_backend: SQLiteVecEmbeddingBackend):
         record = register_flat(svec_backend)
         assert record.metric_type == MetricType.COSINE
-        assert declared_metric(svec_backend.emb_engine, record.storage_identifier) == MetricType.COSINE
+        assert (
+            declared_metric(svec_backend.emb_engine, record.storage_identifier) == MetricType.COSINE
+        )
 
     @pytest.mark.parametrize("metric", [MetricType.L2, MetricType.L1])
     def test_registration_with_another_metric_locks_the_model_to_it(
@@ -277,7 +285,9 @@ class TestSQLiteVecMetricTable:
         for match in matches:
             assert match.similarity == pytest.approx(L2_SIMILARITY[match.concept_id], abs=1e-5)
 
-    def test_registering_an_unsupported_metric_raises(self, svec_backend: SQLiteVecEmbeddingBackend):
+    def test_registering_an_unsupported_metric_raises(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
         with pytest.raises(ValueError, match="not supported"):
             svec_backend.register_model(
                 model_name=MODEL_NAME,
@@ -324,7 +334,9 @@ class TestSQLiteVecMetricTable:
         )
         record = svec_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
         assert record.metric_type == MetricType.COSINE
-        assert declared_metric(svec_backend.emb_engine, record.storage_identifier) == MetricType.COSINE
+        assert (
+            declared_metric(svec_backend.emb_engine, record.storage_identifier) == MetricType.COSINE
+        )
 
     def test_registry_row_without_a_metric_raises_then_rebuilds_to_cosine(
         self, svec_backend: SQLiteVecEmbeddingBackend
@@ -429,7 +441,6 @@ class TestSQLiteVecVacuum:
         finally:
             backend.emb_engine.dispose()
 
-
     @staticmethod
     def _fill(backend: SQLiteVecEmbeddingBackend, n: int = 4000) -> list[int]:
         register_flat(backend, dimensions=64)
@@ -502,7 +513,9 @@ class TestSQLiteVecVacuum:
             self._fill(backend)
             before = self._size(backend)
 
-            statements = self._statements(backend, lambda: backend.compact_storage(model_name=MODEL_NAME))
+            statements = self._statements(
+                backend, lambda: backend.compact_storage(model_name=MODEL_NAME)
+            )
 
             assert self._size(backend) == before
             assert not any(s.startswith(("VACUUM", "DROP", "CREATE", "INSERT")) for s in statements)
@@ -517,7 +530,9 @@ class TestSQLiteVecVacuum:
             backend.delete_embeddings(model_name=MODEL_NAME, concept_ids=ids[:2048])
             before = self._size(backend)
 
-            statements = self._statements(backend, lambda: backend.compact_storage(model_name=MODEL_NAME))
+            statements = self._statements(
+                backend, lambda: backend.compact_storage(model_name=MODEL_NAME)
+            )
 
             assert self._size(backend) < before
             assert any(s.startswith("VACUUM") for s in statements)

@@ -26,7 +26,9 @@ class TestCanonicalModelName:
 
         backend = _make_mock_backend()
 
-        with patch("omop_emb.interface.build_model_backend_from_resolved") as mock_build_model_backend:
+        with patch(
+            "omop_emb.interface.build_model_backend_from_resolved"
+        ) as mock_build_model_backend:
             model_backend = Mock()
             model_backend.model = "pseudo-model:v1"
             model_backend.provider = "ollama"
@@ -36,7 +38,10 @@ class TestCanonicalModelName:
             resolved = ResolvedModel(
                 name="test-model",
                 provider=ResolvedProvider(
-                    name="test-provider", provider="ollama", base_url="http://localhost:11434", api_key=None
+                    name="test-provider",
+                    provider="ollama",
+                    base_url="http://localhost:11434",
+                    api_key=None,
                 ),
                 model="pseudo-model",
                 embedding_dim=None,

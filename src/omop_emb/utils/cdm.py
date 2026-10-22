@@ -16,8 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def streamed(stmt: Select, batch_size: int) -> Select:
-    """Return *stmt* with server-side cursor streaming enabled.
-    """
+    """Return *stmt* with server-side cursor streaming enabled."""
     return stmt.execution_options(stream_results=True, yield_per=batch_size)
 
 
@@ -55,9 +54,7 @@ def check_concept_cdm(cdm_session_factory: CDMSessionFactory) -> None:
     except DBAPIError as e:
         error_msg = str(e).lower()
         if "does not exist" in error_msg or "no such table" in error_msg:
-            logger.error(
-                "Database schema is missing! Did you forget to run the ingestion CLI?"
-            )
+            logger.error("Database schema is missing! Did you forget to run the ingestion CLI?")
             raise RuntimeError("Database not initialized.") from e
         raise
 

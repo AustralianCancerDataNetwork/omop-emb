@@ -9,9 +9,7 @@ from . import (
     cli_diagnostics as diagnostics,
 )
 
-app = typer.Typer(
-    rich_markup_mode="rich", help="CLI Manager for OMOP embeddings and utilities."
-)
+app = typer.Typer(rich_markup_mode="rich", help="CLI Manager for OMOP embeddings and utilities.")
 
 
 @app.callback()

@@ -24,7 +24,7 @@ from sqlalchemy import (
     insert,
     select,
     text,
-    LargeBinary
+    LargeBinary,
 )
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -73,6 +73,7 @@ def table_exists(engine: Engine, table_name: str) -> bool:
             is not None
         )
 
+
 def declared_metric(engine: Engine, table_name: str) -> Optional[MetricType]:
     """Return the metric the vec0 table *table_name* declares on its embedding column.
 
@@ -94,9 +95,7 @@ def declared_metric(engine: Engine, table_name: str) -> Optional[MetricType]:
     return MetricType(match.group(1)) if match else None
 
 
-def recreate_vec0(
-    engine: Engine, table_name: str, dimensions: int, metric_type: MetricType
-) -> int:
+def recreate_vec0(engine: Engine, table_name: str, dimensions: int, metric_type: MetricType) -> int:
     """Recreate a vec0 table with the given metric, keeping every stored row.
 
     Parameters
@@ -129,10 +128,14 @@ def recreate_vec0(
         conn.exec_driver_sql("BEGIN IMMEDIATE")
         conn.execute(text(ddl_drop_vec0(staging)))
         conn.execute(text(ddl_create_vec0(staging, dimensions, metric_type)))
-        conn.execute(text(f'INSERT INTO "{staging}"({columns}) SELECT {columns} FROM "{table_name}"'))
+        conn.execute(
+            text(f'INSERT INTO "{staging}"({columns}) SELECT {columns} FROM "{table_name}"')
+        )
         conn.execute(text(ddl_drop_vec0(table_name)))
         conn.execute(text(ddl_create_vec0(table_name, dimensions, metric_type)))
-        conn.execute(text(f'INSERT INTO "{table_name}"({columns}) SELECT {columns} FROM "{staging}"'))
+        conn.execute(
+            text(f'INSERT INTO "{table_name}"({columns}) SELECT {columns} FROM "{staging}"')
+        )
         count = conn.execute(text(f'SELECT count(*) FROM "{table_name}"')).scalar_one()
         conn.execute(text(ddl_drop_vec0(staging)))
     return int(count)
@@ -180,7 +183,9 @@ def ddl_create_vec0(table_name: str, dimensions: int, metric_type: MetricType) -
     str
         ``CREATE VIRTUAL TABLE IF NOT EXISTS ...`` statement.
     """
-    embedding_col = f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}] distance_metric={metric_type.value}"
+    embedding_col = (
+        f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}] distance_metric={metric_type.value}"
+    )
     metadata_cols = ", ".join(f"{c.name} {c.vec0_ddl}" for c in CONCEPT_METADATA_COLUMNS)
 
     return (
@@ -402,9 +407,7 @@ def query_knn_batch(
     statement.
     """
     if k > MAX_KNN_K:
-        raise ValueError(
-            f"sqlite-vec returns at most {MAX_KNN_K} results per query. Got k={k}."
-        )
+        raise ValueError(f"sqlite-vec returns at most {MAX_KNN_K} results per query. Got k={k}.")
     results: list[Sequence[Row]] = []
     for query_vector in query_vectors:
         stmt = _build_knn_stmt(table, query_vector, k, concept_filter)
@@ -420,7 +423,9 @@ def query_concept_ids_matching_filter(
     """Return every ``concept_id`` in `table` satisfying `concept_filter`.
     Used to build an exact FAISS pre-filter set, not for ranking.
     """
-    stmt = apply_concept_filter_where(select(table.c.concept_id), table.c, concept_filter, dialect=Dialect.SQLITE)
+    stmt = apply_concept_filter_where(
+        select(table.c.concept_id), table.c, concept_filter, dialect=Dialect.SQLITE
+    )
     rows = session.execute(stmt).all()
     return {int(row[0]) for row in rows}
 
@@ -455,9 +460,8 @@ def query_embedding_count_by_vocabulary(session: Session, table: Table) -> dict[
         ``vocabulary_id`` to embedding count, for every vocabulary with at
         least one stored embedding.
     """
-    stmt = (
-        select(table.c.vocabulary_id, func.count(table.c.concept_id))
-        .group_by(table.c.vocabulary_id)
+    stmt = select(table.c.vocabulary_id, func.count(table.c.concept_id)).group_by(
+        table.c.vocabulary_id
     )
     rows = session.execute(stmt).all()
     return {row[0]: int(row[1]) for row in rows}

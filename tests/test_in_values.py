@@ -23,7 +23,9 @@ _table = sa.Table(
 
 def _count(engine: sa.Engine, condition) -> int:
     with engine.connect() as connection:
-        return connection.execute(sa.select(sa.func.count()).select_from(_table).where(condition)).scalar_one()
+        return connection.execute(
+            sa.select(sa.func.count()).select_from(_table).where(condition)
+        ).scalar_one()
 
 
 def _check(engine: sa.Engine, dialect: str) -> None:
@@ -34,7 +36,10 @@ def _check(engine: sa.Engine, dialect: str) -> None:
 
     sa.event.listen(engine, "before_cursor_execute", capture)
     try:
-        assert _count(engine, in_values(_table.c.concept_id, list(range(_MANY)), dialect=dialect)) == 1000
+        assert (
+            _count(engine, in_values(_table.c.concept_id, list(range(_MANY)), dialect=dialect))
+            == 1000
+        )
     finally:
         sa.event.remove(engine, "before_cursor_execute", capture)
     _, parameters = statements[-1]

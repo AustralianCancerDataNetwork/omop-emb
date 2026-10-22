@@ -28,9 +28,7 @@ from omop_emb.utils.embedding_utils import (
 )
 
 logger = logging.getLogger(__name__)
-app = typer.Typer(
-    help="Commands related to embedding generation, storage, and management."
-)
+app = typer.Typer(help="Commands related to embedding generation, storage, and management.")
 
 
 def consolidate_queries(
@@ -51,9 +49,7 @@ def consolidate_queries(
             for query in queries:
                 yield query.strip()
         else:
-            raise ValueError(
-                "Invalid type for queries. Expected a string or a list of strings."
-            )
+            raise ValueError("Invalid type for queries. Expected a string or a list of strings.")
     else:
         raise ValueError("No queries provided.")
 
@@ -185,7 +181,9 @@ def add_embeddings(
     cfg = _get_config()
     resolved_model = _resolve_model(model_name, cfg)
 
-    resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    resolved_vector_store = Resolver.from_active_config().resolve_vector_store(
+        cfg.vector_store_name
+    )
     backend = open_vector_store_writer(resolved_vector_store)
     with open_cdm_sessions() as cdm_sessions:
         _add_embeddings(
@@ -239,9 +237,7 @@ def _add_embeddings(
         n_pending = embedding_writer.count_concepts_requiring_embedding(
             concept_filter=concept_filter,
         )
-        n_total = (
-            min(n_pending, num_embeddings) if num_embeddings is not None else n_pending
-        )
+        n_total = min(n_pending, num_embeddings) if num_embeddings is not None else n_pending
         typer.echo(f"Total concepts to process: {n_total:,}")
 
         n_processed = 0
@@ -253,9 +249,7 @@ def _add_embeddings(
             ):
                 embedding_writer.embed_and_upsert_concepts(
                     concept_ids=tuple(batch_dict.keys()),
-                    concept_texts=tuple(
-                        row.concept_name for row in batch_dict.values()
-                    ),
+                    concept_texts=tuple(row.concept_name for row in batch_dict.values()),
                     concept_meta=batch_dict,
                     batch_size=batch_size,
                 )
@@ -336,7 +330,9 @@ def create_index(
     cfg = _get_config()
     resolved_model = _resolve_model(model_name, cfg)
 
-    resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    resolved_vector_store = Resolver.from_active_config().resolve_vector_store(
+        cfg.vector_store_name
+    )
     backend = open_vector_store_writer(resolved_vector_store)
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
@@ -353,7 +349,9 @@ def create_index(
     )
     record = embedding_writer.rebuild_index(index_config=index_config)
     metric_info = f" (metric={record.metric_type.value})" if record.metric_type else ""
-    typer.echo(f"Index ({index_type.value}) built for '{embedding_writer.canonical_model_name}'{metric_info}.")
+    typer.echo(
+        f"Index ({index_type.value}) built for '{embedding_writer.canonical_model_name}'{metric_info}."
+    )
 
 
 @app.command()
@@ -575,7 +573,9 @@ def search(
     resolved_model = _resolve_model(model_name, cfg)
 
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
-    resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    resolved_vector_store = Resolver.from_active_config().resolve_vector_store(
+        cfg.vector_store_name
+    )
     resolved_faiss_cache_dir = faiss_cache_dir or resolved_vector_store.faiss_cache_dir
     with ExitStack() as stack:
         store = stack.enter_context(open_vector_store_reader(resolved_vector_store))
@@ -585,9 +585,7 @@ def search(
             cdm_sessions = stack.enter_context(open_cdm_sessions())
         except (RuntimeError, ConfigurationError):
             cdm_sessions = None
-            logger.info(
-                "CDM not configured; concept names will not be enriched in results."
-            )
+            logger.info("CDM not configured; concept names will not be enriched in results.")
         _search(
             queries_generator,
             store=store,
@@ -635,9 +633,7 @@ def _search(
         vocabularies=tuple(vocabularies) if vocabularies else None,
     )
 
-    for batch_id, batched_queries in enumerate(
-        itertools.batched(queries_generator, batch_size)
-    ):
+    for batch_id, batched_queries in enumerate(itertools.batched(queries_generator, batch_size)):
         batched_matches = embedding_reader.get_nearest_concepts_from_query_texts(
             query_texts=batched_queries,
             model_backend=model_backend,

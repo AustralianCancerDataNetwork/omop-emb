@@ -12,9 +12,7 @@ from omop_emb.config import IndexType, MetricType
 
 
 def test_from_kwargs_ignores_unknown_keys():
-    cfg = HNSWIndexConfig.from_kwargs(
-        metric_type=MetricType.COSINE, not_a_real_field=123
-    )
+    cfg = HNSWIndexConfig.from_kwargs(metric_type=MetricType.COSINE, not_a_real_field=123)
     assert cfg.metric_type == MetricType.COSINE
 
 
@@ -31,9 +29,7 @@ def test_from_kwargs_keeps_default_when_value_is_none():
 
 
 def test_from_kwargs_applies_explicit_non_none_values():
-    cfg = HNSWIndexConfig.from_kwargs(
-        metric_type=MetricType.COSINE, num_neighbors=64, ef_search=32
-    )
+    cfg = HNSWIndexConfig.from_kwargs(metric_type=MetricType.COSINE, num_neighbors=64, ef_search=32)
     assert cfg.num_neighbors == 64
     assert cfg.ef_search == 32
     assert cfg.ef_construction == 64
@@ -51,6 +47,6 @@ def test_flat_config_metric_survives_a_dict_round_trip():
 
 def test_index_config_from_index_type_passes_the_flat_metric():
     assert index_config_from_index_type(IndexType.FLAT) == FlatIndexConfig()
-    assert index_config_from_index_type(IndexType.FLAT, metric_type=MetricType.L2) == FlatIndexConfig(
-        metric_type=MetricType.L2
-    )
+    assert index_config_from_index_type(
+        IndexType.FLAT, metric_type=MetricType.L2
+    ) == FlatIndexConfig(metric_type=MetricType.L2)

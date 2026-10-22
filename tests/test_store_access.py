@@ -42,14 +42,16 @@ from .conftest import (
 
 # Public EmbeddingBackend members that are neither reads nor writes: identity,
 # engine access, constants and static validators.
-_NEITHER = frozenset({
-    "DEFAULT_K_NEAREST",
-    "backend_name",
-    "default_flat_metric",
-    "dialect",
-    "emb_engine",
-    "emb_session_factory",
-})
+_NEITHER = frozenset(
+    {
+        "DEFAULT_K_NEAREST",
+        "backend_name",
+        "default_flat_metric",
+        "dialect",
+        "emb_engine",
+        "emb_session_factory",
+    }
+)
 
 _MODEL = "test-model"
 
@@ -62,8 +64,15 @@ def _populate(store):
     with open_vector_store_writer(store) as writer:
         for record in writer.get_registered_models():
             writer.delete_model(model_name=record.model_name)
-        writer.register_model(model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM)
-        writer.upsert_embeddings(model_name=_MODEL, records=list(CONCEPT_RECORDS), embeddings=CONCEPT_EMBEDDINGS)
+        writer.register_model(
+            model_name=_MODEL,
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=EMBEDDING_DIM,
+        )
+        writer.upsert_embeddings(
+            model_name=_MODEL, records=list(CONCEPT_RECORDS), embeddings=CONCEPT_EMBEDDINGS
+        )
     return store
 
 
@@ -77,7 +86,9 @@ def _same_database_stores(path, second_path=None):
     else:
         connections = {
             "store_a_connection": ConnectionConfig(dialect=Dialect.SQLITE, database_name=str(path)),
-            "store_b_connection": ConnectionConfig(dialect=Dialect.SQLITE, database_name=str(second_path)),
+            "store_b_connection": ConnectionConfig(
+                dialect=Dialect.SQLITE, database_name=str(second_path)
+            ),
         }
         store_connections = {
             "store_a": "store_a_connection",
@@ -107,7 +118,8 @@ def test_every_public_backend_member_is_classified_exactly_once():
     public = {name for name in dir(EmbeddingBackend) if not name.startswith("_")}
     reader = {name for name in vars(EmbeddingStoreReader) if not name.startswith("_")}
     writes = {
-        name for name in public
+        name
+        for name in public
         if getattr(getattr(EmbeddingBackend, name), "__omop_emb_writes__", False)
     }
     assert reader <= public
@@ -131,7 +143,8 @@ def test_every_concrete_backend_override_of_a_write_method_stays_classified_as_a
     from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend  # noqa: F401
 
     write_names = {
-        name for name in dir(EmbeddingBackend)
+        name
+        for name in dir(EmbeddingBackend)
         if not name.startswith("_")
         and getattr(getattr(EmbeddingBackend, name), "__omop_emb_writes__", False)
     }
@@ -143,8 +156,7 @@ def test_every_concrete_backend_override_of_a_write_method_stays_classified_as_a
                 continue  # inherited as-is, already classified via the base class
             overridden = vars(subclass)[name]
             assert getattr(overridden, "__omop_emb_writes__", False), (
-                f"{subclass.__name__}.{name} overrides a @writes method without "
-                "re-applying @writes"
+                f"{subclass.__name__}.{name} overrides a @writes method without re-applying @writes"
             )
 
 
@@ -152,18 +164,24 @@ def test_reader_rejects_every_write(tmp_path):
     store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
     with open_vector_store_writer(store) as writer:
         writer.register_model(
-            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
+            model_name=_MODEL,
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=EMBEDDING_DIM,
         )
 
     with open_vector_store_reader(store) as reader:
         backend = reader
         assert isinstance(backend, EmbeddingBackend)
         with pytest.raises(ReadOnlyStoreError):
-            backend.register_model(model_name="other-model", provider_type="ollama", dimensions=EMBEDDING_DIM)
+            backend.register_model(
+                model_name="other-model", provider_type="ollama", dimensions=EMBEDDING_DIM
+            )
         with pytest.raises(ReadOnlyStoreError):
             backend.upsert_embeddings(
                 model_name=_MODEL,
-                records=CONCEPT_RECORDS[:1], embeddings=CONCEPT_EMBEDDINGS[:1],
+                records=CONCEPT_RECORDS[:1],
+                embeddings=CONCEPT_EMBEDDINGS[:1],
             )
         with pytest.raises(ReadOnlyStoreError):
             backend.delete_model(model_name=_MODEL)
@@ -183,7 +201,9 @@ def test_one_store_per_model_on_same_sqlite_file(tmp_path, use_path_alias):
             index_config=FlatIndexConfig(),
             dimensions=EMBEDDING_DIM,
         )
-        first.upsert_embeddings(model_name=_MODEL, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS)
+        first.upsert_embeddings(
+            model_name=_MODEL, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+        )
         again = first.register_model(
             model_name=_MODEL,
             provider_type="ollama",
@@ -221,15 +241,19 @@ def test_one_store_per_model_on_same_sqlite_file(tmp_path, use_path_alias):
 
 
 def test_same_model_can_register_in_different_sqlite_databases(tmp_path):
-    _, (store_a, store_b) = _same_database_stores(
-        tmp_path / "store-a.db", tmp_path / "store-b.db"
-    )
+    _, (store_a, store_b) = _same_database_stores(tmp_path / "store-a.db", tmp_path / "store-b.db")
     with open_vector_store_writer(store_a) as first, open_vector_store_writer(store_b) as second:
         record_a = first.register_model(
-            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM
+            model_name=_MODEL,
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=EMBEDDING_DIM,
         )
         record_b = second.register_model(
-            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM
+            model_name=_MODEL,
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=EMBEDDING_DIM,
         )
         assert record_a.storage_identifier != record_b.storage_identifier
 
@@ -238,6 +262,7 @@ def test_concurrent_cross_store_registration_on_sqlite_has_one_winner(tmp_path):
     _, (store_a, store_b) = _same_database_stores(tmp_path / "concurrent.db")
     # Initialize the shared registry before the concurrent registration calls.
     with open_vector_store_writer(store_a) as first, open_vector_store_writer(store_b) as second:
+
         def register(writer):
             try:
                 return writer.register_model(
@@ -253,7 +278,9 @@ def test_concurrent_cross_store_registration_on_sqlite_has_one_winner(tmp_path):
             outcomes = list(executor.map(register, (first, second)))
 
     successes = [result for result in outcomes if not isinstance(result, Exception)]
-    conflicts = [result for result in outcomes if isinstance(result, ModelRegistrationConflictError)]
+    conflicts = [
+        result for result in outcomes if isinstance(result, ModelRegistrationConflictError)
+    ]
     assert len(successes) == 1
     assert len(conflicts) == 1
     assert str(conflicts[0]).startswith(f"Model '{_MODEL}' is already registered by vector store '")
@@ -267,20 +294,30 @@ def test_prerelease_registry_without_model_unique_constraint_still_refuses_secon
         engine = writer.emb_engine
         table = ModelRegistry.__table__.to_metadata(sa.MetaData())
         for constraint in tuple(table.constraints):
-            if isinstance(constraint, sa.UniqueConstraint) and constraint.name == "uq_model_registry_model_name":
+            if (
+                isinstance(constraint, sa.UniqueConstraint)
+                and constraint.name == "uq_model_registry_model_name"
+            ):
                 table.constraints.remove(constraint)
         with engine.begin() as connection:
             ModelRegistry.__table__.drop(connection)
             table.create(connection)
         writer.register_model(
-            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM
+            model_name=_MODEL,
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=EMBEDDING_DIM,
         )
 
-    with open_vector_store_writer(store_b) as writer, pytest.raises(
-        ModelRegistrationConflictError, match="store_a"
+    with (
+        open_vector_store_writer(store_b) as writer,
+        pytest.raises(ModelRegistrationConflictError, match="store_a"),
     ):
         writer.register_model(
-            model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM
+            model_name=_MODEL,
+            provider_type="ollama",
+            index_config=FlatIndexConfig(),
+            dimensions=EMBEDDING_DIM,
         )
 
 
@@ -292,7 +329,9 @@ def test_register_model_does_not_read_active_config(tmp_path, monkeypatch):
     def no_active_config(cls):
         raise FileNotFoundError("no active config")
 
-    monkeypatch.setattr(oa_configurator.Resolver, "from_active_config", classmethod(no_active_config))
+    monkeypatch.setattr(
+        oa_configurator.Resolver, "from_active_config", classmethod(no_active_config)
+    )
     with open_vector_store_writer(store_a) as writer:
         registered = writer.register_model(
             model_name=_MODEL,
@@ -326,12 +365,22 @@ def _assert_every_read_works_without_mutating_sql(store) -> None:
                     concept_ids=tuple(stored_ids), domains=("Drug",), vocabularies=("RxNorm",)
                 ),
             ) == {ASPIRIN_ID, NON_STANDARD_ID}
-            assert set(reader.get_embeddings_by_concept_ids(model_name=_MODEL, concept_ids=sorted(stored_ids))) == stored_ids
-            assert reader.get_concept_filter_metadata(model_name=_MODEL, concept_ids=sorted(stored_ids)) == {
-                r.concept_id: r for r in CONCEPT_RECORDS
-            }
+            assert (
+                set(
+                    reader.get_embeddings_by_concept_ids(
+                        model_name=_MODEL, concept_ids=sorted(stored_ids)
+                    )
+                )
+                == stored_ids
+            )
+            assert reader.get_concept_filter_metadata(
+                model_name=_MODEL, concept_ids=sorted(stored_ids)
+            ) == {r.concept_id: r for r in CONCEPT_RECORDS}
             assert reader.get_embedding_count(model_name=_MODEL) == len(CONCEPT_RECORDS)
-            assert reader.get_embedding_count_by_vocabulary(model_name=_MODEL) == {"SNOMED": 2, "RxNorm": 2}
+            assert reader.get_embedding_count_by_vocabulary(model_name=_MODEL) == {
+                "SNOMED": 2,
+                "RxNorm": 2,
+            }
             matches = reader.get_nearest_concepts(
                 model_name=_MODEL,
                 metric_type=MetricType.COSINE,
@@ -393,7 +442,11 @@ def test_only_the_writer_attaches_the_vector_extension_hook(pg_db, monkeypatch):
 
     monkeypatch.setattr(pg_backend, "_create_vector_extension", _record)
     store = ResolvedVectorStore(
-        name="default", backend_type="pgvector", database=pg_db.resolved, faiss_cache_dir=None, configuration={},
+        name="default",
+        backend_type="pgvector",
+        database=pg_db.resolved,
+        faiss_cache_dir=None,
+        configuration={},
     )
 
     with open_vector_store_reader(store) as reader:
@@ -421,8 +474,12 @@ def test_one_model_name_is_unique_across_schemas_in_one_postgres_database(pg_db)
 
     conn_url = sa.engine.make_url(pg_db.committing_engine.url)
     shared_connection = ConnectionConfig(
-        dialect=conn_url.drivername, host=conn_url.host, port=conn_url.port,
-        user=conn_url.username, password=conn_url.password, database_name=conn_url.database,
+        dialect=conn_url.drivername,
+        host=conn_url.host,
+        port=conn_url.port,
+        user=conn_url.username,
+        password=conn_url.password,
+        database_name=conn_url.database,
         test_only=True,
     )
 
@@ -439,31 +496,47 @@ def test_one_model_name_is_unique_across_schemas_in_one_postgres_database(pg_db)
         )
         resolver = Resolver(stack)
         store_a = ResolvedVectorStore(
-            name="store_a", backend_type="pgvector", database=resolver.resolve_database("store_a"),
-            faiss_cache_dir=None, configuration={},
+            name="store_a",
+            backend_type="pgvector",
+            database=resolver.resolve_database("store_a"),
+            faiss_cache_dir=None,
+            configuration={},
         )
         store_b = ResolvedVectorStore(
-            name="store_b", backend_type="pgvector", database=resolver.resolve_database("store_b"),
-            faiss_cache_dir=None, configuration={},
+            name="store_b",
+            backend_type="pgvector",
+            database=resolver.resolve_database("store_b"),
+            faiss_cache_dir=None,
+            configuration={},
         )
 
         try:
             with open_vector_store_writer(store_a) as writer_a:
                 writer_a.register_model(
-                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
+                    model_name=_MODEL,
+                    provider_type="ollama",
+                    index_config=FlatIndexConfig(),
+                    dimensions=EMBEDDING_DIM,
                 )
-            with open_vector_store_writer(store_b) as writer_b, pytest.raises(
-                ModelRegistrationConflictError, match="store_a"
+            with (
+                open_vector_store_writer(store_b) as writer_b,
+                pytest.raises(ModelRegistrationConflictError, match="store_a"),
             ):
                 writer_b.register_model(
-                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
+                    model_name=_MODEL,
+                    provider_type="ollama",
+                    index_config=FlatIndexConfig(),
+                    dimensions=EMBEDDING_DIM,
                 )
             with open_vector_store_writer(store_a) as writer_a:
                 writer_a.delete_model(model_name=_MODEL)
             with open_vector_store_writer(store_b) as writer_b:
                 assert writer_b.get_registered_models() == ()
                 writer_b.register_model(
-                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
+                    model_name=_MODEL,
+                    provider_type="ollama",
+                    index_config=FlatIndexConfig(),
+                    dimensions=EMBEDDING_DIM,
                 )
                 writer_b.delete_model(model_name=_MODEL)
         finally:
@@ -487,8 +560,12 @@ def test_one_store_per_model_on_one_postgres_registry(pg_db):
 
     conn_url = sa.engine.make_url(pg_db.committing_engine.url)
     shared_connection = ConnectionConfig(
-        dialect=conn_url.drivername, host=conn_url.host, port=conn_url.port,
-        user=conn_url.username, password=conn_url.password, database_name=conn_url.database,
+        dialect=conn_url.drivername,
+        host=conn_url.host,
+        port=conn_url.port,
+        user=conn_url.username,
+        password=conn_url.password,
+        database_name=conn_url.database,
         test_only=True,
     )
 
@@ -500,7 +577,9 @@ def test_one_store_per_model_on_one_postgres_registry(pg_db):
                 database=Resolver(
                     StackConfig.for_session(
                         connections={"shared": shared_connection},
-                        databases={name: GenericDatabaseConfig(connection="shared", schema_name=schema)},
+                        databases={
+                            name: GenericDatabaseConfig(connection="shared", schema_name=schema)
+                        },
                     )
                 ).resolve_database(name),
                 faiss_cache_dir=None,
@@ -511,15 +590,27 @@ def test_one_store_per_model_on_one_postgres_registry(pg_db):
         try:
             with open_vector_store_writer(store_a) as writer_a:
                 record_a = writer_a.register_model(
-                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
+                    model_name=_MODEL,
+                    provider_type="ollama",
+                    index_config=FlatIndexConfig(),
+                    dimensions=EMBEDDING_DIM,
                 )
-                assert writer_a.register_model(
-                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
-                ) == record_a
+                assert (
+                    writer_a.register_model(
+                        model_name=_MODEL,
+                        provider_type="ollama",
+                        index_config=FlatIndexConfig(),
+                        dimensions=EMBEDDING_DIM,
+                    )
+                    == record_a
+                )
             with open_vector_store_writer(store_b) as writer_b:
                 with pytest.raises(ModelRegistrationConflictError) as exc_info:
                     writer_b.register_model(
-                        model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
+                        model_name=_MODEL,
+                        provider_type="ollama",
+                        index_config=FlatIndexConfig(),
+                        dimensions=EMBEDDING_DIM,
                     )
                 assert str(exc_info.value) == (
                     f"Model '{_MODEL}' is already registered by vector store 'store_a' in this database. "
@@ -530,7 +621,10 @@ def test_one_store_per_model_on_one_postgres_registry(pg_db):
                 writer_a.delete_model(model_name=_MODEL)
             with open_vector_store_writer(store_b) as writer_b:
                 record_b = writer_b.register_model(
-                    model_name=_MODEL, provider_type="ollama", index_config=FlatIndexConfig(), dimensions=EMBEDDING_DIM,
+                    model_name=_MODEL,
+                    provider_type="ollama",
+                    index_config=FlatIndexConfig(),
+                    dimensions=EMBEDDING_DIM,
                 )
                 assert record_b.model_name == _MODEL
         finally:
@@ -549,9 +643,15 @@ class TestPostgresReader:
 
         from omop_emb.backends.embedding_table import EmbeddingTableBase
 
-        store = _populate(ResolvedVectorStore(
-            name="default", backend_type="pgvector", database=pg_db.resolved, faiss_cache_dir=None, configuration={},
-        ))
+        store = _populate(
+            ResolvedVectorStore(
+                name="default",
+                backend_type="pgvector",
+                database=pg_db.resolved,
+                faiss_cache_dir=None,
+                configuration={},
+            )
+        )
         yield store
         with open_vector_store_writer(store) as writer:
             writer.delete_model(model_name=_MODEL)
@@ -564,5 +664,8 @@ class TestPostgresReader:
     def test_connection_refuses_writes_at_database_level(self, store):
         with open_vector_store_reader(store) as reader:
             engine = reader.emb_engine  # ty: ignore[unresolved-attribute]
-            with engine.begin() as connection, pytest.raises(InternalError, match="read-only transaction"):
+            with (
+                engine.begin() as connection,
+                pytest.raises(InternalError, match="read-only transaction"),
+            ):
                 connection.execute(text("CREATE TEMPORARY TABLE _probe (id INTEGER)"))

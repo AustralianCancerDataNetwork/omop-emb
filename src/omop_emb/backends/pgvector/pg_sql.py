@@ -49,6 +49,7 @@ def table_exists(engine: Engine, table_name: str) -> bool:
     """Return ``True`` if *table_name* exists in the engine's configured schema."""
     return inspect(engine).has_table(table_name, schema=physical_schema_of(engine))
 
+
 def create_pg_embedding_table(
     engine: Engine,
     model_record: EmbeddingModelRecord,
@@ -96,7 +97,9 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
     with engine.begin() as conn:
         with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
             conn.execute(
-                text(f"DROP TABLE IF EXISTS {qualified(conn, tablename, physical_schema=physical_schema_of(conn))}")
+                text(
+                    f"DROP TABLE IF EXISTS {qualified(conn, tablename, physical_schema=physical_schema_of(conn))}"
+                )
             )
     logger.info(f"Dropped embedding table '{tablename}'.")
 
@@ -111,7 +114,9 @@ def hnsw_operator_class(metric_type: MetricType, dimensions: int) -> str:
     return f"{vector_column_type_for_dimensions(dimensions).value}_{metric_type.value}_ops"
 
 
-def hnsw_index_ddl(engine: Engine, model_record: EmbeddingModelRecord, index_config: HNSWIndexConfig) -> str:
+def hnsw_index_ddl(
+    engine: Engine, model_record: EmbeddingModelRecord, index_config: HNSWIndexConfig
+) -> str:
     """CREATE INDEX statement for model_record's table under index_config."""
     tablename = model_record.storage_identifier
     ops = hnsw_operator_class(index_config.metric_type, model_record.dimensions)
@@ -206,9 +211,9 @@ def q_embedding_count_by_vocabulary(embedding_table: type[PGEmbeddingTable]) -> 
     Select
         Columns: ``vocabulary_id`` (str), ``count`` (int).
     """
-    return select(
-        embedding_table.vocabulary_id, func.count(embedding_table.concept_id)
-    ).group_by(embedding_table.vocabulary_id)
+    return select(embedding_table.vocabulary_id, func.count(embedding_table.concept_id)).group_by(
+        embedding_table.vocabulary_id
+    )
 
 
 def _as_float32_array(value) -> ndarray:
@@ -264,7 +269,7 @@ def query_nearest_concept_ids(
 
     Notes
     -----
-    Deliberately removed batching of queries for multiple vectors, as batching 
+    Deliberately removed batching of queries for multiple vectors, as batching
     the vectors in one statement (a VALUES list joined through a lateral subquery)
     cast the query text to vector once per stored row and lost the parallel scan.
     Separate statements for each query vector are faster and scale linearly.
@@ -419,11 +424,15 @@ def pg_embedding_table_descriptor(model_record: EmbeddingModelRecord) -> type[PG
     ``extend_existing=True`` would otherwise only paper over (SQLAlchemy
     still warns about multiple mapped classes for one table).
     """
-    return _cached_pg_embedding_table_descriptor(model_record.storage_identifier, model_record.dimensions)
+    return _cached_pg_embedding_table_descriptor(
+        model_record.storage_identifier, model_record.dimensions
+    )
 
 
 @functools.lru_cache(maxsize=None)
-def _cached_pg_embedding_table_descriptor(tablename: str, dimensions: int) -> type[PGEmbeddingTable]:
+def _cached_pg_embedding_table_descriptor(
+    tablename: str, dimensions: int
+) -> type[PGEmbeddingTable]:
     from omop_emb.utils.embedding_utils import (
         VectorColumnType,
         vector_column_type_for_dimensions,
@@ -433,9 +442,7 @@ def _cached_pg_embedding_table_descriptor(tablename: str, dimensions: int) -> ty
     col_type = vector_column_type_for_dimensions(dimensions)
     descriptor_registry = registry(metadata=MetaData())
     emb_col = mapped_column(
-        HALFVEC(dimensions)
-        if col_type == VectorColumnType.HALFVEC
-        else VECTOR(dimensions),
+        HALFVEC(dimensions) if col_type == VectorColumnType.HALFVEC else VECTOR(dimensions),
         nullable=False,
         index=False,
     )

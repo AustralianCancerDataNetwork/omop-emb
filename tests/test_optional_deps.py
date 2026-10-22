@@ -33,9 +33,7 @@ def _evict_pgvector_modules() -> dict:
     keys = [
         k
         for k in sys.modules
-        if k.startswith("pgvector")
-        or "backends.pgvector" in k
-        or k == "omop_emb.backends"
+        if k.startswith("pgvector") or "backends.pgvector" in k or k == "omop_emb.backends"
     ]
     return {k: sys.modules.pop(k) for k in keys}
 

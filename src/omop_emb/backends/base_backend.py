@@ -79,7 +79,7 @@ def writes[B: EmbeddingBackend, **P, R](
             )
         return method(self, *args, **kwargs)
 
-    wrapper.__omop_emb_writes__ = True  # ty: ignore[unresolved-attribute]
+    vars(wrapper)["__omop_emb_writes__"] = True
     return wrapper
 
 
@@ -162,7 +162,12 @@ class EmbeddingStoreReader(Protocol):
 
     def close(self) -> None: ...
 
-    def __enter__(self) -> EmbeddingStoreReader: ...  # noqa: PYI034
+    def __enter__(self) -> EmbeddingStoreReader:  # noqa: PYI034
+        """Return the reader.
+
+        Typed as the protocol rather than Self so that the reader is accepted as a
+        context manager of EmbeddingStoreReader.
+        """
 
     def __exit__(self, *_exc_info: object) -> None: ...
 
@@ -290,7 +295,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         if record is None:
             return
         table = self._storage_table(record)
-        columns = inspect(table).columns  # ty: ignore[unresolved-attribute]
+        columns = inspect(table, raiseerr=True).columns
         statement = streamed(
             select(
                 columns.concept_id,

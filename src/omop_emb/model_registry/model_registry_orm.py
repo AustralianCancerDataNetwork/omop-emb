@@ -25,6 +25,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
 
+from omop_emb.backends.db_utils import table_for
 from omop_emb.backends.index_config import IndexConfig
 from omop_emb.config import (
     MODEL_REGISTRY_SCHEMA,
@@ -312,7 +313,7 @@ def ensure_registry_table(engine: Engine) -> None:
     with engine.begin() as connection:
         registry_schema = resolve_registry_physical_schema(connection)
         _reject_incompatible_registry(connection, registry_schema=registry_schema)
-        ModelRegistryBase.metadata.create_all(connection, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
+        ModelRegistryBase.metadata.create_all(connection, tables=[table_for(ModelRegistry)])
 
 
 _LEGACY_SIGNATURE_COLUMNS = frozenset({"model_name", "storage_identifier", "dimensions"})

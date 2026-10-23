@@ -6,7 +6,6 @@ from typing import overload
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from omop_alchemy.cdm.query import ConceptFilter as CDMConceptFilter  # noqa: F401
 from sqlalchemy import func
 from sqlalchemy.sql.elements import ColumnElement
 

@@ -6,11 +6,10 @@ import logging
 from collections.abc import Callable, Iterator
 
 from omop_alchemy.cdm.model.vocabulary import Concept
+from omop_alchemy.cdm.query import ConceptFilter as CDMConceptFilter
 from sqlalchemy import Row, Select, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
-
-from omop_emb.utils.embedding_utils import CDMConceptFilter
 
 logger = logging.getLogger(__name__)
 

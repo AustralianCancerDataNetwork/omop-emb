@@ -360,11 +360,10 @@ def require_cdm(resolved: ResolvedDatabase | None) -> ResolvedCDMDatabase:
     return resolved
 
 
-def table_of(model: Any) -> sa.Table:
-    """The Table a mapped class is bound to, narrowed from the declarative base's FromClause."""
-    table = model.__table__
-    assert isinstance(table, sa.Table)
-    return table
+def engine_of(reader: EmbeddingStoreReader) -> sa.Engine:
+    """The engine behind a store opened by open_vector_store_reader()."""
+    assert isinstance(reader, EmbeddingBackend)
+    return reader.emb_engine
 
 
 def registered_model(store: Any, model_name: str) -> EmbeddingModelRecord:

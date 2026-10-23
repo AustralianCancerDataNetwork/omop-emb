@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import inspect
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields, is_dataclass
 from enum import Enum
-from typing import Any, Self, cast, get_type_hints
+from typing import Any, Self, get_type_hints
 
 from omop_emb.config import IndexType, MetricType, parse_index_type
 
@@ -95,8 +94,7 @@ class IndexConfig(ABC):
                 f"Cannot instantiate abstract class {cls.__name__} directly. Call on a subclass."
             )
         known = {f.name for f in fields(cls)}
-        factory = cast(Callable[..., Self], cls)
-        return factory(**{k: v for k, v in kwargs.items() if k in known and v is not None})
+        return cls(**{k: v for k, v in kwargs.items() if k in known and v is not None})
 
     @classmethod
     def from_dict(cls, config_dict: dict[str, Any]) -> Self:
@@ -144,8 +142,7 @@ class IndexConfig(ABC):
                 except ValueError:
                     raise ValueError(f"Invalid enum value '{value}' for {field_type.__name__}.")
             init_params[field.name] = value
-        factory = cast(Callable[..., Self], cls)
-        return factory(**init_params)
+        return cls(**init_params)
 
 
 # ---------------------------------------------------------------------------

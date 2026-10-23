@@ -25,12 +25,23 @@ from oa_configurator import (
     physical_schema_of,
     qualified,
 )
-from sqlalchemy import Engine, MetaData, Row, Select, delete, func, inspect, select, text
+from sqlalchemy import (
+    CursorResult,
+    Engine,
+    MetaData,
+    Row,
+    Select,
+    delete,
+    func,
+    inspect,
+    select,
+    text,
+)
 from sqlalchemy.orm import Session, mapped_column, registry
 from sqlalchemy.sql.elements import ColumnElement
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.db_utils import apply_concept_filter_where, in_values
+from omop_emb.backends.db_utils import apply_concept_filter_where, in_values, table_for
 from omop_emb.backends.embedding_table import (
     EMBEDDING_COLUMN_NAME,
     ConceptEmbeddingMixin,
@@ -83,7 +94,7 @@ def create_pg_embedding_table(
         engine.begin() as connection,
         guard_schema_provenance_for(connection, schema_tag=Role.PRIMARY),
     ):
-        EmbeddingTableBase.metadata.create_all(connection, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
+        EmbeddingTableBase.metadata.create_all(connection, tables=[table_for(table_cls)])
     return table_cls
 
 
@@ -246,14 +257,18 @@ def delete_embedding_rows(
     embedding_table: type[PGEmbeddingTable],
     concept_ids: Sequence[int],
 ) -> int:
-    """Delete the rows of concept_ids and return how many existed."""
+    """Delete the rows of concept_ids and return how many existed.
+
+    ``Session.execute`` is typed ``Result``; a DML statement returns a ``CursorResult``,
+    which carries ``rowcount``.
+    """
     column = inspect(embedding_table).columns
     result = session.execute(
         delete(embedding_table).where(
             in_values(column.concept_id, concept_ids, dialect=Dialect.POSTGRESQL)
         )
     )
-    return int(result.rowcount)  # ty: ignore[unresolved-attribute]
+    return int(typing.cast(CursorResult[typing.Any], result).rowcount)
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +452,11 @@ def pg_embedding_table_descriptor(model_record: EmbeddingModelRecord) -> type[PG
 def _cached_pg_embedding_table_descriptor(
     tablename: str, dimensions: int
 ) -> type[PGEmbeddingTable]:
+    """Build and map the embedding table class for one table name and dimension.
+
+    The class is created with ``type()``, so the type checker cannot see its bases
+    and the mapped result is cast to ``type[PGEmbeddingTable]``.
+    """
     from pgvector.sqlalchemy import HALFVEC, VECTOR  # optional dependency
 
     from omop_emb.utils.embedding_utils import (

@@ -23,13 +23,13 @@ from omop_emb.backends import (
     open_vector_store_writer,
 )
 from omop_emb.backends.base_backend import EmbeddingBackend
+from omop_emb.backends.db_utils import table_for
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.config import MetricType
 from omop_emb.model_registry.model_registry_orm import ModelRegistry
 from omop_emb.storage.embedding_bundle import export_bundle
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.utils.errors import ModelRegistrationConflictError, ReadOnlyStoreError
-from tests.conftest import table_of
 
 from .conftest import (
     ASPIRIN_ID,
@@ -38,6 +38,7 @@ from .conftest import (
     EMBEDDING_DIM,
     HYPERTENSION_ID,
     NON_STANDARD_ID,
+    engine_of,
     sqlite_resolved_vector_store,
 )
 
@@ -293,7 +294,7 @@ def test_prerelease_registry_without_model_unique_constraint_still_refuses_secon
     _, (store_a, store_b) = _same_database_stores(tmp_path / "prerelease.db")
     with open_vector_store_writer(store_a) as writer:
         engine = writer.emb_engine
-        table = table_of(ModelRegistry).to_metadata(sa.MetaData())
+        table = table_for(ModelRegistry).to_metadata(sa.MetaData())
         for constraint in tuple(table.constraints):
             if (
                 isinstance(constraint, sa.UniqueConstraint)
@@ -301,7 +302,7 @@ def test_prerelease_registry_without_model_unique_constraint_still_refuses_secon
             ):
                 table.constraints.remove(constraint)
         with engine.begin() as connection:
-            table_of(ModelRegistry).drop(connection)
+            table_for(ModelRegistry).drop(connection)
             table.create(connection)
         writer.register_model(
             model_name=_MODEL,
@@ -351,7 +352,7 @@ def _assert_every_read_works_without_mutating_sql(store) -> None:
 
     stored_ids = {r.concept_id for r in CONCEPT_RECORDS}
     with open_vector_store_reader(store) as reader:
-        engine = reader.emb_engine  # ty: ignore[unresolved-attribute]
+        engine = engine_of(reader)
         event.listen(engine, "before_cursor_execute", capture)
         try:
             assert reader.initialized is True
@@ -409,7 +410,7 @@ def test_reader_connection_refuses_writes_at_database_level(tmp_path):
     """Writes that bypass @writes still fail: the connection itself is query-only."""
     store = _populated_store(tmp_path)
     with open_vector_store_reader(store) as reader:
-        engine = reader.emb_engine  # ty: ignore[unresolved-attribute]
+        engine = engine_of(reader)
         with engine.begin() as connection, pytest.raises(OperationalError, match="readonly"):
             connection.execute(text("CREATE TEMPORARY TABLE _probe (id INTEGER)"))
 
@@ -664,7 +665,7 @@ class TestPostgresReader:
 
     def test_connection_refuses_writes_at_database_level(self, store):
         with open_vector_store_reader(store) as reader:
-            engine = reader.emb_engine  # ty: ignore[unresolved-attribute]
+            engine = engine_of(reader)
             with (
                 engine.begin() as connection,
                 pytest.raises(InternalError, match="read-only transaction"),

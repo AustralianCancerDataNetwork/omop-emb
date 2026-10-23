@@ -15,6 +15,7 @@ from omop_alchemy.cross_database import cdm_sessionmaker
 from sqlalchemy import event, insert, inspect, text
 
 from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
+from omop_emb.backends.db_utils import table_for
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.model_registry import ModelRegistry
@@ -24,10 +25,10 @@ from omop_emb.utils.errors import MissingStorageTableError
 from .conftest import (
     EMBEDDING_DIM,
     FakeStoreReader,
+    engine_of,
     require_cdm,
     sqlite_cdm_database,
     sqlite_resolved_vector_store,
-    table_of,
 )
 
 
@@ -56,7 +57,7 @@ def test_reader_before_any_write_does_not_create_the_registry(tmp_path) -> None:
     ) as reader:
         assert reader.initialized is False
         assert reader.get_registered_models() == ()
-        assert inspect(reader.emb_engine).has_table(ModelRegistry.__tablename__) is False  # ty: ignore[unresolved-attribute]
+        assert inspect(engine_of(reader)).has_table(ModelRegistry.__tablename__) is False
 
 
 def test_reader_after_writer_sees_the_registry(tmp_path) -> None:
@@ -86,7 +87,7 @@ def test_reader_sees_registered_models_and_stored_embeddings_without_mutating(tm
         statements.append(statement.strip().lower())
 
     with open_vector_store_reader(store) as reader:
-        engine = reader.emb_engine  # ty: ignore[unresolved-attribute]
+        engine = engine_of(reader)
         event.listen(engine, "before_cursor_execute", capture)
         try:
             assert reader.initialized is True
@@ -136,7 +137,7 @@ def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()
     cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
-    table_of(Concept).create(engine)
+    table_for(Concept).create(engine)
     with engine.begin() as connection:
         connection.execute(
             insert(Concept),
@@ -185,7 +186,7 @@ def test_population_reads_concepts_from_a_separate_vocab_database(tmp_path):
     )
     resolved = require_cdm(Resolver(config).resolve_database("cdm"))
     primary, vocab = resolved.create_engines()
-    table_of(Concept).create(vocab)
+    table_for(Concept).create(vocab)
     with vocab.begin() as connection:
         connection.execute(insert(Concept), [_concept(101)])
 
@@ -213,7 +214,7 @@ def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()
     cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
-    table_of(Concept).create(engine)
+    table_for(Concept).create(engine)
     with engine.begin() as connection:
         connection.execute(
             insert(Concept),
@@ -243,7 +244,7 @@ def test_filtered_population_reports_out_of_scope_rows_apart_from_stale_rows() -
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()
     cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
-    table_of(Concept).create(engine)
+    table_for(Concept).create(engine)
     with engine.begin() as connection:
         connection.execute(
             insert(Concept),
@@ -279,7 +280,7 @@ def test_concept_deprecated_after_embedding_is_out_of_scope_not_stale() -> None:
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()
     cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
-    table_of(Concept).create(engine)
+    table_for(Concept).create(engine)
     with engine.begin() as connection:
         connection.execute(
             insert(Concept),
@@ -305,7 +306,7 @@ def test_population_scope_defaults_to_valid_concepts_only() -> None:
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()
     cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
-    table_of(Concept).create(engine)
+    table_for(Concept).create(engine)
     with engine.begin() as connection:
         connection.execute(
             insert(Concept),
@@ -338,7 +339,7 @@ def test_metadata_change_is_pending() -> None:
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()
     cdm_sessions = cdm_sessionmaker(resolved, primary=engine, vocab=engine)
-    table_of(Concept).create(engine)
+    table_for(Concept).create(engine)
     with engine.begin() as connection:
         connection.execute(insert(Concept), [_concept(1)])
 

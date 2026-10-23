@@ -35,6 +35,7 @@ from typing import (
 import numpy as np
 from numpy import ndarray
 from oa_configurator import ResolvedModel
+from omop_alchemy.cdm.query import ConceptFilter as CDMConceptFilter
 from omop_llm import EmbeddingRole, ModelBackend, build_model_backend_from_resolved
 from omop_llm.providers import canonical_model_name as resolve_canonical_model_name
 from sqlalchemy import Row
@@ -55,7 +56,6 @@ from omop_emb.utils.cdm import (
     iter_cdm_concepts_for_filter,
 )
 from omop_emb.utils.embedding_utils import (
-    CDMConceptFilter,
     EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,

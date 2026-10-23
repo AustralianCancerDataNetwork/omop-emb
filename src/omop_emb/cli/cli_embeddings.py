@@ -8,6 +8,7 @@ from typing import Annotated
 
 import typer
 from oa_configurator import ConfigurationError, ResolvedModel, Resolver
+from omop_alchemy.cdm.query import ConceptFilter as CDMConceptFilter
 from omop_llm import build_model_backend_from_resolved
 from tqdm import tqdm
 
@@ -22,7 +23,6 @@ from omop_emb.config import (
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
 from omop_emb.utils.cdm import CDMSessionFactory, check_concept_cdm
 from omop_emb.utils.embedding_utils import (
-    CDMConceptFilter,
     EmbeddingConceptFilter,
     NearestConceptMatch,
 )

@@ -20,6 +20,7 @@ from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_alchemy.cross_database import cdm_sessionmaker
 from sqlalchemy import insert
 
+from omop_emb.backends.db_utils import table_for
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.config import MetricType
 from omop_emb.interface import (
@@ -28,7 +29,7 @@ from omop_emb.interface import (
     EmbeddingWriterInterface,
 )
 
-from .conftest import sqlite_cdm_database, table_of
+from .conftest import sqlite_cdm_database
 
 OLLAMA_BASE = "http://localhost:11434"
 OLLAMA_MODEL = "nomic-embed-text:v1.5"
@@ -261,7 +262,7 @@ class TestEmbeddingWriterInterfaceEmbedTexts:
 def test_population_batches_include_missing_and_metadata_changed_concepts():
     resolved = sqlite_cdm_database()
     cdm_engine, vocab_engine = resolved.create_engines()
-    table_of(Concept).create(vocab_engine)
+    table_for(Concept).create(vocab_engine)
     base = {
         "concept_name": "Concept",
         "domain_id": "Condition",

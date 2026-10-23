@@ -5,11 +5,47 @@ from collections.abc import Sequence
 from typing import Any
 
 from oa_configurator import Dialect
-from sqlalchemy import Column, ColumnElement, Integer, Select, any_, bindparam, func, select
+from sqlalchemy import (
+    Column,
+    ColumnElement,
+    Integer,
+    Select,
+    Table,
+    any_,
+    bindparam,
+    func,
+    select,
+)
 from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.sql.base import ColumnCollection
 
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+
+
+def table_for(model: type[DeclarativeBase]) -> Table:
+    """Return the Table a mapped class is bound to.
+
+    Declarative bases type ``__table__`` as ``FromClause``; this narrows it.
+
+    Parameters
+    ----------
+    model : type[DeclarativeBase]
+        Mapped class.
+
+    Returns
+    -------
+    Table
+
+    Raises
+    ------
+    TypeError
+        If the class is mapped to a selectable other than a Table.
+    """
+    table = model.__table__
+    if not isinstance(table, Table):
+        raise TypeError(f"{model.__name__} is not mapped to a Table")
+    return table
 
 
 def in_values(column: Column[Any], values: Sequence[Any], *, dialect: str) -> ColumnElement[bool]:

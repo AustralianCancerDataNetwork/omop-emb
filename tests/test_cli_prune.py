@@ -15,6 +15,7 @@ from sqlalchemy import insert
 from typer.testing import CliRunner
 
 from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
+from omop_emb.backends.db_utils import table_for
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.cli import cli_embeddings, cli_maintenance
@@ -25,7 +26,6 @@ from .conftest import (
     registered_model,
     sqlite_cdm_database,
     sqlite_resolved_vector_store,
-    table_of,
 )
 
 MODEL = "test-model:v1"
@@ -73,7 +73,7 @@ def pruning_setup(tmp_path, monkeypatch):
     cdm = sqlite_cdm_database()
     engine, _ = cdm.create_engines()
     cdm_sessions = cdm_sessionmaker(cdm, primary=engine, vocab=engine)
-    table_of(Concept).create(engine)
+    table_for(Concept).create(engine)
     with engine.begin() as connection:
         connection.execute(
             insert(Concept),

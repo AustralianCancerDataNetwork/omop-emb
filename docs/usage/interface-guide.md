@@ -22,7 +22,7 @@ cfg = OmopEmbConfig.get_config()
 resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
 
 backend = open_vector_store_writer(resolved)  # EmbeddingBackend
-store = open_vector_store_reader(resolved)    # EmbeddingStoreReader
+store = open_vector_store_reader(resolved)  # EmbeddingStoreReader
 ```
 
 | | `open_vector_store_writer()` | `open_vector_store_reader()` |
@@ -76,7 +76,7 @@ Inside omop-emb's own CLI, `omop_emb.config.open_cdm_sessions()` does this for t
 from omop_emb.backends.index_config import FlatIndexConfig
 
 # Always register with FLAT first
-writer.register_model()                              # uses FlatIndexConfig() by default
+writer.register_model()  # uses FlatIndexConfig() by default
 writer.register_model(index_config=FlatIndexConfig())  # explicit equivalent
 ```
 
@@ -134,7 +134,7 @@ reader = EmbeddingReaderInterface(
     backend=store,
     metric_type=MetricType.COSINE,
     provider_type="ollama",
-    cdm_session_factory=cdm_sessions,   # optional; enriches results with concept_name
+    cdm_session_factory=cdm_sessions,  # optional; enriches results with concept_name
 )
 ```
 
@@ -144,7 +144,7 @@ reader = EmbeddingReaderInterface(
 import numpy as np
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
-query_vec = np.array([[...]], dtype=np.float32)   # shape (Q, D)
+query_vec = np.array([[...]], dtype=np.float32)  # shape (Q, D)
 
 results = reader.get_nearest_concepts(
     query_embedding=query_vec,
@@ -184,7 +184,7 @@ into `get_nearest_concepts`.
 ```python
 joint_vec = reader.get_joint_embedding(
     concept_ids=(201826, 320128),
-    weights=(0.7, 0.3),   # optional; defaults to an unweighted mean
+    weights=(0.7, 0.3),  # optional; defaults to an unweighted mean
 )
 results = reader.get_nearest_concepts(query_embedding=joint_vec[None, :], k=10)
 ```
@@ -237,11 +237,11 @@ reader = EmbeddingReaderInterface(
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 concept_filter = EmbeddingConceptFilter(
-    domains=("Condition", "Observation"),   # restrict to specific OMOP domains
-    vocabularies=("SNOMED", "ICD10CM"),     # restrict to specific vocabularies
-    concept_ids=(313217, 4329847),          # restrict to specific concept IDs
-    require_standard=True,                  # standard_concept = 'S' or 'C'
-    require_active=True,                    # invalid_reason NOT IN ('D', 'U')
+    domains=("Condition", "Observation"),  # restrict to specific OMOP domains
+    vocabularies=("SNOMED", "ICD10CM"),  # restrict to specific vocabularies
+    concept_ids=(313217, 4329847),  # restrict to specific concept IDs
+    require_standard=True,  # standard_concept = 'S' or 'C'
+    require_active=True,  # invalid_reason NOT IN ('D', 'U')
 )
 ```
 
@@ -258,7 +258,7 @@ concept_filter = CDMConceptFilter(
     domains=("Condition", "Observation"),
     vocabularies=("SNOMED", "ICD10CM"),
     require_standard=True,
-    limit=1000,   # cap on CDM rows returned
+    limit=1000,  # cap on CDM rows returned
 )
 
 n_missing = writer.count_concepts_without_embedding(

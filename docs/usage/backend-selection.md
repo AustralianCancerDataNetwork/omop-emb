@@ -67,15 +67,15 @@ The HNSW workflow is always: **register (FLAT) → ingest → rebuild index**:
 
 ```python
 # 1. Register with FLAT (always)
-backend.register_model(model_name=..., provider_type=...,
-                        index_config=FlatIndexConfig(), dimensions=768)
+backend.register_model(
+    model_name=..., provider_type=..., index_config=FlatIndexConfig(), dimensions=768
+)
 
 # 2. Ingest data
 backend.upsert_embeddings(...)
 
 # 3. Build HNSW index
-backend.rebuild_index(model_name=...,
-                       index_config=HNSWIndexConfig(metric_type=MetricType.COSINE))
+backend.rebuild_index(model_name=..., index_config=HNSWIndexConfig(metric_type=MetricType.COSINE))
 ```
 
 Or via the CLI:

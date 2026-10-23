@@ -26,31 +26,20 @@ Design
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace as dc_replace
 from typing import (
     TYPE_CHECKING,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
 )
 
 import numpy as np
 from numpy import ndarray
-from sqlalchemy import Row
 from oa_configurator import ResolvedModel
+from omop_alchemy.cdm.query import ConceptFilter as CDMConceptFilter
 from omop_llm import EmbeddingRole, ModelBackend, build_model_backend_from_resolved
 from omop_llm.providers import canonical_model_name as resolve_canonical_model_name
+from sqlalchemy import Row
 
-from omop_emb.utils.cdm import (
-    CDMSessionFactory,
-    count_missing_concepts,
-    fetch_cdm_concepts_for_filter,
-    iter_cdm_concepts_for_filter,
-)
 from omop_emb.backends.base_backend import (
     CompactionResult,
     ConceptEmbeddingRecord,
@@ -60,8 +49,13 @@ from omop_emb.backends.base_backend import (
 )
 from omop_emb.backends.index_config import IndexConfig
 from omop_emb.config import BackendType, MetricType
+from omop_emb.utils.cdm import (
+    CDMSessionFactory,
+    count_missing_concepts,
+    fetch_cdm_concepts_for_filter,
+    iter_cdm_concepts_for_filter,
+)
 from omop_emb.utils.embedding_utils import (
-    CDMConceptFilter,
     EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
@@ -74,7 +68,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _resolve_k(k: Optional[int], default: int) -> int:
+def _resolve_k(k: int | None, default: int) -> int:
     """Resolve the number of nearest neighbours to request.
 
     *k* wins when given; falls back to *default*. The resolved value must be
@@ -111,7 +105,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         ``is_standard``, and ``is_active`` are populated directly from the
         embedding table by the backend.
     model : str
-        Model name that is expected to be canonicalized by the constructor. 
+        Model name that is expected to be canonicalized by the constructor.
         A possibly-canonical name is accepted as we cannot know if canonical or not.
     provider_type : str, optional
         omop-llm provider key. Defaults to ``'ollama'``.
@@ -129,17 +123,17 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         backend: S,
         metric_type: MetricType,
         *,
-        cdm_session_factory: Optional[CDMSessionFactory] = None,
+        cdm_session_factory: CDMSessionFactory | None = None,
         provider_type: str = "ollama",
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
-        faiss_cache_dir: Optional[str] = None,
+        faiss_cache_dir: str | None = None,
     ):
         canonical_model_name = resolve_canonical_model_name(provider_type, model)
 
         self._backend = backend
 
         if not isinstance(metric_type, MetricType):
-            raise ValueError(
+            raise TypeError(
                 f"metric_type must be an instance of MetricType Enum, got {type(metric_type).__name__}"
             )
         self._metric_type = metric_type
@@ -148,7 +142,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         self._k = k
         self._cdm_session_factory = cdm_session_factory
 
-        self._faiss_cache: Optional["FAISSCache"] = None
+        self._faiss_cache: FAISSCache | None = None
         if faiss_cache_dir is not None:
             try:
                 from omop_emb.storage.faiss import FAISSCache as _FAISSCache
@@ -194,10 +188,10 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
     @staticmethod
     def generate_embeddings(
         model_backend: ModelBackend,
-        text: Union[str, List[str], Tuple[str, ...]],
+        text: str | list[str] | tuple[str, ...],
         *,
         role: EmbeddingRole,
-        batch_size: Optional[int] = None,
+        batch_size: int | None = None,
     ) -> EmbeddingArray:
         """Embed *text* against *model_backend*, validating the resulting shape.
 
@@ -232,7 +226,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
             different number of vectors than texts.
         """
         if isinstance(text, str):
-            text_tuple: Tuple[str, ...] = (text,)
+            text_tuple: tuple[str, ...] = (text,)
         else:
             text_tuple = tuple(text)
 
@@ -279,10 +273,10 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         self,
         query_embedding: EmbeddingArray,
         *,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
-        k: Optional[int] = None,
-        faiss_index_config: Optional[IndexConfig] = None,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+        concept_filter: EmbeddingConceptFilter | None = None,
+        k: int | None = None,
+        faiss_index_config: IndexConfig | None = None,
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
         """Return nearest stored concepts for each query embedding row.
 
         Parameters
@@ -313,9 +307,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
                     "Pass FlatIndexConfig() for exact search or HNSWIndexConfig(metric_type=...) "
                     "for approximate search."
                 )
-            record = self._backend.get_registered_model(
-                model_name=self.canonical_model_name
-            )
+            record = self._backend.get_registered_model(model_name=self.canonical_model_name)
             if record is not None and self._faiss_cache.is_fresh(
                 record, self._metric_type, faiss_index_config
             ):
@@ -345,14 +337,14 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
 
     def get_nearest_concepts_from_query_texts(
         self,
-        query_texts: Union[str, Tuple[str, ...], List[str]],
-        model_backend: Optional[ModelBackend] = None,
+        query_texts: str | tuple[str, ...] | list[str],
+        model_backend: ModelBackend | None = None,
         *,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
-        batch_size: Optional[int] = None,
-        k: Optional[int] = None,
-        faiss_index_config: Optional[IndexConfig] = None,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+        concept_filter: EmbeddingConceptFilter | None = None,
+        batch_size: int | None = None,
+        k: int | None = None,
+        faiss_index_config: IndexConfig | None = None,
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
         """Embed *query_texts* then search for nearest concepts."""
         if model_backend is None:
             raise ValueError(
@@ -375,7 +367,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
 
     def get_embeddings_by_concept_ids(
         self,
-        concept_ids: Tuple[int, ...],
+        concept_ids: tuple[int, ...],
     ) -> Mapping[int, ndarray]:
         return self._backend.get_embeddings_by_concept_ids(
             model_name=self.canonical_model_name,
@@ -384,12 +376,12 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
 
     def get_similar_concepts(
         self,
-        concept_ids: Union[int, Sequence[int]],
-        k: Optional[int] = None,
+        concept_ids: int | Sequence[int],
+        k: int | None = None,
         *,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
-        faiss_index_config: Optional[IndexConfig] = None,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+        concept_filter: EmbeddingConceptFilter | None = None,
+        faiss_index_config: IndexConfig | None = None,
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
         """Return nearest stored concepts for one or more already-embedded concepts.
 
         Convenience wrapper around :meth:`get_nearest_concepts`: resolves each
@@ -449,8 +441,8 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
 
     def get_joint_embedding(
         self,
-        concept_ids: Tuple[int, ...],
-        weights: Optional[Tuple[float, ...]] = None,
+        concept_ids: tuple[int, ...],
+        weights: tuple[float, ...] | None = None,
     ) -> np.ndarray:
         """Return the (optionally weighted) centroid of stored concept embeddings.
 
@@ -495,9 +487,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         if missing:
             raise ValueError(f"No stored embedding for concept_ids: {missing}")
 
-        vectors = np.asarray(
-            [vectors_by_id[cid] for cid in concept_ids], dtype=np.float64
-        )
+        vectors = np.asarray([vectors_by_id[cid] for cid in concept_ids], dtype=np.float64)
         return np.average(vectors, axis=0, weights=weights)
 
     # ------------------------------------------------------------------
@@ -522,7 +512,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
     def get_concepts_without_embedding(
         self,
         *,
-        concept_filter: Optional[CDMConceptFilter] = None,
+        concept_filter: CDMConceptFilter | None = None,
     ) -> Mapping[int, Row]:
         """Return CDM rows for concepts lacking embeddings, keyed by concept_id.
 
@@ -534,14 +524,12 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
             cdm_session_factory=self._require_cdm(),
         )
         embedded_ids = self._backend.get_stored_concept_ids(model_name=self.canonical_model_name)
-        return {
-            cid: row for cid, row in all_concepts.items() if cid not in embedded_ids
-        }
+        return {cid: row for cid, row in all_concepts.items() if cid not in embedded_ids}
 
     def count_concepts_without_embedding(
         self,
         *,
-        concept_filter: Optional[CDMConceptFilter] = None,
+        concept_filter: CDMConceptFilter | None = None,
     ) -> int:
         """Return how many CDM concepts match *concept_filter* but lack an embedding."""
         embedded_ids = self._backend.get_stored_concept_ids(model_name=self.canonical_model_name)
@@ -551,8 +539,8 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         self,
         *,
         batch_size: int,
-        concept_filter: Optional[CDMConceptFilter] = None,
-        limit: Optional[int] = None,
+        concept_filter: CDMConceptFilter | None = None,
+        limit: int | None = None,
     ) -> Iterable[Mapping[int, Row]]:
         """Yield ``{concept_id: Row}`` batches for concepts lacking embeddings.
 
@@ -583,7 +571,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
     def count_concepts_requiring_embedding(
         self,
         *,
-        concept_filter: Optional[CDMConceptFilter] = None,
+        concept_filter: CDMConceptFilter | None = None,
         batch_size: int = 10_000,
     ) -> int:
         """Count missing concepts and concepts with changed filter metadata."""
@@ -600,8 +588,8 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         self,
         *,
         batch_size: int,
-        concept_filter: Optional[CDMConceptFilter] = None,
-        limit: Optional[int] = None,
+        concept_filter: CDMConceptFilter | None = None,
+        limit: int | None = None,
     ) -> Iterable[Mapping[int, Row]]:
         """Yield concepts whose embedding is missing or has stale metadata.
 
@@ -665,8 +653,8 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
 
     def _enrich(
         self,
-        raw: Tuple[Tuple[NearestConceptMatch, ...], ...],
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+        raw: tuple[tuple[NearestConceptMatch, ...], ...],
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
         """Enrich backend results with concept names from the CDM.
 
         Notes
@@ -687,9 +675,7 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
             tuple(
                 dc_replace(
                     r,
-                    concept_name=rows[r.concept_id].concept_name
-                    if r.concept_id in rows
-                    else None,
+                    concept_name=rows[r.concept_id].concept_name if r.concept_id in rows else None,
                 )
                 for r in query_results
             )
@@ -734,11 +720,11 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         resolved_model: ResolvedModel,
         embedding_batch_size: int = 32,
         *,
-        cdm_session_factory: Optional[CDMSessionFactory] = None,
+        cdm_session_factory: CDMSessionFactory | None = None,
     ):
         self._model_backend: ModelBackend = build_model_backend_from_resolved(resolved_model)
         self._embedding_batch_size = embedding_batch_size
-        self._embedding_dim: Optional[int] = None
+        self._embedding_dim: int | None = None
 
         super().__init__(
             backend=backend,
@@ -777,8 +763,8 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
     def register_model(
         self,
         *,
-        index_config: Optional[IndexConfig] = None,
-        metadata: Optional[Mapping[str, object]] = None,
+        index_config: IndexConfig | None = None,
+        metadata: Mapping[str, object] | None = None,
     ) -> EmbeddingModelRecord:
         """Register the embedding model in the backend registry.
 
@@ -793,6 +779,14 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         Returns
         -------
         EmbeddingModelRecord
+
+        Raises
+        ------
+        UnsupportedIndexConfigError
+            If the backend does not support the index type or its metric.
+        ValueError
+            If ``index_config`` is not a FLAT config, or ``metadata`` contains a
+            reserved key.
         """
         return self._backend.register_model(
             model_name=self.canonical_model_name,
@@ -822,6 +816,11 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         -------
         EmbeddingModelRecord
             Updated registry record.
+
+        Raises
+        ------
+        UnsupportedIndexConfigError
+            If the backend does not support the index type or its metric.
         """
         return self._backend.rebuild_index(
             model_name=self.canonical_model_name,
@@ -835,10 +834,10 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
 
     def embed_texts(
         self,
-        texts: Union[str, Tuple[str, ...], List[str]],
+        texts: str | tuple[str, ...] | list[str],
         *,
         role: EmbeddingRole,
-        batch_size: Optional[int] = None,
+        batch_size: int | None = None,
     ) -> EmbeddingArray:
         return self.generate_embeddings(
             self._model_backend,
@@ -891,8 +890,8 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
 
     def bulk_upsert_concept_embeddings(
         self,
-        batches: Iterable[Tuple[Sequence[ConceptEmbeddingRecord], EmbeddingArray]],
-        total_n_batches: Optional[int] = None,
+        batches: Iterable[tuple[Sequence[ConceptEmbeddingRecord], EmbeddingArray]],
+        total_n_batches: int | None = None,
     ) -> None:
         """Upsert from a lazy ``(records, embeddings)`` iterable."""
         self._backend.bulk_upsert_embeddings(
@@ -908,7 +907,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         concept_ids: Sequence[int],
         concept_texts: Sequence[str],
         concept_meta: Mapping[int, Row],
-        batch_size: Optional[int] = None,
+        batch_size: int | None = None,
     ) -> EmbeddingArray:
         """Generate embeddings from CDM concepts and upsert with filter metadata.
         Concept_ids, concept_texts and concept_meta must be aligned (same length, same order).
@@ -935,23 +934,15 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
             ConceptEmbeddingRecord(
                 concept_id=cid,
                 domain_id=concept_meta[cid].domain_id if cid in concept_meta else "",
-                vocabulary_id=concept_meta[cid].vocabulary_id
-                if cid in concept_meta
-                else "",
-                is_standard=bool(concept_meta[cid].is_standard)
-                if cid in concept_meta
-                else False,
-                is_valid=bool(concept_meta[cid].is_valid)
-                if cid in concept_meta
-                else True,
+                vocabulary_id=concept_meta[cid].vocabulary_id if cid in concept_meta else "",
+                is_standard=bool(concept_meta[cid].is_standard) if cid in concept_meta else False,
+                is_valid=bool(concept_meta[cid].is_valid) if cid in concept_meta else True,
             )
             for cid in concept_ids
         ]
 
         # Check registered dimensions
-        record = self._backend.get_registered_model(
-            model_name=self.canonical_model_name
-        )
+        record = self._backend.get_registered_model(model_name=self.canonical_model_name)
         if record is not None and record.dimensions != self.embedding_dim:
             raise ValueError(
                 f"Embedding dimension mismatch: client produces {self.embedding_dim}d "
@@ -968,14 +959,14 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
 
     def get_nearest_concepts_from_query_texts(
         self,
-        query_texts: Union[str, Tuple[str, ...], List[str]],
-        model_backend: Optional[ModelBackend] = None,
+        query_texts: str | tuple[str, ...] | list[str],
+        model_backend: ModelBackend | None = None,
         *,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
-        batch_size: Optional[int] = None,
-        k: Optional[int] = None,
-        faiss_index_config: Optional[IndexConfig] = None,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+        concept_filter: EmbeddingConceptFilter | None = None,
+        batch_size: int | None = None,
+        k: int | None = None,
+        faiss_index_config: IndexConfig | None = None,
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
         return super().get_nearest_concepts_from_query_texts(
             query_texts=query_texts,
             model_backend=model_backend if model_backend is not None else self._model_backend,

@@ -1,14 +1,51 @@
 """Backend-agnostic database utilities shared across storage backends."""
 
 import json
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from oa_configurator import Dialect
-from sqlalchemy import Column, ColumnElement, Integer, Select, any_, bindparam, func, select
+from sqlalchemy import (
+    Column,
+    ColumnElement,
+    Integer,
+    Select,
+    Table,
+    any_,
+    bindparam,
+    func,
+    select,
+)
 from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.sql.base import ColumnCollection
 
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+
+
+def table_for(model: type[DeclarativeBase]) -> Table:
+    """Return the Table a mapped class is bound to.
+
+    Declarative bases type ``__table__`` as ``FromClause``; this narrows it.
+
+    Parameters
+    ----------
+    model : type[DeclarativeBase]
+        Mapped class.
+
+    Returns
+    -------
+    Table
+
+    Raises
+    ------
+    TypeError
+        If the class is mapped to a selectable other than a Table.
+    """
+    table = model.__table__
+    if not isinstance(table, Table):
+        raise TypeError(f"{model.__name__} is not mapped to a Table")
+    return table
 
 
 def in_values(column: Column[Any], values: Sequence[Any], *, dialect: str) -> ColumnElement[bool]:
@@ -65,13 +102,17 @@ def apply_concept_filter_where(
     Select
     """
     if concept_filter.concept_ids is not None:
-        stmt = stmt.where(in_values(columns.concept_id, concept_filter.concept_ids, dialect=dialect))
+        stmt = stmt.where(
+            in_values(columns.concept_id, concept_filter.concept_ids, dialect=dialect)
+        )
     if concept_filter.domains is not None:
         stmt = stmt.where(in_values(columns.domain_id, concept_filter.domains, dialect=dialect))
     if concept_filter.vocabularies is not None:
-        stmt = stmt.where(in_values(columns.vocabulary_id, concept_filter.vocabularies, dialect=dialect))
+        stmt = stmt.where(
+            in_values(columns.vocabulary_id, concept_filter.vocabularies, dialect=dialect)
+        )
     if concept_filter.require_standard:
-        stmt = stmt.where(columns.is_standard == True)  # noqa: E712
+        stmt = stmt.where(columns.is_standard == True)
     if concept_filter.require_active:
-        stmt = stmt.where(columns.is_valid == True)  # noqa: E712
+        stmt = stmt.where(columns.is_valid == True)
     return stmt

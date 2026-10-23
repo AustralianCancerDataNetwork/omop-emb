@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Mapping, Optional
 
 from omop_emb.backends.index_config import IndexConfig
 from omop_emb.config import IndexType, MetricType
@@ -51,8 +51,8 @@ class EmbeddingModelRecord:
     dimensions: int
     storage_identifier: str
     metadata: Mapping[str, object] = field(default_factory=dict)
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     @property
     def index_type(self) -> IndexType:
@@ -60,6 +60,6 @@ class EmbeddingModelRecord:
         return self.index_config.index_type
 
     @property
-    def metric_type(self) -> Optional[MetricType]:
+    def metric_type(self) -> MetricType | None:
         """Distance metric the model is locked to, or ``None`` if queries choose it."""
         return self.index_config.metric_type

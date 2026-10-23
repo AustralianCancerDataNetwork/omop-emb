@@ -16,7 +16,13 @@ from omop_emb.utils.errors import (
     UnknownEmbeddingBackendError,
 )
 
-from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE, sqlite_resolved_database
+from .conftest import (
+    EMBEDDING_DIM,
+    MODEL_NAME,
+    PROVIDER_TYPE,
+    drop_all_models,
+    sqlite_resolved_database,
+)
 
 pytestmark = [pytest.mark.postgresql, pytest.mark.db_dialect]
 
@@ -34,11 +40,7 @@ def test_open_writer_builds_a_working_pgvector_backend(pg_db):
         registered = {r.model_name for r in backend.get_registered_models()}
         assert MODEL_NAME in registered
     finally:
-        for record in backend.get_registered_models():
-            try:
-                backend.delete_model(model_name=record.model_name)
-            except Exception:
-                pass
+        drop_all_models(backend)
 
 
 def test_open_writer_accepts_the_backend_type_as_a_plain_string(pg_db):
@@ -48,11 +50,7 @@ def test_open_writer_accepts_the_backend_type_as_a_plain_string(pg_db):
     try:
         assert isinstance(backend, PGVectorEmbeddingBackend)
     finally:
-        for record in backend.get_registered_models():
-            try:
-                backend.delete_model(model_name=record.model_name)
-            except Exception:
-                pass
+        drop_all_models(backend)
 
 
 def test_open_writer_rejects_an_unknown_backend_type(pg_db):

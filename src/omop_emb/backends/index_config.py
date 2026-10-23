@@ -4,7 +4,7 @@ import inspect
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, fields, is_dataclass
 from enum import Enum
-from typing import Any, Callable, Optional, Self, cast, get_type_hints
+from typing import Any, Self, get_type_hints
 
 from omop_emb.config import IndexType, MetricType, parse_index_type
 
@@ -33,7 +33,7 @@ class IndexConfig(ABC):
     """
 
     index_type: IndexType
-    metric_type: Optional[MetricType]
+    metric_type: MetricType | None
 
     def __post_init__(self) -> None:
         self._validate_metric_type_after_init()
@@ -62,8 +62,7 @@ class IndexConfig(ABC):
         """
         if not is_dataclass(self):
             raise TypeError(
-                f"to_dict() must be called on a dataclass instance, "
-                f"not {type(self).__name__}."
+                f"to_dict() must be called on a dataclass instance, not {type(self).__name__}."
             )
         return asdict(self)
 
@@ -92,14 +91,10 @@ class IndexConfig(ABC):
             raise TypeError(f"Must be called on a dataclass, not {cls.__name__}.")
         if inspect.isabstract(cls):
             raise TypeError(
-                f"Cannot instantiate abstract class {cls.__name__} directly. "
-                "Call on a subclass."
+                f"Cannot instantiate abstract class {cls.__name__} directly. Call on a subclass."
             )
         known = {f.name for f in fields(cls)}
-        factory = cast(Callable[..., Self], cls)
-        return factory(
-            **{k: v for k, v in kwargs.items() if k in known and v is not None}
-        )
+        return cls(**{k: v for k, v in kwargs.items() if k in known and v is not None})
 
     @classmethod
     def from_dict(cls, config_dict: dict[str, Any]) -> Self:
@@ -132,32 +127,22 @@ class IndexConfig(ABC):
             raise TypeError(f"Must be called on a dataclass, not {cls.__name__}.")
         if inspect.isabstract(cls):
             raise TypeError(
-                f"Cannot instantiate abstract class {cls.__name__} directly. "
-                "Call on a subclass."
+                f"Cannot instantiate abstract class {cls.__name__} directly. Call on a subclass."
             )
         type_hints = get_type_hints(cls)
         init_params: dict[str, Any] = {}
         for field in fields(cls):
             if field.name not in config_dict:
-                raise ValueError(
-                    f"Strict check failed: '{field.name}' missing in config dict."
-                )
+                raise ValueError(f"Strict check failed: '{field.name}' missing in config dict.")
             value = config_dict[field.name]
             field_type = type_hints.get(field.name)
-            if (
-                value is not None
-                and isinstance(field_type, type)
-                and issubclass(field_type, Enum)
-            ):
+            if value is not None and isinstance(field_type, type) and issubclass(field_type, Enum):
                 try:
                     value = field_type(value)
                 except ValueError:
-                    raise ValueError(
-                        f"Invalid enum value '{value}' for {field_type.__name__}."
-                    )
+                    raise ValueError(f"Invalid enum value '{value}' for {field_type.__name__}.")
             init_params[field.name] = value
-        factory = cast(Callable[..., Self], cls)
-        return factory(**init_params)
+        return cls(**init_params)
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +165,7 @@ class FlatIndexConfig(IndexConfig):
     """
 
     index_type: IndexType = IndexType.FLAT
-    metric_type: Optional[MetricType] = None
+    metric_type: MetricType | None = None
 
     def _validate_metric_type_after_init(self) -> None:
         """FLAT accepts any metric or none."""
@@ -219,9 +204,7 @@ class HNSWIndexConfig(IndexConfig):
 
     def _validate_metric_type_after_init(self) -> None:
         if self.metric_type is None:
-            raise ValueError(
-                "HNSW index requires a metric_type (e.g. MetricType.COSINE)."
-            )
+            raise ValueError("HNSW index requires a metric_type (e.g. MetricType.COSINE).")
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +242,7 @@ def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexC
 
 
 def index_config_from_dict(
-    index_type: IndexType | str, config_dict: Optional[dict[str, Any]]
+    index_type: IndexType | str, config_dict: dict[str, Any] | None
 ) -> IndexConfig:
     """Reconstruct an ``IndexConfig`` from its serialised ``to_dict()`` form.
 

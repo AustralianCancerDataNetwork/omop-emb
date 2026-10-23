@@ -25,6 +25,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
 
+from omop_emb.backends.db_utils import table_for
 from omop_emb.backends.index_config import IndexConfig
 from omop_emb.config import (
     MODEL_REGISTRY_SCHEMA,
@@ -37,7 +38,6 @@ from omop_emb.utils.errors import LegacyRegistryError, MisplacedRegistryError
 
 class ModelRegistryBase(DeclarativeBase):
     """Dedicated declarative base for local model registry metadata."""
-
 
 
 class ModelRegistry(ModelRegistryBase):
@@ -97,7 +97,9 @@ class ModelRegistry(ModelRegistryBase):
     __table_args__ = (
         UniqueConstraint("model_name", name="uq_model_registry_model_name"),
         UniqueConstraint(
-            "database_config_name", "storage_identifier", name="uq_model_registry_storage_identifier"
+            "database_config_name",
+            "storage_identifier",
+            name="uq_model_registry_storage_identifier",
         ),
         {"schema": REGISTRY_SCHEMA_KEY},
     )
@@ -118,9 +120,7 @@ class ModelRegistry(ModelRegistryBase):
     index_config: Mapped[Any] = mapped_column(JSON, nullable=True, default=dict)
     details: Mapped[Any] = mapped_column(JSON, nullable=True, default=dict)
 
-    created_at = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
+    created_at = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -173,9 +173,7 @@ class ModelRegistry(ModelRegistryBase):
         not here. The ORM only enforces structural constraints.
         """
         if index_config is None:
-            raise ValueError(
-                "index_config cannot be None. Provide a valid IndexConfig instance."
-            )
+            raise ValueError("index_config cannot be None. Provide a valid IndexConfig instance.")
         if not isinstance(index_config, IndexConfig):
             raise TypeError("Must assign an IndexConfig subclass instance.")
         if index_config.index_type is None:
@@ -183,8 +181,7 @@ class ModelRegistry(ModelRegistryBase):
 
         if index_config.index_type != IndexType.FLAT and index_config.metric_type is None:
             raise ValueError(
-                f"{index_config.index_type} index requires a metric_type "
-                "(e.g. MetricType.COSINE)."
+                f"{index_config.index_type} index requires a metric_type (e.g. MetricType.COSINE)."
             )
 
         self.index_type = index_config.index_type
@@ -294,8 +291,8 @@ def ensure_registry_table(engine: Engine) -> None:
     The registry's schema is claimed and created by registry_writer_engine()
     at create_engine() time. This function only reads the
     already-resolved REGISTRY_SCHEMA_KEY off *engine*'s own
-    schema_translate_map. 
-    
+    schema_translate_map.
+
     Notes
     -----
     - No provenance guard needed as engine was just built for this one call by
@@ -316,7 +313,7 @@ def ensure_registry_table(engine: Engine) -> None:
     with engine.begin() as connection:
         registry_schema = resolve_registry_physical_schema(connection)
         _reject_incompatible_registry(connection, registry_schema=registry_schema)
-        ModelRegistryBase.metadata.create_all(connection, tables=[ModelRegistry.__table__])  # ty: ignore[invalid-argument-type]
+        ModelRegistryBase.metadata.create_all(connection, tables=[table_for(ModelRegistry)])
 
 
 _LEGACY_SIGNATURE_COLUMNS = frozenset({"model_name", "storage_identifier", "dimensions"})
@@ -414,13 +411,8 @@ def _reject_incompatible_registry(connection: Connection, *, registry_schema: st
     if registry_schema is None:
         return
 
-    elsewhere = find_table_in_other_schemas(
-        connection, table_name, physical_schema=registry_schema
-    )
-    elsewhere = [
-        schema for schema in elsewhere
-        if _LEGACY_SIGNATURE_COLUMNS <= columns_of(schema)
-    ]
+    elsewhere = find_table_in_other_schemas(connection, table_name, physical_schema=registry_schema)
+    elsewhere = [schema for schema in elsewhere if _LEGACY_SIGNATURE_COLUMNS <= columns_of(schema)]
     for schema in elsewhere:
         columns = columns_of(schema)
         if _is_legacy_layout(columns):
@@ -434,7 +426,9 @@ def _reject_incompatible_registry(connection: Connection, *, registry_schema: st
             )
 
     if not present_here and elsewhere:
-        quoted_registry_schema = connection.dialect.identifier_preparer.quote_schema(registry_schema)
+        quoted_registry_schema = connection.dialect.identifier_preparer.quote_schema(
+            registry_schema
+        )
         raise MisplacedRegistryError(
             f"Found the model registry in schema(s) {list(elsewhere)}, but omop-emb keeps it in "
             f"{registry_schema!r}. Move it before continuing:\n"

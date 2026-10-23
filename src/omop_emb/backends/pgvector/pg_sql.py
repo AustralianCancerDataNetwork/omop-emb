@@ -14,7 +14,7 @@ from __future__ import annotations
 import functools
 import logging
 import typing
-from typing import Optional, Sequence, Union
+from collections.abc import Sequence
 
 import numpy as np
 from numpy import ndarray
@@ -22,23 +22,34 @@ from oa_configurator import (
     Dialect,
     Role,
     guard_schema_provenance_for,
-    qualified,
     physical_schema_of,
+    qualified,
 )
-from sqlalchemy import Engine, MetaData, Row, Select, delete, func, inspect, select, text
-from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy import (
+    CursorResult,
+    Engine,
+    MetaData,
+    Row,
+    Select,
+    delete,
+    func,
+    inspect,
+    select,
+    text,
+)
 from sqlalchemy.orm import Session, mapped_column, registry
+from sqlalchemy.sql.elements import ColumnElement
 
-from omop_emb.config import MetricType
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.index_config import HNSWIndexConfig
-from omop_emb.backends.db_utils import apply_concept_filter_where, in_values
+from omop_emb.backends.db_utils import apply_concept_filter_where, in_values, table_for
 from omop_emb.backends.embedding_table import (
     EMBEDDING_COLUMN_NAME,
     ConceptEmbeddingMixin,
     EmbeddingTableBase,
     PGEmbeddingTable,
 )
+from omop_emb.backends.index_config import HNSWIndexConfig
+from omop_emb.config import MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter, vector_column_type_for_dimensions
 
@@ -48,6 +59,7 @@ logger = logging.getLogger(__name__)
 def table_exists(engine: Engine, table_name: str) -> bool:
     """Return ``True`` if *table_name* exists in the engine's configured schema."""
     return inspect(engine).has_table(table_name, schema=physical_schema_of(engine))
+
 
 def create_pg_embedding_table(
     engine: Engine,
@@ -78,9 +90,11 @@ def create_pg_embedding_table(
 
     """
     table_cls = pg_embedding_table_descriptor(model_record)
-    with engine.begin() as connection:
-        with guard_schema_provenance_for(connection, schema_tag=Role.PRIMARY):
-            EmbeddingTableBase.metadata.create_all(connection, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
+    with (
+        engine.begin() as connection,
+        guard_schema_provenance_for(connection, schema_tag=Role.PRIMARY),
+    ):
+        EmbeddingTableBase.metadata.create_all(connection, tables=[table_for(table_cls)])
     return table_cls
 
 
@@ -93,11 +107,15 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
     model_record : EmbeddingModelRecord
     """
     tablename = model_record.storage_identifier
-    with engine.begin() as conn:
-        with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
-            conn.execute(
-                text(f"DROP TABLE IF EXISTS {qualified(conn, tablename, physical_schema=physical_schema_of(conn))}")
+    with (
+        engine.begin() as conn,
+        guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY),
+    ):
+        conn.execute(
+            text(
+                f"DROP TABLE IF EXISTS {qualified(conn, tablename, physical_schema=physical_schema_of(conn))}"
             )
+        )
     logger.info(f"Dropped embedding table '{tablename}'.")
 
 
@@ -111,7 +129,9 @@ def hnsw_operator_class(metric_type: MetricType, dimensions: int) -> str:
     return f"{vector_column_type_for_dimensions(dimensions).value}_{metric_type.value}_ops"
 
 
-def hnsw_index_ddl(engine: Engine, model_record: EmbeddingModelRecord, index_config: HNSWIndexConfig) -> str:
+def hnsw_index_ddl(
+    engine: Engine, model_record: EmbeddingModelRecord, index_config: HNSWIndexConfig
+) -> str:
     """CREATE INDEX statement for model_record's table under index_config."""
     tablename = model_record.storage_identifier
     ops = hnsw_operator_class(index_config.metric_type, model_record.dimensions)
@@ -206,9 +226,9 @@ def q_embedding_count_by_vocabulary(embedding_table: type[PGEmbeddingTable]) -> 
     Select
         Columns: ``vocabulary_id`` (str), ``count`` (int).
     """
-    return select(
-        embedding_table.vocabulary_id, func.count(embedding_table.concept_id)
-    ).group_by(embedding_table.vocabulary_id)
+    return select(embedding_table.vocabulary_id, func.count(embedding_table.concept_id)).group_by(
+        embedding_table.vocabulary_id
+    )
 
 
 def _as_float32_array(value) -> ndarray:
@@ -237,14 +257,18 @@ def delete_embedding_rows(
     embedding_table: type[PGEmbeddingTable],
     concept_ids: Sequence[int],
 ) -> int:
-    """Delete the rows of concept_ids and return how many existed."""
+    """Delete the rows of concept_ids and return how many existed.
+
+    ``Session.execute`` is typed ``Result``; a DML statement returns a ``CursorResult``,
+    which carries ``rowcount``.
+    """
     column = inspect(embedding_table).columns
     result = session.execute(
         delete(embedding_table).where(
             in_values(column.concept_id, concept_ids, dialect=Dialect.POSTGRESQL)
         )
     )
-    return int(result.rowcount)  # ty: ignore[unresolved-attribute]
+    return int(typing.cast(CursorResult[typing.Any], result).rowcount)
 
 
 # ---------------------------------------------------------------------------
@@ -258,13 +282,13 @@ def query_nearest_concept_ids(
     query_embedding: ndarray,
     metric_type: MetricType,
     k: int,
-    concept_filter: Optional[EmbeddingConceptFilter] = None,
+    concept_filter: EmbeddingConceptFilter | None = None,
 ) -> Sequence[Row]:
     """Run a pgvector ANN query for a single query vector.
 
     Notes
     -----
-    Deliberately removed batching of queries for multiple vectors, as batching 
+    Deliberately removed batching of queries for multiple vectors, as batching
     the vectors in one statement (a VALUES list joined through a lateral subquery)
     cast the query text to vector once per stored row and lost the parallel scan.
     Separate statements for each query vector are faster and scale linearly.
@@ -365,7 +389,7 @@ def query_concept_filter_metadata(
 
 def get_distance(
     embedding_table: type[PGEmbeddingTable],
-    text_embedding: Union[ndarray, ColumnElement],
+    text_embedding: ndarray | ColumnElement,
     metric: MetricType,
 ) -> ColumnElement:
     """Return a SQLAlchemy distance expression for the given metric.
@@ -419,23 +443,31 @@ def pg_embedding_table_descriptor(model_record: EmbeddingModelRecord) -> type[PG
     ``extend_existing=True`` would otherwise only paper over (SQLAlchemy
     still warns about multiple mapped classes for one table).
     """
-    return _cached_pg_embedding_table_descriptor(model_record.storage_identifier, model_record.dimensions)
+    return _cached_pg_embedding_table_descriptor(
+        model_record.storage_identifier, model_record.dimensions
+    )
 
 
-@functools.lru_cache(maxsize=None)
-def _cached_pg_embedding_table_descriptor(tablename: str, dimensions: int) -> type[PGEmbeddingTable]:
+@functools.cache
+def _cached_pg_embedding_table_descriptor(
+    tablename: str, dimensions: int
+) -> type[PGEmbeddingTable]:
+    """Build and map the embedding table class for one table name and dimension.
+
+    The class is created with ``type()``, so the type checker cannot see its bases
+    and the mapped result is cast to ``type[PGEmbeddingTable]``.
+    """
+    from pgvector.sqlalchemy import HALFVEC, VECTOR  # optional dependency
+
     from omop_emb.utils.embedding_utils import (
         VectorColumnType,
         vector_column_type_for_dimensions,
     )
-    from pgvector.sqlalchemy import VECTOR, HALFVEC  # optional dependency
 
     col_type = vector_column_type_for_dimensions(dimensions)
     descriptor_registry = registry(metadata=MetaData())
     emb_col = mapped_column(
-        HALFVEC(dimensions)
-        if col_type == VectorColumnType.HALFVEC
-        else VECTOR(dimensions),
+        HALFVEC(dimensions) if col_type == VectorColumnType.HALFVEC else VECTOR(dimensions),
         nullable=False,
         index=False,
     )

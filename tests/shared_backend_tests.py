@@ -7,6 +7,8 @@ under test. Queries use the cosine metric, the one metric every backend supports
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -14,6 +16,7 @@ from omop_emb.backends.base_backend import EmbeddingBackend
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.config import MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from omop_emb.utils.errors import ModelRegistrationConflictError
 
 from .conftest import (
     ASPIRIN_ID,
@@ -66,13 +69,14 @@ class SharedBackendTests:
 
     def test_register_model_dimension_conflict_raises(self, backend: EmbeddingBackend):
         register_flat(backend)
-        with pytest.raises(Exception):
+        with pytest.raises(ModelRegistrationConflictError) as exc_info:
             backend.register_model(
                 model_name=MODEL_NAME,
                 provider_type=PROVIDER_TYPE,
                 index_config=FlatIndexConfig(),
                 dimensions=EMBEDDING_DIM + 1,
             )
+        assert exc_info.value.conflict_field == "dimensions"
 
     def test_get_registered_model_before_and_after_registration(self, backend: EmbeddingBackend):
         assert backend.get_registered_model(model_name=MODEL_NAME) is None, (
@@ -86,9 +90,7 @@ class SharedBackendTests:
     def test_get_registered_model(self, backend: EmbeddingBackend):
         register_flat(backend)
         record = backend.get_registered_model(model_name=MODEL_NAME)
-        assert record is not None, (
-            "get_registered_model should return a record after registration"
-        )
+        assert record is not None, "get_registered_model should return a record after registration"
         assert record.model_name == MODEL_NAME, (
             f"Returned record should have the correct model_name. Got: {record.model_name}. Expected: {MODEL_NAME}"
         )
@@ -98,9 +100,7 @@ class SharedBackendTests:
 
     def test_get_registered_models_returns_all(self, backend: EmbeddingBackend):
         register_flat(backend)
-        records = backend.get_registered_models(
-            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE
-        )
+        records = backend.get_registered_models(model_name=MODEL_NAME, provider_type=PROVIDER_TYPE)
         assert len(records) >= 1
 
     # ------------------------------------------------------------------
@@ -164,7 +164,9 @@ class SharedBackendTests:
         ],
         ids=["wrong dimensionality", "1-D", "row count", "NaN"],
     )
-    def test_upsert_rejects_malformed_embeddings(self, backend: EmbeddingBackend, embeddings, message):
+    def test_upsert_rejects_malformed_embeddings(
+        self, backend: EmbeddingBackend, embeddings, message
+    ):
         register_flat(backend)
         with pytest.raises(ValueError, match=message):
             backend.upsert_embeddings(
@@ -190,15 +192,22 @@ class SharedBackendTests:
 
     def test_float64_embeddings_are_accepted_and_stored_as_float32(self, backend: EmbeddingBackend):
         register_flat(backend)
+        # Deliberately off the declared float32 type: the backend converts on the way in.
+        float64_embeddings: Any = CONCEPT_EMBEDDINGS.astype(np.float64)
+        float64_query: Any = QUERY_EMBEDDING.astype(np.float64)
         backend.upsert_embeddings(
-            model_name=MODEL_NAME,
-            records=list(CONCEPT_RECORDS),
-            embeddings=CONCEPT_EMBEDDINGS.astype(np.float64),
+            model_name=MODEL_NAME, records=list(CONCEPT_RECORDS), embeddings=float64_embeddings
         )
+        stored = backend.get_embeddings_by_concept_ids(
+            model_name=MODEL_NAME, concept_ids=[record.concept_id for record in CONCEPT_RECORDS]
+        )
+        for record, expected in zip(CONCEPT_RECORDS, CONCEPT_EMBEDDINGS, strict=True):
+            assert stored[record.concept_id].dtype == np.float32
+            assert np.array_equal(stored[record.concept_id], expected)
         (matches,) = backend.get_nearest_concepts(
             model_name=MODEL_NAME,
             metric_type=MetricType.COSINE,
-            query_embeddings=QUERY_EMBEDDING.astype(np.float64),
+            query_embeddings=float64_query,
             k=1,
         )
         assert matches[0].concept_id == DIABETES_ID
@@ -207,7 +216,9 @@ class SharedBackendTests:
     # Delete embeddings
     # ------------------------------------------------------------------
 
-    def test_delete_embeddings_removes_rows_and_counts_existing_ones(self, backend: EmbeddingBackend):
+    def test_delete_embeddings_removes_rows_and_counts_existing_ones(
+        self, backend: EmbeddingBackend
+    ):
         upsert_all(backend)
         deleted = backend.delete_embeddings(
             model_name=MODEL_NAME,
@@ -372,9 +383,7 @@ class SharedBackendTests:
             model_name=MODEL_NAME,
             metric_type=MetricType.COSINE,
             query_embeddings=QUERY_EMBEDDING,
-            concept_filter=EmbeddingConceptFilter(
-                concept_ids=(HYPERTENSION_ID, ASPIRIN_ID)
-            ),
+            concept_filter=EmbeddingConceptFilter(concept_ids=(HYPERTENSION_ID, ASPIRIN_ID)),
         )
         returned_ids = {r.concept_id for r in results[0]}
         assert returned_ids == {HYPERTENSION_ID, ASPIRIN_ID}
@@ -419,9 +428,7 @@ class SharedBackendTests:
         )
         expected = COSINE_SIMILARITY
         for match in results[0]:
-            assert np.isclose(
-                match.similarity, expected[match.concept_id], atol=1e-5
-            ), (
+            assert np.isclose(match.similarity, expected[match.concept_id], atol=1e-5), (
                 f"concept_id={match.concept_id}: got {match.similarity}, "
                 f"expected {expected[match.concept_id]}"
             )
@@ -438,9 +445,7 @@ class SharedBackendTests:
         )
         assert matching == {ASPIRIN_ID, NON_STANDARD_ID}
 
-    def test_get_stored_concept_ids_require_standard_filter(
-        self, backend: EmbeddingBackend
-    ):
+    def test_get_stored_concept_ids_require_standard_filter(self, backend: EmbeddingBackend):
         upsert_all(backend)
         matching = backend.get_stored_concept_ids(
             model_name=MODEL_NAME,
@@ -448,9 +453,7 @@ class SharedBackendTests:
         )
         assert matching == {HYPERTENSION_ID, DIABETES_ID, ASPIRIN_ID}
 
-    def test_get_stored_concept_ids_empty_filter_returns_all(
-        self, backend: EmbeddingBackend
-    ):
+    def test_get_stored_concept_ids_empty_filter_returns_all(self, backend: EmbeddingBackend):
         upsert_all(backend)
         matching = backend.get_stored_concept_ids(
             model_name=MODEL_NAME,

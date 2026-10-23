@@ -16,10 +16,10 @@ if TYPE_CHECKING:
 __all__ = [
     "EmbeddingBackend",
     "EmbeddingStoreReader",
+    "PGVectorEmbeddingBackend",
+    "SQLiteVecEmbeddingBackend",
     "open_vector_store_reader",
     "open_vector_store_writer",
-    "SQLiteVecEmbeddingBackend",
-    "PGVectorEmbeddingBackend",
 ]
 
 

@@ -37,12 +37,12 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib.metadata import version as _pkg_version
 from itertools import batched
 from pathlib import Path
-from typing import Iterator, Sequence
 
 import h5py
 import numpy as np
@@ -103,27 +103,23 @@ class BundleCorruptionError(ValueError):
 class UnsupportedBundleVersionError(BundleCorruptionError):
     """Raised when a bundle's schema_version is not one this omop-emb reads."""
 
+
 def get_required_attribute(attrs: h5py.AttributeManager, attr_name: str) -> str:
     if attr_name not in REQUIRED_ATTRS:
         raise ValueError(f"Internal error: attribute '{attr_name}' is not in REQUIRED_ATTRS.")
     if attr_name not in attrs:
-        raise BundleCorruptionError(
-            f"Bundle is missing required attribute '{attr_name}'."
-        )
+        raise BundleCorruptionError(f"Bundle is missing required attribute '{attr_name}'.")
     return str(attrs[attr_name])
+
 
 def get_required_dataset(f: h5py.File, ds_name: str) -> h5py.Dataset:
     if ds_name not in REQUIRED_DATASETS:
         raise ValueError(f"Internal error: dataset '{ds_name}' is not in REQUIRED_DATASETS.")
     if ds_name not in f:
-        raise BundleCorruptionError(
-            f"Bundle is missing required dataset '{ds_name}'."
-        )
+        raise BundleCorruptionError(f"Bundle is missing required dataset '{ds_name}'.")
     dataset = f[ds_name]
     if not isinstance(dataset, h5py.Dataset):
-        raise BundleCorruptionError(
-            f"Bundle item '{ds_name}' is not a dataset."
-        )
+        raise BundleCorruptionError(f"Bundle item '{ds_name}' is not a dataset.")
     return dataset
 
 
@@ -151,7 +147,7 @@ class BundleMetadata:
     exported_at: str
 
     @classmethod
-    def from_h5_attrs(cls, attrs: "h5py.AttributeManager") -> "BundleMetadata":
+    def from_h5_attrs(cls, attrs: h5py.AttributeManager) -> BundleMetadata:
         """Read the attributes of a bundle of any supported schema version.
 
         Raises
@@ -164,7 +160,9 @@ class BundleMetadata:
         """
         version = _schema_version(attrs)
         index_config_dict = json.loads(get_required_attribute(attrs, ATTR_INDEX_CONFIG))
-        index_config = index_config_from_dict(index_config_dict.get("index_type"), index_config_dict)
+        index_config = index_config_from_dict(
+            index_config_dict.get("index_type"), index_config_dict
+        )
         if version == 1:
             _check_v1_metric(attrs, index_config)
         return cls(
@@ -177,7 +175,7 @@ class BundleMetadata:
         )
 
 
-def _schema_version(attrs: "h5py.AttributeManager") -> int:
+def _schema_version(attrs: h5py.AttributeManager) -> int:
     """Return the bundle's schema version, raising if it is missing or unsupported."""
     version = int(get_required_attribute(attrs, ATTR_SCHEMA_VERSION))
     if version not in SUPPORTED_SCHEMA_VERSIONS:
@@ -188,7 +186,7 @@ def _schema_version(attrs: "h5py.AttributeManager") -> int:
     return version
 
 
-def _check_v1_metric(attrs: "h5py.AttributeManager", index_config: IndexConfig) -> None:
+def _check_v1_metric(attrs: h5py.AttributeManager, index_config: IndexConfig) -> None:
     """Check a version 1 bundle's metric_type against its index_config.
 
     Version 1 wrote the HNSW metric, or ``cosine`` as a placeholder for FLAT.
@@ -206,7 +204,7 @@ def _check_v1_metric(attrs: "h5py.AttributeManager", index_config: IndexConfig) 
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+    return datetime.now(tz=UTC).isoformat()
 
 
 @dataclass(frozen=True)
@@ -256,7 +254,7 @@ def stream_embedding_batches(
         )
 
 
-def validate_bundle(f: "h5py.File") -> None:
+def validate_bundle(f: h5py.File) -> None:
     """Raise :class:`BundleCorruptionError` if *f* doesn't match the bundle schema."""
     _schema_version(f.attrs)
     missing_attrs = [a for a in REQUIRED_ATTRS if a not in f.attrs]
@@ -289,9 +287,9 @@ def validate_bundle(f: "h5py.File") -> None:
 def export_bundle(
     backend: EmbeddingStoreReader,
     model_name: str,
-    output_dir: "Path | str",
+    output_dir: Path | str,
     batch_size: int = 100_000,
-) -> "tuple[BundleMetadata, Path]":
+) -> tuple[BundleMetadata, Path]:
     """Stream every embedding for *model_name* into one HDF5 bundle.
 
     Raw, never-normalized vectors are written directly into a chunked,
@@ -417,7 +415,7 @@ def export_bundle(
 
 def import_bundle(
     backend: EmbeddingBackend,
-    h5_path: "Path | str",
+    h5_path: Path | str,
     force: bool = False,
     batch_size: int = 10_000,
     rebuild_index: bool = False,
@@ -450,6 +448,9 @@ def import_bundle(
     RuntimeError
         If the backend already has embeddings for this model and
         ``force`` is ``False``.
+    UnsupportedIndexConfigError
+        If ``rebuild_index`` is ``True`` and the backend does not support the
+        bundle's index type or metric.
     """
     h5_path = Path(h5_path).expanduser().resolve()
     if not h5_path.exists():
@@ -459,7 +460,9 @@ def import_bundle(
         validate_bundle(f)
         meta = BundleMetadata.from_h5_attrs(f.attrs)
 
-        was_already_registered = backend.get_registered_model(model_name=meta.model_name) is not None
+        was_already_registered = (
+            backend.get_registered_model(model_name=meta.model_name) is not None
+        )
         if not force and was_already_registered:
             existing = backend.get_embedding_count(model_name=meta.model_name)
             if existing > 0:

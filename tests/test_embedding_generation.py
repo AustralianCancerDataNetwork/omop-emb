@@ -16,15 +16,16 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pytest
 from oa_configurator.resolver import ResolvedModel, ResolvedProvider
-from sqlalchemy import insert
-
 from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_alchemy.cross_database import cdm_sessionmaker
+from sqlalchemy import insert
+
+from omop_emb.backends.db_utils import table_for
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.config import MetricType
 from omop_emb.interface import (
-    EmbeddingRole,
     EmbeddingReaderInterface,
+    EmbeddingRole,
     EmbeddingWriterInterface,
 )
 
@@ -47,7 +48,9 @@ def _make_resolved_model(
 ) -> ResolvedModel:
     return ResolvedModel(
         name="test-model",
-        provider=ResolvedProvider(name="test-provider", provider=provider, base_url=base_url, api_key=api_key),
+        provider=ResolvedProvider(
+            name="test-provider", provider=provider, base_url=base_url, api_key=api_key
+        ),
         model=model,
         embedding_dim=embedding_dim,
         document_prefix=document_prefix,
@@ -116,32 +119,44 @@ class TestGenerateEmbeddings:
         EmbeddingReaderInterface.generate_embeddings(
             backend, ["a"], role=EmbeddingRole.DOCUMENT, batch_size=8
         )
-        backend.embed_texts.assert_called_once_with(["a"], role=EmbeddingRole.DOCUMENT, batch_size=8)
+        backend.embed_texts.assert_called_once_with(
+            ["a"], role=EmbeddingRole.DOCUMENT, batch_size=8
+        )
 
     def test_role_forwarded_to_backend(self):
         backend = _mock_model_backend(vectors=[[0.1]])
         EmbeddingReaderInterface.generate_embeddings(backend, "diabetes", role=EmbeddingRole.QUERY)
-        backend.embed_texts.assert_called_once_with(["diabetes"], role=EmbeddingRole.QUERY, batch_size=None)
+        backend.embed_texts.assert_called_once_with(
+            ["diabetes"], role=EmbeddingRole.QUERY, batch_size=None
+        )
 
     def test_raises_on_non_2d_result(self):
         backend = _mock_model_backend(vectors=[0.1, 0.2, 0.3])  # ty: ignore[invalid-argument-type] - purposefully wrong shape
         with pytest.raises(RuntimeError, match="2-D"):
-            EmbeddingReaderInterface.generate_embeddings(backend, "hello", role=EmbeddingRole.DOCUMENT)
+            EmbeddingReaderInterface.generate_embeddings(
+                backend, "hello", role=EmbeddingRole.DOCUMENT
+            )
 
     def test_raises_on_non_finite_result(self):
         backend = _mock_model_backend(vectors=[[0.1, float("nan")]])
         with pytest.raises(RuntimeError, match="NaN or infinite"):
-            EmbeddingReaderInterface.generate_embeddings(backend, "hello", role=EmbeddingRole.DOCUMENT)
+            EmbeddingReaderInterface.generate_embeddings(
+                backend, "hello", role=EmbeddingRole.DOCUMENT
+            )
 
     def test_returns_float32(self):
         backend = _mock_model_backend(vectors=[[0.1, 0.2]])
-        result = EmbeddingReaderInterface.generate_embeddings(backend, "hello", role=EmbeddingRole.DOCUMENT)
+        result = EmbeddingReaderInterface.generate_embeddings(
+            backend, "hello", role=EmbeddingRole.DOCUMENT
+        )
         assert result.dtype == np.float32
 
     def test_raises_on_row_count_mismatch(self):
         backend = _mock_model_backend(vectors=[[0.1, 0.2]])  # 1 row for 2 texts
         with pytest.raises(RuntimeError, match="Expected 2 embeddings"):
-            EmbeddingReaderInterface.generate_embeddings(backend, ["a", "b"], role=EmbeddingRole.DOCUMENT)
+            EmbeddingReaderInterface.generate_embeddings(
+                backend, ["a", "b"], role=EmbeddingRole.DOCUMENT
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -231,19 +246,23 @@ class TestEmbeddingWriterInterfaceEmbedTexts:
         model_backend = _mock_model_backend(vectors=[[1.0]])
         iface = self._make_interface(model_backend)
         iface.embed_texts(["a"], role=EmbeddingRole.DOCUMENT)
-        model_backend.embed_texts.assert_called_once_with(["a"], role=EmbeddingRole.DOCUMENT, batch_size=16)
+        model_backend.embed_texts.assert_called_once_with(
+            ["a"], role=EmbeddingRole.DOCUMENT, batch_size=16
+        )
 
     def test_batch_size_override(self):
         model_backend = _mock_model_backend(vectors=[[1.0]])
         iface = self._make_interface(model_backend)
         iface.embed_texts(["a"], role=EmbeddingRole.DOCUMENT, batch_size=4)
-        model_backend.embed_texts.assert_called_once_with(["a"], role=EmbeddingRole.DOCUMENT, batch_size=4)
+        model_backend.embed_texts.assert_called_once_with(
+            ["a"], role=EmbeddingRole.DOCUMENT, batch_size=4
+        )
 
 
 def test_population_batches_include_missing_and_metadata_changed_concepts():
     resolved = sqlite_cdm_database()
     cdm_engine, vocab_engine = resolved.create_engines()
-    Concept.__table__.create(vocab_engine)
+    table_for(Concept).create(vocab_engine)
     base = {
         "concept_name": "Concept",
         "domain_id": "Condition",

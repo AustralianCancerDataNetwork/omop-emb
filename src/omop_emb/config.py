@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from contextlib import contextmanager
 from enum import StrEnum
-from typing import TYPE_CHECKING, Annotated, ClassVar, Dict, Generator, Tuple
+from typing import TYPE_CHECKING, Annotated, ClassVar
 
-from pydantic import Field
 from oa_configurator import (
     CDMDatabaseConfig,
     GenericDatabaseConfig,
@@ -18,6 +18,7 @@ from oa_configurator import (
     Resolver,
     VectorStoreConfig,
 )
+from pydantic import Field
 
 if TYPE_CHECKING:
     from omop_emb.utils.cdm import CDMSessionFactory
@@ -279,8 +280,8 @@ def parse_metric_type(value: str | MetricType) -> MetricType:
 
 
 # Supported index + metric combinations per backend.
-SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[
-    BackendType, Dict[IndexType, Tuple[MetricType, ...]]
+SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: dict[
+    BackendType, dict[IndexType, tuple[MetricType, ...]]
 ] = {
     # https://alexgarcia.xyz/sqlite-vec/features/vec0.html
     # The metric is declared on the vec0 column, so each table is locked to one of them.
@@ -295,7 +296,7 @@ SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: Dict[
 }
 
 
-def _supported_indices(backend: BackendType) -> Dict[IndexType, Tuple[MetricType, ...]]:
+def _supported_indices(backend: BackendType) -> dict[IndexType, tuple[MetricType, ...]]:
     """The index/metric support map for *backend*.
 
     Parameters
@@ -355,7 +356,7 @@ def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) 
 
 def get_supported_index_types_for_backend(
     backend: BackendType,
-) -> Tuple[IndexType, ...]:
+) -> tuple[IndexType, ...]:
     """Return all index types supported by a backend.
 
     Parameters
@@ -369,7 +370,7 @@ def get_supported_index_types_for_backend(
     return tuple(_supported_indices(backend).keys())
 
 
-def get_supported_metrics_for_backend(backend: BackendType) -> Tuple[MetricType, ...]:
+def get_supported_metrics_for_backend(backend: BackendType) -> tuple[MetricType, ...]:
     """Return all metrics supported by any index type for a backend.
 
     Parameters

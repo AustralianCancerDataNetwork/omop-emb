@@ -863,6 +863,33 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1311,6 +1338,8 @@
 <p class="admonition-title">Asymmetric embedding models</p>
 <p><code>embed_and_upsert_concepts</code> always applies the <strong>document</strong> role, and <code>get_nearest_concepts_from_query_texts</code> always applies the <strong>query</strong> role. When calling <code>embed_texts</code> directly you must pass <code>role</code> explicitly. See <a href="../asymmetric-embeddings/">Asymmetric Embeddings</a> for task prefix configuration.</p>
 </div>
+<p>For multiple batches, yield the <code>(records, embeddings)</code> pairs returned by <code>writer.embed_concepts(...)</code> to <code>writer.bulk_upsert_concept_embeddings(...)</code>. On DuckDB HNSW stores, ordinary writes rebuild the index after each call; the bulk method rebuilds once at the end, including after a partial failure. CLI population uses this bulk path. Earlier successful batches remain stored if a later batch fails, and the model's update timestamp is refreshed.</p>
+<p><code>add-embeddings-with-index</code> reuses a matching HNSW configuration when a model-owned physical index is present after population. Changed settings and FLAT transitions are still applied. Use <code>create-index</code> to force a rebuild even when the configuration is unchanged.</p>
 <h3 id="build-an-hnsw-index">Build an HNSW index</h3>
 <p>After all embeddings are ingested, optionally upgrade to an approximate index:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">omop_emb.backends.index_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">HNSWIndexConfig</span>

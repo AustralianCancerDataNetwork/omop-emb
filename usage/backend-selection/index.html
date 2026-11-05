@@ -686,6 +686,33 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -877,6 +904,12 @@
 <td><code>omop-emb[pgvector]</code> + PostgreSQL</td>
 <td>Scales to large corpora. HNSW indexing and <code>halfvec</code> storage.</td>
 </tr>
+<tr>
+<td><strong>DuckDB VSS</strong></td>
+<td><code>duckdbvss</code></td>
+<td><code>omop-emb[duckdbvss]</code></td>
+<td>File or in-memory, single process, no server. HNSW indexing via the <code>vss</code> extension (<code>INSTALL vss</code> needs network access once, then it's cached locally).</td>
+</tr>
 </tbody>
 </table>
 <div class="admonition note">
@@ -903,7 +936,7 @@
 </code></pre></div>
 <p>Use FLAT when the corpus is small (tens of thousands of concepts) or when exact results are required.</p>
 <h3 id="hnsw">HNSW</h3>
-<p>Hierarchical Navigable Small World graph. Approximate nearest-neighbour search with sub-linear query time. Supported by pgvector only; <strong>not</strong> supported by sqlite-vec.</p>
+<p>Hierarchical Navigable Small World graph. Approximate nearest-neighbour search with sub-linear query time. Supported <strong>only</strong> by <code>pgvector</code> and DuckDB VSS.</p>
 <table>
 <thead>
 <tr>
@@ -965,6 +998,10 @@ omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index
 <p>HNSW applies a concept filter after the index returns its candidates, so a selective filter can leave fewer than <code>k</code> rows. With pgvector 0.8.0 or newer, <code>omop-emb</code> sets <code>hnsw.iterative_scan</code> for each query, which keeps scanning the index until <code>k</code> rows pass the filter. The scan runs in <code>relaxed_order</code> and the rows are sorted by distance afterwards, because <code>strict_order</code> skips every row closer than the last one it returned and so loses neighbours found in later batches. Older pgvector versions have no iterative scan: <code>ef_search</code> is raised to at least <code>k</code> (at most 1000, the pgvector limit) and a filtered query logs a one-time warning, since its results can still be incomplete. Upgrade the extension to fix this. For very selective filters at a low <code>ef_search</code>, the planner may choose an exact scan over the index.</p>
 </div>
 <div class="admonition warning">
+<p class="admonition-title">DuckDB VSS HNSW and filtered queries</p>
+<p>DuckDB's built-in <code>vss</code> extension applies a concept filter after the index returns its candidates, the same way pgvector does, but with no <code>iterative_scan</code>-equivalent at all: raising <code>ef_search</code> has no effect on a filtered query, confirmed empirically up to <code>ef_search=20000</code> on a 300k-row table (always short, never returning <code>k</code> rows). <code>omop-emb</code> works around this by materializing the filtered rows into a CTE before computing distance, which stops DuckDB's optimizer from using the index and forces an exact scan over just the filtered subset instead. This is always correct, but always pays the exact-scan cost for a filtered query; there is no faster, index-accelerated path today. See the <a href="../performance/">Performance Guide</a> for measured latency. A community fork, <a href="https://duckdb.org/community_extensions/extensions/hnsw_acorn"><code>hnsw_acorn</code></a>, adds predicate-aware index traversal; not adopted here, since it's a single-maintainer fork distributed outside DuckDB's own extension.</p>
+</div>
+<div class="admonition warning">
 <p class="admonition-title">HNSW builds in containers</p>
 <p>A parallel HNSW build can fail with <code>could not resize shared memory segment ... No space left on device</code> when the container's <code>/dev/shm</code> is small. Either enlarge <code>/dev/shm</code> (for example <code>shm_size</code> in Docker Compose) or set <code>max_parallel_maintenance_workers = 0</code> on the server, which builds serially and takes longer.</p>
 </div>
@@ -994,6 +1031,11 @@ omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index
 <td>L2, Cosine, L1</td>
 </tr>
 <tr>
+<td>DuckDB VSS</td>
+<td>L2, Cosine</td>
+<td>L2, Cosine</td>
+</tr>
+<tr>
 <td>FAISS sidecar</td>
 <td>L2, Cosine</td>
 <td>L2, Cosine</td>
@@ -1005,6 +1047,7 @@ omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index
 <li><strong>pgvector FLAT</strong> computes the distance from the raw vectors, so queries choose any supported metric. A metric given for a FLAT model is ignored.</li>
 <li><strong>pgvector HNSW</strong> is locked to the metric it was built with. Change it with <code>rebuild_index</code>.</li>
 <li><strong>sqlite-vec</strong> declares the metric on the table, because its native <code>MATCH</code> search uses it. Every model is locked to one metric, cosine unless given <code>FlatIndexConfig(metric_type=...)</code>. Querying with another metric raises.</li>
+<li><strong>DuckDB VSS FLAT</strong> &amp; <strong>DuckDB VSS HNSW</strong>  same as <code>pgevctor</code>. </li>
 </ul>
 <div class="admonition important">
 <p class="admonition-title">Changing the metric of a sqlite-vec model</p>

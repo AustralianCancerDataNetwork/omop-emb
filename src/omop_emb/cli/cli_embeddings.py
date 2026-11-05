@@ -9,7 +9,6 @@ from typing import Annotated
 import typer
 from oa_configurator import ConfigurationError, ResolvedModel, Resolver
 from omop_llm import build_model_backend_from_resolved
-from tqdm import tqdm
 
 from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.backends.index_config import (
@@ -250,27 +249,26 @@ def _add_embeddings(
         typer.echo(f"Total concepts to process: {n_total:,}")
 
         n_processed = 0
-        with tqdm(total=n_total, desc="Processing", unit="concept") as pbar:
 
-            def batches():
-                nonlocal n_processed
-                for batch_dict in embedding_writer.get_concepts_requiring_embedding_batched(
-                    concept_filter=concept_filter,
+        def batches():
+            nonlocal n_processed
+            for batch_dict in embedding_writer.get_concepts_requiring_embedding_batched(
+                concept_filter=concept_filter,
+                batch_size=batch_size,
+                limit=num_embeddings,
+            ):
+                yield embedding_writer.embed_concepts(
+                    concept_ids=tuple(batch_dict.keys()),
+                    concept_texts=tuple(row.concept_name for row in batch_dict.values()),
+                    concept_meta=batch_dict,
                     batch_size=batch_size,
-                    limit=num_embeddings,
-                ):
-                    yield embedding_writer.embed_concepts(
-                        concept_ids=tuple(batch_dict.keys()),
-                        concept_texts=tuple(row.concept_name for row in batch_dict.values()),
-                        concept_meta=batch_dict,
-                        batch_size=batch_size,
-                    )
-                    n_processed += len(batch_dict)
-                    pbar.update(len(batch_dict))
+                )
+                n_processed += len(batch_dict)
 
-            if n_total:
-                with closing(batches()) as stream:
-                    embedding_writer.bulk_upsert_concept_embeddings(stream)
+        if n_total:
+            total_n_batches = -(-n_total // batch_size)  # ceil division
+            with closing(batches()) as stream:
+                embedding_writer.bulk_upsert_concept_embeddings(stream, total_n_batches=total_n_batches)
 
         typer.echo(f"Processed {n_processed:,} concepts.")
         logger.info("Completed embedding generation and storage.")

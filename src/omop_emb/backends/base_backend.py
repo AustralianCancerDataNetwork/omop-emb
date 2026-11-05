@@ -743,6 +743,15 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
     # Core write operations
     # ------------------------------------------------------------------
 
+    def _sync_index_impl(self, model_record: EmbeddingModelRecord) -> None:
+        """Bring model_record's physical index back in line with the table. No-op by default."""
+        return
+
+    @writes
+    def sync_index(self, *, model_name: str) -> None:
+        """Bring model_name's physical index back in line with the table. No-op on a backend that doesn't need it."""
+        self._sync_index_impl(self._registered_record(model_name))
+
     @writes
     def upsert_embeddings(
         self,
@@ -750,6 +759,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         model_name: str,
         records: Sequence[ConceptEmbeddingRecord],
         embeddings: EmbeddingArray,
+        defer_index_update: bool = False,
     ) -> None:
         """Insert or update embeddings for a set of concepts.
 
@@ -762,6 +772,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         embeddings : EmbeddingArray
             Array of shape ``(N, D)`` where ``N = len(records)`` and ``D`` is
             the registered dimensionality. Converted to float32.
+        defer_index_update : bool
+            Skip the index update for this call. Call ``sync_index``
+            yourself afterwards.
 
         Raises
         ------
@@ -777,7 +790,10 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                 f"Number of records ({len(records)}) does not match "
                 f"number of embeddings ({array.shape[0]})."
             )
-        return self._upsert_embeddings_impl(model_record=record, records=records, embeddings=array)
+        result = self._upsert_embeddings_impl(model_record=record, records=records, embeddings=array)
+        if not defer_index_update:
+            self.sync_index(model_name=model_name)
+        return result
 
     @abstractmethod
     def _upsert_embeddings_impl(
@@ -794,6 +810,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         *,
         model_name: str,
         concept_ids: Sequence[int],
+        defer_index_update: bool = False,
     ) -> int:
         """Delete the stored embeddings of the given concepts.
 
@@ -806,6 +823,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             Canonical model name including tag.
         concept_ids : Sequence[int]
             OMOP concept IDs whose embeddings are removed.
+        defer_index_update : bool
+            Skip the index update for this call. Call ``sync_index``
+            yourself afterwards.
 
         Returns
         -------
@@ -814,13 +834,16 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         """
         model_record = self._registered_record(model_name)
         ids = list(concept_ids)
-        return sum(
+        deleted = sum(
             self._delete_embeddings_impl(
                 model_record=model_record,
                 concept_ids=ids[start : start + self._DELETE_CHUNK_SIZE],
             )
             for start in range(0, len(ids), self._DELETE_CHUNK_SIZE)
         )
+        if not defer_index_update:
+            self.sync_index(model_name=model_name)
+        return deleted
 
     @abstractmethod
     def _delete_embeddings_impl(
@@ -864,6 +887,8 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
     ) -> None:
         """Upsert embeddings in multiple batches, delegating to ``upsert_embeddings``.
 
+        Updates the index once, after all batches, instead of once per batch.
+
         Parameters
         ----------
         model_name : str
@@ -880,12 +905,16 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             desc=f"Upserting embeddings into {model_name}",
             total=total_n_batches,
         )
-        for records, embeddings in pbar:
-            self.upsert_embeddings(
-                model_name=model_name,
-                records=records,
-                embeddings=embeddings,
-            )
+        try:
+            for records, embeddings in pbar:
+                self.upsert_embeddings(
+                    model_name=model_name,
+                    records=records,
+                    embeddings=embeddings,
+                    defer_index_update=True,
+                )
+        finally:
+            self.sync_index(model_name=model_name)
 
     # ------------------------------------------------------------------
     # Core read operations

@@ -128,6 +128,11 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
     DATABASE`` to a fresh one) rewrites the whole physical file, which can
     host more than one schema's data here, so it's out of scope for
     compacting a single model's table.
+
+    ``upsert_embeddings`` and ``delete_embeddings`` rebuild the HNSW index
+    after every write (see ``_sync_index_impl``): DuckDB VSS's index
+    persistence is experimental and goes out of sync with the table after a
+    write, undercounting later searches, unless rebuilt.
     """
 
     @property
@@ -227,6 +232,11 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
     # ------------------------------------------------------------------
     # Core write operations
     # ------------------------------------------------------------------
+
+    def _sync_index_impl(self, model_record: EmbeddingModelRecord) -> None:
+        """Rebuild model_record's HNSW index; no-op for FLAT, which has no physical index."""
+        if isinstance(model_record.index_config, HNSWIndexConfig):
+            self.rebuild_index(model_name=model_record.model_name, index_config=model_record.index_config)
 
     def _upsert_embeddings_impl(
         self,

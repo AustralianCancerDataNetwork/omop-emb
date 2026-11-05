@@ -882,6 +882,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         model_name: str,
         batches: Iterable[tuple[Sequence[ConceptEmbeddingRecord], EmbeddingArray]],
         total_n_batches: int | None = None,
+        disable_progress: bool = False,
     ) -> None:
         """Upsert embeddings in multiple batches, delegating to ``upsert_embeddings``.
 
@@ -895,6 +896,8 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             Iterable of ``(records, embeddings)`` pairs.
         total_n_batches : Optional[int]
             Total number of batches for the progress bar.
+        disable_progress : bool
+            Suppress the progress bar, e.g. in a non-interactive or logged context.
         """
         import tqdm
 
@@ -902,6 +905,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             batches,
             desc=f"Upserting embeddings into {model_name}",
             total=total_n_batches,
+            disable=disable_progress,
         )
         try:
             for records, embeddings in pbar:

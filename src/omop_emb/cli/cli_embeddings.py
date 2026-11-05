@@ -179,6 +179,14 @@ def add_embeddings(
             rich_help_panel="Index Options",
         ),
     ] = MetricType.COSINE,
+    no_progress: Annotated[
+        bool,
+        typer.Option(
+            "--no-progress",
+            help="Suppress the progress bar, e.g. in a non-interactive or logged context.",
+            rich_help_panel="Embedding API Options",
+        ),
+    ] = False,
 ):
     """Bulk generate and store embeddings for OMOP concepts.
 
@@ -203,6 +211,7 @@ def add_embeddings(
             vocabularies=vocabularies,
             num_embeddings=num_embeddings,
             metric_type=metric_type,
+            no_progress=no_progress,
         )
 
 
@@ -218,6 +227,7 @@ def _add_embeddings(
     vocabularies: list[str] | None,
     num_embeddings: int | None,
     metric_type: MetricType = MetricType.COSINE,
+    no_progress: bool = False,
 ) -> None:
     """Embed every concept matching the filters that lacks a current embedding."""
     # Ingestion runs no queries, so the interface's metric is never used here.
@@ -268,7 +278,9 @@ def _add_embeddings(
         if n_total:
             total_n_batches = -(-n_total // batch_size)  # ceil division
             with closing(batches()) as stream:
-                embedding_writer.bulk_upsert_concept_embeddings(stream, total_n_batches=total_n_batches)
+                embedding_writer.bulk_upsert_concept_embeddings(
+                    stream, total_n_batches=total_n_batches, disable_progress=no_progress,
+                )
 
         typer.echo(f"Processed {n_processed:,} concepts.")
         logger.info("Completed embedding generation and storage.")
@@ -487,6 +499,14 @@ def add_embeddings_with_index(
             rich_help_panel="Index Options",
         ),
     ] = None,
+    no_progress: Annotated[
+        bool,
+        typer.Option(
+            "--no-progress",
+            help="Suppress the progress bar, e.g. in a non-interactive or logged context.",
+            rich_help_panel="Embedding API Options",
+        ),
+    ] = False,
 ):
     """Generate embeddings then build an index. Combines ``add-embeddings`` and ``create-index``.
 
@@ -503,6 +523,7 @@ def add_embeddings_with_index(
         domains=domains,
         num_embeddings=num_embeddings,
         metric_type=metric_type,
+        no_progress=no_progress,
     )
 
     _create_index(

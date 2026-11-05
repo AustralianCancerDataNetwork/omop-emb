@@ -893,6 +893,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         self,
         batches: Iterable[Tuple[Sequence[ConceptEmbeddingRecord], EmbeddingArray]],
         total_n_batches: Optional[int] = None,
+        disable_progress: bool = False,
     ) -> None:
         """Upsert from a lazy ``(records, embeddings)`` iterable."""
         try:
@@ -900,6 +901,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
                 model_name=self.canonical_model_name,
                 batches=batches,
                 total_n_batches=total_n_batches,
+                disable_progress=disable_progress,
             )
         finally:
             # Earlier batches can remain committed when a later batch fails.

@@ -173,8 +173,6 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         SQLAlchemy engine pointing at the embedding store. For sqlite-vec this
         is the same .db file as the registry; for pgvector it is the same
         Postgres database.
-    resolved : ResolvedDatabase, optional
-        Enables the schema-provenance guard around storage-table DDL.
     writable : bool, optional
         False makes every ``@writes`` method raise ``ReadOnlyStoreError``.
         Set by ``open_vector_store_reader()``.

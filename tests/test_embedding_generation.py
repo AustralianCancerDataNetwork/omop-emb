@@ -240,6 +240,29 @@ class TestEmbeddingWriterInterfaceEmbedTexts:
         model_backend.embed_texts.assert_called_once_with(["a"], role=EmbeddingRole.DOCUMENT, batch_size=4)
 
 
+@pytest.mark.parametrize("write", [False, True])
+def test_concept_embedding_preparation_preserves_metadata_and_single_batch_writes(write):
+    storage = _mock_storage_backend()
+    model = _mock_model_backend(vectors=[[0.25, 0.75]], dim=2)
+    record = ConceptEmbeddingRecord(42, "Condition", "SNOMED", True, False)
+    with patch("omop_emb.interface.build_model_backend_from_resolved", return_value=model):
+        writer = EmbeddingWriterInterface(
+            backend=storage, metric_type=MetricType.COSINE, resolved_model=_make_resolved_model()
+        )
+    kwargs = dict(concept_ids=[42], concept_texts=["A condition"], concept_meta={42: record}, batch_size=4)
+    if write:
+        embeddings = writer.embed_and_upsert_concepts(**kwargs)
+        assert storage.upsert_embeddings.call_args.kwargs["records"] == [record]
+        np.testing.assert_array_equal(storage.upsert_embeddings.call_args.kwargs["embeddings"], embeddings)
+    else:
+        records, embeddings = writer.embed_concepts(**kwargs)
+        assert records == [record]
+    np.testing.assert_array_equal(embeddings, [[0.25, 0.75]])
+    model.embed_texts.assert_called_once_with(["A condition"], role=EmbeddingRole.DOCUMENT, batch_size=4)
+    assert storage.upsert_embeddings.call_count == int(write)
+    assert storage.refresh_model_updated_at_timestamp.call_count == int(write)
+
+
 def test_population_batches_include_missing_and_metadata_changed_concepts():
     resolved = sqlite_cdm_database()
     cdm_engine, vocab_engine = resolved.create_engines()

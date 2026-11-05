@@ -99,6 +99,10 @@ writer.embed_and_upsert_concepts(
 !!! info "Asymmetric embedding models"
     `embed_and_upsert_concepts` always applies the **document** role, and `get_nearest_concepts_from_query_texts` always applies the **query** role. When calling `embed_texts` directly you must pass `role` explicitly. See [Asymmetric Embeddings](asymmetric-embeddings.md) for task prefix configuration.
 
+For multiple batches, yield the `(records, embeddings)` pairs returned by `writer.embed_concepts(...)` to `writer.bulk_upsert_concept_embeddings(...)`. On DuckDB HNSW stores, ordinary writes rebuild the index after each call; the bulk method rebuilds once at the end, including after a partial failure. CLI population uses this bulk path. Earlier successful batches remain stored if a later batch fails, and the model's update timestamp is refreshed.
+
+`add-embeddings-with-index` reuses a matching HNSW configuration when a model-owned physical index is present after population. Changed settings and FLAT transitions are still applied. Use `create-index` to force a rebuild even when the configuration is unchanged.
+
 ### Build an HNSW index
 
 After all embeddings are ingested, optionally upgrade to an approximate index:

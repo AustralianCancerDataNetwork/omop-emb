@@ -895,12 +895,15 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         total_n_batches: Optional[int] = None,
     ) -> None:
         """Upsert from a lazy ``(records, embeddings)`` iterable."""
-        self._backend.bulk_upsert_embeddings(
-            model_name=self.canonical_model_name,
-            batches=batches,
-            total_n_batches=total_n_batches,
-        )
-        self._backend.refresh_model_updated_at_timestamp(model_name=self.canonical_model_name)
+        try:
+            self._backend.bulk_upsert_embeddings(
+                model_name=self.canonical_model_name,
+                batches=batches,
+                total_n_batches=total_n_batches,
+            )
+        finally:
+            # Earlier batches can remain committed when a later batch fails.
+            self._backend.refresh_model_updated_at_timestamp(model_name=self.canonical_model_name)
 
     def embed_and_upsert_concepts(
         self,
@@ -910,8 +913,33 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         concept_meta: Mapping[int, Row],
         batch_size: Optional[int] = None,
     ) -> EmbeddingArray:
-        """Generate embeddings from CDM concepts and upsert with filter metadata.
-        Concept_ids, concept_texts and concept_meta must be aligned (same length, same order).
+        """Generate and store concept embeddings with their filter metadata.
+
+        Parameters are the same as ``embed_concepts``. Returns the generated
+        embedding array after writing the batch and refreshing its timestamp.
+        """
+        records, embeddings = self.embed_concepts(
+            concept_ids=concept_ids,
+            concept_texts=concept_texts,
+            concept_meta=concept_meta,
+            batch_size=batch_size,
+        )
+        self.upsert_concept_embeddings(records=records, embeddings=embeddings)
+        return embeddings
+
+    def embed_concepts(
+        self,
+        *,
+        concept_ids: Sequence[int],
+        concept_texts: Sequence[str],
+        concept_meta: Mapping[int, Row],
+        batch_size: Optional[int] = None,
+    ) -> Tuple[Sequence[ConceptEmbeddingRecord], EmbeddingArray]:
+        """Prepare records and embeddings without writing them to the store.
+
+        The result can be yielded to ``bulk_upsert_concept_embeddings`` so
+        index maintenance happens once across multiple generated batches.
+        Concept IDs, texts and metadata must be aligned in the same order.
         `fetch_cdm_concepts_for_filter` can be used to get aligned concept_meta for a set of concept_ids.
 
         Parameters
@@ -924,6 +952,11 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
             CDM rows keyed by concept_id, as returned by
             ``get_concepts_without_embedding``.  Used to populate
             domain_id, vocabulary_id, is_standard, and is_valid.
+
+        Returns
+        -------
+        tuple
+            Filter records in input order and their float32 embedding array.
         """
         if len(concept_ids) != len(concept_texts):
             raise ValueError(
@@ -963,8 +996,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
             batch_size=batch_size,
             role=EmbeddingRole.DOCUMENT,
         )
-        self.upsert_concept_embeddings(records=records, embeddings=embeddings)
-        return embeddings
+        return records, embeddings
 
     def get_nearest_concepts_from_query_texts(
         self,

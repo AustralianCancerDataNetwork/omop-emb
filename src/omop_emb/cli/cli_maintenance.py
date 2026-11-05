@@ -92,7 +92,7 @@ def rebuild_index(
         IndexType,
         typer.Option(
             "--index-type",
-            help="Index type to build (FLAT = exact scan, HNSW = approximate; pgvector only).",
+            help="Index type to build (FLAT = exact scan, HNSW = approximate; pgvector and duckdbvss only).",
             rich_help_panel="Index Options",
         ),
     ] = IndexType.FLAT,
@@ -637,6 +637,13 @@ def import_bundle_cmd(
             help="Build the index recorded in the bundle's metadata right after import.",
         ),
     ] = False,
+    no_progress: Annotated[
+        bool,
+        typer.Option(
+            "--no-progress",
+            help="Suppress the progress bar, e.g. in a non-interactive or logged context.",
+        ),
+    ] = False,
 ):
 
     cfg = OmopEmbConfig.get_config()
@@ -649,6 +656,7 @@ def import_bundle_cmd(
             force=force,
             batch_size=batch_size,
             rebuild_index=rebuild_index,
+            disable_progress=no_progress,
         )
     except (RuntimeError, embedding_bundle.BundleCorruptionError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)

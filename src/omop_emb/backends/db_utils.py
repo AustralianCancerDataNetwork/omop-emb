@@ -14,9 +14,10 @@ from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 def in_values(column: Column[Any], values: Sequence[Any], *, dialect: str) -> ColumnElement[bool]:
     """Return ``column IN values`` with values sent as one bind parameter, whatever their number.
 
-    PostgreSQL compares against one array parameter (``= ANY(:values)``);
-    SQLite reads one JSON text parameter through ``json_each``. Both are
-    semi-joins, so duplicate values never duplicate rows.
+    PostgreSQL and DuckDB compare against one array parameter
+    (``= ANY(:values)``); SQLite reads one JSON text parameter through
+    ``json_each``. All are semi-joins, so duplicate values never duplicate
+    rows.
 
     Parameters
     ----------
@@ -25,7 +26,7 @@ def in_values(column: Column[Any], values: Sequence[Any], *, dialect: str) -> Co
     values : Sequence
         Values to match.
     dialect : str
-        ``'postgresql'`` or ``'sqlite'``.
+        ``'postgresql'``, ``'sqlite'``, or ``'duckdb'``.
 
     Returns
     -------
@@ -35,6 +36,8 @@ def in_values(column: Column[Any], values: Sequence[Any], *, dialect: str) -> Co
     plain = [cast_value(v) for v in values]
     if dialect == Dialect.POSTGRESQL:
         return column == any_(bindparam(None, plain, type_=ARRAY(column.type)))
+    if dialect == Dialect.DUCKDB:
+        return column == any_(bindparam(None, plain))
     if dialect == Dialect.SQLITE:
         listed = func.json_each(bindparam(None, json.dumps(plain))).table_valued("value")
         return column.in_(select(listed.c.value))
@@ -58,7 +61,7 @@ def apply_concept_filter_where(
         (ORM). Both expose the TEmbeddingTable columns as real ``Column`` objects.
     concept_filter : EmbeddingConceptFilter
     dialect : str
-        ``'postgresql'`` or ``'sqlite'``.
+        ``'postgresql'``, ``'sqlite'``, or ``'duckdb'``.
 
     Returns
     -------

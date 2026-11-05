@@ -38,6 +38,7 @@ nav:
       - Interfaces: usage/interface-guide.md
       - Asymmetric Embeddings: usage/asymmetric-embeddings.md
       - "CLI Reference": usage/cli.md
+  - API Reference: api.md
 
 plugins:
   - search

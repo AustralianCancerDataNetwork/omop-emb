@@ -11,15 +11,17 @@ from .base_backend import (
 from .sqlitevec import SQLiteVecEmbeddingBackend
 
 if TYPE_CHECKING:
+    from .duckdbvss import DuckDBVSSEmbeddingBackend
     from .pgvector import PGVectorEmbeddingBackend
 
 __all__ = [
+    "DuckDBVSSEmbeddingBackend",
     "EmbeddingBackend",
     "EmbeddingStoreReader",
+    "PGVectorEmbeddingBackend",
+    "SQLiteVecEmbeddingBackend",
     "open_vector_store_reader",
     "open_vector_store_writer",
-    "SQLiteVecEmbeddingBackend",
-    "PGVectorEmbeddingBackend",
 ]
 
 
@@ -31,4 +33,11 @@ def __getattr__(name: str):
 
         globals()[name] = PGVectorEmbeddingBackend
         return PGVectorEmbeddingBackend
+    if name == "DuckDBVSSEmbeddingBackend":
+        from .duckdbvss import (
+            DuckDBVSSEmbeddingBackend,
+        )  # raises ImportError with install hint if absent
+
+        globals()[name] = DuckDBVSSEmbeddingBackend
+        return DuckDBVSSEmbeddingBackend
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

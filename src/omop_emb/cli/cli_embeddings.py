@@ -3,16 +3,20 @@
 import itertools
 import logging
 from collections.abc import Generator, Sequence
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from typing import Annotated
 
 import typer
 from oa_configurator import ConfigurationError, ResolvedModel, Resolver
 from omop_llm import build_model_backend_from_resolved
-from tqdm import tqdm
 
 from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
-from omop_emb.backends.index_config import FlatIndexConfig, index_config_from_index_type
+from omop_emb.backends.index_config import (
+    FlatIndexConfig,
+    HNSWIndexConfig,
+    IndexConfig,
+    index_config_from_index_type,
+)
 from omop_emb.config import (
     IndexType,
     MetricType,
@@ -175,6 +179,14 @@ def add_embeddings(
             rich_help_panel="Index Options",
         ),
     ] = MetricType.COSINE,
+    no_progress: Annotated[
+        bool,
+        typer.Option(
+            "--no-progress",
+            help="Suppress the progress bar, e.g. in a non-interactive or logged context.",
+            rich_help_panel="Embedding API Options",
+        ),
+    ] = False,
 ):
     """Bulk generate and store embeddings for OMOP concepts.
 
@@ -199,6 +211,7 @@ def add_embeddings(
             vocabularies=vocabularies,
             num_embeddings=num_embeddings,
             metric_type=metric_type,
+            no_progress=no_progress,
         )
 
 
@@ -214,6 +227,7 @@ def _add_embeddings(
     vocabularies: list[str] | None,
     num_embeddings: int | None,
     metric_type: MetricType = MetricType.COSINE,
+    no_progress: bool = False,
 ) -> None:
     """Embed every concept matching the filters that lacks a current embedding."""
     # Ingestion runs no queries, so the interface's metric is never used here.
@@ -245,22 +259,28 @@ def _add_embeddings(
         typer.echo(f"Total concepts to process: {n_total:,}")
 
         n_processed = 0
-        with tqdm(total=n_total, desc="Processing", unit="concept") as pbar:
+
+        def batches():
+            nonlocal n_processed
             for batch_dict in embedding_writer.get_concepts_requiring_embedding_batched(
                 concept_filter=concept_filter,
                 batch_size=batch_size,
                 limit=num_embeddings,
             ):
-                embedding_writer.embed_and_upsert_concepts(
+                yield embedding_writer.embed_concepts(
                     concept_ids=tuple(batch_dict.keys()),
-                    concept_texts=tuple(
-                        row.concept_name for row in batch_dict.values()
-                    ),
+                    concept_texts=tuple(row.concept_name for row in batch_dict.values()),
                     concept_meta=batch_dict,
                     batch_size=batch_size,
                 )
                 n_processed += len(batch_dict)
-                pbar.update(len(batch_dict))
+
+        if n_total:
+            total_n_batches = -(-n_total // batch_size)  # ceil division
+            with closing(batches()) as stream:
+                embedding_writer.bulk_upsert_concept_embeddings(
+                    stream, total_n_batches=total_n_batches, disable_progress=no_progress,
+                )
 
         typer.echo(f"Processed {n_processed:,} concepts.")
         logger.info("Completed embedding generation and storage.")
@@ -333,6 +353,23 @@ def create_index(
     locked in and all subsequent queries must use the same metric.
     """
 
+    _create_index(
+        model_name=model_name,
+        metric_type=metric_type,
+        index_config=index_config_from_index_type(
+            index_type, num_neighbors=index_hnsw_num_neighbors,
+            ef_search=index_hnsw_ef_search, ef_construction=index_hnsw_ef_construction,
+            metric_type=metric_type,
+        ),
+    )
+
+
+def _create_index(
+    *, model_name: str | None, metric_type: MetricType, index_config: IndexConfig,
+    skip_if_unchanged: bool = False,
+) -> None:
+    """Build the requested index, optionally reusing an existing matching HNSW index."""
+
     cfg = _get_config()
     resolved_model = _resolve_model(model_name, cfg)
 
@@ -344,16 +381,19 @@ def create_index(
         resolved_model=resolved_model,
     )
 
-    index_config = index_config_from_index_type(
-        index_type,
-        num_neighbors=index_hnsw_num_neighbors,
-        ef_search=index_hnsw_ef_search,
-        ef_construction=index_hnsw_ef_construction,
-        metric_type=metric_type,
-    )
+    current = backend.get_registered_model(model_name=embedding_writer.canonical_model_name)
+    if (
+        skip_if_unchanged
+        and isinstance(index_config, HNSWIndexConfig)
+        and current is not None
+        and current.index_config == index_config
+        and backend.physical_indexes(embedding_writer.canonical_model_name)
+    ):
+        typer.echo(f"HNSW index already matches for '{embedding_writer.canonical_model_name}'.")
+        return
     record = embedding_writer.rebuild_index(index_config=index_config)
     metric_info = f" (metric={record.metric_type.value})" if record.metric_type else ""
-    typer.echo(f"Index ({index_type.value}) built for '{embedding_writer.canonical_model_name}'{metric_info}.")
+    typer.echo(f"Index ({index_config.index_type.value}) built for '{embedding_writer.canonical_model_name}'{metric_info}.")
 
 
 @app.command()
@@ -459,11 +499,20 @@ def add_embeddings_with_index(
             rich_help_panel="Index Options",
         ),
     ] = None,
+    no_progress: Annotated[
+        bool,
+        typer.Option(
+            "--no-progress",
+            help="Suppress the progress bar, e.g. in a non-interactive or logged context.",
+            rich_help_panel="Embedding API Options",
+        ),
+    ] = False,
 ):
     """Generate embeddings then build an index. Combines ``add-embeddings`` and ``create-index``.
 
-    Embeddings are always ingested with a FLAT (exact) index first, then the
-    index is rebuilt to the requested type. Index creation is expensive. Only use a non-Flat index after all embeddings are stored.
+    New models start FLAT. Existing models keep their index during population;
+    a matching HNSW index is reused after the population sync. Changed settings
+    are applied afterwards. Use ``create-index`` to force a rebuild.
     """
     add_embeddings(
         batch_size=batch_size,
@@ -474,15 +523,18 @@ def add_embeddings_with_index(
         domains=domains,
         num_embeddings=num_embeddings,
         metric_type=metric_type,
+        no_progress=no_progress,
     )
 
-    create_index(
+    _create_index(
         model_name=model_name,
         metric_type=metric_type,
-        index_type=index_type,
-        index_hnsw_num_neighbors=index_hnsw_num_neighbors,
-        index_hnsw_ef_search=index_hnsw_ef_search,
-        index_hnsw_ef_construction=index_hnsw_ef_construction,
+        index_config=index_config_from_index_type(
+            index_type, num_neighbors=index_hnsw_num_neighbors,
+            ef_search=index_hnsw_ef_search, ef_construction=index_hnsw_ef_construction,
+            metric_type=metric_type,
+        ),
+        skip_if_unchanged=True,
     )
 
 

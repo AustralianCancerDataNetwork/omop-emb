@@ -173,8 +173,6 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         SQLAlchemy engine pointing at the embedding store. For sqlite-vec this
         is the same .db file as the registry; for pgvector it is the same
         Postgres database.
-    resolved : ResolvedDatabase, optional
-        Enables the schema-provenance guard around storage-table DDL.
     writable : bool, optional
         False makes every ``@writes`` method raise ``ReadOnlyStoreError``.
         Set by ``open_vector_store_reader()``.
@@ -743,6 +741,15 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
     # Core write operations
     # ------------------------------------------------------------------
 
+    def _sync_index_impl(self, model_record: EmbeddingModelRecord) -> None:
+        """Bring model_record's physical index back in line with the table. No-op by default."""
+        return
+
+    @writes
+    def sync_index(self, *, model_name: str) -> None:
+        """Bring model_name's physical index back in line with the table. No-op on a backend that doesn't need it."""
+        self._sync_index_impl(self._registered_record(model_name))
+
     @writes
     def upsert_embeddings(
         self,
@@ -750,6 +757,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         model_name: str,
         records: Sequence[ConceptEmbeddingRecord],
         embeddings: EmbeddingArray,
+        defer_index_update: bool = False,
     ) -> None:
         """Insert or update embeddings for a set of concepts.
 
@@ -762,6 +770,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         embeddings : EmbeddingArray
             Array of shape ``(N, D)`` where ``N = len(records)`` and ``D`` is
             the registered dimensionality. Converted to float32.
+        defer_index_update : bool
+            Skip the index update for this call. Call ``sync_index``
+            yourself afterwards.
 
         Raises
         ------
@@ -777,7 +788,10 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                 f"Number of records ({len(records)}) does not match "
                 f"number of embeddings ({array.shape[0]})."
             )
-        return self._upsert_embeddings_impl(model_record=record, records=records, embeddings=array)
+        result = self._upsert_embeddings_impl(model_record=record, records=records, embeddings=array)
+        if not defer_index_update:
+            self.sync_index(model_name=model_name)
+        return result
 
     @abstractmethod
     def _upsert_embeddings_impl(
@@ -794,6 +808,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         *,
         model_name: str,
         concept_ids: Sequence[int],
+        defer_index_update: bool = False,
     ) -> int:
         """Delete the stored embeddings of the given concepts.
 
@@ -806,6 +821,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             Canonical model name including tag.
         concept_ids : Sequence[int]
             OMOP concept IDs whose embeddings are removed.
+        defer_index_update : bool
+            Skip the index update for this call. Call ``sync_index``
+            yourself afterwards.
 
         Returns
         -------
@@ -814,13 +832,16 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         """
         model_record = self._registered_record(model_name)
         ids = list(concept_ids)
-        return sum(
+        deleted = sum(
             self._delete_embeddings_impl(
                 model_record=model_record,
                 concept_ids=ids[start : start + self._DELETE_CHUNK_SIZE],
             )
             for start in range(0, len(ids), self._DELETE_CHUNK_SIZE)
         )
+        if not defer_index_update:
+            self.sync_index(model_name=model_name)
+        return deleted
 
     @abstractmethod
     def _delete_embeddings_impl(
@@ -861,8 +882,11 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         model_name: str,
         batches: Iterable[tuple[Sequence[ConceptEmbeddingRecord], EmbeddingArray]],
         total_n_batches: int | None = None,
+        disable_progress: bool = False,
     ) -> None:
         """Upsert embeddings in multiple batches, delegating to ``upsert_embeddings``.
+
+        Updates the index once, after all batches, instead of once per batch.
 
         Parameters
         ----------
@@ -872,6 +896,8 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             Iterable of ``(records, embeddings)`` pairs.
         total_n_batches : Optional[int]
             Total number of batches for the progress bar.
+        disable_progress : bool
+            Suppress the progress bar, e.g. in a non-interactive or logged context.
         """
         import tqdm
 
@@ -879,13 +905,18 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             batches,
             desc=f"Upserting embeddings into {model_name}",
             total=total_n_batches,
+            disable=disable_progress,
         )
-        for records, embeddings in pbar:
-            self.upsert_embeddings(
-                model_name=model_name,
-                records=records,
-                embeddings=embeddings,
-            )
+        try:
+            for records, embeddings in pbar:
+                self.upsert_embeddings(
+                    model_name=model_name,
+                    records=records,
+                    embeddings=embeddings,
+                    defer_index_update=True,
+                )
+        finally:
+            self.sync_index(model_name=model_name)
 
     # ------------------------------------------------------------------
     # Core read operations
@@ -1153,8 +1184,24 @@ def _extensions_for(backend_type: BackendType, *, writable: bool) -> Sequence[Ca
         )
 
         return [_create_vector_extension] if writable else [_set_read_only]
+    elif backend_type == BackendType.DUCKDBVSS:
+        from omop_emb.backends.duckdbvss.duckdbvss_backend import _install_vss
+
+        return [_install_vss]
     else:
         raise UnknownEmbeddingBackendError(f"Unknown backend type {backend_type!r}.")
+
+
+def _connect_args_for(backend_type: BackendType, *, writable: bool) -> dict[str, Any]:
+    """Connect-time kwargs for backend_type's engine, forwarded to
+    ``sqlalchemy.create_engine(connect_args=...)``.
+
+    Injects DuckDB's ``read_only=True`` flag for the reader path since 
+    DuckDB does not have a connect-event hook to enforce read-only mode.
+    """
+    if backend_type == BackendType.DUCKDBVSS and not writable:
+        return {"read_only": True}
+    return {}
 
 
 def _parse_backend_type(backend_type: str | BackendType) -> BackendType:
@@ -1204,6 +1251,20 @@ def _backend_class_for(backend_type: BackendType, *, dialect: str) -> type[Embed
                 "Install it with: pip install omop-emb[pgvector]"
             ) from exc
         return PGVectorEmbeddingBackend
+
+    elif backend_type == BackendType.DUCKDBVSS:
+        if dialect != Dialect.DUCKDB:
+            raise EmbeddingBackendConfigurationError(
+                f"duckdbvss backend requires a duckdb-dialect database, got dialect: {dialect!r}."
+            )
+        try:
+            from omop_emb.backends.duckdbvss import DuckDBVSSEmbeddingBackend
+        except ImportError as exc:
+            raise EmbeddingBackendDependencyError(
+                "duckdbvss backend is not installed. "
+                "Install it with: pip install omop-emb[duckdbvss]"
+            ) from exc
+        return DuckDBVSSEmbeddingBackend
     else:
         raise UnknownEmbeddingBackendError(f"Unknown backend type {backend_type!r}.")
 
@@ -1223,7 +1284,11 @@ def _open_writer(
     backend_cls = _backend_class_for(
         resolved_backend, dialect=make_url(database.connection.url).get_backend_name()
     )
-    emb_engine = registry_writer_engine(database, extensions=_extensions_for(resolved_backend, writable=True))
+    emb_engine = registry_writer_engine(
+        database,
+        extensions=_extensions_for(resolved_backend, writable=True),
+        connect_args=_connect_args_for(resolved_backend, writable=True),
+    )
     logger.info(f"Using {resolved_backend.value} backend with engine: {emb_engine.url}")
     return backend_cls(emb_engine=emb_engine)
 
@@ -1241,15 +1306,32 @@ def open_vector_store_writer(resolved: ResolvedVectorStore) -> EmbeddingBackend:
 def open_vector_store_reader(resolved: ResolvedVectorStore) -> EmbeddingStoreReader:
     """Open a resolved vector store read-only: no registration, no DDL, no writes.
 
-    Writes are refused twice: ``@writes`` methods raise ``ReadOnlyStoreError``,
-    and every connection is read-only at the database level. A store that's
-    never been set up reports an empty registry instead of being created by
-    being looked at.
+    Notes
+    -----
+    - Double protection against writes:
+        1. @writes methods raise ReadOnlyStoreError at the Python level.
+        2. The database connection itself is opened in read-only mode.
+    - A store that's never been set up reports an empty registry instead of raising.
     """
     resolved_backend = _parse_backend_type(resolved.backend_type)
     database = resolved.database
     backend_cls = _backend_class_for(
         resolved_backend, dialect=make_url(database.connection.url).get_backend_name()
     )
-    emb_engine = registry_reader_engine(database, extensions=_extensions_for(resolved_backend, writable=False))
+    connect_args = _connect_args_for(resolved_backend, writable=False)
+    if resolved_backend == BackendType.DUCKDBVSS:
+        # DuckDB rejects read_only=True on :memory: (nothing to protect anyways)
+        from omop_emb.backends.duckdbvss.duckdbvss_backend import (
+            _reader_database_for_missing_file,
+        )
+
+        substituted = _reader_database_for_missing_file(database)
+        if substituted is not database:
+            connect_args = {}
+        database = substituted
+    emb_engine = registry_reader_engine(
+        database,
+        extensions=_extensions_for(resolved_backend, writable=False),
+        connect_args=connect_args,
+    )
     return backend_cls(emb_engine=emb_engine, writable=False)

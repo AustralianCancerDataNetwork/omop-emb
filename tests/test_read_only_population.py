@@ -25,6 +25,7 @@ from omop_emb.utils.errors import MissingStorageTableError
 from .conftest import (
     EMBEDDING_DIM,
     FakeStoreReader,
+    duckdbvss_resolved_vector_store,
     engine_of,
     require_cdm,
     sqlite_cdm_database,
@@ -58,6 +59,52 @@ def test_reader_before_any_write_does_not_create_the_registry(tmp_path) -> None:
         assert reader.initialized is False
         assert reader.get_registered_models() == ()
         assert inspect(engine_of(reader)).has_table(ModelRegistry.__tablename__) is False
+
+
+@pytest.mark.duckdbvss
+def test_duckdb_reader_before_any_write_reports_empty_without_erroring(tmp_path) -> None:
+    db_path = tmp_path / "test.duckdb"
+    assert not db_path.exists()
+
+    with open_vector_store_reader(duckdbvss_resolved_vector_store(str(db_path))) as reader:
+        assert reader.initialized is False
+        assert reader.get_registered_models() == ()
+        assert inspect(engine_of(reader)).has_table(ModelRegistry.__tablename__) is False
+
+    assert not db_path.exists()
+
+
+@pytest.mark.duckdbvss
+def test_duckdb_reader_cannot_open_while_a_writer_is_still_open(tmp_path) -> None:
+    """DuckDB's single-process-at-a-time file lock means a reader can't actually
+    open concurrently with a still-open writer."""
+    store = duckdbvss_resolved_vector_store(str(tmp_path / "test.duckdb"))
+    writer = open_vector_store_writer(store)
+    try:
+        with pytest.raises(Exception, match="database file"):
+            open_vector_store_reader(store)
+    finally:
+        writer.close()
+
+    with open_vector_store_reader(store) as reader:
+        assert reader.initialized is True
+
+
+@pytest.mark.duckdbvss
+def test_duckdb_reader_rejects_a_write_at_the_database_level(tmp_path) -> None:
+    """A raw write against the reader's own engine must fail at the
+    database level, not just via the @writes Python-level guard on the
+    backend's own methods."""
+    store = duckdbvss_resolved_vector_store(str(tmp_path / "test.duckdb"))
+    open_vector_store_writer(store).close()
+
+    with (
+        open_vector_store_reader(store) as reader,
+        pytest.raises(Exception, match="read-only"),
+        engine_of(reader).connect() as connection,
+    ):
+        connection.execute(text("CREATE TABLE sneaky (id INTEGER)"))
+        connection.commit()
 
 
 def test_reader_after_writer_sees_the_registry(tmp_path) -> None:

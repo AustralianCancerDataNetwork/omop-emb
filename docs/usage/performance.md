@@ -9,6 +9,8 @@ Numbers are single-client medians for top-10 queries on 1024-dimension vectors (
 | Up to about 50,000 | sqlite-vec | About 1 ms per 1,000 vectors: 10 ms at 10k, 43 ms at 50k. No server needed. |
 | 50,000 to a few million, interactive | pgvector with an HNSW index | 2 to 5 ms at 300k |
 | 50,000 to a few million, exact results or occasional batch jobs | pgvector FLAT | 0.4 s at 300k, 3.3 s at 1.8M |
+| Up to a few million, single file, no server, exact results | DuckDB VSS FLAT | 4.3 ms at 300k (synthetic, see below) |
+| 50,000 to a few million, single file, no server, interactive, mostly unfiltered | DuckDB VSS with an HNSW index | 2.3 ms at 300k unfiltered (synthetic); filtered queries exact-scan instead, see [Embedding Storage](backend-selection.md#hnsw) |
 | Any size, many queries at once | FAISS sidecar | 1.2 ms per query (HNSW) or 11 ms per query (flat) at 300k in batches of 100 |
 
 Measured on a 300k-vector store:
@@ -18,17 +20,21 @@ Measured on a 300k-vector store:
 | sqlite-vec | 342 ms | 138 ms | 345 ms per query |
 | pgvector FLAT | 405 ms | 46 ms | 385 ms per query |
 | pgvector HNSW, `ef_search` 16 | 2 to 5 ms | 4 ms | no gain over one at a time |
+| DuckDB VSS FLAT* | 4.3 ms | - | - |
+| DuckDB VSS HNSW, `ef_search` 16* | 2.3 ms | 31 ms | no gain over one at a time |
 | FAISS flat | 30 ms | 8 ms | 10.8 ms per query |
 | FAISS HNSW | 3.1 ms | 3.8 ms | 1.2 ms per query |
 
 The filtered column uses a domain, standard and valid filter that keeps 6% of the concepts.
 
-- sqlite-vec and pgvector run one scan per query vector, so a batch costs the sum of its queries. FAISS shares the scan across a batch, which makes a flat query about three times cheaper and an HNSW query about two and a half times cheaper than running it alone.
+\* FLAT's filtered-query cell is left blank because a FLAT scan computes distance over every row regardless of a filter, so its filtered time is the same as its unfiltered one. DuckDB's filtered HNSW number is an exact scan over just the filtered rows, not an index lookup, so it scales with the size of the filtered set rather than staying flat like pgvector's; see [Embedding Storage](backend-selection.md#hnsw) for why.
+
+- sqlite-vec, pgvector and DuckDB VSS run one scan per query vector, so a batch costs the sum of its queries. FAISS shares the scan across a batch, which makes a flat query about three times cheaper and an HNSW query about two and a half times cheaper than running it alone.
 - HNSW is approximate. On a 300k sample, recall at 5 is 0.84 at the default `ef_search` of 16, and 0.98 at `ef_search` 200 once duplicate vectors are removed, which the valid-only default does.
 - FAISS holds the whole index in memory, about 4.1 KB per vector for flat and 4.4 KB for HNSW (1.2 and 1.3 GB at 300k). The cache is a snapshot: rebuild it after the store changes (see `check-faiss-cache`).
 - A cache build or export peaks at about 12 KB per vector of one batch, so the default 100,000-row batch needs about 1.5 GB. `--batch-size` lowers it.
-- sqlite-vec files take about 4.2 KB per vector. pgvector tables take about 5.3 KB per vector, and an HNSW index adds 6 to 8 KB.
-- Filtered HNSW queries on pgvector need extension 0.8.0 or newer, see [Embedding Storage](backend-selection.md#hnsw).
+- sqlite-vec files take about 4.2 KB per vector. pgvector tables take about 5.3 KB per vector, and an HNSW index adds 6 to 8 KB. DuckDB VSS files take about 6.0 KB per vector, and an HNSW index adds about 3.6 KB (measured at 1024 dimensions, file-backed, after `CHECKPOINT`).
+- Filtered HNSW queries on pgvector need extension 0.8.0 or newer, see [Embedding Storage](backend-selection.md#hnsw). Filtered HNSW queries on DuckDB VSS always exact-scan the filtered rows instead, with no version that fixes it, see [Embedding Storage](backend-selection.md#hnsw).
 
 ## Tuning pgvector
 

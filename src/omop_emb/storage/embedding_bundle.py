@@ -419,6 +419,7 @@ def import_bundle(
     force: bool = False,
     batch_size: int = 10_000,
     rebuild_index: bool = False,
+    disable_progress: bool = False,
 ) -> int:
     """Stream every row of a bundle produced by :func:`export_bundle` into *backend*.
 
@@ -435,6 +436,9 @@ def import_bundle(
     Pass ``rebuild_index=True`` to build the index recorded in the bundle's
     ``index_config`` right after the vectors land (registration itself only
     ever creates a FLAT index).
+
+    Pass ``disable_progress=True`` to suppress the progress bar, e.g. in a
+    non-interactive or logged context.
 
     Raises
     ------
@@ -511,6 +515,7 @@ def import_bundle(
             model_name=meta.model_name,
             batches=_batches(),
             total_n_batches=(n + batch_size - 1) // batch_size,
+            disable_progress=disable_progress,
         )
 
         if was_already_registered:

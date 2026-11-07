@@ -2,16 +2,19 @@
 
 Vector embedding layer for OMOP CDM concepts.
 
-`omop-emb` generates, stores, and retrieves embeddings for OMOP concepts. It works out of the box with **sqlite-vec** (no external database required) and scales to **PostgreSQL/pgvector** for larger deployments. The database is the source of truth; FAISS is an optional read-acceleration sidecar, not a primary store.
+`omop-emb` generates, stores, and retrieves embeddings for OMOP concepts. It works out of the box with **sqlite-vec** (no external database required), scales to **PostgreSQL/pgvector** for larger deployments, and supports **DuckDB/VSS** as a single-file alternative with HNSW indexing. The database is the source of truth; FAISS is an optional read-acceleration sidecar, not a primary store.
 
 ## Installation
 
 ```bash
 pip install omop-emb                         # sqlite-vec backend (default, no extras needed)
 pip install "omop-emb[pgvector]"             # adds PostgreSQL/pgvector support
+pip install "omop-emb[duckdbvss]"            # adds DuckDB/VSS support
 pip install "omop-emb[faiss-cpu]"            # adds FAISS sidecar support
 pip install "omop-emb[pgvector,faiss-cpu]"   # everything
 ```
+
+DuckDB/VSS's first connection runs `INSTALL vss`, which needs network access once; it's cached locally for every connection after that.
 
 ## Configuration
 
@@ -65,7 +68,8 @@ Full documentation: <https://AustralianCancerDataNetwork.github.io/omop-emb>
 
 - [x] sqlite-vec backend (default, zero-config)
 - [x] pgvector backend (PostgreSQL)
-- [x] HNSW index support for pgvector
+- [x] DuckDB/VSS backend
+- [x] HNSW index support for pgvector and DuckDB/VSS
 - [x] FAISS sidecar (approximate nearest-neighbour read acceleration)
 - [x] Embedding bundle export / import CLI (`maintenance export`, `maintenance import`, `maintenance build-faiss-cache`)
 - [x] In-DB concept filtering (domain, vocabulary, standard status, active status)

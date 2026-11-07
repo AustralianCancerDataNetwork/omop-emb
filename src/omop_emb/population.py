@@ -7,10 +7,9 @@ from dataclasses import dataclass, field
 from itertools import chain
 from typing import Literal
 
-from sqlalchemy import Row, select
-
 from omop_alchemy.cdm.model.vocabulary import Concept
 from omop_alchemy.cdm.query import ConceptFilter
+from sqlalchemy import Row, select
 
 from omop_emb.backends.base_backend import EmbeddingStoreReader
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
@@ -52,9 +51,7 @@ class VocabularyPopulationPlan:
 
     @property
     def pending_ids(self) -> frozenset[int]:
-        return (
-            self.missing_ids | self.metadata_changed_ids | self.changed_source_text_ids
-        )
+        return self.missing_ids | self.metadata_changed_ids | self.changed_source_text_ids
 
 
 @dataclass(frozen=True)
@@ -102,9 +99,7 @@ class EmbeddingPopulationPlan:
 
     @property
     def pending_ids(self) -> frozenset[int]:
-        return (
-            self.missing_ids | self.metadata_changed_ids | self.changed_source_text_ids
-        )
+        return self.missing_ids | self.metadata_changed_ids | self.changed_source_text_ids
 
 
 @dataclass
@@ -184,8 +179,7 @@ def plan_population(
         model_name=model_name,
         scope=scope,
         rows=tuple(
-            accumulators[vocabulary].freeze(vocabulary)
-            for vocabulary in sorted(accumulators)
+            accumulators[vocabulary].freeze(vocabulary) for vocabulary in sorted(accumulators)
         ),
         store_initialized=store.initialized,
     )
@@ -197,16 +191,13 @@ def _iter_current_concepts(
     *,
     batch_size: int,
 ) -> Iterator[Row]:
-    statement = (
-        scope.concept_filter()
-        .apply(
-            select(
-                Concept.concept_id,
-                Concept.domain_id,
-                Concept.vocabulary_id,
-                Concept.is_standard_expr().label("is_standard"),
-                Concept.is_valid_expr().label("is_valid"),
-            )
+    statement = scope.concept_filter().apply(
+        select(
+            Concept.concept_id,
+            Concept.domain_id,
+            Concept.vocabulary_id,
+            Concept.is_standard_expr().label("is_standard"),
+            Concept.is_valid_expr().label("is_valid"),
         )
     )
     with cdm_session_factory() as session:

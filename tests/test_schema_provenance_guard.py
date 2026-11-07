@@ -18,7 +18,11 @@ from __future__ import annotations
 import pytest
 from oa_configurator import GenericDatabaseConfig, Resolver, SchemaDriftError
 from oa_configurator.cli import app
-from oa_configurator.testing import guarded_resolver, isolated_test_schema, reset_schema_registry_rows
+from oa_configurator.testing import (
+    guarded_resolver,
+    isolated_test_schema,
+    reset_schema_registry_rows,
+)
 from typer.testing import CliRunner
 
 from omop_emb.backends.base_backend import _open_writer
@@ -53,9 +57,9 @@ def _resolver(pg_db, *, database_config_name: str, schema: str) -> Resolver:
 
 
 def _resolved(pg_db, *, database_config_name: str, schema: str):
-    return _resolver(pg_db, database_config_name=database_config_name, schema=schema).resolve_database(
-        database_config_name
-    )
+    return _resolver(
+        pg_db, database_config_name=database_config_name, schema=schema
+    ).resolve_database(database_config_name)
 
 
 def test_backend_construction_is_unaffected_by_the_primary_schema_changing(pg_db, pg_engine):
@@ -74,7 +78,9 @@ def test_backend_construction_is_unaffected_by_the_primary_schema_changing(pg_db
         assert backend_b is not None
 
 
-def test_registry_schema_guard_fires_on_genuine_registry_drift(pg_db, pg_engine, cleanup_after_test, monkeypatch):
+def test_registry_schema_guard_fires_on_genuine_registry_drift(
+    pg_db, pg_engine, cleanup_after_test, monkeypatch
+):
     reset_schema_registry_rows(cleanup_after_test, pg_engine, [REGISTRY_SCHEMA_KEY])
     resolver = _resolver(pg_db, database_config_name="emb_guard", schema="unrelated_primary_schema")
     monkeypatch.setattr("oa_configurator.cli.load_stack_config", lambda: resolver.config)
@@ -83,10 +89,14 @@ def test_registry_schema_guard_fires_on_genuine_registry_drift(pg_db, pg_engine,
         app,
         [
             "acknowledge-schema-migration",
-            "--database", "emb_guard",
-            "--schema-tag", REGISTRY_SCHEMA_KEY,
-            "--new-schema", "a_previous_registry_schema_that_is_not_current",
-            "--reason", "test: force a stale baseline",
+            "--database",
+            "emb_guard",
+            "--schema-tag",
+            REGISTRY_SCHEMA_KEY,
+            "--new-schema",
+            "a_previous_registry_schema_that_is_not_current",
+            "--reason",
+            "test: force a stale baseline",
         ],
     )
     assert result.exit_code == 0, result.output

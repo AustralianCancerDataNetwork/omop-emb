@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-
 from .conftest import MODEL_NAME, PROVIDER_TYPE, register_flat
 
 

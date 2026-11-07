@@ -140,7 +140,7 @@ class RegistryManager:
     embedding_engine : Engine
         SQLAlchemy embedding engine connected to the embedding store. Must
         have been built via registry_reader_engine()/registry_writer_engine(),
-        which is checked here to ensure the registry schema claim is present. 
+        which is checked here to ensure the registry schema claim is present.
 
     Notes
     -----
@@ -171,7 +171,8 @@ class RegistryManager:
         is always True.
         """
         return inspect(self._embedding_engine).has_table(
-            ModelRegistry.__tablename__, schema=resolve_registry_physical_schema(self._embedding_engine)
+            ModelRegistry.__tablename__,
+            schema=resolve_registry_physical_schema(self._embedding_engine),
         )
 
     # ------------------------------------------------------------------
@@ -210,7 +211,9 @@ class RegistryManager:
         """
         if not self.registry_available:
             return ()
-        stmt = select(ModelRegistry).where(ModelRegistry.database_config_name == self._database_config_name)
+        stmt = select(ModelRegistry).where(
+            ModelRegistry.database_config_name == self._database_config_name
+        )
         if model_name is not None:
             stmt = stmt.where(ModelRegistry.model_name == model_name)
         if provider_type is not None:
@@ -364,8 +367,8 @@ class RegistryManager:
         -----
         Uses a Python-side timestamp rather than ``func.now()`` so the value
         carries microsecond precision on every backend. SQLite's
-        ``CURRENT_TIMESTAMP``only has whole-second resolution, 
-        which made staleness checks racy when an upsert and its preceding 
+        ``CURRENT_TIMESTAMP``only has whole-second resolution,
+        which made staleness checks racy when an upsert and its preceding
         FAISS export land in the same second.
 
         Parameters

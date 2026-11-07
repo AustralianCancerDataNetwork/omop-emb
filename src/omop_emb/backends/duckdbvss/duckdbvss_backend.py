@@ -68,11 +68,11 @@ def _install_vss(dbapi_connection, _connection_record) -> None:
 
     Passed as an ``extensions`` callable to ``ResolvedDatabase.create_engine()``
     (see its docstring). Loading an extension is inherently per-connection,
-    so this is safe to run on every new connection. 
-    
+    so this is safe to run on every new connection.
+
     Notes
     -----
-    - Tries a bare ``LOAD`` first and only falls back to ``INSTALL`` 
+    - Tries a bare ``LOAD`` first and only falls back to ``INSTALL``
         - ``INSTALL`` needs network access the first time but is cached
         locally for subsequent connections.
     """
@@ -182,16 +182,20 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
         see ``compact_storage``.
         """
         table_ref = qualified(
-            self.emb_engine, model_record.storage_identifier, physical_schema=physical_schema_of(self.emb_engine)
+            self.emb_engine,
+            model_record.storage_identifier,
+            physical_schema=physical_schema_of(self.emb_engine),
         )
-        with self.emb_engine.begin() as conn:
-            with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
-                for statement in self.drop_index_sql(model_record.model_name):
-                    conn.execute(text(statement))
-                if isinstance(index_config, HNSWIndexConfig):
-                    conn.execute(text(hnsw_index_ddl(self.emb_engine, model_record, index_config)))
-                if vacuum:
-                    conn.execute(text(f"ANALYZE {table_ref}"))
+        with (
+            self.emb_engine.begin() as conn,
+            guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY),
+        ):
+            for statement in self.drop_index_sql(model_record.model_name):
+                conn.execute(text(statement))
+            if isinstance(index_config, HNSWIndexConfig):
+                conn.execute(text(hnsw_index_ddl(self.emb_engine, model_record, index_config)))
+            if vacuum:
+                conn.execute(text(f"ANALYZE {table_ref}"))
         logger.info(
             f"Rebuilt '{model_record.storage_identifier}' with index type '{index_config.index_type.value}'."
         )
@@ -224,7 +228,8 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
         return tuple(
             str(item["name"])
             for item in inspect(self.emb_engine).get_indexes(
-                record.storage_identifier, schema=physical_schema,
+                record.storage_identifier,
+                schema=physical_schema,
             )
             if str(item["name"]).startswith(expected_prefix)
         )
@@ -236,7 +241,9 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
     def _sync_index_impl(self, model_record: EmbeddingModelRecord) -> None:
         """Rebuild model_record's HNSW index; no-op for FLAT, which has no physical index."""
         if isinstance(model_record.index_config, HNSWIndexConfig):
-            self.rebuild_index(model_name=model_record.model_name, index_config=model_record.index_config)
+            self.rebuild_index(
+                model_name=model_record.model_name, index_config=model_record.index_config
+            )
 
     def _upsert_embeddings_impl(
         self,
@@ -255,9 +262,7 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
                     registered_table=table,
                 )
         except Exception as exc:
-            logger.error(
-                "Failed to upsert embeddings for '%s': %s", model_record.model_name, exc
-            )
+            logger.error("Failed to upsert embeddings for '%s': %s", model_record.model_name, exc)
             raise
 
     def _delete_embeddings_impl(
@@ -268,7 +273,9 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
     ) -> int:
         table = self._storage_table(model_record)
         with self.emb_session_factory.begin() as session:
-            return delete_embedding_rows(session=session, embedding_table=table, concept_ids=concept_ids)
+            return delete_embedding_rows(
+                session=session, embedding_table=table, concept_ids=concept_ids
+            )
 
     # ------------------------------------------------------------------
     # Core read operations
@@ -283,7 +290,9 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
             return {}
         table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
-            result = query_embeddings_by_ids(session=session, embedding_table=table, concept_ids=concept_ids)
+            result = query_embeddings_by_ids(
+                session=session, embedding_table=table, concept_ids=concept_ids
+            )
         missing = set(concept_ids) - set(result.keys())
         if missing:
             raise ValueError(
@@ -304,12 +313,14 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
 
         with self.emb_session_factory() as session:
             if isinstance(model_record.index_config, HNSWIndexConfig):
-                session.execute(text(f"SET hnsw_ef_search = {int(model_record.index_config.ef_search)}"))
+                session.execute(
+                    text(f"SET hnsw_ef_search = {int(model_record.index_config.ef_search)}")
+                )
 
             batches = query_knn_batch(
                 session=session,
                 embedding_table=table,
-                query_vectors=list(query_embeddings),
+                query_vectors=query_embeddings,
                 metric_type=metric_type,
                 k=k,
                 dimensions=model_record.dimensions,
@@ -321,7 +332,9 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
             tuple(
                 NearestConceptMatch(
                     concept_id=int(row.concept_id),
-                    similarity=float(get_similarity_from_distance(float(row.distance), metric_type)),
+                    similarity=float(
+                        get_similarity_from_distance(float(row.distance), metric_type)
+                    ),
                     domain_id=row.domain_id,
                     vocabulary_id=row.vocabulary_id,
                     is_standard=bool(row.is_standard),
@@ -342,9 +355,7 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
         with self.emb_session_factory() as session:
             return session.execute(select(table.concept_id).limit(1)).first() is not None
 
-    def _get_all_stored_concept_ids_impl(
-        self, *, model_record: EmbeddingModelRecord
-    ) -> set[int]:
+    def _get_all_stored_concept_ids_impl(self, *, model_record: EmbeddingModelRecord) -> set[int]:
         table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return {row[0] for row in session.execute(q_all_concept_ids(table))}

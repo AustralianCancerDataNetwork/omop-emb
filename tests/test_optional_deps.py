@@ -33,9 +33,7 @@ def _evict_pgvector_modules() -> dict:
     keys = [
         k
         for k in sys.modules
-        if k.startswith("pgvector")
-        or "backends.pgvector" in k
-        or k == "omop_emb.backends"
+        if k.startswith("pgvector") or "backends.pgvector" in k or k == "omop_emb.backends"
     ]
     return {k: sys.modules.pop(k) for k in keys}
 
@@ -75,9 +73,11 @@ def test_pg_backend_missing_pgvector_install_hint():
     """Directly importing pg_backend without pgvector raises with the install hint."""
     saved = _evict_pgvector_modules()
     try:
-        with patch.dict(sys.modules, {"pgvector": None, "pgvector.sqlalchemy": None}):
-            with pytest.raises(ImportError, match=r"pip install omop-emb\[pgvector\]"):
-                importlib.import_module("omop_emb.backends.pgvector.pg_backend")
+        with (
+            patch.dict(sys.modules, {"pgvector": None, "pgvector.sqlalchemy": None}),
+            pytest.raises(ImportError, match=r"pip install omop-emb\[pgvector\]"),
+        ):
+            importlib.import_module("omop_emb.backends.pgvector.pg_backend")
     finally:
         sys.modules.update(saved)
 
@@ -86,9 +86,11 @@ def test_pgvector_subpackage_missing_pgvector_install_hint():
     """Directly importing omop_emb.backends.pgvector without pgvector raises with the install hint."""
     saved = _evict_pgvector_modules()
     try:
-        with patch.dict(sys.modules, {"pgvector": None, "pgvector.sqlalchemy": None}):
-            with pytest.raises(ImportError, match=r"pip install omop-emb\[pgvector\]"):
-                importlib.import_module("omop_emb.backends.pgvector")
+        with (
+            patch.dict(sys.modules, {"pgvector": None, "pgvector.sqlalchemy": None}),
+            pytest.raises(ImportError, match=r"pip install omop-emb\[pgvector\]"),
+        ):
+            importlib.import_module("omop_emb.backends.pgvector")
     finally:
         sys.modules.update(saved)
 
@@ -135,9 +137,13 @@ def test_duckdbvss_sql_missing_install_hint():
     """Directly importing duckdbvss_sql without duckdb-sqlalchemy raises with the install hint."""
     saved = _evict_duckdbvss_modules()
     try:
-        with patch.dict(sys.modules, {"duckdb_sqlalchemy": None, "duckdb_sqlalchemy.datatypes": None}):
-            with pytest.raises(ImportError, match=r"pip install omop-emb\[duckdbvss\]"):
-                importlib.import_module("omop_emb.backends.duckdbvss.duckdbvss_sql")
+        with (
+            patch.dict(
+                sys.modules, {"duckdb_sqlalchemy": None, "duckdb_sqlalchemy.datatypes": None}
+            ),
+            pytest.raises(ImportError, match=r"pip install omop-emb\[duckdbvss\]"),
+        ):
+            importlib.import_module("omop_emb.backends.duckdbvss.duckdbvss_sql")
     finally:
         sys.modules.update(saved)
 
@@ -146,9 +152,13 @@ def test_duckdbvss_subpackage_missing_install_hint():
     """Directly importing omop_emb.backends.duckdbvss without duckdb-sqlalchemy raises with the install hint."""
     saved = _evict_duckdbvss_modules()
     try:
-        with patch.dict(sys.modules, {"duckdb_sqlalchemy": None, "duckdb_sqlalchemy.datatypes": None}):
-            with pytest.raises(ImportError, match=r"pip install omop-emb\[duckdbvss\]"):
-                importlib.import_module("omop_emb.backends.duckdbvss")
+        with (
+            patch.dict(
+                sys.modules, {"duckdb_sqlalchemy": None, "duckdb_sqlalchemy.datatypes": None}
+            ),
+            pytest.raises(ImportError, match=r"pip install omop-emb\[duckdbvss\]"),
+        ):
+            importlib.import_module("omop_emb.backends.duckdbvss")
     finally:
         sys.modules.update(saved)
 
@@ -168,7 +178,9 @@ def test_backends_importable_without_duckdbvss():
     """omop_emb.backends is importable even when duckdb-sqlalchemy is not installed."""
     saved = _evict_duckdbvss_modules()
     try:
-        with patch.dict(sys.modules, {"duckdb_sqlalchemy": None, "duckdb_sqlalchemy.datatypes": None}):
+        with patch.dict(
+            sys.modules, {"duckdb_sqlalchemy": None, "duckdb_sqlalchemy.datatypes": None}
+        ):
             importlib.import_module("omop_emb.backends")  # must not raise
     finally:
         sys.modules.update(saved)
@@ -183,7 +195,9 @@ def test_omop_emb_importable_without_duckdb_sqlalchemy_fresh_process():
     file otherwise tests.
     """
     code = "import sys; sys.modules['duckdb_sqlalchemy'] = None; import omop_emb"
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+    )
     assert result.returncode == 0, result.stderr
 
 
@@ -191,7 +205,9 @@ def test_backends_duckdbvss_attr_missing_install_hint():
     """Accessing backends.DuckDBVSSEmbeddingBackend without duckdb-sqlalchemy raises with the install hint."""
     saved = _evict_duckdbvss_modules()
     try:
-        with patch.dict(sys.modules, {"duckdb_sqlalchemy": None, "duckdb_sqlalchemy.datatypes": None}):
+        with patch.dict(
+            sys.modules, {"duckdb_sqlalchemy": None, "duckdb_sqlalchemy.datatypes": None}
+        ):
             backends = importlib.import_module("omop_emb.backends")
             with pytest.raises(ImportError, match=r"pip install omop-emb\[duckdbvss\]"):
                 _ = backends.DuckDBVSSEmbeddingBackend
@@ -208,9 +224,11 @@ def test_faiss_cache_module_missing_install_hint():
     """Directly importing faiss_cache without faiss raises with the install hint."""
     saved = _evict_faiss_modules()
     try:
-        with patch.dict(sys.modules, {"faiss": None}):
-            with pytest.raises(ImportError, match=r"pip install omop-emb\[faiss"):
-                importlib.import_module("omop_emb.storage.faiss.faiss_cache")
+        with (
+            patch.dict(sys.modules, {"faiss": None}),
+            pytest.raises(ImportError, match=r"pip install omop-emb\[faiss"),
+        ):
+            importlib.import_module("omop_emb.storage.faiss.faiss_cache")
     finally:
         sys.modules.update(saved)
 

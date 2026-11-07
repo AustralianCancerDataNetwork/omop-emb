@@ -55,6 +55,7 @@ from omop_emb.utils.errors import (
     MissingStorageTableError,
     ReadOnlyStoreError,
     UnknownEmbeddingBackendError,
+    UnsupportedIndexConfigError,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def writes[B: EmbeddingBackend, **P, R](method: Callable[Concatenate[B, P], R]) -> Callable[Concatenate[B, P], R]:
+def writes[B: EmbeddingBackend, **P, R](
+    method: Callable[Concatenate[B, P], R],
+) -> Callable[Concatenate[B, P], R]:
     """Mark an EmbeddingBackend method as a write: raises ReadOnlyStoreError on a reader."""
 
     @wraps(method)
@@ -76,7 +79,7 @@ def writes[B: EmbeddingBackend, **P, R](method: Callable[Concatenate[B, P], R]) 
             )
         return method(self, *args, **kwargs)
 
-    wrapper.__omop_emb_writes__ = True  # ty: ignore[unresolved-attribute]
+    vars(wrapper)["__omop_emb_writes__"] = True
     return wrapper
 
 
@@ -159,7 +162,12 @@ class EmbeddingStoreReader(Protocol):
 
     def close(self) -> None: ...
 
-    def __enter__(self) -> EmbeddingStoreReader: ...  # noqa: PYI034
+    def __enter__(self) -> EmbeddingStoreReader:  # noqa: PYI034
+        """Return the reader.
+
+        Typed as the protocol rather than Self so that the reader is accepted as a
+        context manager of EmbeddingStoreReader.
+        """
 
     def __exit__(self, *_exc_info: object) -> None: ...
 
@@ -285,7 +293,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         if record is None:
             return
         table = self._storage_table(record)
-        columns = inspect(table).columns  # ty: ignore[unresolved-attribute]
+        columns = inspect(table, raiseerr=True).columns
         statement = streamed(
             select(
                 columns.concept_id,
@@ -392,11 +400,12 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         ------
         ModelRegistrationConflictError
             If the model is already registered with a different dimensionality.
+        UnsupportedIndexConfigError
+            If the backend does not support the index type or its metric.
         ValueError
             If ``metadata`` contains a reserved key, or if ``index_config`` is
             not a FLAT config (non-FLAT indexes may only be built after
-            registration, not at registration time), or its metric is
-            unsupported by the backend.
+            registration, not at registration time).
         """
 
         if index_config is None:
@@ -512,8 +521,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         Raises
         ------
         ValueError
-            If the model is not registered, or the index type or metric is
-            unsupported by the backend.
+            If the model is not registered.
+        UnsupportedIndexConfigError
+            If the backend does not support the index type or its metric.
 
         Notes
         -----
@@ -549,20 +559,25 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         return FlatIndexConfig(metric_type=metric_type)
 
     def _validate_index_config(self, index_config: IndexConfig) -> None:
-        """Raise ``ValueError`` if the backend supports neither the index type nor its metric."""
+        """Raise ``UnsupportedIndexConfigError`` if the backend supports neither the index type nor its metric."""
         if not is_index_type_supported_for_backend(
             backend=self.backend_type, index=index_config.index_type
         ):
             supported = get_supported_index_types_for_backend(self.backend_type)
-            raise ValueError(
+            raise UnsupportedIndexConfigError(
                 f"Index type '{index_config.index_type.value}' is not supported by "
                 f"backend '{self.backend_name}'. "
                 f"Supported: {[idx.value for idx in supported]}."
             )
-        if index_config.metric_type is not None and not is_supported_index_metric_combination_for_backend(
-            backend=self.backend_type, index=index_config.index_type, metric=index_config.metric_type
+        if (
+            index_config.metric_type is not None
+            and not is_supported_index_metric_combination_for_backend(
+                backend=self.backend_type,
+                index=index_config.index_type,
+                metric=index_config.metric_type,
+            )
         ):
-            raise ValueError(
+            raise UnsupportedIndexConfigError(
                 f"Metric '{index_config.metric_type.value}' is not supported by backend "
                 f"'{self.backend_name}' with index type '{index_config.index_type.value}'."
             )
@@ -788,7 +803,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                 f"Number of records ({len(records)}) does not match "
                 f"number of embeddings ({array.shape[0]})."
             )
-        result = self._upsert_embeddings_impl(model_record=record, records=records, embeddings=array)
+        result = self._upsert_embeddings_impl(
+            model_record=record, records=records, embeddings=array
+        )
         if not defer_index_update:
             self.sync_index(model_name=model_name)
         return result
@@ -1044,9 +1061,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         return self._has_any_embeddings_impl(model_record=self._registered_record(model_name))
 
     @abstractmethod
-    def _has_any_embeddings_impl(
-        self, *, model_record: EmbeddingModelRecord
-    ) -> bool: ...
+    def _has_any_embeddings_impl(self, *, model_record: EmbeddingModelRecord) -> bool: ...
 
     def get_stored_concept_ids(
         self,
@@ -1136,7 +1151,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         -------
         int
         """
-        return len(self._get_all_stored_concept_ids_impl(model_record=self._registered_record(model_name)))
+        return len(
+            self._get_all_stored_concept_ids_impl(model_record=self._registered_record(model_name))
+        )
 
     def get_embedding_count_by_vocabulary(
         self,
@@ -1156,7 +1173,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             ``vocabulary_id`` to embedding count, for every vocabulary with at
             least one stored embedding.
         """
-        return self._get_embedding_count_by_vocabulary_impl(model_record=self._registered_record(model_name))
+        return self._get_embedding_count_by_vocabulary_impl(
+            model_record=self._registered_record(model_name)
+        )
 
     @abstractmethod
     def _get_embedding_count_by_vocabulary_impl(
@@ -1164,7 +1183,9 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
     ) -> Mapping[str, int]: ...
 
 
-def _extensions_for(backend_type: BackendType, *, writable: bool) -> Sequence[Callable[[Any, Any], None]]:
+def _extensions_for(
+    backend_type: BackendType, *, writable: bool
+) -> Sequence[Callable[[Any, Any], None]]:
     """Connect-event callables for backend_type's engine.
 
     The writer path may create the pgvector extension. The reader path runs no
@@ -1196,7 +1217,7 @@ def _connect_args_for(backend_type: BackendType, *, writable: bool) -> dict[str,
     """Connect-time kwargs for backend_type's engine, forwarded to
     ``sqlalchemy.create_engine(connect_args=...)``.
 
-    Injects DuckDB's ``read_only=True`` flag for the reader path since 
+    Injects DuckDB's ``read_only=True`` flag for the reader path since
     DuckDB does not have a connect-event hook to enforce read-only mode.
     """
     if backend_type == BackendType.DUCKDBVSS and not writable:
@@ -1213,7 +1234,9 @@ def _parse_backend_type(backend_type: str | BackendType) -> BackendType:
         If backend_type names no known backend.
     """
     try:
-        return parse_backend_type(backend_type.lower() if isinstance(backend_type, str) else backend_type)
+        return parse_backend_type(
+            backend_type.lower() if isinstance(backend_type, str) else backend_type
+        )
     except ValueError as exc:
         raise UnknownEmbeddingBackendError(str(exc)) from exc
 
@@ -1247,8 +1270,7 @@ def _backend_class_for(backend_type: BackendType, *, dialect: str) -> type[Embed
             from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
         except ImportError as exc:
             raise EmbeddingBackendDependencyError(
-                "pgvector backend is not installed. "
-                "Install it with: pip install omop-emb[pgvector]"
+                "pgvector backend is not installed. Install it with: pip install omop-emb[pgvector]"
             ) from exc
         return PGVectorEmbeddingBackend
 

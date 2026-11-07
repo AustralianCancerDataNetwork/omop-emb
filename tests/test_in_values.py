@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 import sqlalchemy as sa
+from sqlalchemy import event
 
 from omop_emb.backends.db_utils import in_values
 
@@ -23,20 +26,25 @@ _table = sa.Table(
 
 def _count(engine: sa.Engine, condition) -> int:
     with engine.connect() as connection:
-        return connection.execute(sa.select(sa.func.count()).select_from(_table).where(condition)).scalar_one()
+        return connection.execute(
+            sa.select(sa.func.count()).select_from(_table).where(condition)
+        ).scalar_one()
 
 
 def _check(engine: sa.Engine, dialect: str) -> None:
-    statements: list[tuple[str, object]] = []
+    statements: list[tuple[str, Any]] = []
 
     def capture(_connection, _cursor, statement, parameters, _context, _many):
         statements.append((statement, parameters))
 
-    sa.event.listen(engine, "before_cursor_execute", capture)
+    event.listen(engine, "before_cursor_execute", capture)
     try:
-        assert _count(engine, in_values(_table.c.concept_id, list(range(_MANY)), dialect=dialect)) == 1000
+        assert (
+            _count(engine, in_values(_table.c.concept_id, list(range(_MANY)), dialect=dialect))
+            == 1000
+        )
     finally:
-        sa.event.remove(engine, "before_cursor_execute", capture)
+        event.remove(engine, "before_cursor_execute", capture)
     _, parameters = statements[-1]
     assert len(parameters) == 1
 

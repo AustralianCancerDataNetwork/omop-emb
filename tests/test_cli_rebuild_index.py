@@ -11,7 +11,13 @@ from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.cli import cli_maintenance
 from omop_emb.config import MetricType
 
-from .conftest import MODEL_NAME, PROVIDER_TYPE, EMBEDDING_DIM, sqlite_resolved_vector_store
+from .conftest import (
+    EMBEDDING_DIM,
+    MODEL_NAME,
+    PROVIDER_TYPE,
+    registered_model,
+    sqlite_resolved_vector_store,
+)
 
 runner = CliRunner()
 
@@ -38,7 +44,7 @@ def store(tmp_path, monkeypatch):
 
 def _metric(store) -> MetricType | None:
     with open_vector_store_reader(store) as reader:
-        return reader.get_registered_model(model_name=MODEL_NAME).metric_type
+        return registered_model(reader, MODEL_NAME).metric_type
 
 
 def test_rebuild_index_metric_type_changes_the_sqlite_vec_metric(store) -> None:
@@ -54,7 +60,9 @@ def test_rebuild_index_metric_type_changes_the_sqlite_vec_metric(store) -> None:
 
 
 def test_rebuild_index_without_metric_type_uses_cosine(store) -> None:
-    runner.invoke(cli_maintenance.app, ["rebuild-index", "--model", MODEL_NAME, "--metric-type", "l1"])
+    runner.invoke(
+        cli_maintenance.app, ["rebuild-index", "--model", MODEL_NAME, "--metric-type", "l1"]
+    )
     assert _metric(store) == MetricType.L1
 
     result = runner.invoke(cli_maintenance.app, ["rebuild-index", "--model", MODEL_NAME])

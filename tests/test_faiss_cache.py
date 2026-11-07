@@ -6,10 +6,10 @@ in-memory SQLiteVec backend and assert expected similarity scores.
 
 from __future__ import annotations
 
+import faiss
 import numpy as np
 import pytest
 
-import faiss
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
@@ -178,9 +178,7 @@ class TestL2Correctness:
         return _build_faiss(tmp_path, backend, MetricType.L2)
 
     @pytest.mark.parametrize("concept_id,expected_sim", list(_L2_EXPECTED.items()))
-    def test_l2_similarity_values(
-        self, faiss_l2: FAISSCache, concept_id: int, expected_sim: float
-    ):
+    def test_l2_similarity_values(self, faiss_l2: FAISSCache, concept_id: int, expected_sim: float):
         results = faiss_l2.search(
             _L2_QUERY, k=4, metric_type=MetricType.L2, index_config=FlatIndexConfig()
         )
@@ -226,9 +224,7 @@ class TestCrossBackendParity:
         populate(backend, _COSINE_RECORDS, _COSINE_VECS, model_name=_MODEL)
         cache = _build_faiss(tmp_path, backend, MetricType.COSINE)
 
-        svec = self._svec_search(
-            backend, _COSINE_QUERY, k=3, metric_type=MetricType.COSINE
-        )
+        svec = self._svec_search(backend, _COSINE_QUERY, k=3, metric_type=MetricType.COSINE)
         faiss_results = cache.search(
             _COSINE_QUERY,
             k=3,
@@ -271,9 +267,7 @@ class TestIndexCache:
         # The same raw vectors back both metrics: build both FAISS indices
         # straight from the backend (metric only matters to FAISS).
         cache = FAISSCache(model_name=_MODEL, cache_dir=tmp_path / "faiss_cache")
-        cache.build_from_backend(
-            backend, metric_type=MetricType.L2, index_config=FlatIndexConfig()
-        )
+        cache.build_from_backend(backend, metric_type=MetricType.L2, index_config=FlatIndexConfig())
         cache.build_from_backend(
             backend, metric_type=MetricType.COSINE, index_config=FlatIndexConfig()
         )
@@ -304,9 +298,7 @@ class TestHNSWEfSearch:
         populate(backend, _COSINE_RECORDS, _COSINE_VECS, model_name=_MODEL)
 
         index_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=32)
-        cache = _build_faiss(
-            tmp_path, backend, MetricType.COSINE, index_config=index_config
-        )
+        cache = _build_faiss(tmp_path, backend, MetricType.COSINE, index_config=index_config)
 
         index = cache._load_index(MetricType.COSINE, index_config)
         # IndexIDMap wraps the HNSW index; downcast to expose .hnsw
@@ -323,9 +315,7 @@ class TestHNSWEfSearch:
         populate(backend, _COSINE_RECORDS, _COSINE_VECS, model_name=_MODEL)
 
         build_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=16)
-        cache = _build_faiss(
-            tmp_path, backend, MetricType.COSINE, index_config=build_config
-        )
+        cache = _build_faiss(tmp_path, backend, MetricType.COSINE, index_config=build_config)
 
         load_config = HNSWIndexConfig(metric_type=MetricType.COSINE, ef_search=64)
         index = cache._load_index(MetricType.COSINE, load_config)
@@ -382,19 +372,26 @@ class TestConceptFilterPrefiltering:
         backend = make_svec_backend()
         records = [
             ConceptEmbeddingRecord(
-                concept_id=i, domain_id="Drug" if i == 5 else "Condition",
-                vocabulary_id="Test", is_standard=True, is_valid=True,
+                concept_id=i,
+                domain_id="Drug" if i == 5 else "Condition",
+                vocabulary_id="Test",
+                is_standard=True,
+                is_valid=True,
             )
             for i in range(1, 6)
         ]
         # Query is [0, 0]; concept 5 ("Drug") is the farthest away.
         vecs = np.array([[1, 0], [2, 0], [3, 0], [4, 0], [100, 0]], dtype=np.float32)
         backend.register_model(
-            model_name=_MODEL, provider_type=_PROVIDER,
-            index_config=FlatIndexConfig(), dimensions=2,
+            model_name=_MODEL,
+            provider_type=_PROVIDER,
+            index_config=FlatIndexConfig(),
+            dimensions=2,
         )
         backend.upsert_embeddings(
-            model_name=_MODEL, records=records, embeddings=vecs,
+            model_name=_MODEL,
+            records=records,
+            embeddings=vecs,
         )
         cache = _build_faiss(tmp_path, backend, MetricType.L2)
 
@@ -489,7 +486,11 @@ class TestStalenessAfterUpsert:
             model_name=_MODEL,
             records=[
                 ConceptEmbeddingRecord(
-                    concept_id=99, domain_id="Test", vocabulary_id="Test", is_standard=True, is_valid=True
+                    concept_id=99,
+                    domain_id="Test",
+                    vocabulary_id="Test",
+                    is_standard=True,
+                    is_valid=True,
                 )
             ],
             embeddings=np.array([[5, 0]], dtype=np.float32),

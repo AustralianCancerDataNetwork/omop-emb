@@ -1,18 +1,18 @@
 from __future__ import annotations
-from dataclasses import dataclass, asdict
-from typing import Optional, overload
+
 import logging
+from dataclasses import asdict, dataclass
+from typing import overload
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from sqlalchemy import func
 from sqlalchemy.sql.elements import ColumnElement
 
-from omop_alchemy.cdm.query import ConceptFilter as CDMConceptFilter  # noqa: F401
 from omop_emb.config import (
-    MetricType,
     PGVECTOR_HALFVEC_MAX_DIMENSIONS,
     PGVECTOR_VECTOR_MAX_DIMENSIONS,
+    MetricType,
     VectorColumnType,
 )
 
@@ -22,7 +22,7 @@ EmbeddingArray = NDArray[np.float32]
 """Float32 array of shape ``(N, D)``: one row per vector, ``D`` the embedding dimensionality."""
 
 
-def as_embedding_array(embeddings: ArrayLike, dimensions: Optional[int] = None) -> EmbeddingArray:
+def as_embedding_array(embeddings: ArrayLike, dimensions: int | None = None) -> EmbeddingArray:
     """Return embeddings as a finite float32 array of shape ``(N, D)``.
 
     Parameters
@@ -61,9 +61,9 @@ def as_embedding_array(embeddings: ArrayLike, dimensions: Optional[int] = None) 
 class EmbeddingConceptFilter:
     """Search constraints applied during KNN retrieval.
 
-    All fields are optional. Unset fields impose no constraint. 
-    To limit the number of KNN results returned, pass `k` to 
-    `get_nearest_concepts`/`get_similar_concepts`. 
+    All fields are optional. Unset fields impose no constraint.
+    To limit the number of KNN results returned, pass `k` to
+    `get_nearest_concepts`/`get_similar_concepts`.
 
     Notes
     -----
@@ -90,9 +90,9 @@ class EmbeddingConceptFilter:
         ``Concept.is_valid`` rule are returned. Default ``False``.
     """
 
-    concept_ids: Optional[tuple[int, ...]] = None
-    domains: Optional[tuple[str, ...]] = None
-    vocabularies: Optional[tuple[str, ...]] = None
+    concept_ids: tuple[int, ...] | None = None
+    domains: tuple[str, ...] | None = None
+    vocabularies: tuple[str, ...] | None = None
     require_standard: bool = False
     require_active: bool = False
 
@@ -145,11 +145,11 @@ class NearestConceptMatch:
 
     concept_id: int
     similarity: float
-    concept_name: Optional[str] = None
-    domain_id: Optional[str] = None
-    vocabulary_id: Optional[str] = None
-    is_standard: Optional[bool] = None
-    is_active: Optional[bool] = None
+    concept_name: str | None = None
+    domain_id: str | None = None
+    vocabulary_id: str | None = None
+    is_standard: bool | None = None
+    is_active: bool | None = None
 
     def to_dict(self) -> dict:
         """Convert to a dictionary for serialization."""
@@ -202,9 +202,7 @@ def get_similarity_from_distance(
     """
     if metric == MetricType.COSINE:
         similarity = 1.0 - (distance_col / 2.0)
-    elif metric == MetricType.L2:
-        similarity = 1.0 / (1.0 + distance_col)
-    elif metric == MetricType.L1:
+    elif metric == MetricType.L2 or metric == MetricType.L1:
         similarity = 1.0 / (1.0 + distance_col)
     elif metric == MetricType.HAMMING:
         raise ValueError(

@@ -253,10 +253,10 @@ All fields are optional and combinable. `require_standard` and `require_active` 
 
 ## CDMConceptFilter
 
-`CDMConceptFilter` (`omop_alchemy.cdm.query.ConceptFilter`, re-exported from `omop_emb.utils.embedding_utils`) is the filter type for CDM-only queries. Difference to `EmbeddingConceptFilter`: it carries `limit`, which caps the number of CDM rows returned.
+`CDMConceptFilter` (`omop_alchemy.cdm.query.ConceptFilter`) is the filter type for CDM-only queries. Importing it from `omop_emb.utils.embedding_utils` is deprecated and will be removed in 4.0. Difference to `EmbeddingConceptFilter`: it carries `limit`, which caps the number of CDM rows returned.
 
 ```python
-from omop_emb.utils.embedding_utils import CDMConceptFilter
+from omop_alchemy.cdm.query import ConceptFilter as CDMConceptFilter
 
 concept_filter = CDMConceptFilter(
     domains=("Condition", "Observation"),

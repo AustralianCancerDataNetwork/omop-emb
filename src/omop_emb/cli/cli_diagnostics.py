@@ -27,7 +27,7 @@ def health_check():
             typer.echo(f"CDM: {cfg.cdm_db} | concept table reachable.")
         except RuntimeError as exc:
             typer.echo(f"CDM: not configured ({exc})")
-        except (SQLAlchemyError, OSError) as exc:
+        except (SQLAlchemyError, OSError, ImportError) as exc:
             typer.echo(f"CDM: connection failed. {exc}")
 
         records = store.get_registered_models()

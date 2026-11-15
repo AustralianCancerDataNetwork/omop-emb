@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import asdict, dataclass
 from typing import overload
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
+from omop_alchemy.cdm.query import ConceptFilter
 from sqlalchemy import func
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -17,6 +19,31 @@ from omop_emb.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def __getattr__(name: str) -> object:
+    """Resolve the deprecated ``CDMConceptFilter`` alias, removed in 4.0.
+
+    Parameters
+    ----------
+    name : str
+        Attribute requested from the module.
+
+    Returns
+    -------
+    object
+        ``omop_alchemy.cdm.query.ConceptFilter`` for ``CDMConceptFilter``.
+    """
+    if name == "CDMConceptFilter":
+        warnings.warn(
+            "omop_emb.utils.embedding_utils.CDMConceptFilter is deprecated and will be "
+            "removed in 4.0. Import omop_alchemy.cdm.query.ConceptFilter instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return ConceptFilter
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 EmbeddingArray = NDArray[np.float32]
 """Float32 array of shape ``(N, D)``: one row per vector, ``D`` the embedding dimensionality."""

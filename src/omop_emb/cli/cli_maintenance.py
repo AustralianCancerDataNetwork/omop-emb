@@ -1,7 +1,7 @@
 """Maintenance and management commands for omop-emb."""
 
 import logging
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 from oa_configurator import Resolver
@@ -30,14 +30,14 @@ app = typer.Typer(help="Maintenance and management commands for omop-emb.")
 @app.command(name="list-models", help="List all registered embedding models.")
 def list_models(
     provider_type: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--provider-type",
             help="Filter by embedding provider.",
         ),
     ] = None,
     model: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--model",
             "-m",
@@ -55,9 +55,7 @@ def list_models(
         typer.echo("No registered models found.")
         return
 
-    typer.echo(
-        f"{'Model':<40} {'Provider':<10} {'Metric':<8} {'Index':<6} {'Dims':<6} {'Table'}"
-    )
+    typer.echo(f"{'Model':<40} {'Provider':<10} {'Metric':<8} {'Index':<6} {'Dims':<6} {'Table'}")
     typer.echo("-" * 100)
     for r in records:
         index_str = r.index_type.value if r.index_type else "none"
@@ -69,9 +67,7 @@ def list_models(
         )
 
 
-@app.command(
-    name="rebuild-index", help="Build or rebuild the index on an embedding table."
-)
+@app.command(name="rebuild-index", help="Build or rebuild the index on an embedding table.")
 def rebuild_index(
     model: Annotated[
         str,
@@ -82,7 +78,7 @@ def rebuild_index(
         ),
     ],
     provider_type: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--provider-type",
             help="Embedding provider type. Required to determine canonical model name.",
@@ -106,7 +102,7 @@ def rebuild_index(
         ),
     ] = MetricType.COSINE,
     index_hnsw_num_neighbors: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-hnsw-num-neighbors",
             help="HNSW: number of neighbors per graph node.",
@@ -114,7 +110,7 @@ def rebuild_index(
         ),
     ] = None,
     index_hnsw_ef_search: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-hnsw-ef-search",
             help="HNSW: ef parameter controlling recall during search.",
@@ -122,7 +118,7 @@ def rebuild_index(
         ),
     ] = None,
     index_hnsw_ef_construction: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--index-ef-construction",
             help="HNSW: ef parameter controlling graph quality during construction.",
@@ -187,7 +183,7 @@ def delete_model(
         ),
     ],
     provider_type: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--provider-type",
             help="Embedding provider type. Used to check canonical model_name if provided.",
@@ -243,7 +239,7 @@ def prune_embeddings(
         ),
     ],
     provider_type: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--provider-type",
             help="Embedding provider type. Used to canonicalize the model name if provided.",
@@ -266,7 +262,7 @@ def prune_embeddings(
         ),
     ] = False,
     vocabularies: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--vocabulary",
             help="Keep only concepts from specific OMOP vocabularies. Repeat to add multiple.",
@@ -274,7 +270,7 @@ def prune_embeddings(
         ),
     ] = None,
     domains: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option(
             "--domain",
             help="Keep only concepts from specific OMOP domains. Repeat to add multiple.",
@@ -400,7 +396,7 @@ def export_bundle_cmd(
         ),
     ],
     provider_type: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--provider-type",
             help="Embedding provider type. Used to canonicalize the model name if provided.",
@@ -452,7 +448,7 @@ def build_faiss_cache(
         ),
     ],
     provider_type: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--provider-type",
             help="Embedding provider type. Used to canonicalize the model name if provided.",
@@ -522,9 +518,7 @@ def build_faiss_cache(
     )
 
 
-@app.command(
-    name="check-faiss-cache", help="Check whether the FAISS sidecar cache is fresh."
-)
+@app.command(name="check-faiss-cache", help="Check whether the FAISS sidecar cache is fresh.")
 def check_faiss_cache(
     model: Annotated[
         str,
@@ -558,7 +552,7 @@ def check_faiss_cache(
         ),
     ] = IndexType.FLAT,
     provider_type: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--provider-type",
             help="Embedding provider type. Used to canonicalize the model name if provided.",

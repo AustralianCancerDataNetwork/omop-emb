@@ -9,6 +9,10 @@ class UnknownEmbeddingBackendError(EmbeddingBackendError, ValueError):
     """An unrecognized backend name."""
 
 
+class UnsupportedIndexConfigError(EmbeddingBackendError, ValueError):
+    """A backend was asked for an index type, or an index and metric pairing, it does not support."""
+
+
 class EmbeddingBackendDependencyError(EmbeddingBackendError, ImportError):
     """A backend was requested without its optional dependencies installed."""
 

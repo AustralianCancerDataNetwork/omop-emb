@@ -30,6 +30,7 @@ from .conftest import (
     MODEL_NAME,
     PROVIDER_TYPE,
     QUERY_EMBEDDING,
+    registered_model,
 )
 from .shared_backend_tests import SharedBackendTests
 
@@ -90,12 +91,16 @@ class TestDuckDBVSSHNSWBackend:
     ):
         """Switching metric replaces the HNSW index; reverting to FLAT drops it."""
         self._register_and_upsert(duckdbvss_backend)
-        table = duckdbvss_backend.get_registered_model(model_name=MODEL_NAME).storage_identifier
+        table = registered_model(duckdbvss_backend, MODEL_NAME).storage_identifier
 
-        duckdbvss_backend.rebuild_index(model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.COSINE))
+        duckdbvss_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.COSINE)
+        )
         assert duckdbvss_backend.physical_indexes(MODEL_NAME) == (f"idx_{table}_cosine",)
 
-        duckdbvss_backend.rebuild_index(model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.L2))
+        duckdbvss_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.L2)
+        )
         assert duckdbvss_backend.physical_indexes(MODEL_NAME) == (f"idx_{table}_l2",)
 
         duckdbvss_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
@@ -112,11 +117,9 @@ class TestDuckDBVSSHNSWBackend:
                 model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.L1)
             )
         assert duckdbvss_backend.physical_indexes(MODEL_NAME) == before
-        assert duckdbvss_backend.get_registered_model(model_name=MODEL_NAME).index_config == self.HNSW_CONFIG
+        assert registered_model(duckdbvss_backend, MODEL_NAME).index_config == self.HNSW_CONFIG
 
-    def test_hnsw_search_returns_correct_top1(
-        self, duckdbvss_backend: DuckDBVSSEmbeddingBackend
-    ):
+    def test_hnsw_search_returns_correct_top1(self, duckdbvss_backend: DuckDBVSSEmbeddingBackend):
         self._register_and_upsert(duckdbvss_backend)
         duckdbvss_backend.rebuild_index(
             model_name=MODEL_NAME,
@@ -130,7 +133,9 @@ class TestDuckDBVSSHNSWBackend:
         )
         assert results[0][0].concept_id == DIABETES_ID
 
-    def _knn_uses_hnsw_index(self, duckdbvss_backend: DuckDBVSSEmbeddingBackend, *, table_ref: str) -> bool:
+    def _knn_uses_hnsw_index(
+        self, duckdbvss_backend: DuckDBVSSEmbeddingBackend, *, table_ref: str
+    ) -> bool:
         """EXPLAIN a KNN query shaped like _build_knn_stmt's real one
         (ORDER BY array_distance(...) LIMIT k) and report whether DuckDB's
         planner actually used the HNSW index, rather than trusting that a
@@ -138,7 +143,9 @@ class TestDuckDBVSSHNSWBackend:
         with duckdbvss_backend.emb_engine.connect() as conn:
             conn.execute(text("SET hnsw_enable_experimental_persistence = true"))
             plan_rows = conn.execute(
-                text(f"EXPLAIN SELECT concept_id, array_distance(embedding, [1.0, 0.0]::FLOAT[{EMBEDDING_DIM}]) AS distance FROM {table_ref} ORDER BY distance LIMIT 1")
+                text(
+                    f"EXPLAIN SELECT concept_id, array_distance(embedding, [1.0, 0.0]::FLOAT[{EMBEDDING_DIM}]) AS distance FROM {table_ref} ORDER BY distance LIMIT 1"
+                )
             ).fetchall()
         return any("HNSW Index:" in row[1] for row in plan_rows)
 
@@ -149,9 +156,11 @@ class TestDuckDBVSSHNSWBackend:
         HNSW index must be the thing DuckDB's own query planner picks, not
         merely present on the table."""
         self._register_and_upsert(duckdbvss_backend)
-        record = duckdbvss_backend.get_registered_model(model_name=MODEL_NAME)
+        record = registered_model(duckdbvss_backend, MODEL_NAME)
         table_ref = qualified(
-            duckdbvss_backend.emb_engine, record.storage_identifier, physical_schema=physical_schema_of(duckdbvss_backend.emb_engine)
+            duckdbvss_backend.emb_engine,
+            record.storage_identifier,
+            physical_schema=physical_schema_of(duckdbvss_backend.emb_engine),
         )
 
         assert self._knn_uses_hnsw_index(duckdbvss_backend, table_ref=table_ref) is False
@@ -162,9 +171,7 @@ class TestDuckDBVSSHNSWBackend:
         duckdbvss_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
         assert self._knn_uses_hnsw_index(duckdbvss_backend, table_ref=table_ref) is False
 
-    def test_filtered_hnsw_query_returns_full_k(
-        self, duckdbvss_backend: DuckDBVSSEmbeddingBackend
-    ):
+    def test_filtered_hnsw_query_returns_full_k(self, duckdbvss_backend: DuckDBVSSEmbeddingBackend):
         """Regression guard: DuckDB's built-in vss extension returns too few
         rows, often zero, on a filtered top-k query against an HNSW index,
         regardless of ef_search (confirmed empirically up to ef_search=20000
@@ -233,7 +240,7 @@ class TestDuckDBVSSCompactionAndDelete:
         self, duckdbvss_backend: DuckDBVSSEmbeddingBackend
     ):
         self._register_and_upsert(duckdbvss_backend)
-        record = duckdbvss_backend.get_registered_model(model_name=MODEL_NAME)
+        record = registered_model(duckdbvss_backend, MODEL_NAME)
 
         deleted = duckdbvss_backend._delete_embeddings_impl(
             model_record=record, concept_ids=[HYPERTENSION_ID, DIABETES_ID]
@@ -252,7 +259,7 @@ class TestDuckDBVSSCompactionAndDelete:
         happen to fall across row groups, and a database's very first
         checkpoint can read as a jump from 0."""
         self._register_and_upsert(duckdbvss_backend)
-        record = duckdbvss_backend.get_registered_model(model_name=MODEL_NAME)
+        record = registered_model(duckdbvss_backend, MODEL_NAME)
 
         result = duckdbvss_backend._compact_storage_impl(model_record=record)
 

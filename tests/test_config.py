@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 
 from omop_emb.config import (
+    SUPPORTED_INDICES_AND_METRICS_PER_BACKEND,
     BackendType,
     IndexType,
     MetricType,
-    SUPPORTED_INDICES_AND_METRICS_PER_BACKEND,
     get_supported_index_types_for_backend,
     get_supported_metrics_for_backend,
     is_index_type_supported_for_backend,

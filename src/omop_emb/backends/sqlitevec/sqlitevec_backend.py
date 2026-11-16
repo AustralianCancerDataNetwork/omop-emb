@@ -7,7 +7,7 @@ the registry table share the same file and SQLAlchemy engine.
 from __future__ import annotations
 
 import logging
-from typing import Mapping, Optional, Sequence, Tuple
+from collections.abc import Mapping, Sequence
 
 from numpy import ndarray
 from oa_configurator import Dialect
@@ -21,7 +21,6 @@ except ImportError as _e:
         "sqlite-vec is not installed. Install it with: pip install sqlite-vec"
     ) from _e
 
-from omop_emb.config import BackendType, MetricType
 from omop_emb.backends.base_backend import (
     CompactionResult,
     ConceptEmbeddingRecord,
@@ -37,26 +36,27 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     dml_upsert_rows,
     freelist_pages,
     query_all_concept_ids,
-    query_metadata_by_ids,
     query_concept_ids_matching_filter,
     query_embedding_count_by_vocabulary,
     query_embeddings_by_ids,
     query_has_any,
     query_knn_batch,
+    query_metadata_by_ids,
     reclaimable_chunks,
     recreate_vec0,
-    table_exists,
     sqlite_vec_table_descriptor,
+    table_exists,
     vacuum_database,
 )
+from omop_emb.config import BackendType, MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
-from omop_emb.utils.errors import LegacyVectorTableError
 from omop_emb.utils.embedding_utils import (
     EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
     get_similarity_from_distance,
 )
+from omop_emb.utils.errors import LegacyVectorTableError, UnsupportedIndexConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
       table to return it.
     - vec0 is a SQLite virtual table type the SQLAlchemy ORM cannot map, but
       it accepts ordinary SQL once created. ``_table_cache`` therefore stores
-      a Core :class:`~sqlalchemy.Table` used for every query except the initial 
+      a Core :class:`~sqlalchemy.Table` used for every query except the initial
       ``CREATE VIRTUAL TABLE``.
     """
 
@@ -153,7 +153,9 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         declared = declared_metric(self.emb_engine, model_record.storage_identifier)
         if declared is None or declared != model_record.metric_type:
             raise self._legacy_table_error(model_record)
-        return sqlite_vec_table_descriptor(model_record.storage_identifier, self._sqlite_vec_metadata)
+        return sqlite_vec_table_descriptor(
+            model_record.storage_identifier, self._sqlite_vec_metadata
+        )
 
     def _create_storage_table(self, model_record: EmbeddingModelRecord) -> Table:
         metric_type = model_record.metric_type
@@ -166,7 +168,9 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         )
         with self.emb_engine.begin() as conn:
             conn.execute(text(ddl))
-        return sqlite_vec_table_descriptor(model_record.storage_identifier, self._sqlite_vec_metadata)
+        return sqlite_vec_table_descriptor(
+            model_record.storage_identifier, self._sqlite_vec_metadata
+        )
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
         with self.emb_engine.begin() as conn:
@@ -180,7 +184,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         self, *, model_record: EmbeddingModelRecord, index_config: IndexConfig, vacuum: bool
     ) -> None:
         if not isinstance(index_config, FlatIndexConfig):
-            raise ValueError(
+            raise UnsupportedIndexConfigError(
                 f"sqlite-vec only supports FLAT indexes. Got: {type(index_config).__name__}."
             )
         metric_type = index_config.metric_type
@@ -293,15 +297,15 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         model_record: EmbeddingModelRecord,
         metric_type: MetricType,
         query_embeddings: EmbeddingArray,
-        concept_filter: Optional[EmbeddingConceptFilter] = None,
+        concept_filter: EmbeddingConceptFilter | None = None,
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
-    ) -> Tuple[Tuple[NearestConceptMatch, ...], ...]:
+    ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
         table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             batches = query_knn_batch(
                 session=session,
                 table=table,
-                query_vectors=list(query_embeddings),
+                query_embeddings=query_embeddings,
                 k=k,
                 concept_filter=concept_filter,
             )
@@ -331,9 +335,7 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
         with self.emb_session_factory() as session:
             return query_has_any(session=session, table=table)
 
-    def _get_all_stored_concept_ids_impl(
-        self, *, model_record: EmbeddingModelRecord
-    ) -> set[int]:
+    def _get_all_stored_concept_ids_impl(self, *, model_record: EmbeddingModelRecord) -> set[int]:
         table = self._storage_table(model_record)
         with self.emb_session_factory() as session:
             return query_all_concept_ids(session=session, table=table)

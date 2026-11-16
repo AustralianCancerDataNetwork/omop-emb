@@ -27,6 +27,7 @@ from oa_configurator import (
 )
 from sqlalchemy import (
     REAL,
+    CursorResult,
     Engine,
     MetaData,
     Row,
@@ -50,7 +51,7 @@ except ImportError as _e:
     ) from _e
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.db_utils import apply_concept_filter_where
+from omop_emb.backends.db_utils import apply_concept_filter_where, table_for
 from omop_emb.backends.embedding_table import (
     EMBEDDING_COLUMN_NAME,
     ConceptEmbeddingMixin,
@@ -60,7 +61,7 @@ from omop_emb.backends.embedding_table import (
 from omop_emb.backends.index_config import HNSWIndexConfig
 from omop_emb.config import MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
-from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from omop_emb.utils.embedding_utils import EmbeddingArray, EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
 
@@ -85,20 +86,21 @@ def create_duckdbvss_embedding_table(
 ) -> type[DuckDBVSSEmbeddingTable]:
     """Create a DuckDB VSS embedding table and return its ORM class."""
     table_cls = duckdbvss_embedding_table_descriptor(model_record)
-    with engine.begin() as connection:
-        with guard_schema_provenance_for(connection, schema_tag=Role.PRIMARY):
-            EmbeddingTableBase.metadata.create_all(connection, tables=[table_cls.__table__])  # ty: ignore[invalid-argument-type]
+    with (
+        engine.begin() as connection,
+        guard_schema_provenance_for(connection, schema_tag=Role.PRIMARY),
+    ):
+        EmbeddingTableBase.metadata.create_all(connection, tables=[table_for(table_cls)])
     return table_cls
 
 
 def drop_duckdbvss_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) -> None:
     """Drop the physical embedding table from the database."""
     tablename = model_record.storage_identifier
-    with engine.begin() as conn:
-        with guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
-            conn.execute(
-                DropTable(Table(tablename, MetaData(), schema=physical_schema_of(conn)), if_exists=True)
-            )
+    with engine.begin() as conn, guard_schema_provenance_for(conn, schema_tag=Role.PRIMARY):
+        conn.execute(
+            DropTable(Table(tablename, MetaData(), schema=physical_schema_of(conn)), if_exists=True)
+        )
     logger.info(f"Dropped embedding table '{tablename}'.")
 
 
@@ -107,12 +109,16 @@ def hnsw_index_name(tablename: str, metric_type: MetricType) -> str:
     return f"idx_{tablename}_{metric_type.value}"
 
 
-def hnsw_index_ddl(engine: Engine, model_record: EmbeddingModelRecord, index_config: HNSWIndexConfig) -> str:
+def hnsw_index_ddl(
+    engine: Engine, model_record: EmbeddingModelRecord, index_config: HNSWIndexConfig
+) -> str:
     """CREATE INDEX statement for model_record's table under index_config."""
     tablename = model_record.storage_identifier
     metric = _HNSW_METRIC[index_config.metric_type]
     table_ref = qualified(engine, tablename, physical_schema=physical_schema_of(engine))
-    index_ref = qualified(engine, hnsw_index_name(tablename, index_config.metric_type), physical_schema=None)
+    index_ref = qualified(
+        engine, hnsw_index_name(tablename, index_config.metric_type), physical_schema=None
+    )
     return (
         f"CREATE INDEX {index_ref} "
         f"ON {table_ref} USING HNSW ({EMBEDDING_COLUMN_NAME}) "
@@ -167,7 +173,11 @@ def delete_embedding_rows(
     embedding_table: type[DuckDBVSSEmbeddingTable],
     concept_ids: Sequence[int],
 ) -> int:
-    """Delete rows for concept_ids; returns the number of rows deleted."""
+    """Delete the rows of concept_ids and return how many existed.
+
+    ``Session.execute`` is typed ``Result``; a DML statement returns a ``CursorResult``,
+    which carries ``rowcount``.
+    """
     from sqlalchemy import delete
 
     from omop_emb.backends.db_utils import in_values
@@ -178,7 +188,7 @@ def delete_embedding_rows(
             in_values(columns.concept_id, concept_ids, dialect=Dialect.DUCKDB)
         )
     )
-    return int(result.rowcount)  # ty: ignore[unresolved-attribute]
+    return int(typing.cast(CursorResult[typing.Any], result).rowcount)
 
 
 def database_block_bytes(engine: Engine) -> int:
@@ -199,9 +209,9 @@ def q_all_concept_ids(embedding_table: type[DuckDBVSSEmbeddingTable]) -> Select:
 
 def q_embedding_count_by_vocabulary(embedding_table: type[DuckDBVSSEmbeddingTable]) -> Select:
     """Build a SELECT for stored embedding counts grouped by vocabulary_id."""
-    return select(
-        embedding_table.vocabulary_id, func.count(embedding_table.concept_id)
-    ).group_by(embedding_table.vocabulary_id)
+    return select(embedding_table.vocabulary_id, func.count(embedding_table.concept_id)).group_by(
+        embedding_table.vocabulary_id
+    )
 
 
 def query_embeddings_by_ids(
@@ -369,7 +379,7 @@ def _build_knn_stmt(
 def query_knn_batch(
     session: Session,
     embedding_table: type[DuckDBVSSEmbeddingTable],
-    query_vectors: Sequence[ndarray],
+    query_vectors: EmbeddingArray,
     metric_type: MetricType,
     k: int,
     dimensions: int,
@@ -434,13 +444,17 @@ def query_concept_filter_metadata(
     return session.execute(stmt).all()
 
 
-def duckdbvss_embedding_table_descriptor(model_record: EmbeddingModelRecord) -> type[DuckDBVSSEmbeddingTable]:
+def duckdbvss_embedding_table_descriptor(
+    model_record: EmbeddingModelRecord,
+) -> type[DuckDBVSSEmbeddingTable]:
     """Return the SQLAlchemy ORM class descriptor for a DuckDB VSS embedding table.
 
     Cached by (tablename, dimensions): a repeated call for the same table
     reuses the one mapped class instead of building another.
     """
-    return _cached_duckdbvss_embedding_table_descriptor(model_record.storage_identifier, model_record.dimensions)
+    return _cached_duckdbvss_embedding_table_descriptor(
+        model_record.storage_identifier, model_record.dimensions
+    )
 
 
 @functools.cache

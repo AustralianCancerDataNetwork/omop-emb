@@ -33,6 +33,7 @@ METRIC = MetricType.L2
 FLAT = FlatIndexConfig()
 HNSW = HNSWIndexConfig(metric_type=MetricType.COSINE)
 
+
 @pytest.mark.unit
 class TestRegistryManager:
     def test_register_and_retrieve(self, registry: RegistryManager):
@@ -99,9 +100,7 @@ class TestRegistryManager:
                 dimensions=EMBEDDING_DIM + 1,
             )
 
-    def test_update_index_config_keeps_storage_identifier(
-        self, registry: RegistryManager
-    ):
+    def test_update_index_config_keeps_storage_identifier(self, registry: RegistryManager):
         """Rebuilding from FLAT to HNSW keeps the same physical table name."""
         r_flat = registry.register_model(
             model_name=MODEL_NAME,
@@ -271,7 +270,8 @@ def _create_pre_scoping_registry(connection: sa.Connection, *, schema: str | Non
     changes nothing about the detection this exercises.
     """
     qualified = "model_registry" if schema is None else f"{schema}.model_registry"
-    connection.execute(sa.text(f"""
+    connection.execute(
+        sa.text(f"""
         CREATE TABLE {qualified} (
             model_name VARCHAR PRIMARY KEY,
             provider_type VARCHAR(6),
@@ -282,11 +282,14 @@ def _create_pre_scoping_registry(connection: sa.Connection, *, schema: str | Non
             index_config JSON,
             details JSON
         )
-    """))
-    connection.execute(sa.text(
-        f"INSERT INTO {qualified} (model_name, provider_type, storage_identifier, dimensions) "
-        "VALUES ('nomic-embed-text', 'OLLAMA', 'emb_nomic_embed_text', 768)"
-    ))
+    """)
+    )
+    connection.execute(
+        sa.text(
+            f"INSERT INTO {qualified} (model_name, provider_type, storage_identifier, dimensions) "
+            "VALUES ('nomic-embed-text', 'OLLAMA', 'emb_nomic_embed_text', 768)"
+        )
+    )
 
 
 @pytest.mark.unit
@@ -304,9 +307,9 @@ def test_unreadable_registry_signatures_are_rejected(signature, error_match):
         if signature == "legacy":
             _create_pre_scoping_registry(connection)
         else:
-            connection.execute(sa.text(
-                "CREATE TABLE model_registry (model_name TEXT, storage_identifier TEXT)"
-            ))
+            connection.execute(
+                sa.text("CREATE TABLE model_registry (model_name TEXT, storage_identifier TEXT)")
+            )
 
     with pytest.raises(LegacyRegistryError, match=error_match) as exc_info:
         ensure_registry_table(engine)
@@ -314,7 +317,10 @@ def test_unreadable_registry_signatures_are_rejected(signature, error_match):
         assert "without per-store scoping" in str(exc_info.value)
         assert "migration script is not available yet" in str(exc_info.value)
         assert "oa-configurator/issues/40" in str(exc_info.value)
-        assert "uv run https://raw.githubusercontent.com/AustralianCancerDataNetwork/oa-configurator/main/migrations/to_v2.py" in str(exc_info.value)
+        assert (
+            "uv run https://raw.githubusercontent.com/AustralianCancerDataNetwork/oa-configurator/main/migrations/to_v2.py"
+            in str(exc_info.value)
+        )
 
 
 @pytest.mark.unit

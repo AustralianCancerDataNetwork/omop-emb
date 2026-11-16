@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import re
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 from numpy import ndarray
@@ -13,6 +13,7 @@ from oa_configurator import Dialect
 from sqlalchemy import (
     Column,
     Engine,
+    LargeBinary,
     MetaData,
     Row,
     Select,
@@ -24,7 +25,6 @@ from sqlalchemy import (
     insert,
     select,
     text,
-    LargeBinary
 )
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -33,7 +33,7 @@ from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.db_utils import apply_concept_filter_where, in_values
 from omop_emb.backends.embedding_table import CONCEPT_METADATA_COLUMNS, EMBEDDING_COLUMN_NAME
 from omop_emb.config import MetricType
-from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from omop_emb.utils.embedding_utils import EmbeddingArray, EmbeddingConceptFilter
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,8 @@ def table_exists(engine: Engine, table_name: str) -> bool:
             is not None
         )
 
-def declared_metric(engine: Engine, table_name: str) -> Optional[MetricType]:
+
+def declared_metric(engine: Engine, table_name: str) -> MetricType | None:
     """Return the metric the vec0 table *table_name* declares on its embedding column.
 
     Parameters
@@ -94,9 +95,7 @@ def declared_metric(engine: Engine, table_name: str) -> Optional[MetricType]:
     return MetricType(match.group(1)) if match else None
 
 
-def recreate_vec0(
-    engine: Engine, table_name: str, dimensions: int, metric_type: MetricType
-) -> int:
+def recreate_vec0(engine: Engine, table_name: str, dimensions: int, metric_type: MetricType) -> int:
     """Recreate a vec0 table with the given metric, keeping every stored row.
 
     Parameters
@@ -129,10 +128,14 @@ def recreate_vec0(
         conn.exec_driver_sql("BEGIN IMMEDIATE")
         conn.execute(text(ddl_drop_vec0(staging)))
         conn.execute(text(ddl_create_vec0(staging, dimensions, metric_type)))
-        conn.execute(text(f'INSERT INTO "{staging}"({columns}) SELECT {columns} FROM "{table_name}"'))
+        conn.execute(
+            text(f'INSERT INTO "{staging}"({columns}) SELECT {columns} FROM "{table_name}"')
+        )
         conn.execute(text(ddl_drop_vec0(table_name)))
         conn.execute(text(ddl_create_vec0(table_name, dimensions, metric_type)))
-        conn.execute(text(f'INSERT INTO "{table_name}"({columns}) SELECT {columns} FROM "{staging}"'))
+        conn.execute(
+            text(f'INSERT INTO "{table_name}"({columns}) SELECT {columns} FROM "{staging}"')
+        )
         count = conn.execute(text(f'SELECT count(*) FROM "{table_name}"')).scalar_one()
         conn.execute(text(ddl_drop_vec0(staging)))
     return int(count)
@@ -180,7 +183,9 @@ def ddl_create_vec0(table_name: str, dimensions: int, metric_type: MetricType) -
     str
         ``CREATE VIRTUAL TABLE IF NOT EXISTS ...`` statement.
     """
-    embedding_col = f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}] distance_metric={metric_type.value}"
+    embedding_col = (
+        f"{EMBEDDING_COLUMN_NAME} FLOAT[{dimensions}] distance_metric={metric_type.value}"
+    )
     metadata_cols = ", ".join(f"{c.name} {c.vec0_ddl}" for c in CONCEPT_METADATA_COLUMNS)
 
     return (
@@ -336,9 +341,12 @@ def _build_knn_stmt(
     table: Table,
     query_vector: ndarray,
     k: int,
-    concept_filter: Optional[EmbeddingConceptFilter] = None,
+    concept_filter: EmbeddingConceptFilter | None = None,
 ) -> Select:
-    """Build a single-vector ``MATCH`` KNN statement. Internal; see :func:`query_knn_batch`."""
+    """Build a single-vector ``MATCH`` KNN statement. Internal; see :func:`query_knn_batch`.
+
+    ``query_vector`` is one float32 row of shape ``(D,)``.
+    """
     stmt = (
         select(
             table.c.concept_id,
@@ -366,18 +374,18 @@ def _build_knn_stmt(
 def query_knn_batch(
     session: Session,
     table: Table,
-    query_vectors: Sequence[ndarray],
+    query_embeddings: EmbeddingArray,
     k: int,
-    concept_filter: Optional[EmbeddingConceptFilter] = None,
+    concept_filter: EmbeddingConceptFilter | None = None,
 ) -> list[Sequence[Row]]:
-    """Run KNN queries against a vec0 table, one per vector in *query_vectors*, in the table's metric.
+    """Run KNN queries against a vec0 table, one per row of *query_embeddings*, in the table's metric.
 
     Parameters
     ----------
     session : Session
     table : Table
-    query_vectors : Sequence[ndarray]
-        Each a float32 array of shape ``(D,)``.
+    query_embeddings : EmbeddingArray
+        Float32 array of shape ``(N, D)``, one query vector per row.
     k : int
         Maximum number of results to return per vector, at most ``MAX_KNN_K``.
     concept_filter : EmbeddingConceptFilter, optional
@@ -386,7 +394,7 @@ def query_knn_batch(
     Returns
     -------
     list[Sequence[Row]]
-        One row sequence per query vector. Each row contains ``concept_id``,
+        One row sequence per row of *query_embeddings*. Each row contains ``concept_id``,
         ``distance``, ``domain_id``, ``vocabulary_id``, ``is_standard``, and
         ``is_valid``, ordered by distance ascending.
 
@@ -402,11 +410,9 @@ def query_knn_batch(
     statement.
     """
     if k > MAX_KNN_K:
-        raise ValueError(
-            f"sqlite-vec returns at most {MAX_KNN_K} results per query. Got k={k}."
-        )
+        raise ValueError(f"sqlite-vec returns at most {MAX_KNN_K} results per query. Got k={k}.")
     results: list[Sequence[Row]] = []
-    for query_vector in query_vectors:
+    for query_vector in query_embeddings:
         stmt = _build_knn_stmt(table, query_vector, k, concept_filter)
         results.append(session.execute(stmt).all())
     return results
@@ -420,7 +426,9 @@ def query_concept_ids_matching_filter(
     """Return every ``concept_id`` in `table` satisfying `concept_filter`.
     Used to build an exact FAISS pre-filter set, not for ranking.
     """
-    stmt = apply_concept_filter_where(select(table.c.concept_id), table.c, concept_filter, dialect=Dialect.SQLITE)
+    stmt = apply_concept_filter_where(
+        select(table.c.concept_id), table.c, concept_filter, dialect=Dialect.SQLITE
+    )
     rows = session.execute(stmt).all()
     return {int(row[0]) for row in rows}
 
@@ -455,9 +463,8 @@ def query_embedding_count_by_vocabulary(session: Session, table: Table) -> dict[
         ``vocabulary_id`` to embedding count, for every vocabulary with at
         least one stored embedding.
     """
-    stmt = (
-        select(table.c.vocabulary_id, func.count(table.c.concept_id))
-        .group_by(table.c.vocabulary_id)
+    stmt = select(table.c.vocabulary_id, func.count(table.c.concept_id)).group_by(
+        table.c.vocabulary_id
     )
     rows = session.execute(stmt).all()
     return {row[0]: int(row[1]) for row in rows}

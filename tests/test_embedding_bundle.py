@@ -28,7 +28,9 @@ _MODEL = "test-bundle-model:v1"
 _PROVIDER = "ollama"
 
 
-def _populate(backend: SQLiteVecEmbeddingBackend, *, dim: int, ids: list[int], vecs: np.ndarray) -> None:
+def _populate(
+    backend: SQLiteVecEmbeddingBackend, *, dim: int, ids: list[int], vecs: np.ndarray
+) -> None:
     records = [
         ConceptEmbeddingRecord(
             concept_id=i, domain_id="Drug", vocabulary_id="RxNorm", is_standard=True, is_valid=True
@@ -48,9 +50,7 @@ class TestBundleRoundTrip:
         ids = [1, 2, 3]
         # Deliberately non-unit-length vectors: normalizing these would
         # change their values, which is exactly what must NOT happen here.
-        vecs = np.array(
-            [[3.0, 0.0, 0.0], [0.0, 5.0, 0.0], [1.0, 1.0, 1.0]], dtype=np.float32
-        )
+        vecs = np.array([[3.0, 0.0, 0.0], [0.0, 5.0, 0.0], [1.0, 1.0, 1.0]], dtype=np.float32)
 
         backend = make_svec_backend()
         _populate(backend, dim=dim, ids=ids, vecs=vecs)
@@ -117,9 +117,7 @@ class TestBundleRoundTrip:
             embedding_bundle.import_bundle(backend=backend, h5_path=bundle_path)
 
         # force=True allows it.
-        imported = embedding_bundle.import_bundle(
-            backend=backend, h5_path=bundle_path, force=True
-        )
+        imported = embedding_bundle.import_bundle(backend=backend, h5_path=bundle_path, force=True)
         assert imported == len(ids)
 
     def test_force_overwrite_bumps_updated_at(self, tmp_path):
@@ -185,9 +183,7 @@ class TestImportRebuildIndex:
     """import_bundle(rebuild_index=True) applies the bundle's own
     index_config without the caller re-specifying it."""
 
-    def test_rebuild_index_calls_backend_with_bundles_index_config(
-        self, tmp_path, monkeypatch
-    ):
+    def test_rebuild_index_calls_backend_with_bundles_index_config(self, tmp_path, monkeypatch):
         dim = 2
         backend = make_svec_backend()
         _populate(
@@ -231,9 +227,7 @@ class TestImportRebuildIndex:
 
         target_backend = make_svec_backend()
         calls = []
-        monkeypatch.setattr(
-            target_backend, "rebuild_index", lambda **kwargs: calls.append(kwargs)
-        )
+        monkeypatch.setattr(target_backend, "rebuild_index", lambda **kwargs: calls.append(kwargs))
 
         embedding_bundle.import_bundle(backend=target_backend, h5_path=bundle_path)
 
@@ -294,7 +288,9 @@ class TestExportNaming:
 def _bundle(tmp_path) -> Path:
     backend = make_svec_backend()
     _populate(backend, dim=2, ids=[1], vecs=np.array([[1.0, 0.0]], dtype=np.float32))
-    _, bundle_path = embedding_bundle.export_bundle(backend=backend, model_name=_MODEL, output_dir=tmp_path)
+    _, bundle_path = embedding_bundle.export_bundle(
+        backend=backend, model_name=_MODEL, output_dir=tmp_path
+    )
     return bundle_path
 
 
@@ -307,7 +303,13 @@ def _as_v1(bundle_path: Path, *, metric_type: str, index_config: dict | None = N
             f.attrs[embedding_bundle.ATTR_INDEX_CONFIG] = json.dumps(index_config)
 
 
-_HNSW_L2 = {"index_type": "hnsw", "metric_type": "l2", "num_neighbors": 32, "ef_search": 16, "ef_construction": 64}
+_HNSW_L2 = {
+    "index_type": "hnsw",
+    "metric_type": "l2",
+    "num_neighbors": 32,
+    "ef_search": 16,
+    "ef_construction": 64,
+}
 
 
 @pytest.mark.unit

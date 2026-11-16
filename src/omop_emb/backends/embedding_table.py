@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass
-from typing import Any, TypeVar
+from typing import Any
 
 from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import DeclarativeBase, MappedColumn, mapped_column
 from sqlalchemy.sql.type_api import TypeEngine
-
-_T = TypeVar("_T", bound=type)
 
 
 @dataclass(frozen=True)
@@ -39,7 +37,7 @@ CONCEPT_METADATA_COLUMNS: tuple[EmbeddingColumnSpec, ...] = (
 EMBEDDING_COLUMN_NAME = "embedding"
 
 
-def _check_columns_match_spec(cls: _T) -> _T:
+def _check_columns_match_spec[T: type](cls: T) -> T:
     """Class decorator: assert cls's declared columns match CONCEPT_METADATA_COLUMNS.
 
     Works for both dataclasses (checked via ``fields()``) and SQLAlchemy

@@ -8,6 +8,7 @@ from typing import Annotated
 
 import typer
 from oa_configurator import ConfigurationError, ResolvedModel, Resolver
+from omop_alchemy.cdm.query import ConceptFilter as CDMConceptFilter
 from omop_llm import build_model_backend_from_resolved
 
 from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
@@ -26,15 +27,12 @@ from omop_emb.config import (
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
 from omop_emb.utils.cdm import CDMSessionFactory, check_concept_cdm
 from omop_emb.utils.embedding_utils import (
-    CDMConceptFilter,
     EmbeddingConceptFilter,
     NearestConceptMatch,
 )
 
 logger = logging.getLogger(__name__)
-app = typer.Typer(
-    help="Commands related to embedding generation, storage, and management."
-)
+app = typer.Typer(help="Commands related to embedding generation, storage, and management.")
 
 
 def consolidate_queries(
@@ -55,9 +53,7 @@ def consolidate_queries(
             for query in queries:
                 yield query.strip()
         else:
-            raise ValueError(
-                "Invalid type for queries. Expected a string or a list of strings."
-            )
+            raise ValueError("Invalid type for queries. Expected a string or a list of strings.")
     else:
         raise ValueError("No queries provided.")
 
@@ -197,7 +193,9 @@ def add_embeddings(
     cfg = _get_config()
     resolved_model = _resolve_model(model_name, cfg)
 
-    resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    resolved_vector_store = Resolver.from_active_config().resolve_vector_store(
+        cfg.vector_store_name
+    )
     backend = open_vector_store_writer(resolved_vector_store)
     with open_cdm_sessions() as cdm_sessions:
         _add_embeddings(
@@ -253,9 +251,7 @@ def _add_embeddings(
         n_pending = embedding_writer.count_concepts_requiring_embedding(
             concept_filter=concept_filter,
         )
-        n_total = (
-            min(n_pending, num_embeddings) if num_embeddings is not None else n_pending
-        )
+        n_total = min(n_pending, num_embeddings) if num_embeddings is not None else n_pending
         typer.echo(f"Total concepts to process: {n_total:,}")
 
         n_processed = 0
@@ -279,7 +275,9 @@ def _add_embeddings(
             total_n_batches = -(-n_total // batch_size)  # ceil division
             with closing(batches()) as stream:
                 embedding_writer.bulk_upsert_concept_embeddings(
-                    stream, total_n_batches=total_n_batches, disable_progress=no_progress,
+                    stream,
+                    total_n_batches=total_n_batches,
+                    disable_progress=no_progress,
                 )
 
         typer.echo(f"Processed {n_processed:,} concepts.")
@@ -357,15 +355,20 @@ def create_index(
         model_name=model_name,
         metric_type=metric_type,
         index_config=index_config_from_index_type(
-            index_type, num_neighbors=index_hnsw_num_neighbors,
-            ef_search=index_hnsw_ef_search, ef_construction=index_hnsw_ef_construction,
+            index_type,
+            num_neighbors=index_hnsw_num_neighbors,
+            ef_search=index_hnsw_ef_search,
+            ef_construction=index_hnsw_ef_construction,
             metric_type=metric_type,
         ),
     )
 
 
 def _create_index(
-    *, model_name: str | None, metric_type: MetricType, index_config: IndexConfig,
+    *,
+    model_name: str | None,
+    metric_type: MetricType,
+    index_config: IndexConfig,
     skip_if_unchanged: bool = False,
 ) -> None:
     """Build the requested index, optionally reusing an existing matching HNSW index."""
@@ -373,7 +376,9 @@ def _create_index(
     cfg = _get_config()
     resolved_model = _resolve_model(model_name, cfg)
 
-    resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    resolved_vector_store = Resolver.from_active_config().resolve_vector_store(
+        cfg.vector_store_name
+    )
     backend = open_vector_store_writer(resolved_vector_store)
     embedding_writer = EmbeddingWriterInterface(
         backend=backend,
@@ -393,7 +398,9 @@ def _create_index(
         return
     record = embedding_writer.rebuild_index(index_config=index_config)
     metric_info = f" (metric={record.metric_type.value})" if record.metric_type else ""
-    typer.echo(f"Index ({index_config.index_type.value}) built for '{embedding_writer.canonical_model_name}'{metric_info}.")
+    typer.echo(
+        f"Index ({index_config.index_type.value}) built for '{embedding_writer.canonical_model_name}'{metric_info}."
+    )
 
 
 @app.command()
@@ -530,8 +537,10 @@ def add_embeddings_with_index(
         model_name=model_name,
         metric_type=metric_type,
         index_config=index_config_from_index_type(
-            index_type, num_neighbors=index_hnsw_num_neighbors,
-            ef_search=index_hnsw_ef_search, ef_construction=index_hnsw_ef_construction,
+            index_type,
+            num_neighbors=index_hnsw_num_neighbors,
+            ef_search=index_hnsw_ef_search,
+            ef_construction=index_hnsw_ef_construction,
             metric_type=metric_type,
         ),
         skip_if_unchanged=True,
@@ -627,7 +636,9 @@ def search(
     resolved_model = _resolve_model(model_name, cfg)
 
     queries_generator = consolidate_queries(queries=queries, queries_file=queries_file)
-    resolved_vector_store = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    resolved_vector_store = Resolver.from_active_config().resolve_vector_store(
+        cfg.vector_store_name
+    )
     resolved_faiss_cache_dir = faiss_cache_dir or resolved_vector_store.faiss_cache_dir
     with ExitStack() as stack:
         store = stack.enter_context(open_vector_store_reader(resolved_vector_store))
@@ -637,9 +648,7 @@ def search(
             cdm_sessions = stack.enter_context(open_cdm_sessions())
         except (RuntimeError, ConfigurationError):
             cdm_sessions = None
-            logger.info(
-                "CDM not configured; concept names will not be enriched in results."
-            )
+            logger.info("CDM not configured; concept names will not be enriched in results.")
         _search(
             queries_generator,
             store=store,
@@ -687,9 +696,7 @@ def _search(
         vocabularies=tuple(vocabularies) if vocabularies else None,
     )
 
-    for batch_id, batched_queries in enumerate(
-        itertools.batched(queries_generator, batch_size)
-    ):
+    for batch_id, batched_queries in enumerate(itertools.batched(queries_generator, batch_size)):
         batched_matches = embedding_reader.get_nearest_concepts_from_query_texts(
             query_texts=batched_queries,
             model_backend=model_backend,

@@ -3,15 +3,18 @@ from typing import Annotated
 import typer
 
 from omop_emb.config import OmopEmbConfig
+
 from . import (
-    cli_embeddings as embeddings,
-    cli_maintenance as maintenance,
     cli_diagnostics as diagnostics,
 )
-
-app = typer.Typer(
-    rich_markup_mode="rich", help="CLI Manager for OMOP embeddings and utilities."
+from . import (
+    cli_embeddings as embeddings,
 )
+from . import (
+    cli_maintenance as maintenance,
+)
+
+app = typer.Typer(rich_markup_mode="rich", help="CLI Manager for OMOP embeddings and utilities.")
 
 
 @app.callback()

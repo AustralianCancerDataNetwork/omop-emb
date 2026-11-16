@@ -6,14 +6,18 @@ on:
 jobs:
   label-gate:
     uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/label-gate.yml@main
+  ruff:
+    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/ruff.yml@main
+  ty:
+    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/ty.yml@main
   build-test-sqlite:
-    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test.yml@main
+    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-sqlite.yml@main
   build-test-duckdb:
     uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-duckdb.yml@main
     with:
       markers: duckdbvss
   build-test-postgres:
-    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-postgres-v2.yml@main
+    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-postgres-v3.yml@main
     with:
       postgres-image: pgvector/pgvector:pg16
       postgres-user: test

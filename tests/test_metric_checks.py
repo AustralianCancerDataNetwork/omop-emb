@@ -71,7 +71,9 @@ def test_pgvector_flat_drops_a_given_metric_and_stays_free(pg_backend):
         dimensions=EMBEDDING_DIM,
     )
     assert record.metric_type is None
-    pg_backend.upsert_embeddings(model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS)
+    pg_backend.upsert_embeddings(
+        model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+    )
     for metric in (MetricType.L1, MetricType.COSINE):
         assert len(_query(pg_backend, metric)[0]) == 1
     rebuilt = pg_backend.rebuild_index(
@@ -92,7 +94,9 @@ def test_pgvector_flat_rejects_an_unsupported_metric(pg_backend):
 @pytest.mark.integration
 def test_hnsw_accepts_only_its_index_metric(pg_backend):
     upsert_all(pg_backend)
-    pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.L2))
+    pg_backend.rebuild_index(
+        model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.L2)
+    )
     assert len(_query(pg_backend, MetricType.L2)[0]) == 1
     with pytest.raises(ValueError, match="indexed with metric 'l2'"):
         _query(pg_backend, MetricType.COSINE)
@@ -113,7 +117,9 @@ def test_bundle_moves_between_sqlitevec_and_pgvector_without_carrying_the_lock(
         index_config=FlatIndexConfig(metric_type=MetricType.L2),
         dimensions=EMBEDDING_DIM,
     )
-    svec_backend.upsert_embeddings(model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS)
+    svec_backend.upsert_embeddings(
+        model_name=MODEL_NAME, records=CONCEPT_RECORDS, embeddings=CONCEPT_EMBEDDINGS
+    )
     _, bundle = embedding_bundle.export_bundle(svec_backend, MODEL_NAME, tmp_path / "from_svec")
 
     embedding_bundle.import_bundle(pg_backend, bundle, rebuild_index=True)

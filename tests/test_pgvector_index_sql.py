@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 import pytest
 import sqlalchemy as sa
 
-pytest.importorskip(
-    "pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests"
-)
+pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests")
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.pgvector.pg_sql import (
@@ -29,9 +29,9 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def unconnected_pg_engine() -> sa.Engine:
     """A Postgres Engine that is never connected, giving qualified() a real dialect to quote against."""
-    return sa.create_engine("postgresql+psycopg://unused:unused@localhost/unused").execution_options(
-        schema_translate_map={"primary": "public"}
-    )
+    return sa.create_engine(
+        "postgresql+psycopg://unused:unused@localhost/unused"
+    ).execution_options(schema_translate_map={"primary": "public"})
 
 
 def _record(dimensions: int = 4) -> EmbeddingModelRecord:
@@ -82,7 +82,9 @@ def test_operator_class_follows_metric_and_column_type(metric, dimensions, expec
 
 
 def test_ddl_carries_name_ops_and_build_parameters(unconnected_pg_engine):
-    config = HNSWIndexConfig(metric_type=MetricType.COSINE, num_neighbors=32, ef_search=64, ef_construction=128)
+    config = HNSWIndexConfig(
+        metric_type=MetricType.COSINE, num_neighbors=32, ef_search=64, ef_construction=128
+    )
     ddl = hnsw_index_ddl(unconnected_pg_engine, _record(), config)
     assert ddl.startswith("CREATE INDEX idx_my_table_cosine ON ")
     assert "USING hnsw (embedding vector_cosine_ops)" in ddl
@@ -91,8 +93,16 @@ def test_ddl_carries_name_ops_and_build_parameters(unconnected_pg_engine):
 
 
 def test_ddl_differs_by_build_parameters(unconnected_pg_engine):
-    a = hnsw_index_ddl(unconnected_pg_engine, _record(), HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=8))
-    b = hnsw_index_ddl(unconnected_pg_engine, _record(), HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=64))
+    a = hnsw_index_ddl(
+        unconnected_pg_engine,
+        _record(),
+        HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=8),
+    )
+    b = hnsw_index_ddl(
+        unconnected_pg_engine,
+        _record(),
+        HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=64),
+    )
     assert "m = 8" in a
     assert "m = 64" in b
 
@@ -120,19 +130,24 @@ def test_bit_metrics_not_in_pgvector_supported_metrics(metric):
 
     for index in (IndexType.FLAT, IndexType.HNSW):
         assert not is_supported_index_metric_combination_for_backend(
-            backend=BackendType.PGVECTOR, index=index, metric=metric,
+            backend=BackendType.PGVECTOR,
+            index=index,
+            metric=metric,
         )
 
 
 @pytest.mark.parametrize("metric", [MetricType.HAMMING, MetricType.JACCARD])
 def test_get_distance_raises_for_bit_metrics(metric):
+    from omop_emb.backends.embedding_table import PGEmbeddingTable
     from omop_emb.backends.pgvector.pg_sql import get_distance
 
     class _FakeTable:
         embedding = None
 
     with pytest.raises(ValueError, match="bit"):
-        get_distance(_FakeTable, np.empty(0, dtype=np.float32), metric)
+        get_distance(
+            cast(type[PGEmbeddingTable], _FakeTable), np.empty(0, dtype=np.float32), metric
+        )
 
 
 def test_get_similarity_raises_valueerror_for_hamming():

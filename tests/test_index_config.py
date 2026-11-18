@@ -84,4 +84,4 @@ def test_hnsw_record_missing_a_required_field_is_rejected():
 )
 def test_hnsw_config_rejects_a_non_positive_value(name):
     with pytest.raises(ValueError, match=name):
-        HNSWIndexConfig(metric_type=MetricType.COSINE, **{name: 0})
+        HNSWIndexConfig.from_kwargs(metric_type=MetricType.COSINE, **{name: 0})

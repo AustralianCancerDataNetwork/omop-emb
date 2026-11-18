@@ -48,11 +48,11 @@ _NEITHER = frozenset(
     {
         "DEFAULT_K_NEAREST",
         "backend_name",
+        "capabilities",
         "default_flat_metric",
         "dialect",
         "emb_engine",
         "emb_session_factory",
-        "supports_max_scan_tuples",
     }
 )
 

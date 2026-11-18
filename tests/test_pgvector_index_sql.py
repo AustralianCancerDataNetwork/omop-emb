@@ -123,17 +123,10 @@ def test_vector_column_type_rejects_oversized():
 
 @pytest.mark.parametrize("metric", [MetricType.HAMMING, MetricType.JACCARD])
 def test_bit_metrics_not_in_pgvector_supported_metrics(metric):
-    from omop_emb.config import (
-        BackendType,
-        is_supported_index_metric_combination_for_backend,
-    )
+    from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 
     for index in (IndexType.FLAT, IndexType.HNSW):
-        assert not is_supported_index_metric_combination_for_backend(
-            backend=BackendType.PGVECTOR,
-            index=index,
-            metric=metric,
-        )
+        assert not PGVectorEmbeddingBackend.CAPABILITIES.supports_metric(index, metric)
 
 
 @pytest.mark.parametrize("metric", [MetricType.HAMMING, MetricType.JACCARD])

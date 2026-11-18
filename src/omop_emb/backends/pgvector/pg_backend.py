@@ -4,6 +4,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from functools import cached_property
+from typing import ClassVar
 
 from numpy import ndarray
 from oa_configurator import (
@@ -29,6 +30,7 @@ from omop_emb.backends.base_backend import (
     EmbeddingBackend,
     writes,
 )
+from omop_emb.backends.capabilities import BackendCapabilities
 from omop_emb.backends.embedding_table import (
     PGEmbeddingTable,
 )
@@ -49,7 +51,7 @@ from omop_emb.backends.pgvector.pg_sql import (
     table_exists,
     upsert_embedding_rows,
 )
-from omop_emb.config import BackendType, MetricType
+from omop_emb.config import BackendType, IndexType, MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
     EmbeddingArray,
@@ -114,6 +116,16 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         Forwarded to ``EmbeddingBackend``.
     """
 
+    # https://github.com/pgvector/pgvector?tab=readme-ov-file#querying
+    CAPABILITIES: ClassVar[BackendCapabilities] = BackendCapabilities(
+        backend_type=BackendType.PGVECTOR,
+        indices={
+            IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1),
+            IndexType.HNSW: (MetricType.L2, MetricType.COSINE, MetricType.L1),
+        },
+        max_scan_tuples=True,
+    )
+
     # Instance variables
     _MAX_EF_SEARCH = 1000
     _filtered_hnsw_warned = False
@@ -135,8 +147,8 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         return None
 
     @property
-    def supports_max_scan_tuples(self) -> bool:
-        return True
+    def capabilities(self) -> BackendCapabilities:
+        return self.CAPABILITIES
 
     # ------------------------------------------------------------------
     # Storage table management

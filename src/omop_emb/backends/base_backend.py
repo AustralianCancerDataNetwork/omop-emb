@@ -25,15 +25,13 @@ from sqlalchemy import Engine, inspect, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
+from omop_emb.backends.capabilities import BackendCapabilities
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig, IndexConfig
 from omop_emb.config import (
     BackendType,
     IndexType,
     MetricType,
-    get_supported_index_types_for_backend,
-    is_index_type_supported_for_backend,
-    is_supported_index_metric_combination_for_backend,
     parse_backend_type,
 )
 from omop_emb.model_registry import (
@@ -256,9 +254,10 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         ...
 
     @property
-    def supports_max_scan_tuples(self) -> bool:
-        """Whether ``HNSWIndexConfig.max_scan_tuples`` has an effect on this backend."""
-        return False
+    @abstractmethod
+    def capabilities(self) -> BackendCapabilities:
+        """Index and storage options this backend supports."""
+        ...
 
     @property
     def emb_engine(self) -> Engine:
@@ -425,7 +424,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                 "See the CLI documentation for details."
             )
         index_config = self._normalized_flat_metric(index_config)
-        self._validate_index_config(index_config)
+        self.capabilities.validate_index_config(index_config)
 
         preexisting = bool(self._registry.get_registered_models(model_name=model_name))
         record = self._registry.register_model(
@@ -538,7 +537,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         """
         record = self._registered_record(model_name)
         index_config = self._normalized_flat_metric(index_config)
-        self._validate_index_config(index_config)
+        self.capabilities.validate_index_config(index_config)
         self._rebuild_index_impl(model_record=record, index_config=index_config, vacuum=vacuum)
         return self._registry.update_index_config(
             model_name=model_name,
@@ -591,10 +590,8 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             raise UnsupportedIndexConfigError(
                 f"Model '{model_name}' has no HNSW index. Build one with rebuild_index first."
             )
-        if max_scan_tuples is not None and not self.supports_max_scan_tuples:
-            raise UnsupportedIndexConfigError(
-                f"max_scan_tuples is not supported by backend '{self.backend_name}'."
-            )
+        if max_scan_tuples is not None:
+            self.capabilities.require_max_scan_tuples()
         updated = replace(
             current,
             ef_search=current.ef_search if ef_search is None else ef_search,
@@ -621,30 +618,6 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         if metric_type == index_config.metric_type:
             return index_config
         return FlatIndexConfig(metric_type=metric_type)
-
-    def _validate_index_config(self, index_config: IndexConfig) -> None:
-        """Raise ``UnsupportedIndexConfigError`` if the backend supports neither the index type nor its metric."""
-        if not is_index_type_supported_for_backend(
-            backend=self.backend_type, index=index_config.index_type
-        ):
-            supported = get_supported_index_types_for_backend(self.backend_type)
-            raise UnsupportedIndexConfigError(
-                f"Index type '{index_config.index_type.value}' is not supported by "
-                f"backend '{self.backend_name}'. "
-                f"Supported: {[idx.value for idx in supported]}."
-            )
-        if (
-            index_config.metric_type is not None
-            and not is_supported_index_metric_combination_for_backend(
-                backend=self.backend_type,
-                index=index_config.index_type,
-                metric=index_config.metric_type,
-            )
-        ):
-            raise UnsupportedIndexConfigError(
-                f"Metric '{index_config.metric_type.value}' is not supported by backend "
-                f"'{self.backend_name}' with index type '{index_config.index_type.value}'."
-            )
 
     @abstractmethod
     def _rebuild_index_impl(
@@ -732,9 +705,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                     f"'{metric_type.value}'. Rebuild the index with the desired "
                     "metric or query with the registered one."
                 )
-        elif not is_supported_index_metric_combination_for_backend(
-            backend=self.backend_type, index=record.index_type, metric=metric_type
-        ):
+        elif not self.capabilities.supports_metric(record.index_type, metric_type):
             raise ValueError(
                 f"Metric '{metric_type.value}' is not supported by backend "
                 f"'{self.backend_name}' with index type '{record.index_type.value}'."

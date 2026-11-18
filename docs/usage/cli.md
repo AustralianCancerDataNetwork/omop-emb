@@ -201,9 +201,32 @@ omop-emb maintenance rebuild-index --model <CANONICAL_NAME> [OPTIONS]
 | `--index-type` | `flat` | `flat` or `hnsw`. |
 | `--metric-type` | `cosine` | Distance metric. Locked in for `hnsw` and for `flat` on sqlite-vec, where another metric recreates the table from the stored vectors. Ignored for `flat` on pgvector. See [Metrics](backend-selection.md#metrics). |
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
-| `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
-| `--index-ef-construction` | `None` | HNSW build quality parameter. |
+| `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. The default is 200. |
+| `--index-ef-construction` | `None` | HNSW build quality parameter. The default is 200. |
 | `--vacuum` / `--no-vacuum` | `--vacuum` | Maintenance after the rebuild. pgvector runs `VACUUM (ANALYZE)` on the table to refresh planner statistics. sqlite-vec runs `VACUUM` on the database file after a metric change, which needs free disk space for a second copy of the data. Neither returns the space deleted rows left behind, see [`prune-embeddings --compact`](#prune-embeddings). Use `--no-vacuum` to skip it. |
+
+| Option | Short | Description |
+|---|---|---|
+| `--verbose` | `-v` | Increase log verbosity. |
+
+---
+
+### `set-ef-search`
+
+Change the query-time HNSW settings of a registered model without rebuilding its index. pgvector and DuckDB VSS apply the new values to the next query. A model without an HNSW index is rejected.
+
+```bash
+omop-emb maintenance set-ef-search --model <CANONICAL_NAME> [--value N] [--max-scan-tuples N]
+```
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--model` | `-m` | **required** | Canonical model name. |
+| `--value` | | `None` | New `ef_search`. Higher is more accurate and slower. |
+| `--max-scan-tuples` | | `None` | New cap on the rows a filtered query reads from the index. pgvector only, rejected elsewhere. Server default is 20,000. |
+| `--provider-type` | | `None` | Provider used to canonicalize the model name when needed. |
+
+Give at least one of `--value` and `--max-scan-tuples`. A later `rebuild-index` replaces both with the values it is given or the defaults.
 
 | Option | Short | Description |
 |---|---|---|

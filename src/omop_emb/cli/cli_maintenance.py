@@ -12,7 +12,7 @@ from omop_emb.backends import (
     open_vector_store_reader,
     open_vector_store_writer,
 )
-from omop_emb.backends.index_config import index_config_from_index_type
+from omop_emb.backends.index_config import HNSWIndexConfig, index_config_from_index_type
 from omop_emb.config import (
     IndexType,
     MetricType,
@@ -22,6 +22,7 @@ from omop_emb.config import (
 from omop_emb.population import PopulationScope, plan_population
 from omop_emb.storage import embedding_bundle
 from omop_emb.utils.cdm import CDMSessionFactory
+from omop_emb.utils.errors import UnsupportedIndexConfigError
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(help="Maintenance and management commands for omop-emb.")
@@ -167,6 +168,77 @@ def rebuild_index(
     )
     metric_info = f" (metric={record.metric_type.value})" if record.metric_type else ""
     typer.echo(f"Rebuilt {index_type.value} index for '{model}'{metric_info}.")
+
+
+@app.command(
+    name="set-ef-search",
+    help="Change the query-time HNSW settings of a model without rebuilding its index.",
+)
+def set_ef_search(
+    model: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            "-m",
+            help="Canonical model name to update.",
+        ),
+    ],
+    value: Annotated[
+        int | None,
+        typer.Option(
+            "--value",
+            min=1,
+            help="New ef_search: the candidate list size per query. Higher is more accurate and slower.",
+        ),
+    ] = None,
+    max_scan_tuples: Annotated[
+        int | None,
+        typer.Option(
+            "--max-scan-tuples",
+            min=1,
+            help="New cap on the rows a filtered query reads from the index (pgvector only, "
+            "server default 20,000). Raise it when selective filters return too few rows.",
+        ),
+    ] = None,
+    provider_type: Annotated[
+        str | None,
+        typer.Option(
+            "--provider-type",
+            help="Embedding provider type. Used to canonicalize the model name if provided.",
+        ),
+    ] = None,
+):
+    """Update ``ef_search`` and ``max_scan_tuples`` in the registry.
+
+    pgvector and DuckDB VSS apply the new values to the next query. Neither
+    setting needs an index rebuild.
+    """
+    if value is None and max_scan_tuples is None:
+        typer.echo("Give --value, --max-scan-tuples or both.")
+        raise typer.Exit(1)
+    if provider_type is not None:
+        model = canonical_model_name(provider_type, model)
+
+    cfg = OmopEmbConfig.get_config()
+    resolved = Resolver.from_active_config().resolve_vector_store(cfg.vector_store_name)
+    with open_vector_store_writer(resolved) as backend:
+        if backend.get_registered_model(model_name=model) is None:
+            typer.echo(
+                f"No registered model found for '{model}'. "
+                f"Registered models: {[r.model_name for r in backend.get_registered_models()]}"
+            )
+            raise typer.Exit(1)
+        try:
+            record = backend.set_hnsw_search_params(
+                model_name=model, ef_search=value, max_scan_tuples=max_scan_tuples
+            )
+        except UnsupportedIndexConfigError as exc:
+            typer.secho(str(exc), fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+    config = record.index_config
+    assert isinstance(config, HNSWIndexConfig)
+    scan_cap = config.max_scan_tuples if config.max_scan_tuples is not None else "server default"
+    typer.echo(f"Updated '{model}': ef_search={config.ef_search}, max_scan_tuples={scan_cap}.")
 
 
 @app.command(

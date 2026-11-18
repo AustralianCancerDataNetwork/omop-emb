@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -27,6 +28,7 @@ from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 from omop_emb.config import IndexType, MetricType
 from omop_emb.model_registry import RegistryManager, registry_reader_engine
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from omop_emb.utils.errors import UnsupportedIndexConfigError
 
 from .conftest import (
     CONCEPT_EMBEDDINGS,
@@ -286,6 +288,49 @@ class TestPGVectorHNSWBackend:
 
         assert len(self._hnsw_query(pg_backend, k=1, filtered=True)) == 1
         assert len(self._hnsw_query(pg_backend, k=2, filtered=True)) == 2
+
+    def test_max_scan_tuples_is_set_per_transaction_only_when_configured(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        """A configured scan cap is applied with SET LOCAL, and an unset one leaves the server default."""
+        if not pg_backend._supports_iterative_scan:
+            pytest.skip("pgvector below 0.8.0")
+        upsert_all(pg_backend)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
+
+        with captured_statements(pg_backend.emb_engine) as statements:
+            self._hnsw_query(pg_backend, k=2, filtered=True)
+        assert not any("max_scan_tuples" in s for s in statements)
+
+        pg_backend.set_hnsw_search_params(model_name=MODEL_NAME, max_scan_tuples=5000)
+        with captured_statements(pg_backend.emb_engine) as statements:
+            self._hnsw_query(pg_backend, k=2, filtered=True)
+        assert "set local hnsw.max_scan_tuples = 5000" in statements
+        with pg_backend.emb_engine.connect() as conn:
+            assert conn.execute(sa.text("SHOW hnsw.max_scan_tuples")).scalar_one() == "20000"
+
+    def test_set_hnsw_search_params_keeps_the_other_settings(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        """Updating one query-time setting leaves the other and the graph settings as they were."""
+        upsert_all(pg_backend)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
+
+        record = pg_backend.set_hnsw_search_params(model_name=MODEL_NAME, max_scan_tuples=50_000)
+        assert record.index_config == replace(self.HNSW_CONFIG, max_scan_tuples=50_000)
+
+        record = pg_backend.set_hnsw_search_params(model_name=MODEL_NAME, ef_search=64)
+        assert record.index_config == replace(
+            self.HNSW_CONFIG, ef_search=64, max_scan_tuples=50_000
+        )
+        assert registered_model(pg_backend, MODEL_NAME).index_config == record.index_config
+
+    def test_set_hnsw_search_params_rejects_a_flat_model(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        register_flat(pg_backend)
+        with pytest.raises(UnsupportedIndexConfigError, match="no HNSW index"):
+            pg_backend.set_hnsw_search_params(model_name=MODEL_NAME, ef_search=64)
 
     @pytest.mark.parametrize("k,expected_ef_search", [(1, 8), (50, 50), (5000, 1000)])
     def test_without_iterative_scan_ef_search_covers_k(

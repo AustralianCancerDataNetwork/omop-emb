@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, fields, is_dataclass
+from dataclasses import MISSING, asdict, dataclass, fields, is_dataclass
 from enum import Enum
 from typing import Any, Self, get_type_hints
 
@@ -105,6 +105,8 @@ class IndexConfig(ABC):
         config_dict : dict[str, Any]
             The dict previously produced by :meth:`to_dict`. Enum fields may
             be stored as string values and are coerced back to their types.
+            Fields with a default may be absent, as in records written before
+            the field existed.
 
         Returns
         -------
@@ -116,7 +118,8 @@ class IndexConfig(ABC):
         TypeError
             If called on the abstract base class or a non-dataclass.
         ValueError
-            If a required field is missing or an enum value is unrecognised.
+            If a field without a default is missing or an enum value is
+            unrecognised.
 
         Notes
         -----
@@ -133,7 +136,9 @@ class IndexConfig(ABC):
         init_params: dict[str, Any] = {}
         for field in fields(cls):
             if field.name not in config_dict:
-                raise ValueError(f"Strict check failed: '{field.name}' missing in config dict.")
+                if field.default is MISSING:
+                    raise ValueError(f"Strict check failed: '{field.name}' missing in config dict.")
+                continue
             value = config_dict[field.name]
             field_type = type_hints.get(field.name)
             if value is not None and isinstance(field_type, type) and issubclass(field_type, Enum):
@@ -185,10 +190,14 @@ class HNSWIndexConfig(IndexConfig):
         Number of bi-directional links per node (``M`` in the HNSW paper).
         Default ``32``.
     ef_search : int
-        Size of the dynamic candidate list during search. Default ``16``.
+        Size of the dynamic candidate list during search. Default ``200``.
     ef_construction : int
         Size of the dynamic candidate list during index construction.
-        Default ``64``.
+        Default ``200``.
+    max_scan_tuples : int or None
+        Upper bound on the rows one filtered query may read from the index
+        (pgvector ``hnsw.max_scan_tuples``). ``None`` keeps the server default
+        of 20,000. Only pgvector supports it.
 
     Notes
     -----
@@ -198,13 +207,18 @@ class HNSWIndexConfig(IndexConfig):
 
     metric_type: MetricType
     num_neighbors: int = 32
-    ef_search: int = 16
-    ef_construction: int = 64
+    ef_search: int = 200
+    ef_construction: int = 200
+    max_scan_tuples: int | None = None
     index_type: IndexType = IndexType.HNSW
 
     def _validate_metric_type_after_init(self) -> None:
         if self.metric_type is None:
             raise ValueError("HNSW index requires a metric_type (e.g. MetricType.COSINE).")
+        for name in ("num_neighbors", "ef_search", "ef_construction", "max_scan_tuples"):
+            value = getattr(self, name)
+            if value is not None and value < 1:
+                raise ValueError(f"HNSW '{name}' must be a positive integer, got {value}.")
 
 
 # ---------------------------------------------------------------------------

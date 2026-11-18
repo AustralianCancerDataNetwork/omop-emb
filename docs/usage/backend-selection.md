@@ -49,8 +49,9 @@ Hierarchical Navigable Small World graph. Approximate nearest-neighbour search w
 | Parameter | Default | Effect |
 |---|---|---|
 | `num_neighbors` | `32` | Graph connectivity (`M`). Higher = better recall, larger index. |
-| `ef_construction` | `64` | Build quality. Higher = better recall at build time, slower build. |
-| `ef_search` | `16` | Query recall. Higher = better recall at query time, slower query. |
+| `ef_construction` | `200` | Build quality. Higher = better recall at build time, slower build. |
+| `ef_search` | `200` | Query recall. Higher = better recall at query time, slower query. |
+| `max_scan_tuples` | `None` | pgvector only. Rows a filtered query may read from the index. `None` keeps the server default of 20,000. |
 
 ```python
 from omop_emb.backends.index_config import HNSWIndexConfig
@@ -59,8 +60,8 @@ from omop_emb.config import MetricType
 HNSWIndexConfig(
     metric_type=MetricType.COSINE,  # locked in at build time for HNSW
     num_neighbors=32,
-    ef_construction=64,
-    ef_search=16,
+    ef_construction=200,
+    ef_search=200,
 )
 ```
 
@@ -92,8 +93,16 @@ omop-emb maintenance rebuild-index --model-name embedding-model --index-type hns
 !!! info "pgvector HNSW and filtered queries"
     HNSW applies a concept filter after the index returns its candidates, so a selective filter can leave fewer than `k` rows. With pgvector 0.8.0 or newer, `omop-emb` sets `hnsw.iterative_scan` for each query, which keeps scanning the index until `k` rows pass the filter. The scan runs in `relaxed_order` and the rows are sorted by distance afterwards, because `strict_order` skips every row closer than the last one it returned and so loses neighbours found in later batches. Older pgvector versions have no iterative scan: `ef_search` is raised to at least `k` (at most 1000, the pgvector limit) and a filtered query logs a one-time warning, since its results can still be incomplete. Upgrade the extension to fix this. For very selective filters at a low `ef_search`, the planner may choose an exact scan over the index.
 
+    The iterative scan stops after `hnsw.max_scan_tuples` rows (Default: 20,000) so a filter that matches few of the nearest rows can still return fewer than `k` results, or none. Raise the cap per model with `omop-emb maintenance set-ef-search --model <NAME> --max-scan-tuples 100000`, or set `max_scan_tuples` on the `HNSWIndexConfig`. A higher cap makes those queries slower. Filtering by a single domain is the usual case: a rarer domain needs a larger cap.
+
 !!! warning "DuckDB VSS HNSW and filtered queries"
     DuckDB's built-in `vss` extension applies a concept filter after the index returns its candidates, the same way pgvector does, but with no `iterative_scan`-equivalent at all: raising `ef_search` has no effect on a filtered query, confirmed empirically up to `ef_search=20000` on a 300k-row table (always short, never returning `k` rows). `omop-emb` works around this by materializing the filtered rows into a CTE before computing distance, which stops DuckDB's optimizer from using the index and forces an exact scan over just the filtered subset instead. This is always correct, but always pays the exact-scan cost for a filtered query; there is no faster, index-accelerated path today. See the [Performance Guide](performance.md) for measured latency. A community fork, [`hnsw_acorn`](https://duckdb.org/community_extensions/extensions/hnsw_acorn), adds predicate-aware index traversal; not adopted here, since it's a single-maintainer fork distributed outside DuckDB's own extension.
+
+!!! info "Changing HNSW settings on an existing index"
+    `ef_search` and `max_scan_tuples` are read at query time, so `omop-emb maintenance set-ef-search` changes them without a rebuild. `ef_construction` and `num_neighbors` shape the graph, so changing them needs `rebuild-index`. Stores indexed before the defaults changed to 200 keep the values stored in their registry until they are rebuilt or updated. The FAISS cache applies the `ef_search` of the config passed at search time, not the registry value.
+
+!!! info "DuckDB space after a rebuild"
+    A DuckDB file does not shrink when an index is dropped and rebuilt, so rebuilding with different settings can leave unused space in the file until it is compacted.
 
 !!! warning "HNSW builds in containers"
     A parallel HNSW build can fail with `could not resize shared memory segment ... No space left on device` when the container's `/dev/shm` is small. Either enlarge `/dev/shm` (for example `shm_size` in Docker Compose) or set `max_parallel_maintenance_workers = 0` on the server, which builds serially and takes longer.

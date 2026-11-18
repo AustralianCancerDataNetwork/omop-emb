@@ -134,6 +134,10 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     def default_flat_metric(self) -> None:
         return None
 
+    @property
+    def supports_max_scan_tuples(self) -> bool:
+        return True
+
     # ------------------------------------------------------------------
     # Storage table management
     # ------------------------------------------------------------------
@@ -365,7 +369,13 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             return installed_pgvector_version(session) >= (0, 8, 0)
 
     def _configure_hnsw_scan(
-        self, session: Session, *, ef_search: int, k: int, filtered: bool
+        self,
+        session: Session,
+        *,
+        ef_search: int,
+        k: int,
+        filtered: bool,
+        max_scan_tuples: int | None = None,
     ) -> None:
         """Set the HNSW scan parameters for the current transaction.
 
@@ -378,6 +388,10 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         1000) and a filtered query logs a one-time warning that its results
         may be incomplete.
 
+        The iterative scan stops after ``hnsw.max_scan_tuples`` rows (20,000 by
+        default), so a selective filter can still return fewer than ``k`` rows.
+        ``max_scan_tuples`` raises or lowers that bound for the transaction.
+
         Parameters
         ----------
         session : Session
@@ -388,9 +402,14 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             Number of neighbours requested.
         filtered : bool
             Whether the query carries a concept filter.
+        max_scan_tuples : int, optional
+            Configured scan cap of the model. The server default applies when
+            ``None`` and on pgvector versions without iterative scans.
         """
         if self._supports_iterative_scan:
             session.execute(text("SET LOCAL hnsw.iterative_scan = relaxed_order"))
+            if max_scan_tuples is not None:
+                session.execute(text(f"SET LOCAL hnsw.max_scan_tuples = {int(max_scan_tuples)}"))
         else:
             ef_search = min(max(ef_search, k), self._MAX_EF_SEARCH)
             if filtered and not self._filtered_hnsw_warned:
@@ -419,6 +438,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                     ef_search=model_record.index_config.ef_search,
                     k=k,
                     filtered=concept_filter is not None,
+                    max_scan_tuples=model_record.index_config.max_scan_tuples,
                 )
 
             ann_rows = [

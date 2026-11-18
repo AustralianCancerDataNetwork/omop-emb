@@ -10,10 +10,6 @@ import pytest
 from oa_configurator import physical_schema_of, qualified
 from sqlalchemy import text
 
-pytest.importorskip(
-    "duckdb_sqlalchemy", reason="omop-emb[duckdbvss] not installed: skipping duckdbvss tests"
-)
-
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.duckdbvss.duckdbvss_backend import DuckDBVSSEmbeddingBackend
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
@@ -36,7 +32,6 @@ from .shared_backend_tests import SharedBackendTests
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 class TestDuckDBVSSEmbeddingBackend(SharedBackendTests):
     """Runs the full shared suite against an in-memory DuckDBVSSEmbeddingBackend."""
 
@@ -46,7 +41,6 @@ class TestDuckDBVSSEmbeddingBackend(SharedBackendTests):
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 class TestDuckDBVSSHNSWBackend:
     """DuckDB VSS-specific HNSW index behaviour."""
 
@@ -219,7 +213,6 @@ class TestDuckDBVSSHNSWBackend:
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 class TestDuckDBVSSCompactionAndDelete:
     """DuckDB VSS-specific delete and compaction behaviour."""
 

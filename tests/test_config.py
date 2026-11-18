@@ -16,7 +16,6 @@ from omop_emb.config import (
 )
 
 
-@pytest.mark.unit
 class TestUnregisteredBackendRaises:
     """An unregistered backend must raise, not silently report 'supports
     nothing'. Simulated via monkeypatch since BackendType has no member

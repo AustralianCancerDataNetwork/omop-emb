@@ -15,7 +15,7 @@ from oa_configurator import (
     StackConfig,
 )
 from sqlalchemy import event, text
-from sqlalchemy.exc import InternalError, OperationalError
+from sqlalchemy.exc import DBAPIError
 
 from omop_emb.backends import (
     EmbeddingStoreReader,
@@ -76,6 +76,11 @@ def _populate(store):
             model_name=_MODEL, records=list(CONCEPT_RECORDS), embeddings=CONCEPT_EMBEDDINGS
         )
     return store
+
+
+@pytest.fixture
+def populated_store(vector_store):
+    return _populate(vector_store)
 
 
 def _same_database_stores(path, second_path=None):
@@ -162,17 +167,8 @@ def test_every_concrete_backend_override_of_a_write_method_stays_classified_as_a
             )
 
 
-def test_reader_rejects_every_write(tmp_path):
-    store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
-    with open_vector_store_writer(store) as writer:
-        writer.register_model(
-            model_name=_MODEL,
-            provider_type="ollama",
-            index_config=FlatIndexConfig(),
-            dimensions=EMBEDDING_DIM,
-        )
-
-    with open_vector_store_reader(store) as reader:
+def test_reader_rejects_every_write(populated_store):
+    with open_vector_store_reader(populated_store) as reader:
         backend = reader
         assert isinstance(backend, EmbeddingBackend)
         with pytest.raises(ReadOnlyStoreError):
@@ -190,6 +186,7 @@ def test_reader_rejects_every_write(tmp_path):
         assert [record.model_name for record in reader.get_registered_models()] == [_MODEL]
 
 
+@pytest.mark.sqlitevec
 @pytest.mark.parametrize("use_path_alias", [False, True])
 def test_one_store_per_model_on_same_sqlite_file(tmp_path, use_path_alias):
     real_path = tmp_path / "shared.db"
@@ -242,6 +239,7 @@ def test_one_store_per_model_on_same_sqlite_file(tmp_path, use_path_alias):
         )
 
 
+@pytest.mark.sqlitevec
 def test_same_model_can_register_in_different_sqlite_databases(tmp_path):
     _, (store_a, store_b) = _same_database_stores(tmp_path / "store-a.db", tmp_path / "store-b.db")
     with open_vector_store_writer(store_a) as first, open_vector_store_writer(store_b) as second:
@@ -260,6 +258,7 @@ def test_same_model_can_register_in_different_sqlite_databases(tmp_path):
         assert record_a.storage_identifier != record_b.storage_identifier
 
 
+@pytest.mark.sqlitevec
 def test_concurrent_cross_store_registration_on_sqlite_has_one_winner(tmp_path):
     _, (store_a, store_b) = _same_database_stores(tmp_path / "concurrent.db")
     # Initialize the shared registry before the concurrent registration calls.
@@ -288,6 +287,7 @@ def test_concurrent_cross_store_registration_on_sqlite_has_one_winner(tmp_path):
     assert str(conflicts[0]).startswith(f"Model '{_MODEL}' is already registered by vector store '")
 
 
+@pytest.mark.sqlitevec
 def test_prerelease_registry_without_model_unique_constraint_still_refuses_second_store(tmp_path):
     import sqlalchemy as sa
 
@@ -323,6 +323,7 @@ def test_prerelease_registry_without_model_unique_constraint_still_refuses_secon
         )
 
 
+@pytest.mark.sqlitevec
 def test_register_model_does_not_read_active_config(tmp_path, monkeypatch):
     import oa_configurator
 
@@ -402,21 +403,24 @@ def _assert_every_read_works_without_mutating_sql(store) -> None:
     )
 
 
-def test_reader_runs_every_read_without_mutating_sql(tmp_path):
-    _assert_every_read_works_without_mutating_sql(_populated_store(tmp_path))
+def test_reader_runs_every_read_without_mutating_sql(populated_store):
+    _assert_every_read_works_without_mutating_sql(populated_store)
 
 
-def test_reader_connection_refuses_writes_at_database_level(tmp_path):
-    """Writes that bypass @writes still fail: the connection itself is query-only."""
-    store = _populated_store(tmp_path)
-    with open_vector_store_reader(store) as reader:
+def test_reader_connection_refuses_writes_at_database_level(populated_store):
+    """Writes that bypass @writes still fail: the connection itself is read-only."""
+    with open_vector_store_reader(populated_store) as reader:
         engine = engine_of(reader)
-        with engine.begin() as connection, pytest.raises(OperationalError, match="readonly"):
-            connection.execute(text("CREATE TEMPORARY TABLE _probe (id INTEGER)"))
+        with (
+            engine.connect() as connection,
+            pytest.raises(DBAPIError, match=r"read-?only"),
+        ):
+            connection.execute(text("CREATE TABLE _probe (id INTEGER)"))
+            connection.commit()
 
 
+@pytest.mark.faiss
 def test_export_and_faiss_build_run_on_a_reader(tmp_path):
-    pytest.importorskip("faiss")
     from omop_emb.storage.faiss import FAISSCache
 
     store = _populated_store(tmp_path)
@@ -430,8 +434,7 @@ def test_export_and_faiss_build_run_on_a_reader(tmp_path):
     assert cache.faiss_path(MetricType.COSINE, FlatIndexConfig()).exists()
 
 
-@pytest.mark.postgresql
-@pytest.mark.db_dialect
+@pytest.mark.pgvector
 def test_only_the_writer_attaches_the_vector_extension_hook(pg_db, monkeypatch):
     from oa_configurator import ResolvedVectorStore
 
@@ -460,8 +463,7 @@ def test_only_the_writer_attaches_the_vector_extension_hook(pg_db, monkeypatch):
     assert calls
 
 
-@pytest.mark.postgresql
-@pytest.mark.db_dialect
+@pytest.mark.pgvector
 def test_one_model_name_is_unique_across_schemas_in_one_postgres_database(pg_db):
     """The registry is shared across schemas in one physical database."""
     import sqlalchemy as sa
@@ -548,6 +550,7 @@ def test_one_model_name_is_unique_across_schemas_in_one_postgres_database(pg_db)
                         writer.delete_model(model_name=_MODEL)
 
 
+@pytest.mark.pgvector
 def test_one_store_per_model_on_one_postgres_registry(pg_db):
     """A shared registry gives one vector store ownership of each model name."""
     import sqlalchemy as sa
@@ -634,40 +637,3 @@ def test_one_store_per_model_on_one_postgres_registry(pg_db):
                 with open_vector_store_writer(store) as writer:
                     if writer.get_registered_model(model_name=_MODEL) is not None:
                         writer.delete_model(model_name=_MODEL)
-
-
-@pytest.mark.postgresql
-@pytest.mark.db_dialect
-class TestPostgresReader:
-    @pytest.fixture
-    def store(self, pg_db):
-        from oa_configurator import ResolvedVectorStore
-
-        from omop_emb.backends.embedding_table import EmbeddingTableBase
-
-        store = _populate(
-            ResolvedVectorStore(
-                name="default",
-                backend_type="pgvector",
-                database=pg_db.resolved,
-                faiss_cache_dir=None,
-                configuration={},
-            )
-        )
-        yield store
-        with open_vector_store_writer(store) as writer:
-            writer.delete_model(model_name=_MODEL)
-        EmbeddingTableBase.metadata.clear()
-        EmbeddingTableBase.registry._class_registry.clear()
-
-    def test_every_read_works_on_a_read_only_connection(self, store):
-        _assert_every_read_works_without_mutating_sql(store)
-
-    def test_connection_refuses_writes_at_database_level(self, store):
-        with open_vector_store_reader(store) as reader:
-            engine = engine_of(reader)
-            with (
-                engine.begin() as connection,
-                pytest.raises(InternalError, match="read-only transaction"),
-            ):
-                connection.execute(text("CREATE TEMPORARY TABLE _probe (id INTEGER)"))

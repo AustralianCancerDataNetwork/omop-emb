@@ -27,7 +27,6 @@ from .conftest import (
     duckdbvss_resolved_vector_store,
     registered_model,
     sqlite_cdm_database,
-    sqlite_resolved_vector_store,
 )
 
 MODEL = "test-model:v1"
@@ -52,9 +51,9 @@ def _concept(concept_id: int, **overrides):
 
 
 @pytest.fixture
-def pruning_setup(tmp_path, monkeypatch):
+def pruning_setup(vector_store, monkeypatch):
     """Store with concept 1 (valid), 2 (invalid in the CDM) and 3 (absent from the CDM)."""
-    store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
+    store = vector_store
     with open_vector_store_writer(store) as writer:
         writer.register_model(
             model_name=MODEL,
@@ -373,7 +372,6 @@ def indexed_population(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 @pytest.mark.parametrize(
     "indexed_population",
     ["success", "provider_failure", "store_failure", "nothing_pending"],
@@ -423,7 +421,6 @@ def test_population_of_reopened_hnsw_syncs_once_even_after_a_partial_failure(
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 @pytest.mark.parametrize(
     "indexed_population, target",
     [
@@ -469,7 +466,6 @@ def test_combined_population_reuses_only_a_matching_existing_index(indexed_popul
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 @pytest.mark.parametrize("indexed_population", ["nothing_pending"], indirect=True)
 def test_create_index_still_forces_rebuilding_a_matching_index(indexed_population):
     cli_embeddings.create_index(
@@ -484,7 +480,6 @@ def test_create_index_still_forces_rebuilding_a_matching_index(indexed_populatio
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 @pytest.mark.parametrize("indexed_population", ["provider_failure"], indirect=True)
 def test_combined_command_keeps_population_failure_sync(indexed_population, monkeypatch):
     create = Mock(wraps=cli_embeddings._create_index)

@@ -104,7 +104,7 @@ def duckdb_test_resolver(database_name: str = ":memory:") -> Resolver:
     ``isolated_test_database()``'s ``resolver=`` override.
 
     ``DuckDBTestStrategy.resolve_without_config()`` (the fallback
-    ``isolated_test_database(..., dialect="duckdb")`` would otherwise use
+    ``isolated_test_database(..., dialect=Dialect.DUCKDB)`` would otherwise use
     when nothing configures the field) fabricates a ``ResolvedCDMDatabase``,
     built for omop-alchemy's CDM fixtures. omop-emb's embedding store is a
     plain database, not a CDM one, so this builds a real, resolvable
@@ -256,8 +256,9 @@ def svec_engine(request):
     with isolated_test_database(
         OmopEmbConfig,
         "test_emb_db_sqlite",
-        dialect="sqlite",
+        dialect=Dialect.SQLITE,
         request=request,
+        routing_mark="sqlitevec",
         schema_claims=[
             SchemaClaim(
                 schema_tag=REGISTRY_SCHEMA_KEY,
@@ -298,6 +299,7 @@ def pg_db(request):
         "test_emb_db_pg",
         extensions=[install_postgres_extension("vector")],
         request=request,
+        routing_mark="pgvector",
     ) as db:
         yield db
 
@@ -470,6 +472,7 @@ def duckdbvss_db(request):
         resolver=duckdb_test_resolver(),
         extensions=[_install_vss],
         request=request,
+        routing_mark="duckdbvss",
     ) as db:
         yield db
 
@@ -497,3 +500,77 @@ def duckdbvss_backend(duckdbvss_db):
 def duckdbvss_engine(duckdbvss_backend) -> sa.Engine:
     """``duckdbvss_backend``'s own engine: registry schema claimed and VSS loaded."""
     return duckdbvss_backend.emb_engine
+
+
+BACKEND_PARAMS = tuple(
+    pytest.param(backend, marks=getattr(pytest.mark, backend.value)) for backend in BackendType
+)
+"""One param per vector backend, each carrying that backend's routing mark."""
+
+_ENGINE_FIXTURE_BY_BACKEND = {
+    BackendType.SQLITEVEC: "svec_engine",
+    BackendType.PGVECTOR: "pg_engine",
+    BackendType.DUCKDBVSS: "duckdbvss_engine",
+}
+assert set(_ENGINE_FIXTURE_BY_BACKEND) == {param.values[0] for param in BACKEND_PARAMS}, (
+    "_ENGINE_FIXTURE_BY_BACKEND is missing an entry for a BackendType."
+)
+
+
+@pytest.fixture(params=BACKEND_PARAMS)
+def backend_engine(request) -> sa.Engine:
+    """The engine of each vector backend, registry schema claimed.
+
+    A test using this fixture runs once per backend, in that backend's job.
+    """
+    return request.getfixturevalue(_ENGINE_FIXTURE_BY_BACKEND[request.param])
+
+
+@pytest.fixture
+def svec_store(tmp_path) -> ResolvedVectorStore:
+    """A sqlite-vec store on a file of its own, for tests that open a reader beside a writer."""
+    return sqlite_resolved_vector_store(str(tmp_path / "test.db"))
+
+
+@pytest.fixture
+def duckdbvss_store(tmp_path) -> ResolvedVectorStore:
+    """A DuckDB VSS store on a file of its own, for tests that open a reader beside a writer."""
+    return duckdbvss_resolved_vector_store(str(tmp_path / "test.duckdb"))
+
+
+@pytest.fixture
+def pg_store(pg_db) -> Iterator[ResolvedVectorStore]:
+    """A pgvector store on the shared test database, with its models and tables removed afterwards."""
+    from omop_emb.backends import open_vector_store_writer
+    from omop_emb.backends.embedding_table import EmbeddingTableBase
+
+    store = ResolvedVectorStore(
+        name="default",
+        backend_type="pgvector",
+        database=pg_db.resolved,
+        faiss_cache_dir=None,
+        configuration={},
+    )
+    yield store
+    try:
+        with open_vector_store_writer(store) as writer:
+            drop_all_models(writer)
+    finally:
+        EmbeddingTableBase.metadata.clear()
+        EmbeddingTableBase.registry._class_registry.clear()
+
+
+_STORE_FIXTURE_BY_BACKEND = {
+    BackendType.SQLITEVEC: "svec_store",
+    BackendType.PGVECTOR: "pg_store",
+    BackendType.DUCKDBVSS: "duckdbvss_store",
+}
+assert set(_STORE_FIXTURE_BY_BACKEND) == {param.values[0] for param in BACKEND_PARAMS}, (
+    "_STORE_FIXTURE_BY_BACKEND is missing an entry for a BackendType."
+)
+
+
+@pytest.fixture(params=BACKEND_PARAMS)
+def vector_store(request) -> ResolvedVectorStore:
+    """The store of each vector backend. A test using it runs once per backend, in that backend's job."""
+    return request.getfixturevalue(_STORE_FIXTURE_BY_BACKEND[request.param])

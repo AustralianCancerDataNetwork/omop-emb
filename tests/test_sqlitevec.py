@@ -44,8 +44,9 @@ from .conftest import (
 )
 from .shared_backend_tests import SharedBackendTests
 
+pytestmark = pytest.mark.sqlitevec
 
-@pytest.mark.unit
+
 class TestSQLiteVecEmbeddingBackend(SharedBackendTests):
     """Runs the full shared suite against an in-memory SQLiteVecEmbeddingBackend."""
 
@@ -54,7 +55,6 @@ class TestSQLiteVecEmbeddingBackend(SharedBackendTests):
         return svec_backend
 
 
-@pytest.mark.unit
 class TestSQLiteVecSpecific:
     """SQLiteVec-specific behaviour not covered by the shared suite."""
 
@@ -140,7 +140,6 @@ def _make_pre_cosine_table(backend: SQLiteVecEmbeddingBackend, record, vectors: 
     backend._table_cache.clear()
 
 
-@pytest.mark.unit
 class TestSQLiteVecMetricTable:
     """The vec0 table declares the metric the model is registered with, which MATCH queries rely on."""
 
@@ -419,7 +418,6 @@ class TestSQLiteVecMetricTable:
         assert similarities == sorted(similarities, reverse=True)
 
 
-@pytest.mark.unit
 class TestSQLiteVecVacuum:
     """A metric-change rebuild vacuums unless told not to. Only compact_storage returns space freed by deletes."""
 
@@ -563,7 +561,6 @@ class TestSQLiteVecVacuum:
         return database_size(backend.emb_engine)
 
 
-@pytest.mark.unit
 class TestSQLiteVecConceptIdLookups:
     """Short ID lists use one equality lookup per ID, longer ones one scan, with identical results."""
 
@@ -613,7 +610,6 @@ class TestSQLiteVecConceptIdLookups:
         assert backend.get_embedding_count(model_name=MODEL_NAME) == len(CONCEPT_RECORDS)
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize(
     "limit, expected_statements, scans",
     [(100, 3, False), (2, 1, True)],

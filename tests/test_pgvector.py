@@ -257,8 +257,7 @@ class TestPGVectorHNSWBackend:
         self, pg_backend: PGVectorEmbeddingBackend, filtered: bool
     ):
         """Where pgvector supports it, the HNSW scan is iterative and rows come back ordered by similarity."""
-        if not pg_backend._supports_iterative_scan:
-            pytest.skip("pgvector below 0.8.0")
+        assert pg_backend._supports_iterative_scan, "this test needs pgvector 0.8.0 or later"
         upsert_all(pg_backend)
         pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
 

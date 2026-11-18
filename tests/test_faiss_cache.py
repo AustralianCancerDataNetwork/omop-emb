@@ -20,7 +20,7 @@ from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 from .conftest import make_svec_backend, populate
 
-pytest.importorskip("faiss", reason="faiss-cpu not installed")
+pytestmark = pytest.mark.faiss
 
 # ---------------------------------------------------------------------------
 # Shared test data
@@ -86,9 +86,6 @@ def _build_faiss(
 # ---------------------------------------------------------------------------
 # COSINE metric correctness
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
 class TestCosineCorrectness:
     """FAISS COSINE path: inner product → cosine distance → similarity."""
 
@@ -165,9 +162,6 @@ class TestCosineCorrectness:
 # ---------------------------------------------------------------------------
 # L2 metric correctness
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
 class TestL2Correctness:
     """FAISS L2 path: squared distance → sqrt → true L2 → similarity."""
 
@@ -198,9 +192,6 @@ class TestL2Correctness:
 # ---------------------------------------------------------------------------
 # Cross-backend parity: FAISS vs SQLiteVec
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
 class TestCrossBackendParity:
     """FAISS and SQLiteVec must return the same cosine similarity scores."""
 
@@ -242,9 +233,6 @@ class TestCrossBackendParity:
 # ---------------------------------------------------------------------------
 # Cache identity
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
 class TestIndexCache:
     """Dict-keyed cache: each (metric_type, index_config) gets its own slot."""
 
@@ -287,9 +275,6 @@ class TestIndexCache:
 # ---------------------------------------------------------------------------
 # HNSW efSearch applied at load time
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
 class TestHNSWEfSearch:
     """efSearch from HNSWIndexConfig is applied to the loaded index."""
 
@@ -325,7 +310,6 @@ class TestHNSWEfSearch:
         assert inner.hnsw.efSearch == 64
 
 
-@pytest.mark.unit
 class TestCrossMachineCacheReuse:
     """A FAISS cache built on one backend, shipped alongside its export
     bundle, must validate as fresh once the bundle is imported into a
@@ -354,9 +338,6 @@ class TestCrossMachineCacheReuse:
 # ---------------------------------------------------------------------------
 # Pre-filtering correctness (live backend query, no metadata.npz)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
 class TestConceptFilterPrefiltering:
     """concept_filter must restrict the FAISS traversal itself (pre-filter),
     not just narrow an unfiltered top-k after the fact (post-filter)."""
@@ -448,9 +429,6 @@ class TestConceptFilterPrefiltering:
 # ---------------------------------------------------------------------------
 # metadata.npz removal
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
 class TestNoMetadataNpz:
     """build_from_backend() must no longer write a metadata.npz file."""
 
@@ -465,9 +443,6 @@ class TestNoMetadataNpz:
 # ---------------------------------------------------------------------------
 # Staleness after upsert
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
 class TestStalenessAfterUpsert:
     """A cache built before new embeddings are upserted must go stale."""
 

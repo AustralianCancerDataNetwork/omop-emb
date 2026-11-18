@@ -22,7 +22,7 @@ from omop_emb.storage import embedding_bundle
 
 from .conftest import make_svec_backend, populate
 
-pytest.importorskip("h5py", reason="h5py not installed")
+pytestmark = pytest.mark.sqlitevec
 
 _MODEL = "test-bundle-model:v1"
 _PROVIDER = "ollama"
@@ -40,7 +40,6 @@ def _populate(
     populate(backend, records, vecs, model_name=_MODEL)
 
 
-@pytest.mark.unit
 class TestBundleRoundTrip:
     """Regression coverage for the lossy-COSINE-round-trip bug: a bundle
     export/import must preserve the original raw embedding magnitudes."""
@@ -178,7 +177,6 @@ class TestBundleRoundTrip:
         assert record.updated_at == datetime.fromisoformat(meta.exported_at)
 
 
-@pytest.mark.unit
 class TestImportRebuildIndex:
     """import_bundle(rebuild_index=True) applies the bundle's own
     index_config without the caller re-specifying it."""
@@ -234,7 +232,6 @@ class TestImportRebuildIndex:
         assert calls == []
 
 
-@pytest.mark.unit
 class TestImportBackdatesRegistration:
     """A brand-new registration created by import_bundle() is backdated to
     the bundle's own exported_at, not "now": required so a FAISS cache
@@ -270,7 +267,6 @@ class TestImportBackdatesRegistration:
         assert record.updated_at == expected
 
 
-@pytest.mark.unit
 class TestExportNaming:
     def test_filename_derived_from_storage_identifier(self, tmp_path):
         backend = make_svec_backend()
@@ -312,7 +308,6 @@ _HNSW_L2 = {
 }
 
 
-@pytest.mark.unit
 class TestBundleSchemaVersions:
     def test_export_writes_version_2_without_metric(self, tmp_path):
         with h5py.File(_bundle(tmp_path)) as f:
@@ -359,7 +354,6 @@ class TestBundleSchemaVersions:
             embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path)
 
 
-@pytest.mark.unit
 class TestBundleSchemaValidation:
     """Missing required datasets/attributes must be reported clearly, not
     surfaced as a generic KeyError deep inside import logic."""

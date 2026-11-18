@@ -25,7 +25,6 @@ def _make_interface(backend: Mock, metric_type: MetricType) -> EmbeddingReaderIn
     )
 
 
-@pytest.mark.unit
 class TestResolveK:
     def test_explicit_k_wins(self):
         assert _resolve_k(5, default=1) == 5
@@ -43,7 +42,6 @@ class TestResolveK:
             _resolve_k(None, default=0)
 
 
-@pytest.mark.unit
 class TestGetJointEmbedding:
     def test_unweighted_mean(self):
         backend = _make_backend()
@@ -110,7 +108,6 @@ class TestGetJointEmbedding:
             interface.get_joint_embedding((1, 2))
 
 
-@pytest.mark.unit
 class TestGetSimilarConcepts:
     def test_bare_int_returns_single_row_excluding_self(self):
         backend = _make_backend()

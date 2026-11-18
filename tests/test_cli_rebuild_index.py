@@ -19,6 +19,8 @@ from .conftest import (
     sqlite_resolved_vector_store,
 )
 
+pytestmark = pytest.mark.sqlitevec
+
 runner = CliRunner()
 
 

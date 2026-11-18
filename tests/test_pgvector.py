@@ -11,11 +11,6 @@ from contextlib import contextmanager
 
 import numpy as np
 import pytest
-
-from tests.conftest import registered_model
-
-pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests")
-
 import sqlalchemy as sa
 from oa_configurator import Role, physical_schema_of
 from oa_configurator.testing import resolve_with_role_schemas, scoped_test_schema
@@ -27,6 +22,7 @@ from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 from omop_emb.config import IndexType, MetricType
 from omop_emb.model_registry import RegistryManager, registry_reader_engine
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from tests.conftest import registered_model
 
 from .conftest import (
     CONCEPT_EMBEDDINGS,
@@ -45,7 +41,6 @@ from .shared_backend_tests import SharedBackendTests
 
 
 @pytest.mark.pgvector
-@pytest.mark.integration
 class TestPGVectorBackend(SharedBackendTests):
     """Runs the full shared suite against a pgvector backend."""
 
@@ -111,7 +106,6 @@ def captured_statements(engine):
 
 
 @pytest.mark.pgvector
-@pytest.mark.integration
 class TestPGVectorHNSWBackend:
     """pgvector-specific HNSW index behaviour."""
 
@@ -263,8 +257,7 @@ class TestPGVectorHNSWBackend:
         self, pg_backend: PGVectorEmbeddingBackend, filtered: bool
     ):
         """Where pgvector supports it, the HNSW scan is iterative and rows come back ordered by similarity."""
-        if not pg_backend._supports_iterative_scan:
-            pytest.skip("pgvector below 0.8.0")
+        assert pg_backend._supports_iterative_scan, "this test needs pgvector 0.8.0 or later"
         upsert_all(pg_backend)
         pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
 
@@ -335,7 +328,6 @@ class TestPGVectorHNSWBackend:
 
 
 @pytest.mark.pgvector
-@pytest.mark.integration
 def test_long_provider_model_variants_have_independent_tables_and_indexes(
     pg_backend: PGVectorEmbeddingBackend,
 ):
@@ -396,7 +388,6 @@ def test_long_provider_model_variants_have_independent_tables_and_indexes(
 
 
 @pytest.mark.pgvector
-@pytest.mark.integration
 class TestPGVectorNonDefaultSchema:
     """Every method here defaulted to the public schema in existing coverage,
     so a bug that silently ignored schema_translate_map would still pass
@@ -474,7 +465,6 @@ class TestPGVectorNonDefaultSchema:
 
 
 @pytest.mark.pgvector
-@pytest.mark.integration
 def test_single_upsert_call_exceeds_the_bind_parameter_limit(pg_backend: PGVectorEmbeddingBackend):
     """12,000 rows x 6 columns is past PostgreSQL's 65,535 bind parameters for one statement."""
     from omop_emb.backends.embedding_table import ConceptEmbeddingRecord

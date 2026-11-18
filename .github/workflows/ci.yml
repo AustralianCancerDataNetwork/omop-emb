@@ -10,8 +10,19 @@ jobs:
     uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/ruff.yml@main
   ty:
     uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/ty.yml@main
+  build-test-nodb:
+    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-nodb.yml@main
+    with:
+      exclude-markers: sqlitevec or pgvector or duckdbvss or faiss
   build-test-sqlite:
-    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-sqlite.yml@main
+    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-sqlite-v2.yml@main
+    with:
+      markers: sqlitevec and not pgvector
+  build-test-faiss:
+    # Uses sqlite test as it does not require a database backend but only enable faiss tests.
+    uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-sqlite-v2.yml@main
+    with:
+      markers: faiss
   build-test-duckdb:
     uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-duckdb.yml@main
     with:
@@ -19,6 +30,7 @@ jobs:
   build-test-postgres:
     uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-postgres-v3.yml@main
     with:
+      markers: pgvector
       postgres-image: pgvector/pgvector:pg16
       postgres-user: test
       postgres-password: test

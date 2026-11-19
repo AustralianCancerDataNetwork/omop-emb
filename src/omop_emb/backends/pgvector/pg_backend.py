@@ -467,6 +467,11 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             self.storage_precision_of(model_record)
         )
 
+        has_partial_indexes = (
+            isinstance(model_record.index_config, HNSWIndexConfig)
+            and model_record.index_config.partial_domain_indexes
+        )
+
         with self.emb_session_factory.begin() as session:
             if isinstance(model_record.index_config, HNSWIndexConfig):
                 self._configure_hnsw_scan(
@@ -486,6 +491,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                     k=k,
                     concept_filter=concept_filter,
                     over_half_cast=over_half_cast,
+                    inline_single_domain=has_partial_indexes,
                 )
                 for query_embedding in query_embeddings
             ]

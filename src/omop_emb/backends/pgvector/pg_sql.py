@@ -372,6 +372,7 @@ def query_nearest_concept_ids(
     k: int,
     concept_filter: EmbeddingConceptFilter | None = None,
     over_half_cast: bool = False,
+    inline_single_domain: bool = False,
 ) -> Sequence[Row]:
     """Run a pgvector ANN query for a single query vector.
 
@@ -398,6 +399,10 @@ def query_nearest_concept_ids(
         True if the column is stored as float32 but the index is float16.
         Required to cast the query embedding to the index precision, so the
         database can use the index.
+    inline_single_domain : bool, optional
+        True if the model has partial domain indexes. A filter with exactly one
+        domain is then written into the statement as an equality, so the
+        database can choose that domain's partial index.
 
     Returns
     -------
@@ -425,7 +430,11 @@ def query_nearest_concept_ids(
 
     if concept_filter is not None:
         stmt = apply_concept_filter_where(
-            stmt, inspect(embedding_table).columns, concept_filter, dialect=Dialect.POSTGRESQL
+            stmt,
+            inspect(embedding_table).columns,
+            concept_filter,
+            dialect=Dialect.POSTGRESQL,
+            inline_single_domain=inline_single_domain,
         )
 
     return session.execute(stmt).all()

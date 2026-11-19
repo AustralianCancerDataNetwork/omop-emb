@@ -7,12 +7,13 @@ from typing import cast
 import numpy as np
 import pytest
 import sqlalchemy as sa
+from oa_configurator import Dialect
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateIndex
 
 pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests")
 
-from omop_emb.backends.db_utils import table_for
+from omop_emb.backends.db_utils import apply_concept_filter_where, table_for
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.index_naming import IndexNames
 from omop_emb.backends.pgvector.pg_sql import (
@@ -29,6 +30,7 @@ from omop_emb.model_registry import EmbeddingModelRecord, RegistryManager
 from omop_emb.model_registry.model_registry_manager import (
     STORAGE_IDENTIFIER_READABLE_PREFIX_LENGTH,
 )
+from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
 pytestmark = pytest.mark.unit
 
@@ -229,3 +231,35 @@ class TestPartialIndexes:
 
         assert "is_valid" not in str(q_domain_ids(table, valid_only=False))
         assert "is_valid" in str(q_domain_ids(table, valid_only=True))
+
+
+class TestSingleDomainFilter:
+    """The domain filter is written into the statement only for one domain, on request."""
+
+    @staticmethod
+    def _where(domains: tuple[str, ...], *, inline: bool) -> str:
+        table = pg_embedding_table_descriptor(_record(), VectorPrecision.FLOAT32)
+        stmt = apply_concept_filter_where(
+            sa.select(table.concept_id),
+            sa.inspect(table).columns,
+            EmbeddingConceptFilter(domains=domains),
+            dialect=Dialect.POSTGRESQL,
+            inline_single_domain=inline,
+        )
+        return str(
+            stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"render_postcompile": True})
+        )
+
+    def test_one_domain_is_an_equality_with_the_domain_in_the_statement(self):
+        assert self._where(("Condition",), inline=True).endswith("domain_id = 'Condition'")
+
+    def test_a_domain_with_quotes_and_colons_is_quoted(self):
+        assert self._where(("O'Neil:x",), inline=True).endswith("domain_id = 'O''Neil:x'")
+
+    def test_several_domains_stay_a_bound_array(self):
+        where = self._where(("Condition", "Drug"), inline=True)
+        assert "= ANY" in where and "'Condition'" not in where
+
+    def test_one_domain_stays_a_bound_array_unless_requested(self):
+        where = self._where(("Condition",), inline=False)
+        assert "= ANY" in where and "'Condition'" not in where

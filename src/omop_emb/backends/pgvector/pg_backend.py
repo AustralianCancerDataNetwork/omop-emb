@@ -38,6 +38,7 @@ from omop_emb.backends.embedding_table import (
     PGEmbeddingTable,
 )
 from omop_emb.backends.index_config import HNSWIndexConfig, IndexConfig
+from omop_emb.backends.index_naming import IndexNames
 from omop_emb.backends.pgvector.pg_sql import (
     create_pg_embedding_table,
     default_storage_precision,
@@ -332,7 +333,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                 record.storage_identifier,
                 schema=physical_schema,
             )
-            if str(item["name"]).startswith("idx_")
+            if IndexNames.owns(record.storage_identifier, str(item["name"]))
         )
 
     # ------------------------------------------------------------------

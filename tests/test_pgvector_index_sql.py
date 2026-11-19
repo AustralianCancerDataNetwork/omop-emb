@@ -14,14 +14,13 @@ pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed: skippi
 
 from omop_emb.backends.db_utils import table_for
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
+from omop_emb.backends.index_naming import IndexNames
 from omop_emb.backends.pgvector.pg_sql import (
     column_type_for,
     default_storage_precision,
     hnsw_index_ddl,
-    hnsw_index_name,
     hnsw_operator_class,
     partial_hnsw_index,
-    partial_index_name,
     pg_embedding_table_descriptor,
     q_domain_ids,
 )
@@ -52,11 +51,6 @@ def _record(dimensions: int = 4) -> EmbeddingModelRecord:
     )
 
 
-def test_index_name_format():
-    assert hnsw_index_name("my_table", MetricType.L2) == "idx_my_table_l2"
-    assert hnsw_index_name("my_table", MetricType.COSINE) == "idx_my_table_cosine"
-
-
 def test_store_scoped_storage_names_are_deterministic_and_fit_every_index():
     model_name = "hf.co/second-state/multilingual-e5-large-instruct-GGUF:" + "x" * 80
     storage_id = RegistryManager.storage_name("store_a", model_name)
@@ -68,7 +62,7 @@ def test_store_scoped_storage_names_are_deterministic_and_fit_every_index():
     assert len(readable_prefix) == STORAGE_IDENTIFIER_READABLE_PREFIX_LENGTH == 38
     assert all(char in "abcdefghijklmnopqrstuvwxyz0123456789_" for char in readable_prefix)
     for metric in MetricType:
-        index_name = hnsw_index_name(storage_id, metric)
+        index_name = IndexNames.hnsw(storage_id, metric)
         assert len(index_name.encode("ascii")) <= 63
 
     sanitized = RegistryManager.storage_name("store_a", " ..My__Model!! ")
@@ -186,30 +180,11 @@ class TestPartialIndexes:
         index = partial_hnsw_index(_record(dims), config, precision, domain)
         return str(CreateIndex(index).compile(dialect=postgresql.dialect()))
 
-    def test_name_is_readable_and_unique_per_table_and_domain(self):
-        name = partial_index_name("my_table", "Spec Anatomic Site")
-
-        assert name.endswith("_spec_anatomic_site")
-        assert name.startswith("idx_")
-        assert name == partial_index_name("my_table", "Spec Anatomic Site")
-        assert name != partial_index_name("other_table", "Spec Anatomic Site")
-        assert name != partial_index_name("my_table", "Drug")
-
-    def test_name_fits_the_identifier_limit_for_a_long_table_name(self):
-        storage_id = RegistryManager.storage_name("store_a", "x" * 120)
-
-        assert len(partial_index_name(storage_id, "Spec Anatomic Site").encode("ascii")) <= 63
-
-    @pytest.mark.parametrize("domain", ["", "***", "x" * 60])
-    def test_name_rejects_a_domain_that_cannot_be_named(self, domain):
-        with pytest.raises(ValueError, match="partial index"):
-            partial_index_name("my_table", domain)
-
     def test_ddl_restricts_the_index_to_the_domain(self):
         config = HNSWIndexConfig(metric_type=MetricType.COSINE, partial_domain_indexes=True)
         ddl = self._ddl(config, "Condition")
 
-        assert f"CREATE INDEX {partial_index_name('my_table', 'Condition')} ON " in ddl
+        assert f"CREATE INDEX {IndexNames.partial('my_table', 'Condition')} ON " in ddl
         assert "USING hnsw (embedding vector_cosine_ops)" in ddl
         assert "m = 32, ef_construction = 200)" in ddl
         assert ddl.endswith(" WHERE domain_id = 'Condition'")

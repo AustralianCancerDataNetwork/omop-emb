@@ -59,6 +59,7 @@ from omop_emb.backends.embedding_table import (
     EmbeddingTableBase,
 )
 from omop_emb.backends.index_config import HNSWIndexConfig
+from omop_emb.backends.index_naming import IndexNames
 from omop_emb.config import MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import EmbeddingArray, EmbeddingConceptFilter
@@ -104,11 +105,6 @@ def drop_duckdbvss_embedding_table(engine: Engine, model_record: EmbeddingModelR
     logger.info(f"Dropped embedding table '{tablename}'.")
 
 
-def hnsw_index_name(tablename: str, metric_type: MetricType) -> str:
-    """Physical name of tablename's HNSW index for metric_type."""
-    return f"idx_{tablename}_{metric_type.value}"
-
-
 def hnsw_index_ddl(
     engine: Engine, model_record: EmbeddingModelRecord, index_config: HNSWIndexConfig
 ) -> str:
@@ -117,7 +113,7 @@ def hnsw_index_ddl(
     metric = _HNSW_METRIC[index_config.metric_type]
     table_ref = qualified(engine, tablename, physical_schema=physical_schema_of(engine))
     index_ref = qualified(
-        engine, hnsw_index_name(tablename, index_config.metric_type), physical_schema=None
+        engine, IndexNames.hnsw(tablename, index_config.metric_type), physical_schema=None
     )
     return (
         f"CREATE INDEX {index_ref} "

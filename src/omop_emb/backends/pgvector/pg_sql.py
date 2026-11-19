@@ -12,9 +12,7 @@ pre-filtering during KNN without re-querying the OMOP CDM.
 from __future__ import annotations
 
 import functools
-import hashlib
 import logging
-import re
 import typing
 from collections.abc import Sequence
 
@@ -56,6 +54,7 @@ from omop_emb.backends.embedding_table import (
     PGEmbeddingTable,
 )
 from omop_emb.backends.index_config import HNSWIndexConfig
+from omop_emb.backends.index_naming import IndexNames
 from omop_emb.config import (
     PGVECTOR_VECTOR_MAX_DIMENSIONS,
     MetricType,
@@ -152,11 +151,6 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
     logger.info(f"Dropped embedding table '{tablename}'.")
 
 
-def hnsw_index_name(tablename: str, metric_type: MetricType) -> str:
-    """Physical name of tablename's HNSW index for metric_type."""
-    return f"idx_{tablename}_{metric_type.value}"
-
-
 def hnsw_operator_class(metric_type: MetricType, index_precision: VectorPrecision) -> str:
     """pgvector operator class for metric_type on an index of index_precision."""
     return f"{column_type_for(index_precision).value}_{metric_type.value}_ops"
@@ -181,31 +175,11 @@ def hnsw_index_ddl(
         key = f"({key}::{column_type_for(index_precision).value}({model_record.dimensions}))"
     table_ref = qualified(engine, tablename, physical_schema=physical_schema_of(engine))
     return (
-        f"CREATE INDEX {hnsw_index_name(tablename, index_config.metric_type)} "
+        f"CREATE INDEX {IndexNames.hnsw(tablename, index_config.metric_type)} "
         f"ON {table_ref} "
         f"USING hnsw ({key} {ops}) "
         f"WITH (m = {index_config.num_neighbors}, ef_construction = {index_config.ef_construction})"
     )
-
-
-def partial_index_name(tablename: str, domain: str) -> str:
-    """Physical name of tablename's partial HNSW index for domain.
-
-    The name is ``idx_<hash>_<slug>``. ``hash`` is eight characters of a hash
-    of the table name, which keeps the name unique within the schema, and
-    ``slug`` is the domain in lowercase with runs of other characters
-    replaced by ``_``.
-
-    Raises
-    ------
-    ValueError
-        If the slug is empty or does not fit the 63 byte identifier limit.
-    """
-    prefix = f"idx_{hashlib.sha1(tablename.encode('utf-8')).hexdigest()[:8]}_"
-    slug = re.sub(r"[^a-z0-9]+", "_", domain.lower()).strip("_")
-    if not slug or len(prefix) + len(slug) > 63:
-        raise ValueError(f"Cannot name a partial index for domain '{domain}'.")
-    return prefix + slug
 
 
 def partial_hnsw_index(
@@ -236,7 +210,7 @@ def partial_hnsw_index(
     if index_config.partial_valid_only:
         predicate = and_(predicate, table.c.is_valid == True)
     return Index(
-        partial_index_name(model_record.storage_identifier, domain),
+        IndexNames.partial(model_record.storage_identifier, domain),
         key,
         postgresql_using="hnsw",
         postgresql_with={

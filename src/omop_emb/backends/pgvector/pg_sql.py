@@ -12,7 +12,9 @@ pre-filtering during KNN without re-querying the OMOP CDM.
 from __future__ import annotations
 
 import functools
+import hashlib
 import logging
+import re
 import typing
 from collections.abc import Sequence
 
@@ -28,10 +30,12 @@ from oa_configurator import (
 from sqlalchemy import (
     CursorResult,
     Engine,
+    Index,
     MetaData,
     Row,
     Select,
     Table,
+    and_,
     cast,
     delete,
     func,
@@ -182,6 +186,76 @@ def hnsw_index_ddl(
         f"USING hnsw ({key} {ops}) "
         f"WITH (m = {index_config.num_neighbors}, ef_construction = {index_config.ef_construction})"
     )
+
+
+def partial_index_name(tablename: str, domain: str) -> str:
+    """Physical name of tablename's partial HNSW index for domain.
+
+    The name is ``idx_<hash>_<slug>``. ``hash`` is eight characters of a hash
+    of the table name, which keeps the name unique within the schema, and
+    ``slug`` is the domain in lowercase with runs of other characters
+    replaced by ``_``.
+
+    Raises
+    ------
+    ValueError
+        If the slug is empty or does not fit the 63 byte identifier limit.
+    """
+    prefix = f"idx_{hashlib.sha1(tablename.encode('utf-8')).hexdigest()[:8]}_"
+    slug = re.sub(r"[^a-z0-9]+", "_", domain.lower()).strip("_")
+    if not slug or len(prefix) + len(slug) > 63:
+        raise ValueError(f"Cannot name a partial index for domain '{domain}'.")
+    return prefix + slug
+
+
+def partial_hnsw_index(
+    model_record: EmbeddingModelRecord,
+    index_config: HNSWIndexConfig,
+    storage_precision: VectorPrecision,
+    domain: str,
+) -> Index:
+    """HNSW index over the rows of one domain, under the build options of index_config.
+
+    Covers only the valid rows when ``index_config.partial_valid_only`` is set.
+    The index belongs to a copy of the table, so it is not created along with
+    the table later. Run it with ``CreateIndex``.
+    """
+    from pgvector.sqlalchemy import HALFVEC, VECTOR  # optional dependency
+
+    table = table_for(pg_embedding_table_descriptor(model_record, storage_precision)).to_metadata(
+        MetaData()
+    )
+    index_precision = index_config.effective_precision(storage_precision)
+    key = table.c[EMBEDDING_COLUMN_NAME]
+    if index_config.casts_storage(storage_precision):
+        vector_type = (
+            HALFVEC if column_type_for(index_precision) == VectorColumnType.HALFVEC else VECTOR
+        )
+        key = cast(key, vector_type(model_record.dimensions)).label(EMBEDDING_COLUMN_NAME)
+    predicate = table.c.domain_id == domain
+    if index_config.partial_valid_only:
+        predicate = and_(predicate, table.c.is_valid == True)
+    return Index(
+        partial_index_name(model_record.storage_identifier, domain),
+        key,
+        postgresql_using="hnsw",
+        postgresql_with={
+            "m": index_config.num_neighbors,
+            "ef_construction": index_config.ef_construction,
+        },
+        postgresql_ops={
+            EMBEDDING_COLUMN_NAME: hnsw_operator_class(index_config.metric_type, index_precision)
+        },
+        postgresql_where=predicate,
+    )
+
+
+def q_domain_ids(embedding_table: type[PGEmbeddingTable], *, valid_only: bool) -> Select:
+    """Build a SELECT for the distinct domains in an embedding table, only of valid rows if valid_only."""
+    stmt = select(embedding_table.domain_id).distinct()
+    if valid_only:
+        stmt = stmt.where(embedding_table.is_valid == True)
+    return stmt
 
 
 # ---------------------------------------------------------------------------

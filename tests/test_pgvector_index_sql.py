@@ -7,9 +7,12 @@ from typing import cast
 import numpy as np
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.schema import CreateIndex
 
 pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests")
 
+from omop_emb.backends.db_utils import table_for
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.pgvector.pg_sql import (
     column_type_for,
@@ -17,6 +20,10 @@ from omop_emb.backends.pgvector.pg_sql import (
     hnsw_index_ddl,
     hnsw_index_name,
     hnsw_operator_class,
+    partial_hnsw_index,
+    partial_index_name,
+    pg_embedding_table_descriptor,
+    q_domain_ids,
 )
 from omop_emb.config import IndexType, MetricType, VectorColumnType, VectorPrecision
 from omop_emb.model_registry import EmbeddingModelRecord, RegistryManager
@@ -171,3 +178,79 @@ def test_get_similarity_raises_valueerror_for_hamming():
 
     with pytest.raises(ValueError, match="HAMMING"):
         get_similarity_from_distance(0.5, MetricType.HAMMING)
+
+
+class TestPartialIndexes:
+    @staticmethod
+    def _ddl(config: HNSWIndexConfig, domain: str, precision=VectorPrecision.FLOAT32, dims=4):
+        index = partial_hnsw_index(_record(dims), config, precision, domain)
+        return str(CreateIndex(index).compile(dialect=postgresql.dialect()))
+
+    def test_name_is_readable_and_unique_per_table_and_domain(self):
+        name = partial_index_name("my_table", "Spec Anatomic Site")
+
+        assert name.endswith("_spec_anatomic_site")
+        assert name.startswith("idx_")
+        assert name == partial_index_name("my_table", "Spec Anatomic Site")
+        assert name != partial_index_name("other_table", "Spec Anatomic Site")
+        assert name != partial_index_name("my_table", "Drug")
+
+    def test_name_fits_the_identifier_limit_for_a_long_table_name(self):
+        storage_id = RegistryManager.storage_name("store_a", "x" * 120)
+
+        assert len(partial_index_name(storage_id, "Spec Anatomic Site").encode("ascii")) <= 63
+
+    @pytest.mark.parametrize("domain", ["", "***", "x" * 60])
+    def test_name_rejects_a_domain_that_cannot_be_named(self, domain):
+        with pytest.raises(ValueError, match="partial index"):
+            partial_index_name("my_table", domain)
+
+    def test_ddl_restricts_the_index_to_the_domain(self):
+        config = HNSWIndexConfig(metric_type=MetricType.COSINE, partial_domain_indexes=True)
+        ddl = self._ddl(config, "Condition")
+
+        assert f"CREATE INDEX {partial_index_name('my_table', 'Condition')} ON " in ddl
+        assert "USING hnsw (embedding vector_cosine_ops)" in ddl
+        assert "m = 32, ef_construction = 200)" in ddl
+        assert ddl.endswith(" WHERE domain_id = 'Condition'")
+
+    def test_ddl_adds_the_valid_restriction_when_valid_only(self):
+        config = HNSWIndexConfig(
+            metric_type=MetricType.COSINE, partial_domain_indexes=True, partial_valid_only=True
+        )
+        assert self._ddl(config, "Condition").endswith(
+            " WHERE domain_id = 'Condition' AND is_valid = true"
+        )
+
+    def test_ddl_keeps_the_half_precision_cast(self):
+        config = HNSWIndexConfig(
+            metric_type=MetricType.COSINE,
+            index_precision=VectorPrecision.FLOAT16,
+            partial_domain_indexes=True,
+        )
+        ddl = self._ddl(config, "Drug", dims=3000)
+        assert "USING hnsw (CAST(embedding AS HALFVEC(3000)) halfvec_cosine_ops)" in ddl
+
+    def test_ddl_quotes_a_domain_with_quotes_and_colons(self):
+        config = HNSWIndexConfig(metric_type=MetricType.COSINE, partial_domain_indexes=True)
+        assert self._ddl(config, "O'Neil:x").endswith(" WHERE domain_id = 'O''Neil:x'")
+
+    def test_creating_the_index_leaves_the_table_without_indexes(self):
+        config = HNSWIndexConfig(metric_type=MetricType.COSINE, partial_domain_indexes=True)
+        table = table_for(pg_embedding_table_descriptor(_record(), VectorPrecision.FLOAT32))
+        before = set(table.indexes)
+
+        partial_hnsw_index(_record(), config, VectorPrecision.FLOAT32, "Condition")
+
+        assert set(table.indexes) == before
+
+    def test_global_ddl_has_no_restriction(self, unconnected_pg_engine):
+        config = HNSWIndexConfig(metric_type=MetricType.COSINE, partial_domain_indexes=True)
+        ddl = hnsw_index_ddl(unconnected_pg_engine, _record(), config, VectorPrecision.FLOAT32)
+        assert "WHERE" not in ddl
+
+    def test_domain_query_counts_only_valid_rows_when_valid_only(self):
+        table = pg_embedding_table_descriptor(_record(), VectorPrecision.FLOAT32)
+
+        assert "is_valid" not in str(q_domain_ids(table, valid_only=False))
+        assert "is_valid" in str(q_domain_ids(table, valid_only=True))

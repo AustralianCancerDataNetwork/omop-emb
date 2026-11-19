@@ -52,6 +52,7 @@ from omop_emb.backends.duckdbvss.duckdbvss_sql import (
 )
 from omop_emb.backends.embedding_table import DuckDBVSSEmbeddingTable
 from omop_emb.backends.index_config import HNSWIndexConfig, IndexConfig
+from omop_emb.backends.index_naming import IndexNames
 from omop_emb.config import BackendType, IndexType, MetricType, VectorPrecision
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
@@ -242,14 +243,13 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
         if record is None:
             return ()
         physical_schema = physical_schema_of(self.emb_engine)
-        expected_prefix = f"idx_{record.storage_identifier}_"
         return tuple(
             str(item["name"])
             for item in inspect(self.emb_engine).get_indexes(
                 record.storage_identifier,
                 schema=physical_schema,
             )
-            if str(item["name"]).startswith(expected_prefix)
+            if IndexNames.owns(record.storage_identifier, str(item["name"]))
         )
 
     # ------------------------------------------------------------------

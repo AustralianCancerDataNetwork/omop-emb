@@ -28,10 +28,12 @@ from oa_configurator import (
 from sqlalchemy import (
     CursorResult,
     Engine,
+    Index,
     MetaData,
     Row,
     Select,
     Table,
+    and_,
     cast,
     delete,
     func,
@@ -52,6 +54,7 @@ from omop_emb.backends.embedding_table import (
     PGEmbeddingTable,
 )
 from omop_emb.backends.index_config import HNSWIndexConfig
+from omop_emb.backends.index_naming import IndexNames
 from omop_emb.config import (
     PGVECTOR_VECTOR_MAX_DIMENSIONS,
     MetricType,
@@ -148,11 +151,6 @@ def drop_pg_embedding_table(engine: Engine, model_record: EmbeddingModelRecord) 
     logger.info(f"Dropped embedding table '{tablename}'.")
 
 
-def hnsw_index_name(tablename: str, metric_type: MetricType) -> str:
-    """Physical name of tablename's HNSW index for metric_type."""
-    return f"idx_{tablename}_{metric_type.value}"
-
-
 def hnsw_operator_class(metric_type: MetricType, index_precision: VectorPrecision) -> str:
     """pgvector operator class for metric_type on an index of index_precision."""
     return f"{column_type_for(index_precision).value}_{metric_type.value}_ops"
@@ -177,11 +175,61 @@ def hnsw_index_ddl(
         key = f"({key}::{column_type_for(index_precision).value}({model_record.dimensions}))"
     table_ref = qualified(engine, tablename, physical_schema=physical_schema_of(engine))
     return (
-        f"CREATE INDEX {hnsw_index_name(tablename, index_config.metric_type)} "
+        f"CREATE INDEX {IndexNames.hnsw(tablename, index_config.metric_type)} "
         f"ON {table_ref} "
         f"USING hnsw ({key} {ops}) "
         f"WITH (m = {index_config.num_neighbors}, ef_construction = {index_config.ef_construction})"
     )
+
+
+def partial_hnsw_index(
+    model_record: EmbeddingModelRecord,
+    index_config: HNSWIndexConfig,
+    storage_precision: VectorPrecision,
+    domain: str,
+) -> Index:
+    """HNSW index over the rows of one domain, under the build options of index_config.
+
+    Covers only the valid rows when ``index_config.partial_valid_only`` is set.
+    The index belongs to a copy of the table, so it is not created along with
+    the table later. Run it with ``CreateIndex``.
+    """
+    from pgvector.sqlalchemy import HALFVEC, VECTOR  # optional dependency
+
+    table = table_for(pg_embedding_table_descriptor(model_record, storage_precision)).to_metadata(
+        MetaData()
+    )
+    index_precision = index_config.effective_precision(storage_precision)
+    key = table.c[EMBEDDING_COLUMN_NAME]
+    if index_config.casts_storage(storage_precision):
+        vector_type = (
+            HALFVEC if column_type_for(index_precision) == VectorColumnType.HALFVEC else VECTOR
+        )
+        key = cast(key, vector_type(model_record.dimensions)).label(EMBEDDING_COLUMN_NAME)
+    predicate = table.c.domain_id == domain
+    if index_config.partial_valid_only:
+        predicate = and_(predicate, table.c.is_valid == True)
+    return Index(
+        IndexNames.partial(model_record.storage_identifier, domain),
+        key,
+        postgresql_using="hnsw",
+        postgresql_with={
+            "m": index_config.num_neighbors,
+            "ef_construction": index_config.ef_construction,
+        },
+        postgresql_ops={
+            EMBEDDING_COLUMN_NAME: hnsw_operator_class(index_config.metric_type, index_precision)
+        },
+        postgresql_where=predicate,
+    )
+
+
+def q_domain_ids(embedding_table: type[PGEmbeddingTable], *, valid_only: bool) -> Select:
+    """Build a SELECT for the distinct domains in an embedding table, only of valid rows if valid_only."""
+    stmt = select(embedding_table.domain_id).distinct()
+    if valid_only:
+        stmt = stmt.where(embedding_table.is_valid == True)
+    return stmt
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +372,7 @@ def query_nearest_concept_ids(
     k: int,
     concept_filter: EmbeddingConceptFilter | None = None,
     over_half_cast: bool = False,
+    inline_single_domain: bool = False,
 ) -> Sequence[Row]:
     """Run a pgvector ANN query for a single query vector.
 
@@ -350,6 +399,10 @@ def query_nearest_concept_ids(
         True if the column is stored as float32 but the index is float16.
         Required to cast the query embedding to the index precision, so the
         database can use the index.
+    inline_single_domain : bool, optional
+        True if the model has partial domain indexes. A filter with exactly one
+        domain is then written into the statement as an equality, so the
+        database can choose that domain's partial index.
 
     Returns
     -------
@@ -377,7 +430,11 @@ def query_nearest_concept_ids(
 
     if concept_filter is not None:
         stmt = apply_concept_filter_where(
-            stmt, inspect(embedding_table).columns, concept_filter, dialect=Dialect.POSTGRESQL
+            stmt,
+            inspect(embedding_table).columns,
+            concept_filter,
+            dialect=Dialect.POSTGRESQL,
+            inline_single_domain=inline_single_domain,
         )
 
     return session.execute(stmt).all()

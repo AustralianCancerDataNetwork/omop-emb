@@ -110,6 +110,24 @@ class TestValidateIndexConfig:
                 HNSWIndexConfig(metric_type=MetricType.COSINE, max_scan_tuples=100),
             )
 
+    def test_partial_indexes_are_accepted_on_pgvector(self):
+        _validate(
+            BackendType.PGVECTOR,
+            HNSWIndexConfig(
+                metric_type=MetricType.COSINE, partial_domain_indexes=True, partial_valid_only=True
+            ),
+        )
+
+    def test_rejects_partial_indexes_where_unsupported(self):
+        with pytest.raises(
+            UnsupportedIndexConfigError,
+            match=f"partial_domain_indexes.*{_quoted(BackendType.DUCKDBVSS)}",
+        ):
+            _validate(
+                BackendType.DUCKDBVSS,
+                HNSWIndexConfig(metric_type=MetricType.COSINE, partial_domain_indexes=True),
+            )
+
     def test_unset_scan_cap_is_accepted_everywhere(self):
         _validate(BackendType.DUCKDBVSS, HNSWIndexConfig(metric_type=MetricType.COSINE))
 

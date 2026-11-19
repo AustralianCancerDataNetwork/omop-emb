@@ -4,9 +4,10 @@ import inspect
 from abc import ABC, abstractmethod
 from dataclasses import MISSING, asdict, dataclass, fields, is_dataclass
 from enum import Enum
-from typing import Any, Self, get_type_hints
+from types import UnionType
+from typing import Any, Self, get_args, get_origin, get_type_hints
 
-from omop_emb.config import IndexType, MetricType, parse_index_type
+from omop_emb.config import IndexType, MetricType, VectorPrecision, parse_index_type
 
 # ----------------------------------------------------------------------------
 # Resevered metadata keys
@@ -17,6 +18,15 @@ RESERVED_METADATA_KEYS: frozenset[str] = frozenset({})
 # ---------------------------------------------------------------------------
 # Abstract base
 # ---------------------------------------------------------------------------
+
+
+def _enum_type_of(field_type: Any) -> type[Enum] | None:
+    """Return the Enum class a field is annotated with, looking through ``X | None``."""
+    candidates = get_args(field_type) if get_origin(field_type) is UnionType else (field_type,)
+    for candidate in candidates:
+        if isinstance(candidate, type) and issubclass(candidate, Enum):
+            return candidate
+    return None
 
 
 @dataclass(kw_only=True, frozen=True)
@@ -30,10 +40,17 @@ class IndexConfig(ABC):
     metric_type : MetricType or None
         Distance metric the model is locked to. ``None`` for FLAT without a
         metric, which leaves the metric to the query.
+    index_precision : VectorPrecision or None
+        Precision the index holds its vectors in. ``None`` follows the stored
+        column. ``FLOAT16`` over a float32 column builds a half-size index
+        over a cast and keeps the full vectors in the table. Which index types
+        accept an explicit value depends on the backend, see
+        ``BackendCapabilities.index_precisions``.
     """
 
     index_type: IndexType
     metric_type: MetricType | None
+    index_precision: VectorPrecision | None = None
 
     def __post_init__(self) -> None:
         self._validate_metric_type_after_init()
@@ -41,6 +58,35 @@ class IndexConfig(ABC):
     @abstractmethod
     def _validate_metric_type_after_init(self) -> None:
         """Raise ``ValueError`` if ``metric_type`` is invalid for this index."""
+
+    def effective_precision(self, storage_precision: VectorPrecision) -> VectorPrecision:
+        """Precision the index holds its vectors in.
+
+        Parameters
+        ----------
+        storage_precision : VectorPrecision
+            Precision of the stored column.
+
+        Returns
+        -------
+        VectorPrecision
+            ``index_precision``, or ``storage_precision`` when it is ``None``.
+        """
+        return self.index_precision or storage_precision
+
+    def casts_storage(self, storage_precision: VectorPrecision) -> bool:
+        """Whether the index holds the stored vectors in a different precision than the column.
+
+        True for a float16 index over a float32 column. Queries must then
+        compute their distance on the vectors cast to the index precision,
+        or the database cannot use the index.
+
+        Parameters
+        ----------
+        storage_precision : VectorPrecision
+            Precision of the stored column.
+        """
+        return self.effective_precision(storage_precision) != storage_precision
 
     # TODO: Validate index_config parameters against backend capabilities before
     #       saving to the registry. Would require passing the backend into
@@ -140,8 +186,8 @@ class IndexConfig(ABC):
                     raise ValueError(f"Strict check failed: '{field.name}' missing in config dict.")
                 continue
             value = config_dict[field.name]
-            field_type = type_hints.get(field.name)
-            if value is not None and isinstance(field_type, type) and issubclass(field_type, Enum):
+            field_type = _enum_type_of(type_hints.get(field.name))
+            if value is not None and field_type is not None:
                 try:
                     value = field_type(value)
                 except ValueError:
@@ -198,7 +244,6 @@ class HNSWIndexConfig(IndexConfig):
         Upper bound on the rows one filtered query may read from the index
         (pgvector ``hnsw.max_scan_tuples``). ``None`` keeps the server default
         of 20,000. Only pgvector supports it.
-
     Notes
     -----
     Supported by pgvector, DuckDB VSS, and FAISS backends. sqlite-vec does
@@ -249,7 +294,9 @@ def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexC
     """
     index_type = parse_index_type(index_type)
     if index_type == IndexType.FLAT:
-        return FlatIndexConfig.from_kwargs(metric_type=kwargs.get("metric_type"))
+        return FlatIndexConfig.from_kwargs(
+            metric_type=kwargs.get("metric_type"), index_precision=kwargs.get("index_precision")
+        )
     if index_type == IndexType.HNSW:
         return HNSWIndexConfig.from_kwargs(**kwargs)
     raise ValueError(f"No IndexConfig defined for index type {index_type!r}.")

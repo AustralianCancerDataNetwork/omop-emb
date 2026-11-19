@@ -52,7 +52,7 @@ from omop_emb.backends.duckdbvss.duckdbvss_sql import (
 )
 from omop_emb.backends.embedding_table import DuckDBVSSEmbeddingTable
 from omop_emb.backends.index_config import HNSWIndexConfig, IndexConfig
-from omop_emb.config import BackendType, IndexType, MetricType
+from omop_emb.config import BackendType, IndexType, MetricType, VectorPrecision
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
     EmbeddingArray,
@@ -144,6 +144,7 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
             IndexType.FLAT: (MetricType.L2, MetricType.COSINE),
             IndexType.HNSW: (MetricType.L2, MetricType.COSINE),
         },
+        index_precisions={IndexType.HNSW: (VectorPrecision.FLOAT32,)},
     )
 
     @property

@@ -5,14 +5,14 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
-from omop_emb.config import MetricType
+from omop_emb.config import BackendType, MetricType
 from omop_emb.interface import EmbeddingReaderInterface, _resolve_k
 from omop_emb.utils.embedding_utils import NearestConceptMatch
 
 
 def _make_backend() -> Mock:
     backend = Mock()
-    backend.backend_name = "pgvector"
+    backend.backend_name = BackendType.PGVECTOR.value
     backend.get_registered_model.return_value = None
     return backend
 

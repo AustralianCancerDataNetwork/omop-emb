@@ -212,7 +212,7 @@ def test_add_embeddings_skips_invalid_concepts_unless_asked(
         def __init__(self, **_kwargs):
             pass
 
-        def register_model(self, index_config=None):
+        def register_model(self, index_config=None, storage_precision=None):
             registered.append(index_config)
 
         def count_concepts_requiring_embedding(self, *, concept_filter):
@@ -249,7 +249,7 @@ def test_add_embeddings_registers_the_requested_metric(monkeypatch) -> None:
         def __init__(self, **_kwargs):
             pass
 
-        def register_model(self, index_config=None):
+        def register_model(self, index_config=None, storage_precision=None):
             registered.append(index_config)
 
         def count_concepts_requiring_embedding(self, *, concept_filter):

@@ -17,7 +17,7 @@ import pytest
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
-from omop_emb.config import MetricType
+from omop_emb.config import MetricType, VectorPrecision
 from omop_emb.storage import embedding_bundle
 
 from .conftest import make_svec_backend, populate
@@ -321,20 +321,22 @@ class TestBundleSchemaVersions:
 
     def test_version_1_flat_bundle_imports(self, tmp_path):
         bundle_path = _bundle(tmp_path)
-        _as_v1(bundle_path, metric_type="cosine")
+        _as_v1(bundle_path, metric_type=MetricType.COSINE.value)
         assert embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path) == 1
 
     def test_version_1_hnsw_bundle_with_matching_metric_reads(self, tmp_path):
         bundle_path = _bundle(tmp_path)
-        _as_v1(bundle_path, metric_type="l2", index_config=_HNSW_L2)
+        _as_v1(bundle_path, metric_type=MetricType.L2.value, index_config=_HNSW_L2)
         with h5py.File(bundle_path) as f:
             meta = embedding_bundle.BundleMetadata.from_h5_attrs(f.attrs)
         assert meta.index_config.metric_type is MetricType.L2
 
     def test_version_1_hnsw_bundle_with_mismatching_metric_raises(self, tmp_path):
         bundle_path = _bundle(tmp_path)
-        _as_v1(bundle_path, metric_type="cosine", index_config=_HNSW_L2)
-        with pytest.raises(embedding_bundle.BundleCorruptionError, match="built for 'l2'"):
+        _as_v1(bundle_path, metric_type=MetricType.COSINE.value, index_config=_HNSW_L2)
+        with pytest.raises(
+            embedding_bundle.BundleCorruptionError, match=f"built for '{MetricType.L2.value}'"
+        ):
             embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path)
 
     def test_version_1_bundle_without_metric_raises(self, tmp_path):
@@ -401,3 +403,32 @@ class TestBundleSchemaValidation:
 
         with pytest.raises(embedding_bundle.BundleCorruptionError):
             embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path)
+
+
+@pytest.mark.unit
+class TestBundleStoragePrecision:
+    def test_export_records_the_stored_precision(self, tmp_path):
+        with h5py.File(_bundle(tmp_path)) as f:
+            meta = embedding_bundle.BundleMetadata.from_h5_attrs(f.attrs)
+        assert meta.storage_precision == VectorPrecision.FLOAT32
+
+    def test_bundle_without_the_attribute_reads_as_unrecorded_and_imports(self, tmp_path):
+        bundle_path = _bundle(tmp_path)
+        with h5py.File(bundle_path, "r+") as f:
+            del f.attrs[embedding_bundle.ATTR_STORAGE_PRECISION]
+            assert embedding_bundle.BundleMetadata.from_h5_attrs(f.attrs).storage_precision is None
+        assert embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path) == 1
+
+    def test_unsupported_precision_falls_back_to_the_backend_default(self, tmp_path, caplog):
+        bundle_path = _bundle(tmp_path)
+        with h5py.File(bundle_path, "r+") as f:
+            f.attrs[embedding_bundle.ATTR_STORAGE_PRECISION] = VectorPrecision.FLOAT16.value
+
+        target = make_svec_backend()
+        with caplog.at_level("WARNING"):
+            embedding_bundle.import_bundle(backend=target, h5_path=bundle_path)
+
+        record = target.get_registered_model(model_name=_MODEL)
+        assert record is not None
+        assert record.storage_precision == VectorPrecision.FLOAT32
+        assert VectorPrecision.FLOAT16.value in caplog.text

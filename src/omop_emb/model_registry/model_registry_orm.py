@@ -23,7 +23,9 @@ from sqlalchemy import (
     func,
     inspect,
 )
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
+from sqlalchemy.sql.elements import KeyedColumnElement
 
 from omop_emb.backends.db_utils import table_for
 from omop_emb.backends.index_config import IndexConfig
@@ -32,6 +34,7 @@ from omop_emb.config import (
     REGISTRY_SCHEMA_KEY,
     IndexType,
     MetricType,
+    VectorPrecision,
 )
 from omop_emb.utils.errors import LegacyRegistryError, MisplacedRegistryError
 
@@ -77,6 +80,10 @@ class ModelRegistry(ModelRegistryBase):
     index_config : dict or None
         JSON serialisation of the active ``IndexConfig``. Written by the
         ``@validates`` hook whenever an ``IndexConfig`` object is assigned.
+    storage_precision : VectorPrecision or None
+        Precision of the stored embedding column, fixed at registration.
+        ``NULL`` for a row written before the column existed, which the
+        backend resolves from the model's dimensions.
     details : dict or None
         Free-form operational data (e.g. user extras).
         Exposed as ``metadata`` on ``EmbeddingModelRecord``.
@@ -118,6 +125,9 @@ class ModelRegistry(ModelRegistryBase):
         Enum(MetricType, native_enum=False), nullable=True
     )
     index_config: Mapped[Any] = mapped_column(JSON, nullable=True, default=dict)
+    storage_precision: Mapped[VectorPrecision | None] = mapped_column(
+        Enum(VectorPrecision, native_enum=False), nullable=True
+    )
     details: Mapped[Any] = mapped_column(JSON, nullable=True, default=dict)
 
     created_at = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -331,6 +341,44 @@ def ensure_registry_table(engine: Engine) -> None:
         registry_schema = resolve_registry_physical_schema(connection)
         _reject_incompatible_registry(connection, registry_schema=registry_schema)
         ModelRegistryBase.metadata.create_all(connection, tables=[table_for(ModelRegistry)])
+    _add_missing_columns(engine)
+
+
+def registry_has_column(bindable: Engine | Connection, column_name: str) -> bool:
+    """Whether the registry table on ``bindable`` has a column named ``column_name``."""
+    return column_name in {
+        column["name"]
+        for column in inspect(bindable).get_columns(
+            ModelRegistry.__tablename__, schema=resolve_registry_physical_schema(bindable)
+        )
+    }
+
+
+def _add_missing_columns(engine: Engine) -> None:
+    """Add the nullable columns a registry created by an older omop-emb lacks.
+
+    Each column is added once. Two writers racing to add it both succeed: the
+    one that loses finds the column present afterwards.
+    """
+    for column in (ModelRegistry.__table__.c.storage_precision,):
+        if registry_has_column(engine, column.name):
+            continue
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(_add_column_ddl(connection, column))
+        except DBAPIError:
+            if not registry_has_column(engine, column.name):
+                raise
+
+
+def _add_column_ddl(connection: Connection, column: KeyedColumnElement[Any]) -> str:
+    table = qualified(
+        connection,
+        ModelRegistry.__tablename__,
+        physical_schema=resolve_registry_physical_schema(connection),
+    )
+    name = connection.dialect.identifier_preparer.quote(column.name)
+    return f"ALTER TABLE {table} ADD COLUMN {name} {column.type.compile(connection.dialect)}"
 
 
 _LEGACY_SIGNATURE_COLUMNS = frozenset({"model_name", "storage_identifier", "dimensions"})

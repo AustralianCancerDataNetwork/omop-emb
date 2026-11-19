@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from datetime import datetime
 from functools import cached_property
 from typing import ClassVar
 
@@ -28,7 +27,6 @@ from omop_emb.backends.base_backend import (
     CompactionResult,
     ConceptEmbeddingRecord,
     EmbeddingBackend,
-    writes,
 )
 from omop_emb.backends.capabilities import BackendCapabilities
 from omop_emb.backends.embedding_table import (
@@ -37,6 +35,7 @@ from omop_emb.backends.embedding_table import (
 from omop_emb.backends.index_config import HNSWIndexConfig, IndexConfig
 from omop_emb.backends.pgvector.pg_sql import (
     create_pg_embedding_table,
+    default_storage_precision,
     delete_embedding_rows,
     drop_pg_embedding_table,
     hnsw_index_ddl,
@@ -51,22 +50,23 @@ from omop_emb.backends.pgvector.pg_sql import (
     table_exists,
     upsert_embedding_rows,
 )
-from omop_emb.config import BackendType, IndexType, MetricType
+from omop_emb.config import (
+    PGVECTOR_HALFVEC_MAX_DIMENSIONS,
+    PGVECTOR_VECTOR_MAX_DIMENSIONS,
+    BackendType,
+    IndexType,
+    MetricType,
+    VectorPrecision,
+)
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
     EmbeddingArray,
     EmbeddingConceptFilter,
     NearestConceptMatch,
     get_similarity_from_distance,
-    vector_column_type_for_dimensions,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _validate_pg_registration(dimensions: int) -> None:
-    """Validate pgvector dimensions, including the halfvec limit."""
-    vector_column_type_for_dimensions(dimensions)
 
 
 def _create_vector_extension(dbapi_connection, _connection_record) -> None:
@@ -124,6 +124,13 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             IndexType.HNSW: (MetricType.L2, MetricType.COSINE, MetricType.L1),
         },
         max_scan_tuples=True,
+        storage_precisions=(VectorPrecision.FLOAT32, VectorPrecision.FLOAT16),
+        index_precisions={IndexType.HNSW: (VectorPrecision.FLOAT32, VectorPrecision.FLOAT16)},
+        max_dimensions=PGVECTOR_HALFVEC_MAX_DIMENSIONS,
+        max_indexed_dimensions={
+            VectorPrecision.FLOAT32: PGVECTOR_VECTOR_MAX_DIMENSIONS,
+            VectorPrecision.FLOAT16: PGVECTOR_HALFVEC_MAX_DIMENSIONS,
+        },
     )
 
     # Instance variables
@@ -150,6 +157,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     def capabilities(self) -> BackendCapabilities:
         return self.CAPABILITIES
 
+    def default_storage_precision(self, dimensions: int) -> VectorPrecision:
+        return default_storage_precision(dimensions)
+
     # ------------------------------------------------------------------
     # Storage table management
     # ------------------------------------------------------------------
@@ -160,12 +170,13 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     def _get_storage_table_descriptor(
         self, model_record: EmbeddingModelRecord
     ) -> type[PGEmbeddingTable]:
-        return pg_embedding_table_descriptor(model_record=model_record)
+        return pg_embedding_table_descriptor(model_record, self.storage_precision_of(model_record))
 
     def _create_storage_table(self, model_record: EmbeddingModelRecord) -> type[PGEmbeddingTable]:
         return create_pg_embedding_table(
             engine=self.emb_engine,
             model_record=model_record,
+            storage_precision=self.storage_precision_of(model_record),
         )
 
     def _delete_storage_table(self, model_record: EmbeddingModelRecord) -> None:
@@ -174,58 +185,6 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     # ------------------------------------------------------------------
     # Model registration override
     # ------------------------------------------------------------------
-
-    @writes
-    def register_model(
-        self,
-        *,
-        model_name: str,
-        dimensions: int,
-        provider_type: str,
-        index_config: IndexConfig | None = None,
-        metadata: Mapping[str, object] | None = None,
-        registered_at: datetime | None = None,
-    ) -> EmbeddingModelRecord:
-        """Register a model, validating pgvector dimensionality limits.
-
-        Parameters
-        ----------
-        model_name : str
-            Canonical model name including tag.
-        dimensions : int
-            Embedding vector dimensionality.
-        provider_type : str
-            omop-llm provider key that serves the model.
-        index_config : IndexConfig, optional
-            Defaults to ``FlatIndexConfig()`` when not provided.
-        metadata : Mapping[str, object], optional
-            Free-form operational metadata.
-        registered_at : datetime, optional
-            Backdate ``created_at``/``updated_at`` to this timestamp instead
-            of "now". Only applies to a brand-new registration.
-
-        Returns
-        -------
-        EmbeddingModelRecord
-
-        Raises
-        ------
-        ValueError
-            If ``dimensions`` exceeds the pgvector halfvec limit of 4 000, or
-            for any reason :meth:`EmbeddingBackend.register_model` raises
-            (a reserved metadata key, or a non-``FlatIndexConfig`` index).
-        ModelRegistrationConflictError
-            If the model is already registered with a different dimensionality.
-        """
-        _validate_pg_registration(dimensions)
-        return super().register_model(
-            model_name=model_name,
-            dimensions=dimensions,
-            provider_type=provider_type,
-            index_config=index_config,
-            metadata=metadata,
-            registered_at=registered_at,
-        )
 
     # ------------------------------------------------------------------
     # Index management
@@ -247,7 +206,16 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
             for statement in self.drop_index_sql(model_record.model_name):
                 conn.execute(text(statement))
             if isinstance(index_config, HNSWIndexConfig):
-                conn.execute(text(hnsw_index_ddl(self.emb_engine, model_record, index_config)))
+                conn.execute(
+                    text(
+                        hnsw_index_ddl(
+                            self.emb_engine,
+                            model_record,
+                            index_config,
+                            self.storage_precision_of(model_record),
+                        )
+                    )
+                )
         logger.info(
             f"Rebuilt '{model_record.storage_identifier}' with index type '{index_config.index_type.value}'."
         )
@@ -442,6 +410,9 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         k: int = EmbeddingBackend.DEFAULT_K_NEAREST,
     ) -> tuple[tuple[NearestConceptMatch, ...], ...]:
         table = self._storage_table(model_record)
+        over_half_cast = model_record.index_config.casts_storage(
+            self.storage_precision_of(model_record)
+        )
 
         with self.emb_session_factory.begin() as session:
             if isinstance(model_record.index_config, HNSWIndexConfig):
@@ -461,6 +432,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                     metric_type=metric_type,
                     k=k,
                     concept_filter=concept_filter,
+                    over_half_cast=over_half_cast,
                 )
                 for query_embedding in query_embeddings
             ]

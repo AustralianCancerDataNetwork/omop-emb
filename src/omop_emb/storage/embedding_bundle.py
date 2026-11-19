@@ -51,7 +51,7 @@ from tqdm import tqdm
 from omop_emb.backends.base_backend import EmbeddingBackend, EmbeddingStoreReader
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import IndexConfig, index_config_from_dict
-from omop_emb.config import MetricType
+from omop_emb.config import MetricType, VectorPrecision
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,7 @@ ATTR_DIMENSIONS = "dimensions"
 ATTR_V1_METRIC_TYPE = "metric_type"
 ATTR_PROVIDER_TYPE = "provider_type"
 ATTR_INDEX_CONFIG = "index_config"
+ATTR_STORAGE_PRECISION = "storage_precision"
 ATTR_ROW_COUNT = "row_count"
 ATTR_EXPORTED_AT = "exported_at"
 
@@ -134,6 +135,9 @@ class BundleMetadata:
     provider_type : str
     index_config : IndexConfig
         The source store's index, rebuilt by ``import_bundle(rebuild_index=True)``.
+    storage_precision : VectorPrecision or None
+        Precision of the source store's stored column. ``None`` for a bundle
+        written before it was recorded.
     row_count : int
     exported_at : str
         ISO timestamp of the export.
@@ -145,6 +149,7 @@ class BundleMetadata:
     index_config: IndexConfig
     row_count: int
     exported_at: str
+    storage_precision: VectorPrecision | None = None
 
     @classmethod
     def from_h5_attrs(cls, attrs: h5py.AttributeManager) -> BundleMetadata:
@@ -172,6 +177,11 @@ class BundleMetadata:
             index_config=index_config,
             row_count=int(get_required_attribute(attrs, ATTR_ROW_COUNT)),
             exported_at=str(get_required_attribute(attrs, ATTR_EXPORTED_AT)),
+            storage_precision=(
+                VectorPrecision(str(attrs[ATTR_STORAGE_PRECISION]))
+                if ATTR_STORAGE_PRECISION in attrs
+                else None
+            ),
         )
 
 
@@ -395,6 +405,7 @@ def export_bundle(
             index_config=record.index_config,
             row_count=n,
             exported_at=_now_iso(),
+            storage_precision=record.storage_precision,
         )
         f.attrs[ATTR_SCHEMA_VERSION] = SCHEMA_VERSION
         f.attrs[ATTR_OMOP_EMB_VERSION] = _pkg_version("omop-emb")
@@ -402,6 +413,8 @@ def export_bundle(
         f.attrs[ATTR_DIMENSIONS] = meta.dimensions
         f.attrs[ATTR_PROVIDER_TYPE] = meta.provider_type
         f.attrs[ATTR_INDEX_CONFIG] = json.dumps(meta.index_config.to_dict())
+        if meta.storage_precision is not None:
+            f.attrs[ATTR_STORAGE_PRECISION] = meta.storage_precision.value
         f.attrs[ATTR_ROW_COUNT] = meta.row_count
         f.attrs[ATTR_EXPORTED_AT] = meta.exported_at
 
@@ -411,6 +424,26 @@ def export_bundle(
         h5_path,
     )
     return meta, h5_path
+
+
+def _importable_precision(
+    backend: EmbeddingBackend, meta: BundleMetadata
+) -> VectorPrecision | None:
+    """Storage precision to register an imported model with.
+
+    The bundle's own when the backend supports it, otherwise ``None`` so the
+    backend picks its default. The vectors in a bundle are float32 either way.
+    """
+    precision = meta.storage_precision
+    if precision is None or precision in backend.capabilities.storage_precisions:
+        return precision
+    logger.warning(
+        "Backend '%s' does not support '%s' storage; importing '%s' with its default precision.",
+        backend.backend_name,
+        precision.value,
+        meta.model_name,
+    )
+    return None
 
 
 def import_bundle(
@@ -480,6 +513,7 @@ def import_bundle(
                 model_name=meta.model_name,
                 provider_type=meta.provider_type,
                 dimensions=meta.dimensions,
+                storage_precision=_importable_precision(backend, meta),
                 registered_at=datetime.fromisoformat(meta.exported_at),
             )
 

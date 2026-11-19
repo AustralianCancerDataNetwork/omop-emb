@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import pytest
 import sqlalchemy as sa
-from oa_configurator import ensure_schema
+from oa_configurator import ensure_schema, qualified
 from sqlalchemy.exc import IntegrityError
 
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
-from omop_emb.config import MODEL_REGISTRY_SCHEMA, IndexType, MetricType
+from omop_emb.config import MODEL_REGISTRY_SCHEMA, IndexType, MetricType, VectorPrecision
 from omop_emb.model_registry import (
     REGISTRY_SCHEMA_KEY,
     ModelRegistry,
     RegistryManager,
     ensure_registry_table,
     registry_reader_engine,
+)
+from omop_emb.model_registry.model_registry_orm import (
+    registry_has_column,
+    resolve_registry_physical_schema,
 )
 from omop_emb.utils.errors import LegacyRegistryError, ModelRegistrationConflictError
 
@@ -32,6 +36,22 @@ BACKEND_PREFIX = "sqlitevec"
 METRIC = MetricType.L2
 FLAT = FlatIndexConfig()
 HNSW = HNSWIndexConfig(metric_type=MetricType.COSINE)
+
+
+def _register(
+    registry: RegistryManager,
+    *,
+    metadata: dict[str, object] | None = None,
+    precision: VectorPrecision | None = None,
+):
+    return registry.register_model(
+        model_name=MODEL_NAME,
+        provider_type=PROVIDER_TYPE,
+        index_config=FLAT,
+        dimensions=EMBEDDING_DIM,
+        metadata=metadata,
+        storage_precision=precision,
+    )
 
 
 @pytest.mark.unit
@@ -134,8 +154,8 @@ class TestRegistryManager:
             index_config=FLAT,
             dimensions=EMBEDDING_DIM,
         )
-        assert "flat" not in record.storage_identifier
-        assert "hnsw" not in record.storage_identifier
+        assert IndexType.FLAT.value not in record.storage_identifier
+        assert IndexType.HNSW.value not in record.storage_identifier
 
     def test_get_model_exact_match(self, registry: RegistryManager):
         registry.register_model(
@@ -187,6 +207,58 @@ class TestRegistryManager:
             provider_type=PROVIDER_TYPE,
         )
         assert len(records) == 0
+
+    def test_storage_precision_is_recorded_without_touching_user_metadata(
+        self, registry: RegistryManager
+    ):
+        record = registry.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FLAT,
+            dimensions=EMBEDDING_DIM,
+            metadata={"custom": "value"},
+            storage_precision=VectorPrecision.FLOAT16,
+        )
+        assert record.storage_precision == VectorPrecision.FLOAT16
+        assert record.metadata["custom"] == "value"
+
+    def test_record_without_a_stored_precision_reports_none(self, registry: RegistryManager):
+        record = registry.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FLAT,
+            dimensions=EMBEDDING_DIM,
+        )
+        assert record.storage_precision is None
+
+    def test_registering_again_with_the_same_precision_and_metadata_returns_the_record(
+        self, registry: RegistryManager
+    ):
+        first = _register(registry, metadata={"custom": "value"}, precision=VectorPrecision.FLOAT32)
+        again = _register(registry, metadata={"custom": "value"}, precision=VectorPrecision.FLOAT32)
+        assert again.storage_identifier == first.storage_identifier
+
+    def test_registering_again_with_another_precision_conflicts(self, registry: RegistryManager):
+        _register(registry, precision=VectorPrecision.FLOAT32)
+        with pytest.raises(ModelRegistrationConflictError, match="storage_precision"):
+            _register(registry, precision=VectorPrecision.FLOAT16)
+
+    def test_older_record_accepts_registration_with_a_precision(self, registry: RegistryManager):
+        _register(registry)
+        again = _register(registry, precision=VectorPrecision.FLOAT32)
+        assert again.storage_precision is None
+
+    def test_update_metadata_keeps_the_stored_precision(self, registry: RegistryManager):
+        registry.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            index_config=FLAT,
+            dimensions=EMBEDDING_DIM,
+            storage_precision=VectorPrecision.FLOAT32,
+        )
+        updated = registry.update_metadata(model_name=MODEL_NAME, metadata={"custom": "value"})
+        assert updated.storage_precision == VectorPrecision.FLOAT32
+        assert updated.metadata["custom"] == "value"
 
     def test_update_metadata(self, registry: RegistryManager):
         registry.register_model(
@@ -380,3 +452,61 @@ def test_registry_reader_engine_maps_the_registry_schema(pg_db):
         assert translate_map[REGISTRY_SCHEMA_KEY] == MODEL_REGISTRY_SCHEMA
     finally:
         engine.dispose()
+
+
+def _drop_precision_column(engine: sa.Engine) -> None:
+    """Make the registry look as an older omop-emb left it, without the precision column."""
+    with engine.begin() as connection:
+        table = qualified(
+            connection,
+            ModelRegistry.__tablename__,
+            physical_schema=resolve_registry_physical_schema(connection),
+        )
+        connection.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN storage_precision")
+
+
+def _register_with_precision(engine: sa.Engine, precision: VectorPrecision | None):
+    return RegistryManager(engine).register_model(
+        model_name=MODEL_NAME,
+        provider_type=PROVIDER_TYPE,
+        index_config=FLAT,
+        dimensions=EMBEDDING_DIM,
+        storage_precision=precision,
+    )
+
+
+def _assert_registry_upgrade_keeps_rows(engine: sa.Engine) -> None:
+    _register_with_precision(engine, VectorPrecision.FLOAT32)
+    _drop_precision_column(engine)
+    assert not registry_has_column(engine, "storage_precision")
+
+    (record,) = RegistryManager(engine).get_registered_models()
+    assert record.model_name == MODEL_NAME
+    assert record.storage_precision is None
+
+    ensure_registry_table(engine)
+    ensure_registry_table(engine)
+    assert registry_has_column(engine, "storage_precision")
+
+    manager = RegistryManager(engine)
+    (record,) = manager.get_registered_models()
+    assert record.storage_precision is None
+    other = manager.register_model(
+        model_name=f"{MODEL_NAME}-new",
+        provider_type=PROVIDER_TYPE,
+        index_config=FLAT,
+        dimensions=EMBEDDING_DIM,
+        storage_precision=VectorPrecision.FLOAT16,
+    )
+    assert other.storage_precision == VectorPrecision.FLOAT16
+
+
+@pytest.mark.unit
+def test_registry_without_the_precision_column_is_readable_and_upgraded_by_a_writer(svec_engine):
+    _assert_registry_upgrade_keeps_rows(svec_engine)
+
+
+@pytest.mark.pgvector
+@pytest.mark.integration
+def test_registry_upgrade_adds_the_precision_column_on_postgres(pg_engine):
+    _assert_registry_upgrade_keeps_rows(pg_engine)

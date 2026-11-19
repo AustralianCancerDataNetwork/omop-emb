@@ -521,3 +521,17 @@ class TestCacheMetadata:
         restored = FAISSCacheMetadata.from_json(meta.to_json())
         assert restored == meta
         assert restored.index_config.metric_type is MetricType.L2
+
+
+class TestDistanceConversion:
+    @pytest.mark.parametrize(
+        ("metric", "raw", "expected"),
+        [(MetricType.COSINE, 0.75, 0.25), (MetricType.L2, 4.0, 2.0), (MetricType.L2, -1e-9, 0.0)],
+    )
+    def test_supported_metrics_convert(self, metric, raw, expected):
+        assert FAISSCache._to_metric_dist(raw, metric) == pytest.approx(expected)
+
+    @pytest.mark.parametrize("metric", [MetricType.L1, MetricType.HAMMING, MetricType.JACCARD])
+    def test_other_metrics_are_rejected_instead_of_passed_through(self, metric):
+        with pytest.raises(ValueError, match=metric.value):
+            FAISSCache._to_metric_dist(1.0, metric)

@@ -72,7 +72,7 @@ def sqlite_resolved_vector_store(database_name: str = ":memory:") -> ResolvedVec
     """A sqlite-vec ``ResolvedVectorStore`` on ``sqlite_resolved_database(database_name)``."""
     return ResolvedVectorStore(
         name="default",
-        backend_type="sqlitevec",
+        backend_type=BackendType.SQLITEVEC.value,
         database=sqlite_resolved_database(database_name),
         faiss_cache_dir=None,
         configuration={},
@@ -92,7 +92,7 @@ def duckdbvss_resolved_vector_store(database_name: str) -> ResolvedVectorStore:
     )
     return ResolvedVectorStore(
         name="default",
-        backend_type="duckdbvss",
+        backend_type=BackendType.DUCKDBVSS.value,
         database=Resolver(cfg).resolve_database("default"),
         faiss_cache_dir=None,
         configuration={},
@@ -432,7 +432,7 @@ def pg_backend(pg_db):
     from omop_emb.backends.base_backend import _open_writer
     from omop_emb.backends.embedding_table import EmbeddingTableBase
 
-    backend = _open_writer("pgvector", database=pg_db.resolved)
+    backend = _open_writer(BackendType.PGVECTOR, database=pg_db.resolved)
 
     yield backend
 
@@ -482,7 +482,7 @@ def duckdbvss_backend(duckdbvss_db):
     from omop_emb.backends.base_backend import _open_writer
     from omop_emb.backends.embedding_table import EmbeddingTableBase
 
-    backend = _open_writer("duckdbvss", database=duckdbvss_db.resolved)
+    backend = _open_writer(BackendType.DUCKDBVSS, database=duckdbvss_db.resolved)
 
     yield backend
 

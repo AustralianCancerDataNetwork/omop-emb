@@ -138,18 +138,31 @@ class BackendType(StrEnum):
     DUCKDBVSS = "duckdbvss"
 
 
+class VectorPrecision(StrEnum):
+    """Numeric precision of stored embedding values or of an index over them.
+
+    Members
+    -------
+    FLOAT32
+        Single precision. The default.
+    FLOAT16
+        Half precision. Halves the size at some loss of accuracy. Supported by
+        pgvector only.
+    """
+
+    FLOAT32 = "float32"
+    FLOAT16 = "float16"
+
+
 class VectorColumnType(StrEnum):
     """PostgreSQL column type used to store embedding vectors (pgvector only).
-
-    Selected automatically by the pgvector backend based on dimensionality.
-    Not applicable to the sqlite-vec backend.
 
     Members
     -------
     VECTOR
-        ``pgvector`` ``vector`` type (float32, up to 2 000 dims).
+        ``pgvector`` ``vector`` type (float32).
     HALFVEC
-        ``pgvector`` ``halfvec`` type (float16, up to 4 000 dims).
+        ``pgvector`` ``halfvec`` type (float16).
 
     Notes
     -----

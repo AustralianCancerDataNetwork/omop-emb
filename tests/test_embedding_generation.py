@@ -23,7 +23,7 @@ from sqlalchemy import insert
 
 from omop_emb.backends.db_utils import table_for
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
-from omop_emb.config import MetricType
+from omop_emb.config import BackendType, MetricType
 from omop_emb.interface import (
     EmbeddingReaderInterface,
     EmbeddingRole,
@@ -82,7 +82,7 @@ def _mock_model_backend(
 
 def _mock_storage_backend() -> Mock:
     backend = Mock()
-    backend.backend_name = "pgvector"
+    backend.backend_name = BackendType.PGVECTOR.value
     backend.get_registered_model.return_value = None
     return backend
 

@@ -5,6 +5,7 @@ In-memory SQLite: no external service required.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import ClassVar
 
 import numpy as np
@@ -23,7 +24,7 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     declared_metric,
     recreate_vec0,
 )
-from omop_emb.config import MetricType
+from omop_emb.config import BackendType, MetricType, VectorPrecision
 from omop_emb.model_registry import RegistryManager, registry_writer_engine
 from omop_emb.model_registry.model_registry_orm import ModelRegistry
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
@@ -57,6 +58,32 @@ class TestSQLiteVecEmbeddingBackend(SharedBackendTests):
 @pytest.mark.unit
 class TestSQLiteVecSpecific:
     """SQLiteVec-specific behaviour not covered by the shared suite."""
+
+    def test_storage_precision_is_float32_with_or_without_a_recorded_one(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
+        record = svec_backend.register_model(
+            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, dimensions=3000
+        )
+        assert svec_backend.storage_precision_of(replace(record, storage_precision=None)) == (
+            VectorPrecision.FLOAT32
+        )
+        assert svec_backend.storage_precision_of(record) == VectorPrecision.FLOAT32
+
+    def test_half_precision_storage_is_rejected_and_nothing_is_registered(
+        self, svec_backend: SQLiteVecEmbeddingBackend
+    ):
+        with pytest.raises(
+            UnsupportedIndexConfigError,
+            match=f"'{VectorPrecision.FLOAT16.value}'.*'{BackendType.SQLITEVEC.value}'",
+        ):
+            svec_backend.register_model(
+                model_name=MODEL_NAME,
+                provider_type=PROVIDER_TYPE,
+                dimensions=EMBEDDING_DIM,
+                storage_precision=VectorPrecision.FLOAT16,
+            )
+        assert svec_backend.get_registered_model(model_name=MODEL_NAME) is None
 
     def test_existing_old_style_storage_identifier_keeps_working(
         self, svec_backend: SQLiteVecEmbeddingBackend, monkeypatch
@@ -332,7 +359,7 @@ class TestSQLiteVecMetricTable:
             model_name=MODEL_NAME, metric_type=MetricType.L2, query_embeddings=QUERY_EMBEDDING, k=1
         )
         assert matches[0].concept_id == DIABETES_ID
-        with pytest.raises(ValueError, match="indexed with metric 'l2'"):
+        with pytest.raises(ValueError, match=f"indexed with metric '{MetricType.L2.value}'"):
             svec_backend.get_nearest_concepts(
                 model_name=MODEL_NAME,
                 metric_type=MetricType.COSINE,

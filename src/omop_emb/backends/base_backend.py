@@ -25,15 +25,14 @@ from sqlalchemy import Engine, inspect, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
+from omop_emb.backends.capabilities import BackendCapabilities
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig, IndexConfig
 from omop_emb.config import (
     BackendType,
     IndexType,
     MetricType,
-    get_supported_index_types_for_backend,
-    is_index_type_supported_for_backend,
-    is_supported_index_metric_combination_for_backend,
+    VectorPrecision,
     parse_backend_type,
 )
 from omop_emb.model_registry import (
@@ -53,6 +52,7 @@ from omop_emb.utils.errors import (
     EmbeddingBackendConfigurationError,
     EmbeddingBackendDependencyError,
     MissingStorageTableError,
+    ModelRegistrationConflictError,
     ReadOnlyStoreError,
     UnknownEmbeddingBackendError,
     UnsupportedIndexConfigError,
@@ -255,10 +255,24 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         """
         ...
 
+    def default_storage_precision(self, dimensions: int) -> VectorPrecision:
+        """Storage precision a model of ``dimensions`` gets when none is chosen.
+
+        Also the precision of a record written before the precision was kept.
+        """
+        return VectorPrecision.FLOAT32
+
+    def storage_precision_of(self, model_record: EmbeddingModelRecord) -> VectorPrecision:
+        """Storage precision of a registered model's embedding column."""
+        return model_record.storage_precision or self.default_storage_precision(
+            model_record.dimensions
+        )
+
     @property
-    def supports_max_scan_tuples(self) -> bool:
-        """Whether ``HNSWIndexConfig.max_scan_tuples`` has an effect on this backend."""
-        return False
+    @abstractmethod
+    def capabilities(self) -> BackendCapabilities:
+        """Index and storage options this backend supports."""
+        ...
 
     @property
     def emb_engine(self) -> Engine:
@@ -374,6 +388,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         provider_type: str,
         index_config: IndexConfig | None = None,
         metadata: Mapping[str, object] | None = None,
+        storage_precision: VectorPrecision | None = None,
         registered_at: datetime | None = None,
     ) -> EmbeddingModelRecord:
         """Register a model and create its physical storage table.
@@ -392,6 +407,10 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         metadata : Mapping[str, object], optional
             Free-form operational metadata. Must not contain reserved keys
             (see ``RESERVED_METADATA_KEYS`` in ``index_config.py``).
+        storage_precision : VectorPrecision, optional
+            Precision of the stored column, fixed at registration. Defaults to
+            the backend's choice for ``dimensions``, or to the precision of an
+            already registered model.
         registered_at : datetime, optional
             Backdate ``created_at``/``updated_at`` to this timestamp instead
             of "now". Only applies to a brand-new registration.
@@ -404,9 +423,11 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         Raises
         ------
         ModelRegistrationConflictError
-            If the model is already registered with a different dimensionality.
+            If the model is already registered with a different dimensionality
+            or storage precision.
         UnsupportedIndexConfigError
-            If the backend does not support the index type or its metric.
+            If the backend does not support the index type, its metric, the
+            storage precision or the dimensionality.
         ValueError
             If ``metadata`` contains a reserved key, or if ``index_config`` is
             not a FLAT config (non-FLAT indexes may only be built after
@@ -425,15 +446,38 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                 "See the CLI documentation for details."
             )
         index_config = self._normalized_flat_metric(index_config)
-        self._validate_index_config(index_config)
+        existing = self._registry.get_registered_models(model_name=model_name)
+        current_precision = self.storage_precision_of(existing[0]) if existing else None
+        defaulted = storage_precision is None and current_precision is None
+        if storage_precision is None:
+            storage_precision = current_precision or self.default_storage_precision(dimensions)
+        elif current_precision is not None and storage_precision != current_precision:
+            raise ModelRegistrationConflictError(
+                f"Model '{model_name}' already registered with "
+                f"storage_precision={current_precision.value}, got {storage_precision.value}.",
+                conflict_field="storage_precision",
+            )
+        if defaulted and storage_precision != VectorPrecision.FLOAT32:
+            logger.warning(
+                f"Storing {dimensions} dimensions of '{model_name}' as "
+                f"{storage_precision.value} on backend '{self.backend_name}' by default, "
+                "which may reduce accuracy. Pass a storage precision to choose."
+            )
+        self.capabilities.validate_registration(
+            dimensions=dimensions, storage_precision=storage_precision
+        )
+        self.capabilities.validate_index_config(
+            index_config, dimensions=dimensions, storage_precision=storage_precision
+        )
 
-        preexisting = bool(self._registry.get_registered_models(model_name=model_name))
+        preexisting = bool(existing)
         record = self._registry.register_model(
             model_name=model_name,
             provider_type=provider_type,
             dimensions=dimensions,
             index_config=index_config,
             metadata=metadata,
+            storage_precision=storage_precision,
             registered_at=registered_at,
         )
         try:
@@ -538,7 +582,11 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         """
         record = self._registered_record(model_name)
         index_config = self._normalized_flat_metric(index_config)
-        self._validate_index_config(index_config)
+        self.capabilities.validate_index_config(
+            index_config,
+            dimensions=record.dimensions,
+            storage_precision=self.storage_precision_of(record),
+        )
         self._rebuild_index_impl(model_record=record, index_config=index_config, vacuum=vacuum)
         return self._registry.update_index_config(
             model_name=model_name,
@@ -591,10 +639,8 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             raise UnsupportedIndexConfigError(
                 f"Model '{model_name}' has no HNSW index. Build one with rebuild_index first."
             )
-        if max_scan_tuples is not None and not self.supports_max_scan_tuples:
-            raise UnsupportedIndexConfigError(
-                f"max_scan_tuples is not supported by backend '{self.backend_name}'."
-            )
+        if max_scan_tuples is not None:
+            self.capabilities.require_max_scan_tuples()
         updated = replace(
             current,
             ef_search=current.ef_search if ef_search is None else ef_search,
@@ -620,31 +666,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             metric_type = index_config.metric_type or self.default_flat_metric
         if metric_type == index_config.metric_type:
             return index_config
-        return FlatIndexConfig(metric_type=metric_type)
-
-    def _validate_index_config(self, index_config: IndexConfig) -> None:
-        """Raise ``UnsupportedIndexConfigError`` if the backend supports neither the index type nor its metric."""
-        if not is_index_type_supported_for_backend(
-            backend=self.backend_type, index=index_config.index_type
-        ):
-            supported = get_supported_index_types_for_backend(self.backend_type)
-            raise UnsupportedIndexConfigError(
-                f"Index type '{index_config.index_type.value}' is not supported by "
-                f"backend '{self.backend_name}'. "
-                f"Supported: {[idx.value for idx in supported]}."
-            )
-        if (
-            index_config.metric_type is not None
-            and not is_supported_index_metric_combination_for_backend(
-                backend=self.backend_type,
-                index=index_config.index_type,
-                metric=index_config.metric_type,
-            )
-        ):
-            raise UnsupportedIndexConfigError(
-                f"Metric '{index_config.metric_type.value}' is not supported by backend "
-                f"'{self.backend_name}' with index type '{index_config.index_type.value}'."
-            )
+        return replace(index_config, metric_type=metric_type)
 
     @abstractmethod
     def _rebuild_index_impl(
@@ -732,9 +754,7 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
                     f"'{metric_type.value}'. Rebuild the index with the desired "
                     "metric or query with the registered one."
                 )
-        elif not is_supported_index_metric_combination_for_backend(
-            backend=self.backend_type, index=record.index_type, metric=metric_type
-        ):
+        elif not self.capabilities.supports_metric(record.index_type, metric_type):
             raise ValueError(
                 f"Metric '{metric_type.value}' is not supported by backend "
                 f"'{self.backend_name}' with index type '{record.index_type.value}'."

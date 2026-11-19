@@ -17,6 +17,7 @@ from omop_emb.config import (
     IndexType,
     MetricType,
     OmopEmbConfig,
+    VectorPrecision,
     open_cdm_sessions,
 )
 from omop_emb.population import PopulationScope, plan_population
@@ -126,6 +127,15 @@ def rebuild_index(
             rich_help_panel="Index Options",
         ),
     ] = None,
+    index_precision: Annotated[
+        VectorPrecision | None,
+        typer.Option(
+            "--index-precision",
+            help="HNSW: precision of the index (pgvector only). float16 over float32 vectors "
+            "halves the index and allows up to 4,000 dimensions. Defaults to the stored precision.",
+            rich_help_panel="Index Options",
+        ),
+    ] = None,
     vacuum: Annotated[
         bool,
         typer.Option(
@@ -159,13 +169,18 @@ def rebuild_index(
         num_neighbors=index_hnsw_num_neighbors,
         ef_search=index_hnsw_ef_search,
         ef_construction=index_hnsw_ef_construction,
+        index_precision=index_precision,
         metric_type=metric_type,
     )
-    record = backend.rebuild_index(
-        model_name=model,
-        index_config=index_config,
-        vacuum=vacuum,
-    )
+    try:
+        record = backend.rebuild_index(
+            model_name=model,
+            index_config=index_config,
+            vacuum=vacuum,
+        )
+    except UnsupportedIndexConfigError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1)
     metric_info = f" (metric={record.metric_type.value})" if record.metric_type else ""
     typer.echo(f"Rebuilt {index_type.value} index for '{model}'{metric_info}.")
 

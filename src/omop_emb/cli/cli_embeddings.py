@@ -22,6 +22,7 @@ from omop_emb.config import (
     IndexType,
     MetricType,
     OmopEmbConfig,
+    VectorPrecision,
     open_cdm_sessions,
 )
 from omop_emb.interface import EmbeddingReaderInterface, EmbeddingWriterInterface
@@ -30,6 +31,7 @@ from omop_emb.utils.embedding_utils import (
     EmbeddingConceptFilter,
     NearestConceptMatch,
 )
+from omop_emb.utils.errors import UnsupportedIndexConfigError
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(help="Commands related to embedding generation, storage, and management.")
@@ -175,6 +177,16 @@ def add_embeddings(
             rich_help_panel="Index Options",
         ),
     ] = MetricType.COSINE,
+    storage_precision: Annotated[
+        VectorPrecision | None,
+        typer.Option(
+            "--storage-precision",
+            help="Precision of a new model's stored vectors (float16 is pgvector only). "
+            "Defaults to float32, or float16 above 2,000 dimensions on pgvector. "
+            "Ignored for a model that is already registered.",
+            rich_help_panel="Index Options",
+        ),
+    ] = None,
     no_progress: Annotated[
         bool,
         typer.Option(
@@ -209,6 +221,7 @@ def add_embeddings(
             vocabularies=vocabularies,
             num_embeddings=num_embeddings,
             metric_type=metric_type,
+            storage_precision=storage_precision,
             no_progress=no_progress,
         )
 
@@ -225,6 +238,7 @@ def _add_embeddings(
     vocabularies: list[str] | None,
     num_embeddings: int | None,
     metric_type: MetricType = MetricType.COSINE,
+    storage_precision: VectorPrecision | None = None,
     no_progress: bool = False,
 ) -> None:
     """Embed every concept matching the filters that lacks a current embedding."""
@@ -239,7 +253,10 @@ def _add_embeddings(
     check_concept_cdm(cdm_sessions)
 
     try:
-        embedding_writer.register_model(index_config=FlatIndexConfig(metric_type=metric_type))
+        embedding_writer.register_model(
+            index_config=FlatIndexConfig(metric_type=metric_type),
+            storage_precision=storage_precision,
+        )
 
         # Filter concepts
         concept_filter = CDMConceptFilter(
@@ -343,6 +360,15 @@ def create_index(
             rich_help_panel="Index Options",
         ),
     ] = None,
+    index_precision: Annotated[
+        VectorPrecision | None,
+        typer.Option(
+            "--index-precision",
+            help="HNSW: precision of the index (pgvector only). float16 over float32 vectors "
+            "halves the index and allows up to 4,000 dimensions. Defaults to the stored precision.",
+            rich_help_panel="Index Options",
+        ),
+    ] = None,
 ):
     """Create or rebuild the index on an existing embedding table.
 
@@ -359,6 +385,7 @@ def create_index(
             num_neighbors=index_hnsw_num_neighbors,
             ef_search=index_hnsw_ef_search,
             ef_construction=index_hnsw_ef_construction,
+            index_precision=index_precision,
             metric_type=metric_type,
         ),
     )
@@ -396,7 +423,11 @@ def _create_index(
     ):
         typer.echo(f"HNSW index already matches for '{embedding_writer.canonical_model_name}'.")
         return
-    record = embedding_writer.rebuild_index(index_config=index_config)
+    try:
+        record = embedding_writer.rebuild_index(index_config=index_config)
+    except UnsupportedIndexConfigError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1)
     metric_info = f" (metric={record.metric_type.value})" if record.metric_type else ""
     typer.echo(
         f"Index ({index_config.index_type.value}) built for '{embedding_writer.canonical_model_name}'{metric_info}."
@@ -506,6 +537,25 @@ def add_embeddings_with_index(
             rich_help_panel="Index Options",
         ),
     ] = None,
+    index_precision: Annotated[
+        VectorPrecision | None,
+        typer.Option(
+            "--index-precision",
+            help="HNSW: precision of the index (pgvector only). float16 over float32 vectors "
+            "halves the index and allows up to 4,000 dimensions. Defaults to the stored precision.",
+            rich_help_panel="Index Options",
+        ),
+    ] = None,
+    storage_precision: Annotated[
+        VectorPrecision | None,
+        typer.Option(
+            "--storage-precision",
+            help="Precision of a new model's stored vectors (float16 is pgvector only). "
+            "Defaults to float32, or float16 above 2,000 dimensions on pgvector. "
+            "Ignored for a model that is already registered.",
+            rich_help_panel="Index Options",
+        ),
+    ] = None,
     no_progress: Annotated[
         bool,
         typer.Option(
@@ -530,6 +580,7 @@ def add_embeddings_with_index(
         domains=domains,
         num_embeddings=num_embeddings,
         metric_type=metric_type,
+        storage_precision=storage_precision,
         no_progress=no_progress,
     )
 
@@ -541,6 +592,7 @@ def add_embeddings_with_index(
             num_neighbors=index_hnsw_num_neighbors,
             ef_search=index_hnsw_ef_search,
             ef_construction=index_hnsw_ef_construction,
+            index_precision=index_precision,
             metric_type=metric_type,
         ),
         skip_if_unchanged=True,

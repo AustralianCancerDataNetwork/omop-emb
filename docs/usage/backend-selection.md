@@ -107,8 +107,43 @@ omop-emb maintenance rebuild-index --model-name embedding-model --index-type hns
 !!! warning "HNSW builds in containers"
     A parallel HNSW build can fail with `could not resize shared memory segment ... No space left on device` when the container's `/dev/shm` is small. Either enlarge `/dev/shm` (for example `shm_size` in Docker Compose) or set `max_parallel_maintenance_workers = 0` on the server, which builds serially and takes longer.
 
-!!! warning "pgvector dimension limit"
-    The pgvector `vector` column type supports **at most 2,000 dimensions**. Models with more than 2,000 dimensions automatically use the `halfvec` column type (up to 4,000 dimensions). Registering above 4,000 dimensions raises a `ValueError`.
+## Precision
+
+Two separate options control half precision. Both are pgvector only. sqlite-vec and DuckDB VSS store float32 and reject `float16`, and DuckDB's HNSW index accepts only float32.
+
+| Option | Set | Changed by | Effect |
+|---|---|---|---|
+| Storage precision (`--storage-precision`, `storage_precision`) | At registration | Re-registering with another value is a conflict | `float16` stores the column as `halfvec`. Halves the table and the index, at some loss of accuracy in the stored vectors. |
+| Index precision (`--index-precision`, `index_precision`, on any index config) | When the HNSW index is built | `rebuild-index` | `float16` over a float32 column indexes a `halfvec` cast of it. Halves the index and keeps the full vectors in the table. |
+
+`None` is the default for the index precision and means the index follows the stored column. FLAT has no index, so it rejects an explicit value.
+
+Defaults follow the dimensions. Up to 2,000 dimensions the column is float32. Above that the column defaults to `float16`, because a float32 `vector` index supports at most 2,000 dimensions and `halfvec` supports 4,000. Registering above 4,000 dimensions raises an error.
+
+A wide model can keep float32 storage by choosing `--storage-precision float32` at registration and building its HNSW index with `--index-precision float16`. Without that, an HNSW index on a float32 column above 2,000 dimensions is rejected with a message naming the option.
+
+Models registered before the precision was recorded have none in the registry, so the backend derives it from the dimensions as before. The first writer to open an older registry adds the column. Readers work on an older registry in the meantime. Bundles record the stored precision. An import uses it when the target backend supports it and otherwise registers the model with the backend's default.
+
+Queries on a half-precision index over a float32 column rank by the half-precision distance, so the returned similarities are those of the cast vectors. Stores registered before the option existed keep the precision they were created with. Recall at half precision has not been measured yet.
+
+```bash
+omop-emb embeddings add-embeddings --storage-precision float16
+omop-emb maintenance rebuild-index --model <NAME> --index-type hnsw --index-precision float16
+```
+
+## Backend capabilities
+
+Each backend declares what it supports as `backend.capabilities`. Registration, `rebuild-index` and `set-ef-search` check it before changing anything and raise an error that names the backend and the option.
+
+| Capability | sqlite-vec | pgvector | DuckDB VSS |
+|---|---|---|---|
+| Index types | FLAT | FLAT, HNSW | FLAT, HNSW |
+| Metrics | L2, cosine, L1 | L2, cosine, L1 | L2, cosine |
+| `max_scan_tuples` | no | yes | no |
+| Storage precision | float32 | float32, float16 | float32 |
+| Index precision (HNSW) | none | float32, float16 | float32 |
+| Largest model | no limit | 4,000 dimensions | no limit |
+| Largest HNSW index | none | 2,000 (float32), 4,000 (float16) | no limit |
 
 ## Metrics
 

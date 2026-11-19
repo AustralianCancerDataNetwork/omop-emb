@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from dataclasses import replace
+from typing import Any
 
 import numpy as np
 import pytest
@@ -18,15 +19,16 @@ from tests.conftest import registered_model
 pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests")
 
 import sqlalchemy as sa
-from oa_configurator import Role, physical_schema_of
+from oa_configurator import Role, physical_schema_of, qualified
 from oa_configurator.testing import resolve_with_role_schemas, scoped_test_schema
 from sqlalchemy import event as sa_event
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord, _open_writer
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
-from omop_emb.config import IndexType, MetricType
-from omop_emb.model_registry import RegistryManager, registry_reader_engine
+from omop_emb.config import BackendType, IndexType, MetricType, VectorColumnType, VectorPrecision
+from omop_emb.model_registry import ModelRegistry, RegistryManager, registry_reader_engine
+from omop_emb.model_registry.model_registry_orm import resolve_registry_physical_schema
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.utils.errors import UnsupportedIndexConfigError
 
@@ -39,6 +41,7 @@ from .conftest import (
     MODEL_NAME,
     PROVIDER_TYPE,
     QUERY_EMBEDDING,
+    drop_all_models,
     populate,
     register_flat,
     upsert_all,
@@ -175,7 +178,7 @@ class TestPGVectorHNSWBackend:
         upsert_all(pg_backend)
         pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
         before = pg_backend.physical_indexes(MODEL_NAME)
-        with pytest.raises(ValueError, match="hamming"):
+        with pytest.raises(ValueError, match=MetricType.HAMMING.value):
             pg_backend.rebuild_index(
                 model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.HAMMING)
             )
@@ -234,7 +237,7 @@ class TestPGVectorHNSWBackend:
         def capture(_connection, _cursor, statement, _parameters, _context, _many):
             statements.append(statement.strip().lower())
 
-        fresh = _open_writer("pgvector", database=pg_db.resolved)
+        fresh = _open_writer(BackendType.PGVECTOR, database=pg_db.resolved)
         try:
             sa_event.listen(fresh.emb_engine, "before_cursor_execute", capture)
             fresh.get_nearest_concepts(
@@ -455,10 +458,11 @@ class TestPGVectorNonDefaultSchema:
     @pytest.fixture
     def scoped_backend(self, pg_db):
         with scoped_test_schema(pg_db.resolved, prefix="emb_schema") as scoped:
-            backend = _open_writer("pgvector", database=scoped.resolved)
+            backend = _open_writer(BackendType.PGVECTOR, database=scoped.resolved)
             try:
                 yield backend, scoped.schemas[Role.PRIMARY]
             finally:
+                drop_all_models(backend)
                 backend.emb_engine.dispose()
 
     def test_table_and_index_lifecycle_stays_in_the_configured_schema(self, scoped_backend, pg_db):
@@ -547,3 +551,232 @@ def test_single_upsert_call_exceeds_the_bind_parameter_limit(pg_backend: PGVecto
         pg_backend.get_embeddings_by_concept_ids(model_name=MODEL_NAME, concept_ids=[0])[0],
         np.full(EMBEDDING_DIM, 2.0, dtype=np.float32),
     )
+
+
+@pytest.mark.pgvector
+@pytest.mark.integration
+class TestPGVectorPrecision:
+    """Storage and index precision on pgvector."""
+
+    HNSW_L2 = HNSWIndexConfig(metric_type=MetricType.L2, num_neighbors=4, ef_construction=16)
+
+    @staticmethod
+    def _column_type(backend: PGVectorEmbeddingBackend, model_name: str) -> str:
+        record = registered_model(backend, model_name)
+        with backend.emb_engine.connect() as conn:
+            return conn.execute(
+                sa.text(
+                    "SELECT format_type(a.atttypid, a.atttypmod) FROM pg_attribute a "
+                    "JOIN pg_class c ON c.oid = a.attrelid "
+                    "WHERE c.relname = :t AND a.attname = 'embedding'"
+                ),
+                {"t": record.storage_identifier},
+            ).scalar_one()
+
+    def test_half_storage_creates_a_halfvec_column_that_answers_queries(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        record = pg_backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            dimensions=EMBEDDING_DIM,
+            storage_precision=VectorPrecision.FLOAT16,
+        )
+        pg_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=list(CONCEPT_RECORDS), embeddings=CONCEPT_EMBEDDINGS
+        )
+
+        assert record.storage_precision == VectorPrecision.FLOAT16
+        assert self._column_type(pg_backend, MODEL_NAME) == f"halfvec({EMBEDDING_DIM})"
+        results = pg_backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            query_embeddings=CONCEPT_EMBEDDINGS[[HYPERTENSION_ID - 1]],
+            k=1,
+        )
+        assert results[0][0].concept_id == HYPERTENSION_ID
+
+    def test_default_storage_is_float32_and_recorded(self, pg_backend: PGVectorEmbeddingBackend):
+        record = register_flat(pg_backend)
+        assert record.storage_precision == VectorPrecision.FLOAT32
+        assert self._column_type(pg_backend, MODEL_NAME) == f"vector({EMBEDDING_DIM})"
+
+    def test_wide_model_defaults_to_half_storage(self, pg_backend: PGVectorEmbeddingBackend):
+        record = register_flat(pg_backend, dimensions=2500)
+        assert record.storage_precision == VectorPrecision.FLOAT16
+        assert self._column_type(pg_backend, MODEL_NAME) == "halfvec(2500)"
+
+    def test_wide_model_can_keep_float32_and_index_over_a_half_cast(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        pg_backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            dimensions=2500,
+            storage_precision=VectorPrecision.FLOAT32,
+        )
+        assert self._column_type(pg_backend, MODEL_NAME) == "vector(2500)"
+
+        with pytest.raises(
+            UnsupportedIndexConfigError, match=f"index precision '{VectorPrecision.FLOAT16.value}'"
+        ):
+            pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_L2)
+
+        record = pg_backend.rebuild_index(
+            model_name=MODEL_NAME,
+            index_config=replace(self.HNSW_L2, index_precision=VectorPrecision.FLOAT16),
+        )
+        assert isinstance(record.index_config, HNSWIndexConfig)
+        assert record.index_config.index_precision == VectorPrecision.FLOAT16
+        (index_name,) = pg_backend.physical_indexes(MODEL_NAME)
+        with pg_backend.emb_engine.connect() as conn:
+            definition = conn.execute(
+                sa.text("SELECT indexdef FROM pg_indexes WHERE indexname = :n"),
+                {"n": index_name},
+            ).scalar_one()
+        assert "halfvec(2500)" in definition
+        assert "halfvec_l2_ops" in definition
+
+    def test_registering_again_without_a_precision_keeps_the_stored_one(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        pg_backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            dimensions=EMBEDDING_DIM,
+            storage_precision=VectorPrecision.FLOAT16,
+        )
+        record = register_flat(pg_backend)
+        assert record.storage_precision == VectorPrecision.FLOAT16
+
+    def test_half_index_serves_the_query_through_the_cast_expression(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        upsert_all(pg_backend)
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME,
+            index_config=replace(self.HNSW_L2, index_precision=VectorPrecision.FLOAT16),
+        )
+
+        captured: list[tuple[str, Any]] = []
+
+        def capture(_connection, _cursor, statement, parameters, _context, _many):
+            if "order by" in statement.lower():
+                captured.append((statement, parameters))
+
+        sa_event.listen(pg_backend.emb_engine, "before_cursor_execute", capture)
+        results = pg_backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            query_embeddings=CONCEPT_EMBEDDINGS[[HYPERTENSION_ID - 1]],
+            k=1,
+        )
+        assert results[0][0].concept_id == HYPERTENSION_ID
+
+        (statement, parameters), *_ = captured
+        assert VectorColumnType.HALFVEC.value in statement.lower()
+        with pg_backend.emb_engine.connect() as conn:
+            conn.exec_driver_sql("SET enable_seqscan = off")
+            plan = "\n".join(
+                row[0] for row in conn.exec_driver_sql("EXPLAIN " + statement, parameters)
+            )
+        assert "Index Scan using idx_" in plan
+
+    def test_float32_index_leaves_the_query_uncast(self, pg_backend: PGVectorEmbeddingBackend):
+        upsert_all(pg_backend)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_L2)
+
+        captured: list[str] = []
+
+        def capture(_connection, _cursor, statement, _parameters, _context, _many):
+            if "order by" in statement.lower():
+                captured.append(statement.lower())
+
+        sa_event.listen(pg_backend.emb_engine, "before_cursor_execute", capture)
+        pg_backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            query_embeddings=CONCEPT_EMBEDDINGS[[HYPERTENSION_ID - 1]],
+            k=1,
+        )
+        assert captured and VectorColumnType.HALFVEC.value not in captured[0]
+
+    @pytest.fixture
+    def wide_registration_warnings(self, caplog):
+        caplog.set_level(logging.WARNING)
+        return lambda: [r for r in caplog.records if "by default" in r.getMessage()]
+
+    def test_defaulting_a_wide_model_to_half_storage_warns_once(
+        self, pg_backend: PGVectorEmbeddingBackend, wide_registration_warnings
+    ):
+        register_flat(pg_backend, dimensions=2500)
+        assert len(wide_registration_warnings()) == 1
+        register_flat(pg_backend, dimensions=2500)
+        assert len(wide_registration_warnings()) == 1
+
+    def test_choosing_float32_for_a_wide_model_never_warns_about_a_default(
+        self, pg_backend: PGVectorEmbeddingBackend, wide_registration_warnings
+    ):
+        pg_backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            dimensions=2500,
+            storage_precision=VectorPrecision.FLOAT32,
+        )
+        register_flat(pg_backend, dimensions=2500)
+        assert wide_registration_warnings() == []
+
+    def test_narrow_model_default_does_not_warn(
+        self, pg_backend: PGVectorEmbeddingBackend, wide_registration_warnings
+    ):
+        register_flat(pg_backend)
+        assert wide_registration_warnings() == []
+
+    def test_older_record_without_a_precision_derives_it_from_the_dimensions(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        register_flat(pg_backend, dimensions=2500)
+        with pg_backend.emb_engine.begin() as conn:
+            table = qualified(
+                conn,
+                ModelRegistry.__tablename__,
+                physical_schema=resolve_registry_physical_schema(conn),
+            )
+            conn.execute(sa.text(f"UPDATE {table} SET storage_precision = NULL"))
+
+        record = registered_model(pg_backend, MODEL_NAME)
+        assert record.storage_precision is None
+        assert pg_backend.storage_precision_of(record) == VectorPrecision.FLOAT16
+        pg_backend.upsert_embeddings(
+            model_name=MODEL_NAME,
+            records=[CONCEPT_RECORDS[0]],
+            embeddings=np.ones((1, 2500), dtype=np.float32),
+        )
+        assert pg_backend.get_embedding_count(model_name=MODEL_NAME) == 1
+
+    def test_bundle_round_trip_keeps_half_storage(
+        self, pg_backend: PGVectorEmbeddingBackend, tmp_path
+    ):
+        pytest.importorskip("h5py", reason="h5py not installed")
+        from omop_emb.storage import embedding_bundle
+
+        pg_backend.register_model(
+            model_name=MODEL_NAME,
+            provider_type=PROVIDER_TYPE,
+            dimensions=EMBEDDING_DIM,
+            storage_precision=VectorPrecision.FLOAT16,
+        )
+        pg_backend.upsert_embeddings(
+            model_name=MODEL_NAME, records=list(CONCEPT_RECORDS), embeddings=CONCEPT_EMBEDDINGS
+        )
+        meta, bundle_path = embedding_bundle.export_bundle(
+            backend=pg_backend, model_name=MODEL_NAME, output_dir=tmp_path
+        )
+        assert meta.storage_precision == VectorPrecision.FLOAT16
+
+        pg_backend.delete_model(model_name=MODEL_NAME)
+        embedding_bundle.import_bundle(backend=pg_backend, h5_path=bundle_path)
+
+        record = registered_model(pg_backend, MODEL_NAME)
+        assert record.storage_precision == VectorPrecision.FLOAT16
+        assert self._column_type(pg_backend, MODEL_NAME) == f"halfvec({EMBEDDING_DIM})"

@@ -14,7 +14,7 @@ import pytest
 
 from omop_emb.backends.base_backend import EmbeddingBackend
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
-from omop_emb.config import MetricType
+from omop_emb.config import MetricType, VectorPrecision
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 from omop_emb.utils.errors import ModelRegistrationConflictError
 
@@ -33,6 +33,12 @@ from .conftest import (
     register_flat,
     upsert_all,
 )
+
+
+def registered_precision(backend: EmbeddingBackend) -> VectorPrecision | None:
+    record = backend.get_registered_model(model_name=MODEL_NAME)
+    assert record is not None
+    return record.storage_precision
 
 
 class SharedBackendTests:
@@ -470,6 +476,24 @@ class SharedBackendTests:
         assert backend.get_registered_model(model_name=MODEL_NAME) is not None
         backend.delete_model(model_name=MODEL_NAME)
         assert backend.get_registered_model(model_name=MODEL_NAME) is None
+
+    def test_registration_records_float32_storage_and_patching_metadata_keeps_it(
+        self, backend: EmbeddingBackend
+    ):
+        record = register_flat(backend)
+        assert record.storage_precision == VectorPrecision.FLOAT32
+        backend.patch_model_metadata(model_name=MODEL_NAME, key="custom_key", value=1)
+        assert registered_precision(backend) == VectorPrecision.FLOAT32
+
+    def test_registering_again_with_another_precision_conflicts(self, backend: EmbeddingBackend):
+        register_flat(backend)
+        with pytest.raises(ModelRegistrationConflictError, match="storage_precision"):
+            backend.register_model(
+                model_name=MODEL_NAME,
+                provider_type=PROVIDER_TYPE,
+                dimensions=EMBEDDING_DIM,
+                storage_precision=VectorPrecision.FLOAT16,
+            )
 
     def test_patch_model_metadata(self, backend: EmbeddingBackend):
         register_flat(backend)

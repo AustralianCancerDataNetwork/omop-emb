@@ -25,7 +25,7 @@ from omop_emb.backends import (
 from omop_emb.backends.base_backend import EmbeddingBackend
 from omop_emb.backends.db_utils import table_for
 from omop_emb.backends.index_config import FlatIndexConfig
-from omop_emb.config import MetricType
+from omop_emb.config import BackendType, MetricType
 from omop_emb.model_registry.model_registry_orm import ModelRegistry
 from omop_emb.storage.embedding_bundle import export_bundle
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
@@ -48,11 +48,13 @@ _NEITHER = frozenset(
     {
         "DEFAULT_K_NEAREST",
         "backend_name",
+        "capabilities",
         "default_flat_metric",
+        "default_storage_precision",
         "dialect",
         "emb_engine",
         "emb_session_factory",
-        "supports_max_scan_tuples",
+        "storage_precision_of",
     }
 )
 
@@ -108,7 +110,7 @@ def _same_database_stores(path, second_path=None):
     return resolver, tuple(
         ResolvedVectorStore(
             name=name,
-            backend_type="sqlitevec",
+            backend_type=BackendType.SQLITEVEC.value,
             database=resolver.resolve_database(name),
             faiss_cache_dir=None,
             configuration={},
@@ -446,7 +448,7 @@ def test_only_the_writer_attaches_the_vector_extension_hook(pg_db, monkeypatch):
     monkeypatch.setattr(pg_backend, "_create_vector_extension", _record)
     store = ResolvedVectorStore(
         name="default",
-        backend_type="pgvector",
+        backend_type=BackendType.PGVECTOR.value,
         database=pg_db.resolved,
         faiss_cache_dir=None,
         configuration={},
@@ -500,14 +502,14 @@ def test_one_model_name_is_unique_across_schemas_in_one_postgres_database(pg_db)
         resolver = Resolver(stack)
         store_a = ResolvedVectorStore(
             name="store_a",
-            backend_type="pgvector",
+            backend_type=BackendType.PGVECTOR.value,
             database=resolver.resolve_database("store_a"),
             faiss_cache_dir=None,
             configuration={},
         )
         store_b = ResolvedVectorStore(
             name="store_b",
-            backend_type="pgvector",
+            backend_type=BackendType.PGVECTOR.value,
             database=resolver.resolve_database("store_b"),
             faiss_cache_dir=None,
             configuration={},
@@ -576,7 +578,7 @@ def test_one_store_per_model_on_one_postgres_registry(pg_db):
         store_a, store_b = (
             ResolvedVectorStore(
                 name=name,
-                backend_type="pgvector",
+                backend_type=BackendType.PGVECTOR.value,
                 database=Resolver(
                     StackConfig.for_session(
                         connections={"shared": shared_connection},
@@ -649,7 +651,7 @@ class TestPostgresReader:
         store = _populate(
             ResolvedVectorStore(
                 name="default",
-                backend_type="pgvector",
+                backend_type=BackendType.PGVECTOR.value,
                 database=pg_db.resolved,
                 faiss_cache_dir=None,
                 configuration={},

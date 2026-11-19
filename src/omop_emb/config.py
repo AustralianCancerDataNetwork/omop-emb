@@ -138,18 +138,31 @@ class BackendType(StrEnum):
     DUCKDBVSS = "duckdbvss"
 
 
+class VectorPrecision(StrEnum):
+    """Numeric precision of stored embedding values or of an index over them.
+
+    Members
+    -------
+    FLOAT32
+        Single precision. The default.
+    FLOAT16
+        Half precision. Halves the size at some loss of accuracy. Supported by
+        pgvector only.
+    """
+
+    FLOAT32 = "float32"
+    FLOAT16 = "float16"
+
+
 class VectorColumnType(StrEnum):
     """PostgreSQL column type used to store embedding vectors (pgvector only).
-
-    Selected automatically by the pgvector backend based on dimensionality.
-    Not applicable to the sqlite-vec backend.
 
     Members
     -------
     VECTOR
-        ``pgvector`` ``vector`` type (float32, up to 2 000 dims).
+        ``pgvector`` ``vector`` type (float32).
     HALFVEC
-        ``pgvector`` ``halfvec`` type (float16, up to 4 000 dims).
+        ``pgvector`` ``halfvec`` type (float16).
 
     Notes
     -----
@@ -289,116 +302,3 @@ def parse_metric_type(value: str | MetricType) -> MetricType:
             f"Invalid metric type {value!r}. Expected one of "
             f"{[member.value for member in MetricType]}."
         ) from exc
-
-
-# Supported index + metric combinations per backend.
-SUPPORTED_INDICES_AND_METRICS_PER_BACKEND: dict[
-    BackendType, dict[IndexType, tuple[MetricType, ...]]
-] = {
-    # https://alexgarcia.xyz/sqlite-vec/features/vec0.html
-    # The metric is declared on the vec0 column, so each table is locked to one of them.
-    BackendType.SQLITEVEC: {
-        IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1),
-    },
-    # https://github.com/pgvector/pgvector?tab=readme-ov-file#querying
-    BackendType.PGVECTOR: {
-        IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1),
-        IndexType.HNSW: (MetricType.L2, MetricType.COSINE, MetricType.L1),
-    },
-    # https://duckdb.org/docs/stable/core_extensions/vss.html
-    BackendType.DUCKDBVSS: {
-        IndexType.FLAT: (MetricType.L2, MetricType.COSINE),
-        IndexType.HNSW: (MetricType.L2, MetricType.COSINE),
-    },
-}
-
-
-def _supported_indices(backend: BackendType) -> dict[IndexType, tuple[MetricType, ...]]:
-    """The index/metric support map for *backend*.
-
-    Parameters
-    ----------
-    backend : BackendType
-
-    Returns
-    -------
-    Dict[IndexType, Tuple[MetricType, ...]]
-
-    Raises
-    ------
-    ValueError
-        If *backend* isn't registered in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND.
-    """
-    try:
-        return SUPPORTED_INDICES_AND_METRICS_PER_BACKEND[backend]
-    except KeyError:
-        raise ValueError(
-            f"Unsupported backend {backend!r}. Supported: "
-            f"{sorted(b.value for b in SUPPORTED_INDICES_AND_METRICS_PER_BACKEND)}."
-        ) from None
-
-
-def is_supported_index_metric_combination_for_backend(
-    backend: BackendType, index: IndexType, metric: MetricType
-) -> bool:
-    """Return whether a backend supports a given index and metric combination.
-
-    Parameters
-    ----------
-    backend : BackendType
-    index : IndexType
-    metric : MetricType
-
-    Returns
-    -------
-    bool
-    """
-    return metric in _supported_indices(backend).get(index, ())
-
-
-def is_index_type_supported_for_backend(backend: BackendType, index: IndexType) -> bool:
-    """Return whether a backend supports a given index type.
-
-    Parameters
-    ----------
-    backend : BackendType
-    index : IndexType
-
-    Returns
-    -------
-    bool
-    """
-    return index in _supported_indices(backend)
-
-
-def get_supported_index_types_for_backend(
-    backend: BackendType,
-) -> tuple[IndexType, ...]:
-    """Return all index types supported by a backend.
-
-    Parameters
-    ----------
-    backend : BackendType
-
-    Returns
-    -------
-    tuple[IndexType, ...]
-    """
-    return tuple(_supported_indices(backend).keys())
-
-
-def get_supported_metrics_for_backend(backend: BackendType) -> tuple[MetricType, ...]:
-    """Return all metrics supported by any index type for a backend.
-
-    Parameters
-    ----------
-    backend : BackendType
-
-    Returns
-    -------
-    tuple[MetricType, ...]
-    """
-    seen: set[MetricType] = set()
-    for metrics in _supported_indices(backend).values():
-        seen.update(metrics)
-    return tuple(seen)

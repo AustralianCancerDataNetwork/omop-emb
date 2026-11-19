@@ -33,7 +33,7 @@ from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
     EmbeddingBackend,
 )
-from omop_emb.backends.capabilities import BackendCapabilities
+from omop_emb.backends.capabilities import BackendCapabilities, IndexCapabilities
 from omop_emb.backends.duckdbvss.duckdbvss_sql import (
     create_duckdbvss_embedding_table,
     database_block_bytes,
@@ -141,10 +141,12 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
     CAPABILITIES: ClassVar[BackendCapabilities] = BackendCapabilities(
         backend_type=BackendType.DUCKDBVSS,
         indices={
-            IndexType.FLAT: (MetricType.L2, MetricType.COSINE),
-            IndexType.HNSW: (MetricType.L2, MetricType.COSINE),
+            IndexType.FLAT: IndexCapabilities(metrics=(MetricType.L2, MetricType.COSINE)),
+            IndexType.HNSW: IndexCapabilities(
+                metrics=(MetricType.L2, MetricType.COSINE),
+                precisions=(VectorPrecision.FLOAT32,),
+            ),
         },
-        index_precisions={IndexType.HNSW: (VectorPrecision.FLOAT32,)},
     )
 
     @property

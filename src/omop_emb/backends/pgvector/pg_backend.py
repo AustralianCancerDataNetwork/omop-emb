@@ -28,7 +28,11 @@ from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
     EmbeddingBackend,
 )
-from omop_emb.backends.capabilities import BackendCapabilities
+from omop_emb.backends.capabilities import (
+    BackendCapabilities,
+    IndexCapabilities,
+    StorageCapabilities,
+)
 from omop_emb.backends.embedding_table import (
     PGEmbeddingTable,
 )
@@ -119,17 +123,23 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
     # https://github.com/pgvector/pgvector?tab=readme-ov-file#querying
     CAPABILITIES: ClassVar[BackendCapabilities] = BackendCapabilities(
         backend_type=BackendType.PGVECTOR,
+        storage=StorageCapabilities(
+            precisions=(VectorPrecision.FLOAT32, VectorPrecision.FLOAT16),
+            max_dimensions=PGVECTOR_HALFVEC_MAX_DIMENSIONS,
+        ),
         indices={
-            IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1),
-            IndexType.HNSW: (MetricType.L2, MetricType.COSINE, MetricType.L1),
-        },
-        max_scan_tuples=True,
-        storage_precisions=(VectorPrecision.FLOAT32, VectorPrecision.FLOAT16),
-        index_precisions={IndexType.HNSW: (VectorPrecision.FLOAT32, VectorPrecision.FLOAT16)},
-        max_dimensions=PGVECTOR_HALFVEC_MAX_DIMENSIONS,
-        max_indexed_dimensions={
-            VectorPrecision.FLOAT32: PGVECTOR_VECTOR_MAX_DIMENSIONS,
-            VectorPrecision.FLOAT16: PGVECTOR_HALFVEC_MAX_DIMENSIONS,
+            IndexType.FLAT: IndexCapabilities(
+                metrics=(MetricType.L2, MetricType.COSINE, MetricType.L1)
+            ),
+            IndexType.HNSW: IndexCapabilities(
+                metrics=(MetricType.L2, MetricType.COSINE, MetricType.L1),
+                precisions=(VectorPrecision.FLOAT32, VectorPrecision.FLOAT16),
+                max_dimensions={
+                    VectorPrecision.FLOAT32: PGVECTOR_VECTOR_MAX_DIMENSIONS,
+                    VectorPrecision.FLOAT16: PGVECTOR_HALFVEC_MAX_DIMENSIONS,
+                },
+                max_scan_tuples=True,
+            ),
         },
     )
 

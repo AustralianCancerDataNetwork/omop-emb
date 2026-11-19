@@ -27,7 +27,7 @@ from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
     EmbeddingBackend,
 )
-from omop_emb.backends.capabilities import BackendCapabilities
+from omop_emb.backends.capabilities import BackendCapabilities, IndexCapabilities
 from omop_emb.backends.index_config import FlatIndexConfig, IndexConfig
 from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     database_size,
@@ -111,7 +111,11 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     # The metric is declared on the vec0 column, so each table is locked to one of them.
     CAPABILITIES: ClassVar[BackendCapabilities] = BackendCapabilities(
         backend_type=BackendType.SQLITEVEC,
-        indices={IndexType.FLAT: (MetricType.L2, MetricType.COSINE, MetricType.L1)},
+        indices={
+            IndexType.FLAT: IndexCapabilities(
+                metrics=(MetricType.L2, MetricType.COSINE, MetricType.L1)
+            )
+        },
     )
 
     def __init__(

@@ -40,18 +40,18 @@ class TestDeclaredSupport:
     def test_sqlitevec_is_flat_only(self):
         capabilities = _declared(BackendType.SQLITEVEC)
         assert capabilities.index_types == (IndexType.FLAT,)
-        assert not capabilities.max_scan_tuples
 
     def test_pgvector_supports_hnsw_and_scan_cap(self):
         capabilities = _declared(BackendType.PGVECTOR)
         assert capabilities.supports_index_type(IndexType.HNSW)
         assert capabilities.supports_metric(IndexType.HNSW, MetricType.L1)
-        assert capabilities.max_scan_tuples
+        assert capabilities.indices[IndexType.HNSW].max_scan_tuples
+        assert not capabilities.indices[IndexType.FLAT].max_scan_tuples
 
     def test_duckdb_has_no_l1_and_no_scan_cap(self):
         capabilities = _declared(BackendType.DUCKDBVSS)
         assert not capabilities.supports_metric(IndexType.HNSW, MetricType.L1)
-        assert not capabilities.max_scan_tuples
+        assert not capabilities.indices[IndexType.HNSW].max_scan_tuples
 
     @pytest.mark.parametrize("backend_type", _ALL_BACKENDS)
     def test_bit_metrics_are_unsupported(self, backend_type):
@@ -118,25 +118,28 @@ class TestValidateIndexConfig:
 class TestPrecision:
     def test_pgvector_supports_both_precisions(self):
         capabilities = _declared(BackendType.PGVECTOR)
-        assert capabilities.storage_precisions == (
+        assert capabilities.storage.precisions == (
             VectorPrecision.FLOAT32,
             VectorPrecision.FLOAT16,
         )
-        assert capabilities.index_precisions == {
-            IndexType.HNSW: (VectorPrecision.FLOAT32, VectorPrecision.FLOAT16)
-        }
+        assert capabilities.indices[IndexType.HNSW].precisions == (
+            VectorPrecision.FLOAT32,
+            VectorPrecision.FLOAT16,
+        )
+        assert capabilities.indices[IndexType.FLAT].precisions == ()
 
     @pytest.mark.parametrize("backend_type", [BackendType.SQLITEVEC, BackendType.DUCKDBVSS])
     def test_other_backends_store_float32_only(self, backend_type):
-        assert _declared(backend_type).storage_precisions == (VectorPrecision.FLOAT32,)
+        assert _declared(backend_type).storage.precisions == (VectorPrecision.FLOAT32,)
 
     def test_duckdb_indexes_float32_only(self):
-        assert _declared(BackendType.DUCKDBVSS).index_precisions == {
-            IndexType.HNSW: (VectorPrecision.FLOAT32,)
-        }
+        capabilities = _declared(BackendType.DUCKDBVSS)
+        assert capabilities.indices[IndexType.HNSW].precisions == (VectorPrecision.FLOAT32,)
+        assert capabilities.indices[IndexType.FLAT].precisions == ()
 
     def test_sqlitevec_accepts_no_explicit_index_precision(self):
-        assert _declared(BackendType.SQLITEVEC).index_precisions == {}
+        capabilities = _declared(BackendType.SQLITEVEC)
+        assert all(index.precisions == () for index in capabilities.indices.values())
 
     @pytest.mark.parametrize("backend_type", [BackendType.SQLITEVEC, BackendType.DUCKDBVSS])
     def test_registration_rejects_half_storage_naming_backend(self, backend_type):
@@ -224,3 +227,17 @@ class TestPrecision:
 
     def test_flat_ignores_index_limits(self):
         _validate(BackendType.PGVECTOR, FlatIndexConfig(), dimensions=3500)
+
+
+@pytest.mark.unit
+class TestIndexLookup:
+    def test_unsupported_index_type_is_rejected_naming_backend(self):
+        with pytest.raises(
+            UnsupportedIndexConfigError, match=_quoted(IndexType.HNSW, BackendType.SQLITEVEC)
+        ):
+            _declared(BackendType.SQLITEVEC).index(IndexType.HNSW)
+
+    def test_scan_cap_requires_an_index_that_supports_it(self):
+        _declared(BackendType.PGVECTOR).require_max_scan_tuples()
+        with pytest.raises(UnsupportedIndexConfigError, match="max_scan_tuples"):
+            _declared(BackendType.DUCKDBVSS).require_max_scan_tuples()

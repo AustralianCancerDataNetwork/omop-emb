@@ -435,7 +435,7 @@ def _importable_precision(
     backend picks its default. The vectors in a bundle are float32 either way.
     """
     precision = meta.storage_precision
-    if precision is None or precision in backend.capabilities.storage_precisions:
+    if precision is None or precision in backend.capabilities.storage.precisions:
         return precision
     logger.warning(
         "Backend '%s' does not support '%s' storage; importing '%s' with its default precision.",

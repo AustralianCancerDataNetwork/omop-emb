@@ -45,7 +45,7 @@ class IndexConfig(ABC):
         column. ``FLOAT16`` over a float32 column builds a half-size index
         over a cast and keeps the full vectors in the table. Which index types
         accept an explicit value depends on the backend, see
-        ``BackendCapabilities.index_precisions``.
+        ``IndexCapabilities.precisions``.
     """
 
     index_type: IndexType

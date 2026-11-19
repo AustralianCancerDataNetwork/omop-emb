@@ -885,6 +885,31 @@ class TestPGVectorPartialIndexes:
         assert len(pg_backend.physical_indexes(MODEL_NAME)) == 1
         assert self._partials(pg_backend) == {}
 
+    def test_a_rebuild_keeps_an_index_someone_added_by_hand(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        self._fill(pg_backend)
+        record = registered_model(pg_backend, MODEL_NAME)
+        table = qualified(
+            pg_backend.emb_engine,
+            record.storage_identifier,
+            physical_schema=physical_schema_of(pg_backend.emb_engine),
+        )
+        with pg_backend.emb_engine.begin() as conn:
+            conn.execute(sa.text(f"CREATE INDEX idx_domain ON {table} (domain_id)"))
+
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=self._config(partial_domain_indexes=True)
+        )
+
+        with pg_backend.emb_engine.connect() as conn:
+            names = conn.execute(
+                sa.text("SELECT indexname FROM pg_indexes WHERE tablename = :t"),
+                {"t": record.storage_identifier},
+            ).scalars()
+            assert "idx_domain" in set(names)
+        assert "idx_domain" not in pg_backend.physical_indexes(MODEL_NAME)
+
     def test_rebuilding_twice_with_partials_succeeds(self, pg_backend: PGVectorEmbeddingBackend):
         self._fill(pg_backend)
         config = self._config(partial_domain_indexes=True)

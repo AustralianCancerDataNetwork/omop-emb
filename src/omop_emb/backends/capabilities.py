@@ -70,12 +70,16 @@ class IndexCapabilities:
         precision without an entry has no limit.
     max_scan_tuples : bool
         Whether ``HNSWIndexConfig.max_scan_tuples`` has an effect.
+    partial_domain_indexes : bool
+        Whether ``HNSWIndexConfig.partial_domain_indexes`` builds per-domain
+        partial indexes.
     """
 
     metrics: tuple[MetricType, ...]
     precisions: tuple[VectorPrecision, ...] = ()
     max_dimensions: Mapping[VectorPrecision, int] = field(default_factory=dict)
     max_scan_tuples: bool = False
+    partial_domain_indexes: bool = False
 
     def validate(
         self,
@@ -117,6 +121,14 @@ class IndexCapabilities:
         ):
             raise UnsupportedIndexConfigError(
                 f"max_scan_tuples is not supported by backend '{backend.value}'."
+            )
+        if (
+            isinstance(index_config, HNSWIndexConfig)
+            and index_config.partial_domain_indexes
+            and not self.partial_domain_indexes
+        ):
+            raise UnsupportedIndexConfigError(
+                f"partial_domain_indexes is not supported by backend '{backend.value}'."
             )
         self._validate_precision(
             index_config,

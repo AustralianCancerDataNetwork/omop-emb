@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from dataclasses import replace
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 import pytest
@@ -780,3 +780,177 @@ class TestPGVectorPrecision:
         record = registered_model(pg_backend, MODEL_NAME)
         assert record.storage_precision == VectorPrecision.FLOAT16
         assert self._column_type(pg_backend, MODEL_NAME) == f"halfvec({EMBEDDING_DIM})"
+
+
+@pytest.mark.pgvector
+@pytest.mark.integration
+class TestPGVectorPartialIndexes:
+    """Per-domain partial HNSW indexes built next to the global index."""
+
+    DOMAIN_ROWS: ClassVar[dict[str, int]] = {
+        "Condition": 4,
+        "Drug": 3,
+        "Measurement": 1,
+        "O'Neil:x": 3,
+    }
+    ALL_INVALID: ClassVar[str] = "Measurement"
+
+    @classmethod
+    def _config(cls, **options: Any) -> HNSWIndexConfig:
+        return HNSWIndexConfig(
+            metric_type=MetricType.L2, num_neighbors=4, ef_construction=16, **options
+        )
+
+    @classmethod
+    def _fill(cls, backend: PGVectorEmbeddingBackend) -> None:
+        records = [
+            ConceptEmbeddingRecord(
+                concept_id=index,
+                domain_id=domain,
+                vocabulary_id="V",
+                is_standard=True,
+                is_valid=domain != cls.ALL_INVALID,
+            )
+            for index, domain in enumerate(
+                (d for d, rows in cls.DOMAIN_ROWS.items() for _ in range(rows)), start=1
+            )
+        ]
+        register_flat(backend)
+        backend.upsert_embeddings(
+            model_name=MODEL_NAME,
+            records=records,
+            embeddings=np.random.default_rng(0).random((len(records), EMBEDDING_DIM), np.float32),
+        )
+
+    @staticmethod
+    def _partials(backend: PGVectorEmbeddingBackend) -> dict[str, str]:
+        """Definition of every index with a WHERE clause, by name."""
+        record = registered_model(backend, MODEL_NAME)
+        with backend.emb_engine.connect() as conn:
+            rows = conn.execute(
+                sa.text(
+                    "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = :t "
+                    "AND indexdef LIKE '% WHERE %'"
+                ),
+                {"t": record.storage_identifier},
+            ).all()
+        return {name: definition for name, definition in rows}
+
+    def test_no_partials_are_built_by_default(self, pg_backend: PGVectorEmbeddingBackend):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self._config())
+
+        assert len(pg_backend.physical_indexes(MODEL_NAME)) == 1
+        assert self._partials(pg_backend) == {}
+
+    def test_every_domain_gets_a_partial_index(self, pg_backend: PGVectorEmbeddingBackend):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=self._config(partial_domain_indexes=True)
+        )
+
+        partials = self._partials(pg_backend)
+        assert sorted(name.split("_", 2)[2] for name in partials) == [
+            "condition",
+            "drug",
+            "measurement",
+            "o_neil_x",
+        ]
+        assert any("'O''Neil:x'" in definition for definition in partials.values())
+        assert len(pg_backend.physical_indexes(MODEL_NAME)) == 5
+
+    def test_valid_only_leaves_out_a_domain_without_valid_rows(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME,
+            index_config=self._config(partial_domain_indexes=True, partial_valid_only=True),
+        )
+
+        partials = self._partials(pg_backend)
+        assert len(partials) == 3
+        assert all("is_valid" in definition for definition in partials.values())
+        assert not any(name.endswith("_measurement") for name in partials)
+
+    def test_rebuilding_without_partials_drops_the_existing_ones(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=self._config(partial_domain_indexes=True)
+        )
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self._config())
+
+        assert len(pg_backend.physical_indexes(MODEL_NAME)) == 1
+        assert self._partials(pg_backend) == {}
+
+    def test_rebuilding_twice_with_partials_succeeds(self, pg_backend: PGVectorEmbeddingBackend):
+        self._fill(pg_backend)
+        config = self._config(partial_domain_indexes=True)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=config)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=config)
+
+        assert len(pg_backend.physical_indexes(MODEL_NAME)) == 5
+
+    def test_the_settings_are_stored_in_the_registry(self, pg_backend: PGVectorEmbeddingBackend):
+        self._fill(pg_backend)
+        config = self._config(partial_domain_indexes=True, partial_valid_only=True)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=config)
+
+        assert registered_model(pg_backend, MODEL_NAME).index_config == config
+
+    def test_a_domain_that_cannot_be_named_fails_before_building_anything(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        register_flat(pg_backend)
+        pg_backend.upsert_embeddings(
+            model_name=MODEL_NAME,
+            records=[
+                ConceptEmbeddingRecord(
+                    concept_id=1,
+                    domain_id="***",
+                    vocabulary_id="V",
+                    is_standard=True,
+                    is_valid=True,
+                )
+            ],
+            embeddings=np.ones((1, EMBEDDING_DIM), dtype=np.float32),
+        )
+
+        with pytest.raises(ValueError, match="partial index"):
+            pg_backend.rebuild_index(
+                model_name=MODEL_NAME, index_config=self._config(partial_domain_indexes=True)
+            )
+        assert pg_backend.physical_indexes(MODEL_NAME) == ()
+
+    def test_deleting_the_model_drops_its_partials(self, pg_backend: PGVectorEmbeddingBackend):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=self._config(partial_domain_indexes=True)
+        )
+        pg_backend.delete_model(model_name=MODEL_NAME)
+
+        register_flat(pg_backend)
+        assert pg_backend.physical_indexes(MODEL_NAME) == ()
+
+    def test_partials_follow_a_half_index_over_a_float32_column(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME,
+            index_config=self._config(
+                partial_domain_indexes=True, index_precision=VectorPrecision.FLOAT16
+            ),
+        )
+
+        record = registered_model(pg_backend, MODEL_NAME)
+        with pg_backend.emb_engine.connect() as conn:
+            definitions = conn.execute(
+                sa.text("SELECT indexdef FROM pg_indexes WHERE tablename = :t"),
+                {"t": record.storage_identifier},
+            ).scalars()
+            hnsw = [d for d in definitions if "USING hnsw" in d]
+        assert len(hnsw) == 5
+        assert all("halfvec_l2_ops" in d for d in hnsw)

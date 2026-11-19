@@ -263,6 +263,13 @@ class HNSWIndexConfig(IndexConfig):
         Upper bound on the rows one filtered query may read from the index
         (pgvector ``hnsw.max_scan_tuples``). ``None`` keeps the server default
         of 20,000. Only pgvector supports it.
+    partial_domain_indexes : bool
+        Builds one additional index per domain, restricted to that domain's
+        rows, next to the global index. Only pgvector supports it.
+    partial_valid_only : bool
+        Restricts the partial indexes to valid concepts. Requires
+        ``partial_domain_indexes``.
+
     Notes
     -----
     Supported by pgvector, DuckDB VSS, and FAISS backends. sqlite-vec does
@@ -274,6 +281,8 @@ class HNSWIndexConfig(IndexConfig):
     ef_search: int = 200
     ef_construction: int = 200
     max_scan_tuples: int | None = None
+    partial_domain_indexes: bool = False
+    partial_valid_only: bool = False
     index_type: IndexType = IndexType.HNSW
 
     def _build_settings(self, storage_precision: VectorPrecision) -> tuple[Any, ...]:
@@ -285,10 +294,17 @@ class HNSWIndexConfig(IndexConfig):
     def _validate_metric_type_after_init(self) -> None:
         if self.metric_type is None:
             raise ValueError("HNSW index requires a metric_type (e.g. MetricType.COSINE).")
-        for name in ("num_neighbors", "ef_search", "ef_construction", "max_scan_tuples"):
+        for name in (
+            "num_neighbors",
+            "ef_search",
+            "ef_construction",
+            "max_scan_tuples",
+        ):
             value = getattr(self, name)
             if value is not None and value < 1:
                 raise ValueError(f"HNSW '{name}' must be a positive integer, got {value}.")
+        if self.partial_valid_only and not self.partial_domain_indexes:
+            raise ValueError("HNSW 'partial_valid_only' requires 'partial_domain_indexes'.")
 
 
 # ---------------------------------------------------------------------------

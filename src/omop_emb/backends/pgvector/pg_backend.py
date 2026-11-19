@@ -13,8 +13,9 @@ from oa_configurator import (
     physical_schema_of,
     qualified,
 )
-from sqlalchemy import inspect, select, text
+from sqlalchemy import Connection, inspect, select, text
 from sqlalchemy.orm import Session
+from sqlalchemy.schema import CreateIndex
 
 try:
     from pgvector.sqlalchemy import Vector  # noqa: F401
@@ -44,8 +45,10 @@ from omop_emb.backends.pgvector.pg_sql import (
     drop_pg_embedding_table,
     hnsw_index_ddl,
     installed_pgvector_version,
+    partial_hnsw_index,
     pg_embedding_table_descriptor,
     q_all_concept_ids,
+    q_domain_ids,
     q_embedding_count_by_vocabulary,
     query_concept_filter_metadata,
     query_concept_ids_matching_filter,
@@ -139,6 +142,7 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                     VectorPrecision.FLOAT16: PGVECTOR_HALFVEC_MAX_DIMENSIONS,
                 },
                 max_scan_tuples=True,
+                partial_domain_indexes=True,
             ),
         },
     )
@@ -226,11 +230,50 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
                         )
                     )
                 )
+                self._build_partial_indexes(
+                    conn, model_record, index_config, self.storage_precision_of(model_record)
+                )
         logger.info(
             f"Rebuilt '{model_record.storage_identifier}' with index type '{index_config.index_type.value}'."
         )
         if vacuum:
             self._vacuum_analyze(model_record)
+
+    def _build_partial_indexes(
+        self,
+        conn: Connection,
+        model_record: EmbeddingModelRecord,
+        index_config: HNSWIndexConfig,
+        storage_precision: VectorPrecision,
+    ) -> None:
+        """Create one partial index per domain in the table when ``partial_domain_indexes`` is set.
+
+        Raises
+        ------
+        ValueError
+            If a domain cannot be named, or two domains share a name.
+        """
+        if not index_config.partial_domain_indexes:
+            return
+        domains = sorted(
+            conn.execute(
+                q_domain_ids(
+                    self._storage_table(model_record), valid_only=index_config.partial_valid_only
+                )
+            ).scalars()
+        )
+        indexes = {
+            domain: partial_hnsw_index(model_record, index_config, storage_precision, domain)
+            for domain in domains
+        }
+        names = [index.name for index in indexes.values()]
+        if len(set(names)) < len(names):
+            raise ValueError(f"Two domains of {domains} share a partial index name.")
+        for domain, index in indexes.items():
+            conn.execute(CreateIndex(index))
+            logger.info(
+                f"Built partial index for domain '{domain}' on '{model_record.storage_identifier}'."
+            )
 
     def _vacuum_analyze(self, model_record: EmbeddingModelRecord) -> None:
         """Run ``VACUUM (ANALYZE)`` on the model's table."""
@@ -283,14 +326,13 @@ class PGVectorEmbeddingBackend(EmbeddingBackend[type[PGEmbeddingTable]]):
         if record is None:
             return ()
         physical_schema = physical_schema_of(self.emb_engine)
-        expected_prefix = f"idx_{record.storage_identifier}_"
         return tuple(
             str(item["name"])
             for item in inspect(self.emb_engine).get_indexes(
                 record.storage_identifier,
                 schema=physical_schema,
             )
-            if str(item["name"]).startswith(expected_prefix)
+            if str(item["name"]).startswith("idx_")
         )
 
     # ------------------------------------------------------------------

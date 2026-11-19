@@ -289,6 +289,8 @@ class HNSWIndexConfig(IndexConfig):
         return super()._build_settings(storage_precision) + (
             self.num_neighbors,
             self.ef_construction,
+            self.partial_domain_indexes,
+            self.partial_valid_only,
         )
 
     def _validate_metric_type_after_init(self) -> None:
@@ -347,7 +349,10 @@ def index_config_from_index_type(
     if index_type == IndexType.HNSW:
         if isinstance(current, HNSWIndexConfig):
             kept = {f.name: getattr(current, f.name) for f in fields(current)}
-            kwargs = {**kept, **{k: v for k, v in kwargs.items() if v is not None}}
+            given = {k: v for k, v in kwargs.items() if v is not None}
+            if given.get("partial_domain_indexes") is False:
+                kept["partial_valid_only"] = False
+            kwargs = {**kept, **given}
         return HNSWIndexConfig.from_kwargs(**kwargs)
     raise ValueError(f"No IndexConfig defined for index type {index_type!r}.")
 

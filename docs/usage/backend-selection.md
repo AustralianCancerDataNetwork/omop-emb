@@ -107,6 +107,29 @@ omop-emb maintenance rebuild-index --model-name embedding-model --index-type hns
 !!! warning "HNSW builds in containers"
     A parallel HNSW build can fail with `could not resize shared memory segment ... No space left on device` when the container's `/dev/shm` is small. Either enlarge `/dev/shm` (for example `shm_size` in Docker Compose) or set `max_parallel_maintenance_workers = 0` on the server, which builds serially and takes longer.
 
+## Per-domain partial indexes
+
+pgvector HNSW applies a domain filter after the index returns its candidates, so a query for one domain on a large store can miss neighbours. Partial indexes address this by giving each domain its own HNSW index over only that domain's rows, next to the global index. They are off by default.
+
+Turn them on when the index is built, and off again by rebuilding without the option:
+
+```bash
+omop-emb maintenance rebuild-index --model <NAME> --index-type hnsw --partial-domain-indexes
+omop-emb maintenance rebuild-index --model <NAME> --index-type hnsw --partial-domain-indexes --partial-valid-only
+```
+
+The same settings are `partial_domain_indexes` and `partial_valid_only` on `HNSWIndexConfig`. The options are also available on `create-index` and `add-embeddings-with-index`.
+
+- One partial index is built for every domain present in the table, with the same `num_neighbors`, `ef_construction` and index precision as the global index.
+- A query that names exactly one domain uses that domain's index. A query with no domain or several domains uses the global index, as does a domain without a partial index.
+- `--partial-valid-only` builds the partial indexes over valid concepts only. They serve a single-domain query that also requires active concepts, and a query that allows invalid concepts uses the global index.
+- New rows go into the matching partial index when they are inserted, so only a domain that first appears after the build has no partial index until the next rebuild.
+- Each row sits in one partial index, so their total size is close to the size of the global index. Plan the disk and `maintenance_work_mem` for both, and build with `--index-precision float16` to keep them smaller.
+- The indexes are named `idx_<table hash>_<domain>`. `rebuild-index` drops every index it created for the model, including these, and leaves other indexes on the table alone.
+- A filter with one domain is sent to the database with the domain written into the statement. This lets the planner match the partial index even when the driver reuses a prepared statement, which it cannot do for a bound parameter.
+
+The planner chooses between the global and a partial index by cost. Whether the partial index wins on a large store, and by how much recall, is measured with the recall benchmark and not assumed here.
+
 ## Precision
 
 Two separate options control half precision. Both are pgvector only. sqlite-vec and DuckDB VSS store float32 and reject `float16`, and DuckDB's HNSW index accepts only float32.
@@ -140,6 +163,7 @@ Each backend declares what it supports as `backend.capabilities`. Registration, 
 | Index types | FLAT | FLAT, HNSW | FLAT, HNSW |
 | Metrics | L2, cosine, L1 | L2, cosine, L1 | L2, cosine |
 | `max_scan_tuples` | no | yes | no |
+| Per-domain partial indexes | no | yes | no |
 | Storage precision | float32 | float32, float16 | float32 |
 | Index precision (HNSW) | none | float32, float16 | float32 |
 | Largest model | no limit | 4,000 dimensions | no limit |

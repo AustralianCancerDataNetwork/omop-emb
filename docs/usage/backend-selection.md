@@ -128,7 +128,7 @@ The same settings are `partial_domain_indexes` and `partial_valid_only` on `HNSW
 - The indexes are named `idx_<table hash>_<domain>`. `rebuild-index` drops every index it created for the model, including these, and leaves other indexes on the table alone.
 - A filter with one domain is sent to the database with the domain written into the statement. This lets the planner match the partial index even when the driver reuses a prepared statement, which it cannot do for a bound parameter.
 
-The planner chooses between the global and a partial index by cost. Whether the partial index wins on a large store, and by how much recall, is measured with the recall benchmark and not assumed here.
+The planner chooses between the global and a partial index by cost. Whether the partial index wins on a large store, and by how much recall, is measured with the recall benchmark in `benchmarks/recall` and not assumed here.
 
 ## Precision
 

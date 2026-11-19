@@ -87,6 +87,7 @@ def apply_concept_filter_where(
     concept_filter: EmbeddingConceptFilter,
     *,
     dialect: str,
+    inline_single_domain: bool = False,
 ) -> Select:
     """Apply concept_filter's WHERE-clause constraints to stmt.
 
@@ -99,6 +100,11 @@ def apply_concept_filter_where(
     concept_filter : EmbeddingConceptFilter
     dialect : str
         ``'postgresql'``, ``'sqlite'``, or ``'duckdb'``.
+    inline_single_domain : bool, optional
+        Compare a filter with exactly one domain by equality with the domain
+        written into the statement. The database can then prove that the
+        query implies the predicate of a partial index, which it cannot for a
+        bound parameter.
 
     Returns
     -------
@@ -109,7 +115,14 @@ def apply_concept_filter_where(
             in_values(columns.concept_id, concept_filter.concept_ids, dialect=dialect)
         )
     if concept_filter.domains is not None:
-        stmt = stmt.where(in_values(columns.domain_id, concept_filter.domains, dialect=dialect))
+        if inline_single_domain and len(concept_filter.domains) == 1:
+            (domain,) = concept_filter.domains
+            stmt = stmt.where(
+                columns.domain_id
+                == bindparam(None, str(domain), type_=columns.domain_id.type, literal_execute=True)
+            )
+        else:
+            stmt = stmt.where(in_values(columns.domain_id, concept_filter.domains, dialect=dialect))
     if concept_filter.vocabularies is not None:
         stmt = stmt.where(
             in_values(columns.vocabulary_id, concept_filter.vocabularies, dialect=dialect)

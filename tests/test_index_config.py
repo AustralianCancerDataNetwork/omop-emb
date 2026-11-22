@@ -182,15 +182,11 @@ def test_same_build_compares_the_effective_index_precision():
 
 
 def test_factory_keeps_precision_and_query_settings_of_the_current_hnsw_index():
-    current = _hnsw(
-        ef_search=300, max_scan_tuples=50_000, index_precision=VectorPrecision.FLOAT16
-    )
+    current = _hnsw(ef_search=300, max_scan_tuples=50_000, index_precision=VectorPrecision.FLOAT16)
     config = index_config_from_index_type(
         IndexType.HNSW, current=current, metric_type=MetricType.COSINE, ef_search=None
     )
-    assert config.ef_search == 300
-    assert config.max_scan_tuples == 50_000
-    assert config.index_precision == VectorPrecision.FLOAT16
+    assert config == current
 
 
 def test_factory_prefers_a_value_that_is_given():
@@ -202,8 +198,7 @@ def test_factory_prefers_a_value_that_is_given():
         ef_search=100,
         index_precision=VectorPrecision.FLOAT32,
     )
-    assert config.ef_search == 100
-    assert config.index_precision == VectorPrecision.FLOAT32
+    assert config == _hnsw(ef_search=100, index_precision=VectorPrecision.FLOAT32)
 
 
 def test_factory_takes_graph_settings_from_the_defaults_not_the_current_index():
@@ -211,7 +206,7 @@ def test_factory_takes_graph_settings_from_the_defaults_not_the_current_index():
     config = index_config_from_index_type(
         IndexType.HNSW, current=current, metric_type=MetricType.COSINE
     )
-    assert (config.num_neighbors, config.ef_construction) == (32, 200)
+    assert config == _hnsw()
 
 
 def test_factory_keeps_nothing_across_index_types():

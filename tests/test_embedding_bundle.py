@@ -285,7 +285,9 @@ class TestImportResolvesIndexConfigBeforeLoading:
 
         with open_vector_store_writer(store) as target:
             embedding_bundle.import_bundle(backend=target, h5_path=bundle_path, rebuild_index=True)
-            config = target.get_registered_model(model_name=_MODEL).index_config
+            record = target.get_registered_model(model_name=_MODEL)
+            assert record is not None
+            config = record.index_config
 
         assert config == HNSWIndexConfig(
             metric_type=MetricType.COSINE, num_neighbors=8, ef_search=40, ef_construction=64

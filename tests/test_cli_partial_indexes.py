@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+import typer.main
 from typer.testing import CliRunner
 
 from omop_emb.backends import open_vector_store_writer
@@ -61,12 +62,15 @@ def sqlite_store(tmp_path, monkeypatch):
     ],
 )
 def test_the_commands_that_build_an_index_list_the_options(app, command):
-    result = runner.invoke(app, [command, "--help"], env={"COLUMNS": "200"})
+    params = typer.main.get_group(app).commands[command].params
+    options = {option for param in params for option in (*param.opts, *param.secondary_opts)}
 
-    assert "--partial-domain-indexes" in result.output
-    assert "--no-partial-domain-indexes" in result.output
-    assert "--partial-valid-only" in result.output
-    assert "--no-partial-valid-only" in result.output
+    assert {
+        "--partial-domain-indexes",
+        "--no-partial-domain-indexes",
+        "--partial-valid-only",
+        "--no-partial-valid-only",
+    } <= options
 
 
 def test_valid_only_needs_partial_indexes(sqlite_store) -> None:

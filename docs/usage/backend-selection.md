@@ -111,11 +111,12 @@ omop-emb maintenance rebuild-index --model-name embedding-model --index-type hns
 
 pgvector HNSW applies a domain filter after the index returns its candidates, so a query for one domain on a large store can miss neighbours. Partial indexes address this by giving each domain its own HNSW index over only that domain's rows, next to the global index. They are off by default.
 
-Turn them on when the index is built, and off again by rebuilding without the option:
+Turn them on when the index is built, and off again with the `--no-` form. A build that names neither keeps the setting of the current index, so a top-up run of `add-embeddings-with-index` does not drop existing partial indexes:
 
 ```bash
 omop-emb maintenance rebuild-index --model <NAME> --index-type hnsw --partial-domain-indexes
 omop-emb maintenance rebuild-index --model <NAME> --index-type hnsw --partial-domain-indexes --partial-valid-only
+omop-emb maintenance rebuild-index --model <NAME> --index-type hnsw --no-partial-domain-indexes
 ```
 
 The same settings are `partial_domain_indexes` and `partial_valid_only` on `HNSWIndexConfig`. The options are also available on `create-index` and `add-embeddings-with-index`.

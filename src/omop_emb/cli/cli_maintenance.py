@@ -132,7 +132,7 @@ def rebuild_index(
         typer.Option(
             "--index-precision",
             help="HNSW: precision of the index (pgvector only). float16 over float32 vectors "
-            "halves the index and allows up to 4,000 dimensions. Defaults to the stored precision.",
+            "halves the index and allows up to 4,000 dimensions. Defaults to the current index's precision, or the stored precision for a new index.",
             rich_help_panel="Index Options",
         ),
     ] = None,
@@ -166,6 +166,7 @@ def rebuild_index(
 
     index_config = index_config_from_index_type(
         index_type,
+        current=record.index_config,
         num_neighbors=index_hnsw_num_neighbors,
         ef_search=index_hnsw_ef_search,
         ef_construction=index_hnsw_ef_construction,

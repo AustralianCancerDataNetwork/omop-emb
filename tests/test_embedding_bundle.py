@@ -14,13 +14,15 @@ import h5py
 import numpy as np
 import pytest
 
+from omop_emb import open_vector_store_writer
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.index_config import FlatIndexConfig
+from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.config import MetricType, VectorPrecision
 from omop_emb.storage import embedding_bundle
+from omop_emb.utils.errors import UnsupportedIndexConfigError
 
-from .conftest import make_svec_backend, populate
+from .conftest import duckdbvss_resolved_vector_store, make_svec_backend, populate
 
 pytest.importorskip("h5py", reason="h5py not installed")
 
@@ -232,6 +234,63 @@ class TestImportRebuildIndex:
         embedding_bundle.import_bundle(backend=target_backend, h5_path=bundle_path)
 
         assert calls == []
+
+
+def _bundle_with_index_config(tmp_path, index_config: dict) -> Path:
+    """A bundle whose recorded index config is replaced by ``index_config``."""
+    backend = make_svec_backend()
+    _populate(backend, dim=2, ids=[1], vecs=np.array([[1.0, 0.0]], dtype=np.float32))
+    _, bundle_path = embedding_bundle.export_bundle(
+        backend=backend, model_name=_MODEL, output_dir=tmp_path
+    )
+    with h5py.File(bundle_path, "r+") as f:
+        f.attrs[embedding_bundle.ATTR_INDEX_CONFIG] = json.dumps(index_config)
+    return bundle_path
+
+
+_FLOAT16_HNSW = {
+    "index_type": "hnsw",
+    "metric_type": "cosine",
+    "num_neighbors": 8,
+    "ef_search": 40,
+    "ef_construction": 64,
+    "max_scan_tuples": 50_000,
+    "index_precision": "float16",
+}
+
+
+@pytest.mark.unit
+class TestImportResolvesIndexConfigBeforeLoading:
+    """An index config the target cannot honour is handled before any vector loads."""
+
+    def test_unsupported_index_type_fails_before_registering_the_model(self, tmp_path):
+        bundle_path = _bundle_with_index_config(tmp_path, _FLOAT16_HNSW)
+        target = make_svec_backend()
+
+        with pytest.raises(UnsupportedIndexConfigError):
+            embedding_bundle.import_bundle(backend=target, h5_path=bundle_path, rebuild_index=True)
+
+        assert target.get_registered_model(model_name=_MODEL) is None
+
+    def test_without_rebuild_the_index_config_is_not_checked(self, tmp_path):
+        bundle_path = _bundle_with_index_config(tmp_path, _FLOAT16_HNSW)
+        target = make_svec_backend()
+
+        assert embedding_bundle.import_bundle(backend=target, h5_path=bundle_path) == 1
+
+    @pytest.mark.duckdbvss
+    def test_unsupported_options_are_dropped_with_a_warning(self, tmp_path, caplog):
+        bundle_path = _bundle_with_index_config(tmp_path, _FLOAT16_HNSW)
+        store = duckdbvss_resolved_vector_store(str(tmp_path / "target.duckdb"))
+
+        with open_vector_store_writer(store) as target:
+            embedding_bundle.import_bundle(backend=target, h5_path=bundle_path, rebuild_index=True)
+            config = target.get_registered_model(model_name=_MODEL).index_config
+
+        assert config == HNSWIndexConfig(
+            metric_type=MetricType.COSINE, num_neighbors=8, ef_search=40, ef_construction=64
+        )
+        assert "does not support index_precision or max_scan_tuples" in caplog.text
 
 
 @pytest.mark.unit

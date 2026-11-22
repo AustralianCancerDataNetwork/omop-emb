@@ -4,7 +4,7 @@ import itertools
 import logging
 from collections.abc import Generator, Sequence
 from contextlib import ExitStack, closing
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from oa_configurator import ConfigurationError, ResolvedModel, Resolver
@@ -15,7 +15,6 @@ from omop_emb.backends import open_vector_store_reader, open_vector_store_writer
 from omop_emb.backends.index_config import (
     FlatIndexConfig,
     HNSWIndexConfig,
-    IndexConfig,
     index_config_from_index_type,
 )
 from omop_emb.config import (
@@ -365,7 +364,7 @@ def create_index(
         typer.Option(
             "--index-precision",
             help="HNSW: precision of the index (pgvector only). float16 over float32 vectors "
-            "halves the index and allows up to 4,000 dimensions. Defaults to the stored precision.",
+            "halves the index and allows up to 4,000 dimensions. Defaults to the current index's precision, or the stored precision for a new index.",
             rich_help_panel="Index Options",
         ),
     ] = None,
@@ -380,14 +379,13 @@ def create_index(
     _create_index(
         model_name=model_name,
         metric_type=metric_type,
-        index_config=index_config_from_index_type(
-            index_type,
-            num_neighbors=index_hnsw_num_neighbors,
-            ef_search=index_hnsw_ef_search,
-            ef_construction=index_hnsw_ef_construction,
-            index_precision=index_precision,
-            metric_type=metric_type,
-        ),
+        index_type=index_type,
+        index_options={
+            "num_neighbors": index_hnsw_num_neighbors,
+            "ef_search": index_hnsw_ef_search,
+            "ef_construction": index_hnsw_ef_construction,
+            "index_precision": index_precision,
+        },
     )
 
 
@@ -395,10 +393,17 @@ def _create_index(
     *,
     model_name: str | None,
     metric_type: MetricType,
-    index_config: IndexConfig,
+    index_type: IndexType,
+    index_options: dict[str, Any],
     skip_if_unchanged: bool = False,
 ) -> None:
-    """Build the requested index, optionally reusing an existing matching HNSW index."""
+    """Build the requested index, optionally reusing an existing matching HNSW index.
+
+    Options left as ``None`` in ``index_options`` keep the HNSW settings of the
+    current index where ``index_config_from_index_type`` allows it. With
+    ``skip_if_unchanged`` an HNSW index with the same build settings is kept,
+    and only changed query-time settings are applied.
+    """
 
     cfg = _get_config()
     resolved_model = _resolve_model(model_name, cfg)
@@ -412,16 +417,34 @@ def _create_index(
         metric_type=metric_type,
         resolved_model=resolved_model,
     )
+    canonical_name = embedding_writer.canonical_model_name
 
-    current = backend.get_registered_model(model_name=embedding_writer.canonical_model_name)
+    current = backend.get_registered_model(model_name=canonical_name)
+    current_config = current.index_config if current is not None else None
+    index_config = index_config_from_index_type(
+        index_type, current=current_config, metric_type=metric_type, **index_options
+    )
     if (
         skip_if_unchanged
-        and isinstance(index_config, HNSWIndexConfig)
         and current is not None
-        and current.index_config == index_config
-        and backend.physical_indexes(embedding_writer.canonical_model_name)
+        and isinstance(index_config, HNSWIndexConfig)
+        and isinstance(current_config, HNSWIndexConfig)
+        and current_config.same_build(index_config, backend.storage_precision_of(current))
+        and backend.physical_indexes(canonical_name)
     ):
-        typer.echo(f"HNSW index already matches for '{embedding_writer.canonical_model_name}'.")
+        typer.echo(f"HNSW index already matches for '{canonical_name}'.")
+        changed = {
+            name: getattr(index_config, name)
+            for name in ("ef_search", "max_scan_tuples")
+            if getattr(index_config, name) != getattr(current_config, name)
+        }
+        if changed:
+            try:
+                backend.set_hnsw_search_params(model_name=canonical_name, **changed)
+            except UnsupportedIndexConfigError as exc:
+                typer.echo(str(exc))
+                raise typer.Exit(code=1)
+            typer.echo(f"Updated {', '.join(f'{k}={v}' for k, v in changed.items())}.")
         return
     try:
         record = embedding_writer.rebuild_index(index_config=index_config)
@@ -430,7 +453,7 @@ def _create_index(
         raise typer.Exit(code=1)
     metric_info = f" (metric={record.metric_type.value})" if record.metric_type else ""
     typer.echo(
-        f"Index ({index_config.index_type.value}) built for '{embedding_writer.canonical_model_name}'{metric_info}."
+        f"Index ({index_config.index_type.value}) built for '{canonical_name}'{metric_info}."
     )
 
 
@@ -542,7 +565,7 @@ def add_embeddings_with_index(
         typer.Option(
             "--index-precision",
             help="HNSW: precision of the index (pgvector only). float16 over float32 vectors "
-            "halves the index and allows up to 4,000 dimensions. Defaults to the stored precision.",
+            "halves the index and allows up to 4,000 dimensions. Defaults to the current index's precision, or the stored precision for a new index.",
             rich_help_panel="Index Options",
         ),
     ] = None,
@@ -587,14 +610,13 @@ def add_embeddings_with_index(
     _create_index(
         model_name=model_name,
         metric_type=metric_type,
-        index_config=index_config_from_index_type(
-            index_type,
-            num_neighbors=index_hnsw_num_neighbors,
-            ef_search=index_hnsw_ef_search,
-            ef_construction=index_hnsw_ef_construction,
-            index_precision=index_precision,
-            metric_type=metric_type,
-        ),
+        index_type=index_type,
+        index_options={
+            "num_neighbors": index_hnsw_num_neighbors,
+            "ef_search": index_hnsw_ef_search,
+            "ef_construction": index_hnsw_ef_construction,
+            "index_precision": index_precision,
+        },
         skip_if_unchanged=True,
     )
 

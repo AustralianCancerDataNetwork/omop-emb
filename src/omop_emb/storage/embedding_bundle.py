@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from importlib.metadata import version as _pkg_version
 from itertools import batched
@@ -50,7 +50,7 @@ from tqdm import tqdm
 
 from omop_emb.backends.base_backend import EmbeddingBackend, EmbeddingStoreReader
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
-from omop_emb.backends.index_config import IndexConfig, index_config_from_dict
+from omop_emb.backends.index_config import HNSWIndexConfig, IndexConfig, index_config_from_dict
 from omop_emb.config import MetricType, VectorPrecision
 
 logger = logging.getLogger(__name__)
@@ -446,6 +446,54 @@ def _importable_precision(
     return None
 
 
+def _importable_index_config(
+    backend: EmbeddingBackend, meta: BundleMetadata, storage_precision: VectorPrecision
+) -> IndexConfig:
+    """Index config to rebuild an imported model with.
+
+    The bundle's own, without the options the backend cannot honour
+    (``index_precision`` and ``max_scan_tuples``), which are dropped with a
+    warning. Anything else the backend cannot build is an error.
+
+    Parameters
+    ----------
+    backend : EmbeddingBackend
+        Backend the bundle is imported into.
+    meta : BundleMetadata
+        Metadata of the bundle.
+    storage_precision : VectorPrecision
+        Precision of the model's column on this backend.
+
+    Raises
+    ------
+    UnsupportedIndexConfigError
+        If the backend cannot build the resulting index.
+    """
+    config = meta.index_config
+    index = backend.capabilities.index(config.index_type)
+    dropped: dict[str, None] = {}
+    if config.index_precision is not None and config.index_precision not in index.precisions:
+        dropped["index_precision"] = None
+    if (
+        isinstance(config, HNSWIndexConfig)
+        and config.max_scan_tuples is not None
+        and not index.max_scan_tuples
+    ):
+        dropped["max_scan_tuples"] = None
+    if dropped:
+        logger.warning(
+            "Backend '%s' does not support %s; rebuilding the index of '%s' without.",
+            backend.backend_name,
+            " or ".join(dropped),
+            meta.model_name,
+        )
+        config = replace(config, **dropped)
+    backend.capabilities.validate_index_config(
+        config, dimensions=meta.dimensions, storage_precision=storage_precision
+    )
+    return config
+
+
 def import_bundle(
     backend: EmbeddingBackend,
     h5_path: Path | str,
@@ -497,9 +545,8 @@ def import_bundle(
         validate_bundle(f)
         meta = BundleMetadata.from_h5_attrs(f.attrs)
 
-        was_already_registered = (
-            backend.get_registered_model(model_name=meta.model_name) is not None
-        )
+        registered = backend.get_registered_model(model_name=meta.model_name)
+        was_already_registered = registered is not None
         if not force and was_already_registered:
             existing = backend.get_embedding_count(model_name=meta.model_name)
             if existing > 0:
@@ -508,12 +555,23 @@ def import_bundle(
                     "Pass force=True to overwrite."
                 )
 
+        precision = None if registered else _importable_precision(backend, meta)
+        index_config = None
+        if rebuild_index:
+            index_config = _importable_index_config(
+                backend,
+                meta,
+                backend.storage_precision_of(registered)
+                if registered
+                else precision or backend.default_storage_precision(meta.dimensions),
+            )
+
         if not was_already_registered:
             backend.register_model(
                 model_name=meta.model_name,
                 provider_type=meta.provider_type,
                 dimensions=meta.dimensions,
-                storage_precision=_importable_precision(backend, meta),
+                storage_precision=precision,
                 registered_at=datetime.fromisoformat(meta.exported_at),
             )
 
@@ -555,11 +613,11 @@ def import_bundle(
         if was_already_registered:
             backend.refresh_model_updated_at_timestamp(model_name=meta.model_name)
 
-    if rebuild_index:
-        backend.rebuild_index(model_name=meta.model_name, index_config=meta.index_config)
+    if index_config is not None:
+        backend.rebuild_index(model_name=meta.model_name, index_config=index_config)
         logger.info(
             "Rebuilt index (%s) for '%s'.",
-            meta.index_config.index_type.value,
+            index_config.index_type.value,
             meta.model_name,
         )
 

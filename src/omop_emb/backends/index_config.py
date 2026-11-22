@@ -88,6 +88,25 @@ class IndexConfig(ABC):
         """
         return self.effective_precision(storage_precision) != storage_precision
 
+    def _build_settings(self, storage_precision: VectorPrecision) -> tuple[Any, ...]:
+        """Settings that decide what the physical index looks like."""
+        return (self.index_type, self.metric_type, self.effective_precision(storage_precision))
+
+    def same_build(self, other: IndexConfig, storage_precision: VectorPrecision) -> bool:
+        """Whether both configs describe the same physical index.
+
+        Query-time settings such as ``ef_search`` and ``max_scan_tuples`` are
+        ignored, since changing them does not change the built index.
+
+        Parameters
+        ----------
+        other : IndexConfig
+            Configuration to compare with.
+        storage_precision : VectorPrecision
+            Precision of the stored column, which an unset ``index_precision`` follows.
+        """
+        return self._build_settings(storage_precision) == other._build_settings(storage_precision)
+
     # TODO: Validate index_config parameters against backend capabilities before
     #       saving to the registry. Would require passing the backend into
     #       IndexConfig, which overlaps with EmbeddingModelRecord.
@@ -257,6 +276,12 @@ class HNSWIndexConfig(IndexConfig):
     max_scan_tuples: int | None = None
     index_type: IndexType = IndexType.HNSW
 
+    def _build_settings(self, storage_precision: VectorPrecision) -> tuple[Any, ...]:
+        return super()._build_settings(storage_precision) + (
+            self.num_neighbors,
+            self.ef_construction,
+        )
+
     def _validate_metric_type_after_init(self) -> None:
         if self.metric_type is None:
             raise ValueError("HNSW index requires a metric_type (e.g. MetricType.COSINE).")
@@ -271,13 +296,21 @@ class HNSWIndexConfig(IndexConfig):
 # ---------------------------------------------------------------------------
 
 
-def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexConfig:
+def index_config_from_index_type(
+    index_type: IndexType, *, current: IndexConfig | None = None, **kwargs: Any
+) -> IndexConfig:
     """Build an ``IndexConfig`` for a given index type from raw kwargs.
 
     Parameters
     ----------
     index_type : IndexType
         Target index type.
+    current : IndexConfig, optional
+        Config of the index being replaced. When both it and the target are
+        HNSW, ``index_precision``, ``ef_search`` and ``max_scan_tuples`` left
+        unset in ``kwargs`` keep the values of ``current``. The settings that
+        shape the graph (``num_neighbors``, ``ef_construction``) fall back to
+        the defaults instead.
     **kwargs : Any
         Parameters forwarded to the concrete config class. Unknown keys are
         silently ignored.
@@ -298,6 +331,12 @@ def index_config_from_index_type(index_type: IndexType, **kwargs: Any) -> IndexC
             metric_type=kwargs.get("metric_type"), index_precision=kwargs.get("index_precision")
         )
     if index_type == IndexType.HNSW:
+        if isinstance(current, HNSWIndexConfig):
+            kept = {
+                name: getattr(current, name)
+                for name in ("index_precision", "ef_search", "max_scan_tuples")
+            }
+            kwargs = {**kept, **{k: v for k, v in kwargs.items() if v is not None}}
         return HNSWIndexConfig.from_kwargs(**kwargs)
     raise ValueError(f"No IndexConfig defined for index type {index_type!r}.")
 

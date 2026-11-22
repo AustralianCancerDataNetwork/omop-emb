@@ -149,3 +149,76 @@ def test_hnsw_record_stored_before_index_precision_existed_still_loads():
         "max_scan_tuples": None,
     }
     assert HNSWIndexConfig.from_dict(stored).index_precision is None
+
+
+def _hnsw(**overrides):
+    return HNSWIndexConfig(metric_type=MetricType.COSINE, **overrides)
+
+
+def test_same_build_ignores_query_time_settings():
+    stored = _hnsw(ef_search=300, max_scan_tuples=50_000)
+    assert stored.same_build(_hnsw(), VectorPrecision.FLOAT32)
+
+
+@pytest.mark.parametrize("change", [{"num_neighbors": 16}, {"ef_construction": 64}])
+def test_same_build_sees_graph_settings(change):
+    assert not _hnsw().same_build(_hnsw(**change), VectorPrecision.FLOAT32)
+
+
+def test_same_build_sees_the_distance_metric_and_index_type():
+    assert not _hnsw().same_build(
+        HNSWIndexConfig(metric_type=MetricType.L2), VectorPrecision.FLOAT32
+    )
+    assert not _hnsw().same_build(FlatIndexConfig(), VectorPrecision.FLOAT32)
+
+
+def test_same_build_compares_the_effective_index_precision():
+    unset = _hnsw()
+    assert unset.same_build(_hnsw(index_precision=VectorPrecision.FLOAT32), VectorPrecision.FLOAT32)
+    assert not unset.same_build(
+        _hnsw(index_precision=VectorPrecision.FLOAT16), VectorPrecision.FLOAT32
+    )
+    assert unset.same_build(_hnsw(index_precision=VectorPrecision.FLOAT16), VectorPrecision.FLOAT16)
+
+
+def test_factory_keeps_precision_and_query_settings_of_the_current_hnsw_index():
+    current = _hnsw(
+        ef_search=300, max_scan_tuples=50_000, index_precision=VectorPrecision.FLOAT16
+    )
+    config = index_config_from_index_type(
+        IndexType.HNSW, current=current, metric_type=MetricType.COSINE, ef_search=None
+    )
+    assert config.ef_search == 300
+    assert config.max_scan_tuples == 50_000
+    assert config.index_precision == VectorPrecision.FLOAT16
+
+
+def test_factory_prefers_a_value_that_is_given():
+    current = _hnsw(ef_search=300, index_precision=VectorPrecision.FLOAT16)
+    config = index_config_from_index_type(
+        IndexType.HNSW,
+        current=current,
+        metric_type=MetricType.COSINE,
+        ef_search=100,
+        index_precision=VectorPrecision.FLOAT32,
+    )
+    assert config.ef_search == 100
+    assert config.index_precision == VectorPrecision.FLOAT32
+
+
+def test_factory_takes_graph_settings_from_the_defaults_not_the_current_index():
+    current = _hnsw(num_neighbors=16, ef_construction=64)
+    config = index_config_from_index_type(
+        IndexType.HNSW, current=current, metric_type=MetricType.COSINE
+    )
+    assert (config.num_neighbors, config.ef_construction) == (32, 200)
+
+
+def test_factory_keeps_nothing_across_index_types():
+    current = _hnsw(ef_search=300, index_precision=VectorPrecision.FLOAT16)
+    flat = index_config_from_index_type(IndexType.FLAT, current=current)
+    assert flat.index_precision is None
+    hnsw = index_config_from_index_type(
+        IndexType.HNSW, current=FlatIndexConfig(), metric_type=MetricType.COSINE
+    )
+    assert hnsw == _hnsw()

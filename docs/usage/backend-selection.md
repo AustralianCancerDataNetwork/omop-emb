@@ -122,7 +122,7 @@ Defaults follow the dimensions. Up to 2,000 dimensions the column is float32. Ab
 
 A wide model can keep float32 storage by choosing `--storage-precision float32` at registration and building its HNSW index with `--index-precision float16`. Without that, an HNSW index on a float32 column above 2,000 dimensions is rejected with a message naming the option.
 
-Models registered before the precision was recorded have none in the registry, so the backend derives it from the dimensions as before. The first writer to open an older registry adds the column. Readers work on an older registry in the meantime. Bundles record the stored precision. An import uses it when the target backend supports it and otherwise registers the model with the backend's default.
+Models registered before the precision was recorded have none in the registry, so the backend derives it from the dimensions as before. The first writer to open an older registry adds the column. Readers work on an older registry in the meantime. Bundles record the stored precision. An import uses it when the target backend supports it and otherwise registers the model with the backend's default. An import that rebuilds the index also checks the bundle's index config before loading anything. It drops the index precision or `max_scan_tuples` when the target does not support them, with a warning, and raises for anything else it cannot build.
 
 Queries on a half-precision index over a float32 column rank by the half-precision distance, so the returned similarities are those of the cast vectors. Stores registered before the option existed keep the precision they were created with. Recall at half precision has not been measured yet.
 

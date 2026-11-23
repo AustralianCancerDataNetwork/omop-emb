@@ -201,11 +201,16 @@ def test_factory_prefers_a_value_that_is_given():
     assert config == _hnsw(ef_search=100, index_precision=VectorPrecision.FLOAT32)
 
 
-def test_factory_takes_graph_settings_from_the_defaults_not_the_current_index():
+def test_factory_keeps_the_graph_settings_of_the_current_index():
     current = _hnsw(num_neighbors=16, ef_construction=64)
     config = index_config_from_index_type(
         IndexType.HNSW, current=current, metric_type=MetricType.COSINE
     )
+    assert config == current
+
+
+def test_factory_takes_the_defaults_without_a_current_hnsw_index():
+    config = index_config_from_index_type(IndexType.HNSW, metric_type=MetricType.COSINE)
     assert config == _hnsw()
 
 

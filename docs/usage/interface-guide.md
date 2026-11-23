@@ -101,7 +101,7 @@ writer.embed_and_upsert_concepts(
 
 For multiple batches, yield the `(records, embeddings)` pairs returned by `writer.embed_concepts(...)` to `writer.bulk_upsert_concept_embeddings(...)`. On DuckDB HNSW stores, ordinary writes rebuild the index after each call; the bulk method rebuilds once at the end, including after a partial failure. CLI population uses this bulk path. Earlier successful batches remain stored if a later batch fails, and the model's update timestamp is refreshed.
 
-`add-embeddings-with-index` reuses the HNSW index when a model-owned physical index is present after population and its build settings match: metric, `num_neighbors`, `ef_construction` and index precision. A different `ef_search` or `max_scan_tuples` is applied without a rebuild, and FLAT transitions are still applied. The index commands keep the stored index precision, `ef_search` and `max_scan_tuples` of an HNSW index unless given. Use `create-index` to force a rebuild even when the configuration is unchanged.
+`add-embeddings-with-index` reuses the HNSW index when a model-owned physical index is present after population and its build settings match: metric, `num_neighbors`, `ef_construction` and index precision. A different `ef_search` or `max_scan_tuples` is applied without a rebuild, and FLAT transitions are still applied. The index commands keep every setting of an HNSW index that they are not given. Use `create-index` to force a rebuild even when the configuration is unchanged.
 
 ### Build an HNSW index
 

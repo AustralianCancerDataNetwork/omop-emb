@@ -399,10 +399,9 @@ def _create_index(
 ) -> None:
     """Build the requested index, optionally reusing an existing matching HNSW index.
 
-    Options left as ``None`` in ``index_options`` keep the HNSW settings of the
-    current index where ``index_config_from_index_type`` allows it. With
-    ``skip_if_unchanged`` an HNSW index with the same build settings is kept,
-    and only changed query-time settings are applied.
+    Options left as ``None`` in ``index_options`` keep the settings of the
+    current HNSW index. With ``skip_if_unchanged`` an HNSW index with the same
+    build settings is kept, and only changed query-time settings are applied.
     """
 
     cfg = _get_config()

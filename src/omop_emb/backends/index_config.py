@@ -307,10 +307,8 @@ def index_config_from_index_type(
         Target index type.
     current : IndexConfig, optional
         Config of the index being replaced. When both it and the target are
-        HNSW, ``index_precision``, ``ef_search`` and ``max_scan_tuples`` left
-        unset in ``kwargs`` keep the values of ``current``. The settings that
-        shape the graph (``num_neighbors``, ``ef_construction``) fall back to
-        the defaults instead.
+        HNSW, every setting left unset in ``kwargs`` keeps the value of
+        ``current``. Otherwise unset settings take the defaults.
     **kwargs : Any
         Parameters forwarded to the concrete config class. Unknown keys are
         silently ignored.
@@ -332,10 +330,7 @@ def index_config_from_index_type(
         )
     if index_type == IndexType.HNSW:
         if isinstance(current, HNSWIndexConfig):
-            kept = {
-                name: getattr(current, name)
-                for name in ("index_precision", "ef_search", "max_scan_tuples")
-            }
+            kept = {f.name: getattr(current, f.name) for f in fields(current)}
             kwargs = {**kept, **{k: v for k, v in kwargs.items() if v is not None}}
         return HNSWIndexConfig.from_kwargs(**kwargs)
     raise ValueError(f"No IndexConfig defined for index type {index_type!r}.")

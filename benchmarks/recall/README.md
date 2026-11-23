@@ -50,7 +50,7 @@ A run measures whichever indexes exist when it starts, and the label names that 
 |---|---|---|
 | `global-ef200` | `omop-emb maintenance rebuild-index --model <NAME> --index-type hnsw --index-ef-construction 200` | Whether a better-built global graph closes the gap |
 | `global-ef200-half` | The same with `--index-precision float16` | Whether the half-size index loses recall. A full-precision build at 9.4M rows may not fit in memory, so this may be the only way to measure `ef_construction` 200 |
-| `partials-valid` | `build --valid-only` | Whether valid-only partials are useful. Only queries that require active concepts can use them |
+| `partials-valid` | `build --valid-only` | Recall of valid-only partials. Only queries that require active concepts can use them |
 
 `rebuild-index` drops the global index and every partial index before it builds. Use a copy of the store, not one in use, and run `build` again afterwards to bring the partial indexes back.
 
@@ -66,7 +66,7 @@ Other options of `queries` set the domains (`--domain`), pairs (`--pair`, for ex
 - **Settings** are `ef_search` 100, 200 and 400 at the default `max_scan_tuples`, and 200 with `max_scan_tuples` 100,000. Each setting runs one warm pass and three timed passes in random order, and pools the timings.
 - **Recall** is counted at 10 and 25 by distance. A returned concept counts if its exact distance is no larger than the exact k-th distance, so concepts with identical vectors are interchangeable. The distance is recomputed from the stored vectors, so a half-precision index is scored fairly.
 - **Also reported** are the share of queries below 0.8 recall@10, the share returning fewer than 25 results or none, and p50 and p95 latency of the production query path.
-- **The index the planner used** is shown for a one-off plan and for a generic plan, which is what a driver reuses for a statement it runs repeatedly. This is the evidence for whether partial indexes are chosen at your size.
+- **The index the planner used** is shown for a one-off plan and for a generic plan, which is what a driver reuses for a statement it runs repeatedly. It shows which index the planner picks at your size.
 - **Split arms** run for pairs when partial indexes exist: one search per domain, merged by distance, sequentially and in parallel. They show whether building a merge for two-domain queries is worth it.
 
 ## Reading the comparison

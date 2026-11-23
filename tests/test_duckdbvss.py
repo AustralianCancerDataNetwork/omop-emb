@@ -5,6 +5,8 @@ In-memory DuckDB with the vss extension: no external service required.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from oa_configurator import physical_schema_of, qualified
@@ -15,6 +17,7 @@ from omop_emb.backends.duckdbvss.duckdbvss_backend import DuckDBVSSEmbeddingBack
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.config import IndexType, MetricType
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
+from omop_emb.utils.errors import UnsupportedIndexConfigError
 
 from .conftest import (
     ASPIRIN_ID,
@@ -100,13 +103,35 @@ class TestDuckDBVSSHNSWBackend:
         duckdbvss_backend.rebuild_index(model_name=MODEL_NAME, index_config=FlatIndexConfig())
         assert duckdbvss_backend.physical_indexes(MODEL_NAME) == ()
 
+    def test_set_hnsw_search_params_updates_ef_search_without_a_rebuild(
+        self, duckdbvss_backend: DuckDBVSSEmbeddingBackend
+    ):
+        self._register_and_upsert(duckdbvss_backend)
+        duckdbvss_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
+        before = duckdbvss_backend.physical_indexes(MODEL_NAME)
+
+        record = duckdbvss_backend.set_hnsw_search_params(model_name=MODEL_NAME, ef_search=64)
+
+        assert record.index_config == replace(self.HNSW_CONFIG, ef_search=64)
+        assert duckdbvss_backend.physical_indexes(MODEL_NAME) == before
+
+    def test_set_hnsw_search_params_rejects_max_scan_tuples(
+        self, duckdbvss_backend: DuckDBVSSEmbeddingBackend
+    ):
+        self._register_and_upsert(duckdbvss_backend)
+        duckdbvss_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
+
+        with pytest.raises(UnsupportedIndexConfigError, match="max_scan_tuples"):
+            duckdbvss_backend.set_hnsw_search_params(model_name=MODEL_NAME, max_scan_tuples=1000)
+        assert registered_model(duckdbvss_backend, MODEL_NAME).index_config == self.HNSW_CONFIG
+
     def test_rebuild_rejects_a_metric_the_backend_cannot_index(
         self, duckdbvss_backend: DuckDBVSSEmbeddingBackend
     ):
         self._register_and_upsert(duckdbvss_backend)
         duckdbvss_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
         before = duckdbvss_backend.physical_indexes(MODEL_NAME)
-        with pytest.raises(ValueError, match="l1"):
+        with pytest.raises(ValueError, match=MetricType.L1.value):
             duckdbvss_backend.rebuild_index(
                 model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.L1)
             )

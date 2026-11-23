@@ -64,6 +64,7 @@ omop-emb embeddings add-embeddings [OPTIONS]
 | Option | Default | Description |
 |---|---|---|
 | `--metric-type` | `cosine` | Metric of a new model's table. Locked in for `flat` on sqlite-vec; ignored for `flat` on pgvector and for a model that is already registered. See [Metrics](backend-selection.md#metrics). |
+| `--storage-precision` | `None` | Precision of a new model's stored vectors, `float32` or `float16` (pgvector only). Defaults to `float32`, or `float16` above 2,000 dimensions. An already registered model keeps its precision, and a different value is a conflict. See [Precision](backend-selection.md#precision). |
 
 | Option | Short | Description |
 |---|---|---|
@@ -89,6 +90,9 @@ Accepts all options from `add-embeddings` (its `--metric-type` also applies to t
 | `--index-hnsw-num-neighbors` | `None` | HNSW graph connectivity (`M`). |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
+| `--index-precision` | `None` | HNSW index precision, `float32` or `float16` (pgvector only). Defaults to the precision of the current index, or the stored precision for a new one. See [Precision](backend-selection.md#precision). |
+| `--partial-domain-indexes` / `--no-partial-domain-indexes` | current | HNSW: also build one index per domain next to the global one (pgvector only). Not given keeps the setting of the current index. See [Per-domain partial indexes](backend-selection.md#per-domain-partial-indexes). |
+| `--partial-valid-only` / `--no-partial-valid-only` | current | HNSW: restrict the per-domain indexes to valid concepts. Requires `--partial-domain-indexes`. Not given keeps the setting of the current index. |
 
 ---
 
@@ -115,6 +119,9 @@ omop-emb embeddings create-index [OPTIONS]
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
+| `--index-precision` | `None` | HNSW index precision, `float32` or `float16` (pgvector only). Defaults to the precision of the current index, or the stored precision for a new one. See [Precision](backend-selection.md#precision). |
+| `--partial-domain-indexes` / `--no-partial-domain-indexes` | current | HNSW: also build one index per domain next to the global one (pgvector only). Not given keeps the setting of the current index. See [Per-domain partial indexes](backend-selection.md#per-domain-partial-indexes). |
+| `--partial-valid-only` / `--no-partial-valid-only` | current | HNSW: restrict the per-domain indexes to valid concepts. Requires `--partial-domain-indexes`. Not given keeps the setting of the current index. |
 
 | Option | Short | Description |
 |---|---|---|
@@ -201,9 +208,35 @@ omop-emb maintenance rebuild-index --model <CANONICAL_NAME> [OPTIONS]
 | `--index-type` | `flat` | `flat` or `hnsw`. |
 | `--metric-type` | `cosine` | Distance metric. Locked in for `hnsw` and for `flat` on sqlite-vec, where another metric recreates the table from the stored vectors. Ignored for `flat` on pgvector. See [Metrics](backend-selection.md#metrics). |
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
-| `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
-| `--index-ef-construction` | `None` | HNSW build quality parameter. |
+| `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. Keeps the current index's value, or 200 for a new index. |
+| `--index-ef-construction` | `None` | HNSW build quality parameter. Keeps the current index's value, or 200 for a new index. |
+| `--index-precision` | `None` | HNSW index precision, `float32` or `float16` (pgvector only). Defaults to the precision of the current index, or the stored precision for a new one. See [Precision](backend-selection.md#precision). |
+| `--partial-domain-indexes` / `--no-partial-domain-indexes` | current | HNSW: also build one index per domain next to the global one (pgvector only). Not given keeps the setting of the current index. See [Per-domain partial indexes](backend-selection.md#per-domain-partial-indexes). |
+| `--partial-valid-only` / `--no-partial-valid-only` | current | HNSW: restrict the per-domain indexes to valid concepts. Requires `--partial-domain-indexes`. Not given keeps the setting of the current index. |
 | `--vacuum` / `--no-vacuum` | `--vacuum` | Maintenance after the rebuild. pgvector runs `VACUUM (ANALYZE)` on the table to refresh planner statistics. sqlite-vec runs `VACUUM` on the database file after a metric change, which needs free disk space for a second copy of the data. Neither returns the space deleted rows left behind, see [`prune-embeddings --compact`](#prune-embeddings). Use `--no-vacuum` to skip it. |
+
+| Option | Short | Description |
+|---|---|---|
+| `--verbose` | `-v` | Increase log verbosity. |
+
+---
+
+### `set-ef-search`
+
+Change the query-time HNSW settings of a registered model without rebuilding its index. pgvector and DuckDB VSS apply the new values to the next query. A model without an HNSW index is rejected.
+
+```bash
+omop-emb maintenance set-ef-search --model <CANONICAL_NAME> [--value N] [--max-scan-tuples N]
+```
+
+| Option | Short | Default | Description |
+|---|---|---|---|
+| `--model` | `-m` | **required** | Canonical model name. |
+| `--value` | | `None` | New `ef_search`. Higher is more accurate and slower. |
+| `--max-scan-tuples` | | `None` | New cap on the rows a filtered query reads from the index. pgvector only, rejected elsewhere. Server default is 20,000. |
+| `--provider-type` | | `None` | Provider used to canonicalize the model name when needed. |
+
+Give at least one of `--value` and `--max-scan-tuples`. A later `rebuild-index` replaces both with the values it is given or the defaults.
 
 | Option | Short | Description |
 |---|---|---|

@@ -26,6 +26,7 @@ from omop_emb.backends.base_backend import (
     EmbeddingBackend,
     EmbeddingStoreReader,
 )
+from omop_emb.backends.capabilities import BackendCapabilities
 from omop_emb.backends.index_config import FlatIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
 from omop_emb.backends.sqlitevec.sqlitevec_backend import _load_sqlite_vec
@@ -33,6 +34,7 @@ from omop_emb.config import (
     MODEL_REGISTRY_SCHEMA,
     REGISTRY_SCHEMA_KEY,
     BackendType,
+    IndexType,
     MetricType,
     OmopEmbConfig,
 )
@@ -72,7 +74,7 @@ def sqlite_resolved_vector_store(database_name: str = ":memory:") -> ResolvedVec
     """A sqlite-vec ``ResolvedVectorStore`` on ``sqlite_resolved_database(database_name)``."""
     return ResolvedVectorStore(
         name="default",
-        backend_type="sqlitevec",
+        backend_type=BackendType.SQLITEVEC.value,
         database=sqlite_resolved_database(database_name),
         faiss_cache_dir=None,
         configuration={},
@@ -92,7 +94,7 @@ def duckdbvss_resolved_vector_store(database_name: str) -> ResolvedVectorStore:
     )
     return ResolvedVectorStore(
         name="default",
-        backend_type="duckdbvss",
+        backend_type=BackendType.DUCKDBVSS.value,
         database=Resolver(cfg).resolve_database("default"),
         faiss_cache_dir=None,
         configuration={},
@@ -434,7 +436,7 @@ def pg_backend(pg_db):
     from omop_emb.backends.base_backend import _open_writer
     from omop_emb.backends.embedding_table import EmbeddingTableBase
 
-    backend = _open_writer("pgvector", database=pg_db.resolved)
+    backend = _open_writer(BackendType.PGVECTOR, database=pg_db.resolved)
 
     yield backend
 
@@ -485,7 +487,7 @@ def duckdbvss_backend(duckdbvss_db):
     from omop_emb.backends.base_backend import _open_writer
     from omop_emb.backends.embedding_table import EmbeddingTableBase
 
-    backend = _open_writer("duckdbvss", database=duckdbvss_db.resolved)
+    backend = _open_writer(BackendType.DUCKDBVSS, database=duckdbvss_db.resolved)
 
     yield backend
 
@@ -506,6 +508,20 @@ BACKEND_PARAMS = tuple(
     pytest.param(backend, marks=getattr(pytest.mark, backend.value)) for backend in BackendType
 )
 """One param per vector backend, each carrying that backend's routing mark."""
+
+
+def declared_capabilities(backend_type: BackendType) -> BackendCapabilities:
+    """The capabilities a backend class declares, without opening the backend."""
+    if backend_type == BackendType.SQLITEVEC:
+        return SQLiteVecEmbeddingBackend.CAPABILITIES
+    if backend_type == BackendType.PGVECTOR:
+        from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
+
+        return PGVectorEmbeddingBackend.CAPABILITIES
+    from omop_emb.backends.duckdbvss import DuckDBVSSEmbeddingBackend
+
+    return DuckDBVSSEmbeddingBackend.CAPABILITIES
+
 
 _ENGINE_FIXTURE_BY_BACKEND = {
     BackendType.SQLITEVEC: "svec_engine",
@@ -573,4 +589,18 @@ assert set(_STORE_FIXTURE_BY_BACKEND) == {param.values[0] for param in BACKEND_P
 @pytest.fixture(params=BACKEND_PARAMS)
 def vector_store(request) -> ResolvedVectorStore:
     """The store of each vector backend. A test using it runs once per backend, in that backend's job."""
+    return request.getfixturevalue(_STORE_FIXTURE_BY_BACKEND[request.param])
+
+
+HNSW_BACKEND_PARAMS = tuple(
+    pytest.param(backend, marks=getattr(pytest.mark, backend.value))
+    for backend in BackendType
+    if declared_capabilities(backend).supports_index_type(IndexType.HNSW)
+)
+"""The vector backends that can build an HNSW index."""
+
+
+@pytest.fixture(params=HNSW_BACKEND_PARAMS)
+def hnsw_store(request) -> ResolvedVectorStore:
+    """The store of each backend that supports HNSW. A test using it runs once per such backend."""
     return request.getfixturevalue(_STORE_FIXTURE_BY_BACKEND[request.param])

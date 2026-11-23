@@ -5,13 +5,13 @@ from unittest.mock import Mock, patch
 from oa_configurator.resolver import ResolvedModel, ResolvedProvider
 
 from omop_emb.backends.index_config import FlatIndexConfig
-from omop_emb.config import MetricType
+from omop_emb.config import BackendType, MetricType
 from omop_emb.model_registry.model_registry_manager import RegistryManager
 
 
 def _make_mock_backend() -> Mock:
     backend = Mock()
-    backend.backend_name = "pgvector"
+    backend.backend_name = BackendType.PGVECTOR.value
     backend.get_registered_model.return_value = None
     return backend
 

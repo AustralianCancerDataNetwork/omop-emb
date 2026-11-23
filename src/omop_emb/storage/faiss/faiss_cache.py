@@ -667,13 +667,17 @@ class FAISSCache:
         COSINE: FAISS returns inner product (L2-normalised IndexFlatIP) ∈ [-1, 1].
                 Convert to cosine distance: d = 1 - ip.
         L2:     IndexFlatL2 returns squared Euclidean distance. Take sqrt.
-        Others: pass through unchanged.
+
+        Raises
+        ------
+        ValueError
+            If ``metric_type`` is neither COSINE nor L2.
         """
         if metric_type == MetricType.COSINE:
             return 1.0 - raw
         if metric_type == MetricType.L2:
             return math.sqrt(max(0.0, raw))
-        return raw
+        raise ValueError(f"No FAISS distance conversion for metric '{metric_type.value}'.")
 
     def _load_index(self, metric_type: MetricType, index_config: IndexConfig):
         from omop_emb.backends.index_config import HNSWIndexConfig

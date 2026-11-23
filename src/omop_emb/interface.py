@@ -48,7 +48,7 @@ from omop_emb.backends.base_backend import (
     EmbeddingStoreReader,
 )
 from omop_emb.backends.index_config import IndexConfig
-from omop_emb.config import BackendType, MetricType
+from omop_emb.config import BackendType, MetricType, VectorPrecision
 from omop_emb.utils.cdm import (
     CDMSessionFactory,
     count_missing_concepts,
@@ -765,6 +765,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         *,
         index_config: IndexConfig | None = None,
         metadata: Mapping[str, object] | None = None,
+        storage_precision: VectorPrecision | None = None,
     ) -> EmbeddingModelRecord:
         """Register the embedding model in the backend registry.
 
@@ -775,6 +776,9 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
             provided.
         metadata : Mapping[str, object], optional
             Free-form operational metadata. Must not contain reserved keys.
+        storage_precision : VectorPrecision, optional
+            Precision of the stored column. Defaults to the backend's choice,
+            or to that of an already registered model.
 
         Returns
         -------
@@ -783,7 +787,8 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
         Raises
         ------
         UnsupportedIndexConfigError
-            If the backend does not support the index type or its metric.
+            If the backend does not support the index type, its metric, the
+            storage precision or the dimensionality.
         ValueError
             If ``index_config`` is not a FLAT config, or ``metadata`` contains a
             reserved key.
@@ -794,6 +799,7 @@ class EmbeddingWriterInterface(EmbeddingReaderInterface[EmbeddingBackend]):
             dimensions=self.embedding_dim,
             index_config=index_config,
             metadata=metadata,
+            storage_precision=storage_precision,
         )
 
     def delete_model(self) -> None:

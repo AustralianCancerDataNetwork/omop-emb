@@ -12,10 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.sql.elements import ColumnElement
 
 from omop_emb.config import (
-    PGVECTOR_HALFVEC_MAX_DIMENSIONS,
-    PGVECTOR_VECTOR_MAX_DIMENSIONS,
     MetricType,
-    VectorColumnType,
 )
 
 logger = logging.getLogger(__name__)
@@ -245,35 +242,3 @@ def get_similarity_from_distance(
         return func.least(func.greatest(similarity, 0.0), 1.0)
     else:
         return min(1.0, max(0.0, similarity))
-
-
-def vector_column_type_for_dimensions(dimensions: int) -> VectorColumnType:
-    """Return the appropriate PostgreSQL column type for a given dimensionality.
-
-    Parameters
-    ----------
-    dimensions : int
-        Number of dimensions in the embedding vector.
-
-    Returns
-    -------
-    VectorColumnType
-        ``VECTOR`` for dimensions up to 2 000, ``HALFVEC`` for up to 4 000.
-
-    Raises
-    ------
-    ValueError
-        If ``dimensions`` exceeds the halfvec limit of 4 000.
-    """
-    if dimensions <= PGVECTOR_VECTOR_MAX_DIMENSIONS:
-        return VectorColumnType.VECTOR
-    if dimensions <= PGVECTOR_HALFVEC_MAX_DIMENSIONS:
-        logger.warning(
-            f"Using {VectorColumnType.HALFVEC} for {dimensions} dimensions. This uses float16 quantization which may reduce accuracy. "
-            f"Consider reducing dimensionality to {PGVECTOR_VECTOR_MAX_DIMENSIONS} or less to use the full float32 precision of {VectorColumnType.VECTOR}."
-        )
-        return VectorColumnType.HALFVEC
-    raise ValueError(
-        f"pgvector supports at most {PGVECTOR_HALFVEC_MAX_DIMENSIONS:,} dimensions "
-        f"(halfvec), but model requests {dimensions:,}."
-    )

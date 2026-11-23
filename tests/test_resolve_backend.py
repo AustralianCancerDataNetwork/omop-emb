@@ -46,7 +46,7 @@ def test_open_writer_builds_a_working_pgvector_backend(pg_db):
 def test_open_writer_accepts_the_backend_type_as_a_plain_string(pg_db):
     """Callers resolving from a `[vector_stores.*]` config entry pass a plain
     string, not the BackendType enum member."""
-    backend = _open_writer("pgvector", database=pg_db.resolved)
+    backend = _open_writer(BackendType.PGVECTOR, database=pg_db.resolved)
     try:
         assert isinstance(backend, PGVectorEmbeddingBackend)
     finally:

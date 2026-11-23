@@ -5,20 +5,23 @@ import logging
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from functools import cached_property
 
 from oa_configurator import Dialect, database_config_name_of
 from sqlalchemy import Engine, inspect, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, defer, sessionmaker
 
 from omop_emb.backends.index_config import (
     RESERVED_METADATA_KEYS,
     IndexConfig,
     index_config_from_dict,
 )
-from omop_emb.config import MetricType
+from omop_emb.backends.index_naming import IndexNames
+from omop_emb.config import MetricType, VectorPrecision
 from omop_emb.model_registry.model_registry_orm import (
     ModelRegistry,
+    registry_has_column,
     resolve_registry_physical_schema,
 )
 from omop_emb.model_registry.model_registry_types import EmbeddingModelRecord
@@ -27,7 +30,7 @@ from omop_emb.utils.errors import ModelRegistrationConflictError
 logger = logging.getLogger(__name__)
 _MAX_POSTGRES_IDENTIFIER_BYTES = 63
 _STORAGE_IDENTIFIER_HASH_LENGTH = 8
-_INDEX_NAME_FIXED_BYTES = len("idx_") + len("emb_") + 2 + _STORAGE_IDENTIFIER_HASH_LENGTH
+_INDEX_NAME_FIXED_BYTES = len(IndexNames.PREFIX) + len("emb_") + 2 + _STORAGE_IDENTIFIER_HASH_LENGTH
 STORAGE_IDENTIFIER_READABLE_PREFIX_LENGTH = (
     _MAX_POSTGRES_IDENTIFIER_BYTES
     - _INDEX_NAME_FIXED_BYTES
@@ -43,6 +46,7 @@ def _register_model_atomically(
     dimensions: int,
     index_config: IndexConfig,
     metadata: Mapping[str, object] | None,
+    storage_precision: VectorPrecision | None,
     registered_at: datetime | None,
 ) -> EmbeddingModelRecord:
     try:
@@ -55,7 +59,7 @@ def _register_model_atomically(
             existing = manager._fetch_row(session, model_name)
             if existing is not None:
                 return _existing_registration_result(
-                    manager, existing, model_name, dimensions, metadata
+                    manager, existing, model_name, dimensions, metadata, storage_precision
                 )
             other_store = _other_store_for_model(session, manager, model_name)
             if other_store is not None:
@@ -67,6 +71,7 @@ def _register_model_atomically(
                 dimensions=dimensions,
                 storage_identifier=manager.storage_name(manager._database_config_name, model_name),
                 details=dict(metadata) if metadata else {},
+                storage_precision=storage_precision,
                 index_config=index_config,
             )
             if registered_at is not None:
@@ -79,7 +84,7 @@ def _register_model_atomically(
             existing = manager._fetch_row(session, model_name)
             if existing is not None:
                 return _existing_registration_result(
-                    manager, existing, model_name, dimensions, metadata
+                    manager, existing, model_name, dimensions, metadata, storage_precision
                 )
             other_store = _other_store_for_model(session, manager, model_name)
             if other_store is not None:
@@ -113,12 +118,23 @@ def _existing_registration_result(
     model_name: str,
     dimensions: int,
     metadata: Mapping[str, object] | None,
+    storage_precision: VectorPrecision | None,
 ) -> EmbeddingModelRecord:
     if existing.dimensions != dimensions:
         raise ModelRegistrationConflictError(
             f"Model '{model_name}' already registered with "
             f"dimensions={existing.dimensions}, got {dimensions}.",
             conflict_field="dimensions",
+        )
+    if (
+        storage_precision is not None
+        and existing.storage_precision is not None
+        and existing.storage_precision != storage_precision
+    ):
+        raise ModelRegistrationConflictError(
+            f"Model '{model_name}' already registered with "
+            f"storage_precision={existing.storage_precision.value}, got {storage_precision.value}.",
+            conflict_field="storage_precision",
         )
     if existing.details != (metadata or {}):
         raise ModelRegistrationConflictError(
@@ -211,8 +227,10 @@ class RegistryManager:
         """
         if not self.registry_available:
             return ()
-        stmt = select(ModelRegistry).where(
-            ModelRegistry.database_config_name == self._database_config_name
+        stmt = (
+            select(ModelRegistry)
+            .options(*self._column_options)
+            .where(ModelRegistry.database_config_name == self._database_config_name)
         )
         if model_name is not None:
             stmt = stmt.where(ModelRegistry.model_name == model_name)
@@ -235,6 +253,7 @@ class RegistryManager:
         dimensions: int,
         provider_type: str,
         metadata: Mapping[str, object] | None = None,
+        storage_precision: VectorPrecision | None = None,
         registered_at: datetime | None = None,
     ) -> EmbeddingModelRecord:
         """Register a model or return the existing record if already registered.
@@ -251,6 +270,9 @@ class RegistryManager:
             omop-llm provider key that serves the model.
         metadata : Mapping[str, object], optional
             Free-form operational metadata.
+        storage_precision : VectorPrecision, optional
+            Precision of the stored column. Records written without it leave
+            the precision to the backend.
         registered_at : datetime, optional
             Backdate ``created_at``/``updated_at`` to this timestamp instead
             of "now" (e.g. to match the source data's true snapshot time
@@ -266,7 +288,8 @@ class RegistryManager:
         Raises
         ------
         ModelRegistrationConflictError
-            If the model is already registered with a different configuration.
+            If the model is already registered with a different configuration
+            or storage precision.
         ValueError
             If ``metadata`` contains a reserved key.
         """
@@ -278,6 +301,7 @@ class RegistryManager:
             dimensions=dimensions,
             index_config=index_config,
             metadata=metadata,
+            storage_precision=storage_precision,
             registered_at=registered_at,
         )
 
@@ -439,14 +463,32 @@ class RegistryManager:
 
     def _fetch_row(self, session: Session, model_name: str) -> ModelRegistry | None:
         return session.scalar(
-            select(ModelRegistry).where(
+            select(ModelRegistry)
+            .options(*self._column_options)
+            .where(
                 ModelRegistry.database_config_name == self._database_config_name,
                 ModelRegistry.model_name == model_name,
             )
         )
 
-    @staticmethod
-    def _row_to_record(row: ModelRegistry) -> EmbeddingModelRecord:
+    @cached_property
+    def _has_storage_precision_column(self) -> bool:
+        """Whether the registry has the ``storage_precision`` column.
+
+        A registry written by an older omop-emb lacks it until a writer opens
+        the store. A reader works on such a registry and treats every
+        precision as unrecorded.
+        """
+        return registry_has_column(self._embedding_engine, "storage_precision")
+
+    @property
+    def _column_options(self) -> tuple:
+        """Query options that leave out the registry columns the table lacks."""
+        if self._has_storage_precision_column:
+            return ()
+        return (defer(ModelRegistry.storage_precision),)
+
+    def _row_to_record(self, row: ModelRegistry) -> EmbeddingModelRecord:
         """Convert a SQLAlchemy ORM row to a dataclass record.
 
         Notes
@@ -467,6 +509,9 @@ class RegistryManager:
             index_config=index_config,
             dimensions=row.dimensions,
             storage_identifier=row.storage_identifier,
+            storage_precision=(
+                row.storage_precision if self._has_storage_precision_column else None
+            ),
             metadata=dict(row.details or {}),
             created_at=_as_utc(row.created_at),
             updated_at=_as_utc(row.updated_at),

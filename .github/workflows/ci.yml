@@ -17,7 +17,7 @@ jobs:
   build-test-sqlite:
     uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-sqlite-v2.yml@main
     with:
-      markers: sqlitevec and not pgvector
+      markers: sqlitevec and not pgvector and not duckdbvss
   build-test-faiss:
     # Uses sqlite test as it does not require a database backend but only enable faiss tests.
     uses: AustralianCancerDataNetwork/cava-devops/.github/workflows/build-test-sqlite-v2.yml@main

@@ -50,7 +50,7 @@ def test_only_queries_take_a_metric(method):
 def test_sqlitevec_model_accepts_only_its_registered_metric(svec_backend, metric):
     """The vec0 table declares the model's metric (cosine by default), so other metrics are refused."""
     upsert_all(svec_backend)
-    with pytest.raises(ValueError, match="indexed with metric 'cosine'"):
+    with pytest.raises(ValueError, match=f"indexed with metric '{MetricType.COSINE.value}'"):
         _query(svec_backend, metric)
 
 
@@ -105,7 +105,7 @@ def test_hnsw_accepts_only_its_index_metric(free_metric_backend):
         model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.L2)
     )
     assert len(_query(free_metric_backend, MetricType.L2)[0]) == 1
-    with pytest.raises(ValueError, match="indexed with metric 'l2'"):
+    with pytest.raises(ValueError, match=f"indexed with metric '{MetricType.L2.value}'"):
         _query(free_metric_backend, MetricType.COSINE)
 
 

@@ -14,11 +14,13 @@ import h5py
 import numpy as np
 import pytest
 
+from omop_emb import open_vector_store_writer
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord
-from omop_emb.backends.index_config import FlatIndexConfig
+from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
 from omop_emb.backends.sqlitevec import SQLiteVecEmbeddingBackend
-from omop_emb.config import MetricType
+from omop_emb.config import MetricType, VectorPrecision
 from omop_emb.storage import embedding_bundle
+from omop_emb.utils.errors import UnsupportedIndexConfigError
 
 from .conftest import make_svec_backend, populate
 
@@ -232,6 +234,91 @@ class TestImportRebuildIndex:
         assert calls == []
 
 
+def _bundle_with_index_config(tmp_path, index_config: dict) -> Path:
+    """A bundle whose recorded index config is replaced by ``index_config``."""
+    backend = make_svec_backend()
+    _populate(backend, dim=2, ids=[1], vecs=np.array([[1.0, 0.0]], dtype=np.float32))
+    _, bundle_path = embedding_bundle.export_bundle(
+        backend=backend, model_name=_MODEL, output_dir=tmp_path
+    )
+    with h5py.File(bundle_path, "r+") as f:
+        f.attrs[embedding_bundle.ATTR_INDEX_CONFIG] = json.dumps(index_config)
+    return bundle_path
+
+
+_FLOAT16_HNSW = {
+    "index_type": "hnsw",
+    "metric_type": "cosine",
+    "num_neighbors": 8,
+    "ef_search": 40,
+    "ef_construction": 64,
+    "max_scan_tuples": 50_000,
+    "index_precision": "float16",
+}
+
+
+class TestImportResolvesIndexConfigBeforeLoading:
+    """An index config the target cannot honour is handled before any vector loads."""
+
+    def test_unsupported_index_type_fails_before_registering_the_model(self, tmp_path):
+        bundle_path = _bundle_with_index_config(tmp_path, _FLOAT16_HNSW)
+        target = make_svec_backend()
+
+        with pytest.raises(UnsupportedIndexConfigError):
+            embedding_bundle.import_bundle(backend=target, h5_path=bundle_path, rebuild_index=True)
+
+        assert target.get_registered_model(model_name=_MODEL) is None
+
+    def test_without_rebuild_the_index_config_is_not_checked(self, tmp_path):
+        bundle_path = _bundle_with_index_config(tmp_path, _FLOAT16_HNSW)
+        target = make_svec_backend()
+
+        assert embedding_bundle.import_bundle(backend=target, h5_path=bundle_path) == 1
+
+    @pytest.mark.duckdbvss
+    def test_unsupported_options_are_dropped_with_a_warning(
+        self, tmp_path, duckdbvss_store, caplog
+    ):
+        bundle_path = _bundle_with_index_config(tmp_path, _FLOAT16_HNSW)
+        store = duckdbvss_store
+
+        with open_vector_store_writer(store) as target:
+            embedding_bundle.import_bundle(backend=target, h5_path=bundle_path, rebuild_index=True)
+            record = target.get_registered_model(model_name=_MODEL)
+            assert record is not None
+            config = record.index_config
+
+        assert config == HNSWIndexConfig(
+            metric_type=MetricType.COSINE, num_neighbors=8, ef_search=40, ef_construction=64
+        )
+        assert "does not support index_precision or max_scan_tuples" in caplog.text
+
+    @pytest.mark.duckdbvss
+    def test_partial_index_settings_are_dropped_with_a_warning(
+        self, tmp_path, duckdbvss_store, caplog
+    ):
+        partial = {
+            **_FLOAT16_HNSW,
+            "index_precision": None,
+            "max_scan_tuples": None,
+            "partial_domain_indexes": True,
+            "partial_valid_only": True,
+        }
+        bundle_path = _bundle_with_index_config(tmp_path, partial)
+        store = duckdbvss_store
+
+        with open_vector_store_writer(store) as target:
+            embedding_bundle.import_bundle(backend=target, h5_path=bundle_path, rebuild_index=True)
+            record = target.get_registered_model(model_name=_MODEL)
+            assert record is not None
+            config = record.index_config
+
+        assert config == HNSWIndexConfig(
+            metric_type=MetricType.COSINE, num_neighbors=8, ef_search=40, ef_construction=64
+        )
+        assert "does not support partial_domain_indexes or partial_valid_only" in caplog.text
+
+
 class TestImportBackdatesRegistration:
     """A brand-new registration created by import_bundle() is backdated to
     the bundle's own exported_at, not "now": required so a FAISS cache
@@ -316,20 +403,22 @@ class TestBundleSchemaVersions:
 
     def test_version_1_flat_bundle_imports(self, tmp_path):
         bundle_path = _bundle(tmp_path)
-        _as_v1(bundle_path, metric_type="cosine")
+        _as_v1(bundle_path, metric_type=MetricType.COSINE.value)
         assert embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path) == 1
 
     def test_version_1_hnsw_bundle_with_matching_metric_reads(self, tmp_path):
         bundle_path = _bundle(tmp_path)
-        _as_v1(bundle_path, metric_type="l2", index_config=_HNSW_L2)
+        _as_v1(bundle_path, metric_type=MetricType.L2.value, index_config=_HNSW_L2)
         with h5py.File(bundle_path) as f:
             meta = embedding_bundle.BundleMetadata.from_h5_attrs(f.attrs)
         assert meta.index_config.metric_type is MetricType.L2
 
     def test_version_1_hnsw_bundle_with_mismatching_metric_raises(self, tmp_path):
         bundle_path = _bundle(tmp_path)
-        _as_v1(bundle_path, metric_type="cosine", index_config=_HNSW_L2)
-        with pytest.raises(embedding_bundle.BundleCorruptionError, match="built for 'l2'"):
+        _as_v1(bundle_path, metric_type=MetricType.COSINE.value, index_config=_HNSW_L2)
+        with pytest.raises(
+            embedding_bundle.BundleCorruptionError, match=f"built for '{MetricType.L2.value}'"
+        ):
             embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path)
 
     def test_version_1_bundle_without_metric_raises(self, tmp_path):
@@ -395,3 +484,31 @@ class TestBundleSchemaValidation:
 
         with pytest.raises(embedding_bundle.BundleCorruptionError):
             embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path)
+
+
+class TestBundleStoragePrecision:
+    def test_export_records_the_stored_precision(self, tmp_path):
+        with h5py.File(_bundle(tmp_path)) as f:
+            meta = embedding_bundle.BundleMetadata.from_h5_attrs(f.attrs)
+        assert meta.storage_precision == VectorPrecision.FLOAT32
+
+    def test_bundle_without_the_attribute_reads_as_unrecorded_and_imports(self, tmp_path):
+        bundle_path = _bundle(tmp_path)
+        with h5py.File(bundle_path, "r+") as f:
+            del f.attrs[embedding_bundle.ATTR_STORAGE_PRECISION]
+            assert embedding_bundle.BundleMetadata.from_h5_attrs(f.attrs).storage_precision is None
+        assert embedding_bundle.import_bundle(backend=make_svec_backend(), h5_path=bundle_path) == 1
+
+    def test_unsupported_precision_falls_back_to_the_backend_default(self, tmp_path, caplog):
+        bundle_path = _bundle(tmp_path)
+        with h5py.File(bundle_path, "r+") as f:
+            f.attrs[embedding_bundle.ATTR_STORAGE_PRECISION] = VectorPrecision.FLOAT16.value
+
+        target = make_svec_backend()
+        with caplog.at_level("WARNING"):
+            embedding_bundle.import_bundle(backend=target, h5_path=bundle_path)
+
+        record = target.get_registered_model(model_name=_MODEL)
+        assert record is not None
+        assert record.storage_precision == VectorPrecision.FLOAT32
+        assert VectorPrecision.FLOAT16.value in caplog.text

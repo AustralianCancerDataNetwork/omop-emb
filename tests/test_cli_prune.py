@@ -24,10 +24,8 @@ from omop_emb.config import IndexType, MetricType
 
 from .conftest import (
     EMBEDDING_DIM,
-    duckdbvss_resolved_vector_store,
     registered_model,
     sqlite_cdm_database,
-    sqlite_resolved_vector_store,
 )
 
 MODEL = "test-model:v1"
@@ -52,9 +50,9 @@ def _concept(concept_id: int, **overrides):
 
 
 @pytest.fixture
-def pruning_setup(tmp_path, monkeypatch):
+def pruning_setup(vector_store, monkeypatch):
     """Store with concept 1 (valid), 2 (invalid in the CDM) and 3 (absent from the CDM)."""
-    store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
+    store = vector_store
     with open_vector_store_writer(store) as writer:
         writer.register_model(
             model_name=MODEL,
@@ -279,11 +277,12 @@ def test_add_embeddings_registers_the_requested_metric(monkeypatch) -> None:
 
 
 @pytest.fixture
-def indexed_population(tmp_path, monkeypatch, request):
+def indexed_population(duckdbvss_store, monkeypatch, request):
+    """A DuckDB store with an HNSW index, which population must rebuild. pgvector keeps its index live."""
     from omop_emb import interface
 
     scenario = request.param
-    store = duckdbvss_resolved_vector_store(str(tmp_path / "population.duckdb"))
+    store = duckdbvss_store
     vectors = np.random.default_rng(5).normal(size=(8, EMBEDDING_DIM)).astype(np.float32)
     initial = 8 if scenario == "nothing_pending" else 2
     hnsw = HNSWIndexConfig(
@@ -373,7 +372,6 @@ def indexed_population(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 @pytest.mark.parametrize(
     "indexed_population",
     ["success", "provider_failure", "store_failure", "nothing_pending"],
@@ -423,7 +421,6 @@ def test_population_of_reopened_hnsw_syncs_once_even_after_a_partial_failure(
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 @pytest.mark.parametrize(
     "indexed_population, target",
     [
@@ -469,7 +466,6 @@ def test_combined_population_reuses_only_a_matching_existing_index(indexed_popul
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 @pytest.mark.parametrize("indexed_population", ["nothing_pending"], indirect=True)
 @pytest.mark.parametrize("passed, expected", [(None, 64), (96, 96)])
 def test_combined_population_keeps_the_stored_index_when_only_ef_search_is_given(
@@ -497,7 +493,6 @@ def test_combined_population_keeps_the_stored_index_when_only_ef_search_is_given
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 @pytest.mark.parametrize("indexed_population", ["nothing_pending"], indirect=True)
 def test_create_index_keeps_the_stored_hnsw_settings_that_are_not_given(indexed_population):
     state = indexed_population
@@ -516,7 +511,6 @@ def test_create_index_keeps_the_stored_hnsw_settings_that_are_not_given(indexed_
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 @pytest.mark.parametrize("indexed_population", ["nothing_pending"], indirect=True)
 def test_create_index_still_forces_rebuilding_a_matching_index(indexed_population):
     cli_embeddings.create_index(
@@ -531,7 +525,6 @@ def test_create_index_still_forces_rebuilding_a_matching_index(indexed_populatio
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 @pytest.mark.parametrize("indexed_population", ["provider_failure"], indirect=True)
 def test_combined_command_keeps_population_failure_sync(indexed_population, monkeypatch):
     create = Mock(wraps=cli_embeddings._create_index)

@@ -15,18 +15,16 @@ from .conftest import (
     EMBEDDING_DIM,
     MODEL_NAME,
     PROVIDER_TYPE,
-    duckdbvss_resolved_vector_store,
 )
 
 runner = CliRunner()
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
 def test_rebuild_index_rejects_half_precision_on_a_backend_without_it(
-    tmp_path, monkeypatch
+    duckdbvss_store, monkeypatch
 ) -> None:
-    resolved = duckdbvss_resolved_vector_store(str(tmp_path / "test.duckdb"))
+    resolved = duckdbvss_store
     with open_vector_store_writer(resolved) as writer:
         writer.register_model(
             model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, dimensions=EMBEDDING_DIM

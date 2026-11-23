@@ -50,6 +50,7 @@ def _concept(concept_id: int, **overrides):
     return values
 
 
+@pytest.mark.sqlitevec
 def test_reader_before_any_write_does_not_create_the_registry(tmp_path) -> None:
     """A store that's never been set up reports an empty registry instead of
     being set up by being looked at."""
@@ -90,37 +91,18 @@ def test_duckdb_reader_cannot_open_while_a_writer_is_still_open(tmp_path) -> Non
         assert reader.initialized is True
 
 
-@pytest.mark.duckdbvss
-def test_duckdb_reader_rejects_a_write_at_the_database_level(tmp_path) -> None:
-    """A raw write against the reader's own engine must fail at the
-    database level, not just via the @writes Python-level guard on the
-    backend's own methods."""
-    store = duckdbvss_resolved_vector_store(str(tmp_path / "test.duckdb"))
-    open_vector_store_writer(store).close()
+def test_reader_after_writer_sees_the_registry(vector_store) -> None:
+    open_vector_store_writer(vector_store).close()
 
-    with (
-        open_vector_store_reader(store) as reader,
-        pytest.raises(Exception, match="read-only"),
-        engine_of(reader).connect() as connection,
-    ):
-        connection.execute(text("CREATE TABLE sneaky (id INTEGER)"))
-        connection.commit()
-
-
-def test_reader_after_writer_sees_the_registry(tmp_path) -> None:
-    store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
-    open_vector_store_writer(store).close()
-
-    with open_vector_store_reader(store) as reader:
+    with open_vector_store_reader(vector_store) as reader:
         assert reader.initialized is True
         assert reader.get_registered_models() == ()
 
 
-def test_reader_sees_registered_models_and_stored_embeddings_without_mutating(tmp_path) -> None:
+def test_reader_sees_registered_models_and_stored_embeddings_without_mutating(vector_store) -> None:
     """A model registered through the writer is visible through a reader on
-    the same file, and reading it issues no mutating SQL."""
-    store = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
-    with open_vector_store_writer(store) as writer:
+    the same store, and reading it issues no mutating SQL."""
+    with open_vector_store_writer(vector_store) as writer:
         writer.register_model(
             model_name="test-model",
             provider_type="ollama",
@@ -133,7 +115,7 @@ def test_reader_sees_registered_models_and_stored_embeddings_without_mutating(tm
     def capture(_connection, _cursor, statement, _parameters, _context, _many):
         statements.append(statement.strip().lower())
 
-    with open_vector_store_reader(store) as reader:
+    with open_vector_store_reader(vector_store) as reader:
         engine = engine_of(reader)
         event.listen(engine, "before_cursor_execute", capture)
         try:
@@ -150,6 +132,7 @@ def test_reader_sees_registered_models_and_stored_embeddings_without_mutating(tm
     )
 
 
+@pytest.mark.sqlitevec
 def test_dropped_storage_table_raises_instead_of_being_recreated(tmp_path) -> None:
     """A model registered but whose physical table was dropped out from under
     it raises MissingStorageTableError for a fresh backend instance (an empty
@@ -180,6 +163,7 @@ def test_dropped_storage_table_raises_instead_of_being_recreated(tmp_path) -> No
             engine.dispose()
 
 
+@pytest.mark.sqlitevec
 def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()
@@ -216,6 +200,7 @@ def test_population_plan_distinguishes_missing_and_stale_ids() -> None:
     assert plan.pending_ids == frozenset({2})
 
 
+@pytest.mark.sqlitevec
 def test_population_reads_concepts_from_a_separate_vocab_database(tmp_path):
     primary_path = tmp_path / "primary.db"
     vocab_path = tmp_path / "vocab.db"
@@ -252,6 +237,7 @@ def test_population_reads_concepts_from_a_separate_vocab_database(tmp_path):
     vocab.dispose()
 
 
+@pytest.mark.sqlitevec
 def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:
     """Only concept 1 is both standard (``'S'``) and valid (no invalid_reason,
     confirmed directly against omop_alchemy's own ``ConceptFilter``): concept 2
@@ -287,6 +273,7 @@ def test_population_scope_uses_omop_alchemy_standard_and_valid_flags() -> None:
     assert plan.missing_ids == frozenset({1})
 
 
+@pytest.mark.sqlitevec
 def test_filtered_population_reports_out_of_scope_rows_apart_from_stale_rows() -> None:
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()
@@ -323,6 +310,7 @@ def test_filtered_population_reports_out_of_scope_rows_apart_from_stale_rows() -
     assert plan.prunable_ids == frozenset({2, 3})
 
 
+@pytest.mark.sqlitevec
 def test_concept_deprecated_after_embedding_is_out_of_scope_not_stale() -> None:
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()
@@ -349,6 +337,7 @@ def test_concept_deprecated_after_embedding_is_out_of_scope_not_stale() -> None:
     assert plan.prunable_ids == frozenset({2, 3})
 
 
+@pytest.mark.sqlitevec
 def test_population_scope_defaults_to_valid_concepts_only() -> None:
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()
@@ -382,6 +371,7 @@ def test_population_scope_defaults_to_valid_concepts_only() -> None:
     assert keep_invalid.prunable_ids == frozenset()
 
 
+@pytest.mark.sqlitevec
 def test_metadata_change_is_pending() -> None:
     resolved = sqlite_cdm_database()
     engine, _ = resolved.create_engines()

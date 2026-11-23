@@ -16,8 +16,6 @@ from .conftest import (
     EMBEDDING_DIM,
     MODEL_NAME,
     PROVIDER_TYPE,
-    duckdbvss_resolved_vector_store,
-    sqlite_resolved_vector_store,
 )
 
 runner = CliRunner()
@@ -43,14 +41,18 @@ def _rebuild(index_type: IndexType, *options: str):
     )
 
 
-@pytest.fixture
-def sqlite_store(tmp_path, monkeypatch):
-    resolved = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
+def _register_model(resolved) -> None:
     with open_vector_store_writer(resolved) as writer:
         writer.register_model(
             model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, dimensions=EMBEDDING_DIM
         )
-    _use_store(monkeypatch, resolved)
+
+
+@pytest.fixture
+def store(vector_store, monkeypatch):
+    """Each backend's store with a model registered, and the CLI pointed at it."""
+    _register_model(vector_store)
+    _use_store(monkeypatch, vector_store)
 
 
 @pytest.mark.parametrize(
@@ -73,14 +75,14 @@ def test_the_commands_that_build_an_index_list_the_options(app, command):
     } <= options
 
 
-def test_valid_only_needs_partial_indexes(sqlite_store) -> None:
+def test_valid_only_needs_partial_indexes(store) -> None:
     result = _rebuild(IndexType.HNSW, "--partial-valid-only")
 
     assert result.exit_code == 2
     assert "partial_domain_indexes" in result.output
 
 
-def test_partial_options_are_rejected_for_a_flat_index(sqlite_store) -> None:
+def test_partial_options_are_rejected_for_a_flat_index(store) -> None:
     result = _rebuild(IndexType.FLAT, "--partial-domain-indexes")
 
     assert result.exit_code == 2
@@ -88,14 +90,11 @@ def test_partial_options_are_rejected_for_a_flat_index(sqlite_store) -> None:
 
 
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
-def test_partial_indexes_are_rejected_on_a_backend_without_them(tmp_path, monkeypatch) -> None:
-    resolved = duckdbvss_resolved_vector_store(str(tmp_path / "test.duckdb"))
-    with open_vector_store_writer(resolved) as writer:
-        writer.register_model(
-            model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, dimensions=EMBEDDING_DIM
-        )
-    _use_store(monkeypatch, resolved)
+def test_partial_indexes_are_rejected_on_a_backend_without_them(
+    duckdbvss_store, monkeypatch
+) -> None:
+    _register_model(duckdbvss_store)
+    _use_store(monkeypatch, duckdbvss_store)
 
     result = _rebuild(IndexType.HNSW, "--partial-domain-indexes")
 

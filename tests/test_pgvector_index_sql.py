@@ -7,11 +7,15 @@ from typing import cast
 import numpy as np
 import pytest
 import sqlalchemy as sa
-from oa_configurator import Dialect
+from oa_configurator import (
+    ConnectionConfig,
+    Dialect,
+    GenericDatabaseConfig,
+    Resolver,
+    StackConfig,
+)
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateIndex
-
-pytest.importorskip("pgvector", reason="omop-emb[pgvector] not installed: skipping pgvector tests")
 
 from omop_emb.backends.db_utils import apply_concept_filter_where, table_for
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
@@ -32,15 +36,23 @@ from omop_emb.model_registry.model_registry_manager import (
 )
 from omop_emb.utils.embedding_utils import EmbeddingConceptFilter
 
-pytestmark = pytest.mark.unit
-
 
 @pytest.fixture
 def unconnected_pg_engine() -> sa.Engine:
     """A Postgres Engine that is never connected, giving qualified() a real dialect to quote against."""
-    return sa.create_engine(
-        "postgresql+psycopg://unused:unused@localhost/unused"
-    ).execution_options(schema_translate_map={"primary": "public"})
+    stack = StackConfig.for_session(
+        connections={
+            "db": ConnectionConfig(
+                dialect=f"{Dialect.POSTGRESQL}+psycopg", host="localhost", database_name="unused"
+            )
+        },
+        databases={"default": GenericDatabaseConfig(connection="db")},
+    )
+    return (
+        Resolver(stack)
+        .resolve_database("default")
+        .connection.create_engine(execution_options={"schema_translate_map": {"primary": "public"}})
+    )
 
 
 def _record(dimensions: int = 4) -> EmbeddingModelRecord:

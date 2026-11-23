@@ -8,8 +8,6 @@ from omop_emb.backends.index_naming import IndexNames
 from omop_emb.config import MetricType
 from omop_emb.model_registry import RegistryManager
 
-pytestmark = pytest.mark.unit
-
 
 class TestHNSW:
     def test_name_follows_table_and_metric(self):

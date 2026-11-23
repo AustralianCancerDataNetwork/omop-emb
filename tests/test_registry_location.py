@@ -13,7 +13,7 @@ from omop_emb.model_registry.model_registry_orm import (
 )
 from omop_emb.utils.errors import MisplacedRegistryError
 
-pytestmark = [pytest.mark.postgresql, pytest.mark.db_dialect]
+pytestmark = pytest.mark.pgvector
 
 
 def _create_registry_table(engine: sa.Engine, schema: str) -> None:

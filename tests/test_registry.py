@@ -27,12 +27,11 @@ from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE, sqlite_resolved_
 
 
 @pytest.fixture
-def registry(svec_engine) -> RegistryManager:
-    """RegistryManager backed by an in-memory SQLite engine."""
-    return RegistryManager(svec_engine)
+def registry(backend_engine) -> RegistryManager:
+    """RegistryManager on each vector backend's engine."""
+    return RegistryManager(backend_engine)
 
 
-BACKEND_PREFIX = "sqlitevec"
 METRIC = MetricType.L2
 FLAT = FlatIndexConfig()
 HNSW = HNSWIndexConfig(metric_type=MetricType.COSINE)
@@ -54,7 +53,6 @@ def _register(
     )
 
 
-@pytest.mark.unit
 class TestRegistryManager:
     def test_register_and_retrieve(self, registry: RegistryManager):
         record = registry.register_model(
@@ -307,7 +305,6 @@ class TestRegistryManager:
         assert len(name.rsplit("_", 1)[1]) == 8
 
 
-@pytest.mark.unit
 class TestProviderTypeValidation:
     """provider_type is checked live against omop_llm.supported_providers()."""
 
@@ -364,7 +361,6 @@ def _create_pre_scoping_registry(connection: sa.Connection, *, schema: str | Non
     )
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize(
     ("signature", "error_match"),
     [
@@ -372,6 +368,7 @@ def _create_pre_scoping_registry(connection: sa.Connection, *, schema: str | Non
         ("partial", "unrecognised or partial signature"),
     ],
 )
+@pytest.mark.sqlitevec
 def test_unreadable_registry_signatures_are_rejected(signature, error_match):
     """Readers and writers refuse old or incomplete layouts without DDL."""
     engine = registry_reader_engine(sqlite_resolved_database(), extensions=[_load_sqlite_vec])
@@ -395,11 +392,11 @@ def test_unreadable_registry_signatures_are_rejected(signature, error_match):
         )
 
 
-@pytest.mark.unit
+@pytest.mark.sqlitevec
 def test_reader_rejects_legacy_registry_created_before_reader_opens(tmp_path):
     path = tmp_path / "legacy-reader.db"
     resolved = sqlite_resolved_database(str(path))
-    setup_engine = sa.create_engine(f"sqlite:///{path}")
+    setup_engine = resolved.create_engine()
     with setup_engine.begin() as connection:
         _create_pre_scoping_registry(connection)
     setup_engine.dispose()
@@ -408,7 +405,7 @@ def test_reader_rejects_legacy_registry_created_before_reader_opens(tmp_path):
         registry_reader_engine(resolved, extensions=[_load_sqlite_vec])
 
 
-@pytest.mark.unit
+@pytest.mark.sqlitevec
 def test_current_registry_layout_is_not_mistaken_for_a_legacy_one():
     """The rejection keys on the absence of database_config_name, so a
     registry this version created must survive repeated opens."""
@@ -422,7 +419,6 @@ def test_current_registry_layout_is_not_mistaken_for_a_legacy_one():
 
 
 @pytest.mark.pgvector
-@pytest.mark.integration
 def test_pre_scoping_registry_in_another_schema_is_rejected(pg_engine):
     """The staggered-upgrade case: the current registry already exists here,
     created by another store, while this store's rows are still in their old
@@ -444,7 +440,6 @@ def test_pre_scoping_registry_in_another_schema_is_rejected(pg_engine):
 
 
 @pytest.mark.pgvector
-@pytest.mark.integration
 def test_registry_reader_engine_maps_the_registry_schema(pg_db):
     engine = registry_reader_engine(pg_db.resolved)
     try:
@@ -501,12 +496,7 @@ def _assert_registry_upgrade_keeps_rows(engine: sa.Engine) -> None:
     assert other.storage_precision == VectorPrecision.FLOAT16
 
 
-@pytest.mark.unit
-def test_registry_without_the_precision_column_is_readable_and_upgraded_by_a_writer(svec_engine):
-    _assert_registry_upgrade_keeps_rows(svec_engine)
-
-
-@pytest.mark.pgvector
-@pytest.mark.integration
-def test_registry_upgrade_adds_the_precision_column_on_postgres(pg_engine):
-    _assert_registry_upgrade_keeps_rows(pg_engine)
+def test_registry_without_the_precision_column_is_readable_and_upgraded_by_a_writer(
+    backend_engine,
+):
+    _assert_registry_upgrade_keeps_rows(backend_engine)

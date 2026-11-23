@@ -24,7 +24,7 @@ from .conftest import (
     sqlite_resolved_database,
 )
 
-pytestmark = [pytest.mark.postgresql, pytest.mark.db_dialect]
+pytestmark = pytest.mark.pgvector
 
 
 def test_open_writer_builds_a_working_pgvector_backend(pg_db):

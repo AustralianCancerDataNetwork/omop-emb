@@ -28,8 +28,6 @@ from benchmarks.recall.store import guard_read_only
 from omop_emb.backends.index_naming import IndexNames
 from omop_emb.config import MetricType
 
-pytestmark = pytest.mark.unit
-
 
 class TestRecallByDistance:
     TRUTH: ClassVar[list[tuple[int, float]]] = [(1, 0.10), (2, 0.20), (3, 0.30), (4, 0.40)]
@@ -170,10 +168,10 @@ def test_workload_recall_weights_single_domain_and_no_domain_searches():
     assert value == pytest.approx(0.8 * 0.9 + 0.2 * 0.5)
 
 
-def test_read_only_guard_allows_reads_and_blocks_writes():
-    engine = sa.create_engine("sqlite://")
-    guard_read_only(engine)
-    with engine.connect() as conn:
+@pytest.mark.sqlitevec
+def test_read_only_guard_allows_reads_and_blocks_writes(svec_engine):
+    guard_read_only(svec_engine)
+    with svec_engine.connect() as conn:
         assert conn.execute(sa.text("SELECT 1")).scalar_one() == 1
         with pytest.raises(RuntimeError, match="Blocked non-read-only SQL"):
             conn.execute(sa.text("CREATE TABLE t (x INTEGER)"))

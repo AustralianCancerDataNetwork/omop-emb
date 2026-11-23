@@ -2,7 +2,6 @@
 
 from unittest.mock import Mock, patch
 
-import pytest
 from oa_configurator.resolver import ResolvedModel, ResolvedProvider
 
 from omop_emb.backends.index_config import FlatIndexConfig
@@ -17,7 +16,6 @@ def _make_mock_backend() -> Mock:
     return backend
 
 
-@pytest.mark.unit
 class TestCanonicalModelName:
     """The storage layer receives and preserves the canonical model name verbatim."""
 

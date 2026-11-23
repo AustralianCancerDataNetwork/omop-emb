@@ -45,6 +45,7 @@ def test_only_queries_take_a_metric(method):
     assert "metric_type" in inspect.signature(EmbeddingBackend.get_nearest_concepts).parameters
 
 
+@pytest.mark.sqlitevec
 @pytest.mark.parametrize("metric", [MetricType.L2, MetricType.L1, MetricType.HAMMING])
 def test_sqlitevec_model_accepts_only_its_registered_metric(svec_backend, metric):
     """The vec0 table declares the model's metric (cosine by default), so other metrics are refused."""
@@ -54,7 +55,6 @@ def test_sqlitevec_model_accepts_only_its_registered_metric(svec_backend, metric
 
 
 @pytest.mark.pgvector
-@pytest.mark.integration
 @pytest.mark.parametrize("metric", [MetricType.L2, MetricType.COSINE, MetricType.L1])
 def test_pgvector_flat_accepts_every_supported_metric(pg_backend, metric):
     upsert_all(pg_backend)
@@ -62,7 +62,6 @@ def test_pgvector_flat_accepts_every_supported_metric(pg_backend, metric):
 
 
 @pytest.mark.pgvector
-@pytest.mark.integration
 def test_pgvector_flat_drops_a_given_metric_and_stays_free(pg_backend):
     record = pg_backend.register_model(
         model_name=MODEL_NAME,
@@ -83,32 +82,54 @@ def test_pgvector_flat_drops_a_given_metric_and_stays_free(pg_backend):
 
 
 @pytest.mark.pgvector
-@pytest.mark.integration
 def test_pgvector_flat_rejects_an_unsupported_metric(pg_backend):
     upsert_all(pg_backend)
     with pytest.raises(ValueError, match="not supported"):
         _query(pg_backend, MetricType.HAMMING)
 
 
-@pytest.mark.pgvector
-@pytest.mark.integration
-def test_hnsw_accepts_only_its_index_metric(pg_backend):
-    upsert_all(pg_backend)
-    pg_backend.rebuild_index(
+@pytest.fixture(
+    params=[
+        pytest.param("pg_backend", marks=pytest.mark.pgvector, id="pgvector"),
+        pytest.param("duckdbvss_backend", marks=pytest.mark.duckdbvss, id="duckdbvss"),
+    ]
+)
+def free_metric_backend(request):
+    """A backend whose FLAT index takes the metric per query: pgvector and DuckDB VSS."""
+    return request.getfixturevalue(request.param)
+
+
+def test_hnsw_accepts_only_its_index_metric(free_metric_backend):
+    upsert_all(free_metric_backend)
+    free_metric_backend.rebuild_index(
         model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.L2)
     )
-    assert len(_query(pg_backend, MetricType.L2)[0]) == 1
+    assert len(_query(free_metric_backend, MetricType.L2)[0]) == 1
     with pytest.raises(ValueError, match=f"indexed with metric '{MetricType.L2.value}'"):
-        _query(pg_backend, MetricType.COSINE)
+        _query(free_metric_backend, MetricType.COSINE)
 
 
+@pytest.mark.duckdbvss
+@pytest.mark.parametrize("metric", [MetricType.L2, MetricType.COSINE])
+def test_duckdbvss_flat_accepts_every_supported_metric(duckdbvss_backend, metric):
+    upsert_all(duckdbvss_backend)
+    assert len(_query(duckdbvss_backend, metric)[0]) == 1
+
+
+@pytest.mark.duckdbvss
+@pytest.mark.parametrize("metric", [MetricType.L1, MetricType.HAMMING])
+def test_duckdbvss_flat_rejects_an_unsupported_metric(duckdbvss_backend, metric):
+    upsert_all(duckdbvss_backend)
+    with pytest.raises(ValueError, match="not supported"):
+        _query(duckdbvss_backend, metric)
+
+
+@pytest.mark.sqlitevec
 @pytest.mark.pgvector
-@pytest.mark.integration
 def test_bundle_moves_between_sqlitevec_and_pgvector_without_carrying_the_lock(
     svec_backend, pg_backend, tmp_path
 ):
     """sqlite-vec locks its models to a metric; pgvector FLAT stays free, and the other way round."""
-    pytest.importorskip("h5py")
     from omop_emb.storage import embedding_bundle
 
     svec_backend.register_model(

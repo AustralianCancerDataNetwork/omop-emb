@@ -90,9 +90,6 @@ def _mock_storage_backend() -> Mock:
 # ---------------------------------------------------------------------------
 # EmbeddingReaderInterface.generate_embeddings(): shape validation, role/batch_size passthrough
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
 class TestGenerateEmbeddings:
     def test_single_string_returns_2d_array(self):
         backend = _mock_model_backend(vectors=[[0.1, 0.2, 0.3]])
@@ -163,9 +160,6 @@ class TestGenerateEmbeddings:
 # ---------------------------------------------------------------------------
 # EmbeddingWriterInterface: construction builds the ModelBackend from a ResolvedModel
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
 class TestEmbeddingWriterInterfaceConstruction:
     def test_model_backend_built_from_resolved_model(self):
         resolved = _make_resolved_model(model="nomic-embed-text")
@@ -206,9 +200,6 @@ class TestEmbeddingWriterInterfaceConstruction:
 # ---------------------------------------------------------------------------
 # EmbeddingWriterInterface.embedding_dim: lazy resolution, cached
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
 class TestEmbeddingDimCaching:
     def test_dimensions_resolved_and_cached(self):
         resolved = _make_resolved_model()
@@ -228,9 +219,6 @@ class TestEmbeddingDimCaching:
 # ---------------------------------------------------------------------------
 # EmbeddingWriterInterface.embed_texts(): default vs. per-call batch size
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
 class TestEmbeddingWriterInterfaceEmbedTexts:
     def _make_interface(self, model_backend: Mock) -> EmbeddingWriterInterface:
         resolved = _make_resolved_model()
@@ -292,6 +280,7 @@ def test_concept_embedding_preparation_preserves_metadata_and_single_batch_write
     assert storage.refresh_model_updated_at_timestamp.call_count == int(write)
 
 
+@pytest.mark.sqlitevec
 def test_population_batches_include_missing_and_metadata_changed_concepts():
     resolved = sqlite_cdm_database()
     cdm_engine, vocab_engine = resolved.create_engines()
@@ -339,7 +328,6 @@ def test_population_batches_include_missing_and_metadata_changed_concepts():
     assert tuple(tuple(batch) for batch in batches) == ((2, 3),)
 
 
-@pytest.mark.unit
 def test_delete_concept_embeddings_deletes_then_marks_the_model_updated():
     storage = _mock_storage_backend()
     storage.delete_embeddings.return_value = 2

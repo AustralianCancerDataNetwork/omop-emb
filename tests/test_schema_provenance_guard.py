@@ -31,7 +31,7 @@ from omop_emb.model_registry import REGISTRY_SCHEMA_KEY
 
 from .conftest import EMBEDDING_DIM, MODEL_NAME, PROVIDER_TYPE
 
-pytestmark = [pytest.mark.postgresql, pytest.mark.db_dialect]
+pytestmark = pytest.mark.pgvector
 
 
 @pytest.fixture(autouse=True)

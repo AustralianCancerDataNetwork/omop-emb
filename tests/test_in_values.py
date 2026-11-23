@@ -62,14 +62,14 @@ def _populate(engine: sa.Engine) -> None:
         )
 
 
+@pytest.mark.sqlitevec
 def test_sqlite_sends_one_parameter_past_the_bind_limit():
     engine = sqlite_resolved_database().create_engine()
     _populate(engine)
     _check(engine, "sqlite")
 
 
-@pytest.mark.postgresql
-@pytest.mark.db_dialect
+@pytest.mark.pgvector
 def test_postgres_sends_one_parameter_past_the_bind_limit(pg_db):
     engine = pg_db.committing_engine
     _populate(engine)

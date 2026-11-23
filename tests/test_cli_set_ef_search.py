@@ -16,9 +16,7 @@ from .conftest import (
     EMBEDDING_DIM,
     MODEL_NAME,
     PROVIDER_TYPE,
-    duckdbvss_resolved_vector_store,
     registered_model,
-    sqlite_resolved_vector_store,
 )
 
 runner = CliRunner()
@@ -41,32 +39,43 @@ def _set(*args: str):
     return runner.invoke(cli_maintenance.app, ["set-ef-search", "--model", MODEL_NAME, *args])
 
 
-@pytest.fixture
-def sqlite_store(tmp_path, monkeypatch):
-    resolved = sqlite_resolved_vector_store(str(tmp_path / "test.db"))
+def _register_model(resolved) -> None:
     with open_vector_store_writer(resolved) as writer:
         writer.register_model(
             model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, dimensions=EMBEDDING_DIM
         )
-    _use_store(monkeypatch, resolved)
-    return resolved
 
 
-def test_set_ef_search_needs_a_setting(sqlite_store) -> None:
+def _build_hnsw(resolved) -> None:
+    with open_vector_store_writer(resolved) as writer:
+        writer.rebuild_index(
+            model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.COSINE)
+        )
+
+
+@pytest.fixture
+def store(vector_store, monkeypatch):
+    """Each backend's store with a model registered, and the CLI pointed at it."""
+    _register_model(vector_store)
+    _use_store(monkeypatch, vector_store)
+    return vector_store
+
+
+def test_set_ef_search_needs_a_setting(store) -> None:
     result = _set()
 
     assert result.exit_code == 1
     assert "--value" in result.output
 
 
-def test_set_ef_search_rejects_a_model_without_an_hnsw_index(sqlite_store) -> None:
+def test_set_ef_search_rejects_a_model_without_an_hnsw_index(store) -> None:
     result = _set("--value", "64")
 
     assert result.exit_code == 1
     assert "no HNSW index" in result.output
 
 
-def test_set_ef_search_reports_an_unknown_model(sqlite_store) -> None:
+def test_set_ef_search_reports_an_unknown_model(store) -> None:
     result = runner.invoke(
         cli_maintenance.app, ["set-ef-search", "--model", "missing", "--value", "64"]
     )
@@ -75,36 +84,35 @@ def test_set_ef_search_reports_an_unknown_model(sqlite_store) -> None:
     assert "No registered model" in result.output
 
 
+@pytest.fixture
+def hnsw_model_store(hnsw_store, monkeypatch):
+    """Each HNSW backend's store with a model that has an HNSW index, and the CLI pointed at it."""
+    _register_model(hnsw_store)
+    _build_hnsw(hnsw_store)
+    _use_store(monkeypatch, hnsw_store)
+    return hnsw_store
+
+
+def test_set_ef_search_updates_the_registry(hnsw_model_store) -> None:
+    result = _set("--value", "64")
+
+    assert result.exit_code == 0, result.output
+    assert "ef_search=64" in result.output
+    with open_vector_store_reader(hnsw_model_store) as reader:
+        config = registered_model(reader, MODEL_NAME).index_config
+    assert isinstance(config, HNSWIndexConfig)
+    assert config.ef_search == 64
+
+
 @pytest.mark.duckdbvss
-@pytest.mark.db_dialect
-class TestOnDuckDB:
-    @pytest.fixture
-    def duckdb_store(self, tmp_path, monkeypatch):
-        pytest.importorskip("duckdb_sqlalchemy")
-        resolved = duckdbvss_resolved_vector_store(str(tmp_path / "test.duckdb"))
-        with open_vector_store_writer(resolved) as writer:
-            writer.register_model(
-                model_name=MODEL_NAME, provider_type=PROVIDER_TYPE, dimensions=EMBEDDING_DIM
-            )
-            writer.rebuild_index(
-                model_name=MODEL_NAME,
-                index_config=HNSWIndexConfig(metric_type=MetricType.COSINE),
-            )
-        _use_store(monkeypatch, resolved)
-        return resolved
+def test_set_ef_search_rejects_max_scan_tuples_on_a_backend_without_it(
+    duckdbvss_store, monkeypatch
+) -> None:
+    _register_model(duckdbvss_store)
+    _build_hnsw(duckdbvss_store)
+    _use_store(monkeypatch, duckdbvss_store)
 
-    def test_set_ef_search_updates_the_registry(self, duckdb_store) -> None:
-        result = _set("--value", "64")
+    result = _set("--max-scan-tuples", "100000")
 
-        assert result.exit_code == 0, result.output
-        assert "ef_search=64" in result.output
-        with open_vector_store_reader(duckdb_store) as reader:
-            config = registered_model(reader, MODEL_NAME).index_config
-        assert isinstance(config, HNSWIndexConfig)
-        assert config.ef_search == 64
-
-    def test_set_ef_search_rejects_max_scan_tuples(self, duckdb_store) -> None:
-        result = _set("--max-scan-tuples", "100000")
-
-        assert result.exit_code == 1
-        assert "max_scan_tuples" in result.output
+    assert result.exit_code == 1
+    assert "max_scan_tuples" in result.output

@@ -17,6 +17,7 @@ from omop_emb.backends.index_config import (
     IndexConfig,
     index_config_from_dict,
 )
+from omop_emb.backends.index_naming import IndexNames
 from omop_emb.config import MetricType, VectorPrecision
 from omop_emb.model_registry.model_registry_orm import (
     ModelRegistry,
@@ -29,7 +30,7 @@ from omop_emb.utils.errors import ModelRegistrationConflictError
 logger = logging.getLogger(__name__)
 _MAX_POSTGRES_IDENTIFIER_BYTES = 63
 _STORAGE_IDENTIFIER_HASH_LENGTH = 8
-_INDEX_NAME_FIXED_BYTES = len("idx_") + len("emb_") + 2 + _STORAGE_IDENTIFIER_HASH_LENGTH
+_INDEX_NAME_FIXED_BYTES = len(IndexNames.PREFIX) + len("emb_") + 2 + _STORAGE_IDENTIFIER_HASH_LENGTH
 STORAGE_IDENTIFIER_READABLE_PREFIX_LENGTH = (
     _MAX_POSTGRES_IDENTIFIER_BYTES
     - _INDEX_NAME_FIXED_BYTES

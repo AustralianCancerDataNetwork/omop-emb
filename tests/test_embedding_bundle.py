@@ -294,6 +294,29 @@ class TestImportResolvesIndexConfigBeforeLoading:
         )
         assert "does not support index_precision or max_scan_tuples" in caplog.text
 
+    @pytest.mark.duckdbvss
+    def test_partial_index_settings_are_dropped_with_a_warning(self, tmp_path, caplog):
+        partial = {
+            **_FLOAT16_HNSW,
+            "index_precision": None,
+            "max_scan_tuples": None,
+            "partial_domain_indexes": True,
+            "partial_valid_only": True,
+        }
+        bundle_path = _bundle_with_index_config(tmp_path, partial)
+        store = duckdbvss_resolved_vector_store(str(tmp_path / "target.duckdb"))
+
+        with open_vector_store_writer(store) as target:
+            embedding_bundle.import_bundle(backend=target, h5_path=bundle_path, rebuild_index=True)
+            record = target.get_registered_model(model_name=_MODEL)
+            assert record is not None
+            config = record.index_config
+
+        assert config == HNSWIndexConfig(
+            metric_type=MetricType.COSINE, num_neighbors=8, ef_search=40, ef_construction=64
+        )
+        assert "does not support partial_domain_indexes or partial_valid_only" in caplog.text
+
 
 @pytest.mark.unit
 class TestImportBackdatesRegistration:

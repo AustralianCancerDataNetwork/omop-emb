@@ -13,6 +13,7 @@ from omop_emb.backends import (
     open_vector_store_writer,
 )
 from omop_emb.backends.index_config import HNSWIndexConfig, index_config_from_index_type
+from omop_emb.cli.cli_index_options import build_index_config
 from omop_emb.config import (
     IndexType,
     MetricType,
@@ -136,6 +137,25 @@ def rebuild_index(
             rich_help_panel="Index Options",
         ),
     ] = None,
+    partial_domain_indexes: Annotated[
+        bool | None,
+        typer.Option(
+            "--partial-domain-indexes/--no-partial-domain-indexes",
+            help="HNSW: also build one index per domain, next to the global one (pgvector only). "
+            "A query that names one domain can then use that domain's index. "
+            "Defaults to the current index's setting.",
+            rich_help_panel="Index Options",
+        ),
+    ] = None,
+    partial_valid_only: Annotated[
+        bool | None,
+        typer.Option(
+            "--partial-valid-only/--no-partial-valid-only",
+            help="HNSW: restrict the per-domain indexes to valid concepts. "
+            "Requires --partial-domain-indexes. Defaults to the current index's setting.",
+            rich_help_panel="Index Options",
+        ),
+    ] = None,
     vacuum: Annotated[
         bool,
         typer.Option(
@@ -164,14 +184,16 @@ def rebuild_index(
         )
         raise typer.Exit(1)
 
-    index_config = index_config_from_index_type(
+    index_config = build_index_config(
         index_type,
         current=record.index_config,
+        metric_type=metric_type,
         num_neighbors=index_hnsw_num_neighbors,
         ef_search=index_hnsw_ef_search,
         ef_construction=index_hnsw_ef_construction,
         index_precision=index_precision,
-        metric_type=metric_type,
+        partial_domain_indexes=partial_domain_indexes,
+        partial_valid_only=partial_valid_only,
     )
     try:
         record = backend.rebuild_index(

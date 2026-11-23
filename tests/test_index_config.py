@@ -82,7 +82,8 @@ def test_hnsw_record_missing_a_required_field_is_rejected():
 
 
 @pytest.mark.parametrize(
-    "name", ["num_neighbors", "ef_search", "ef_construction", "max_scan_tuples"]
+    "name",
+    ["num_neighbors", "ef_search", "ef_construction", "max_scan_tuples"],
 )
 def test_hnsw_config_rejects_a_non_positive_value(name):
     with pytest.raises(ValueError, match=name):
@@ -222,3 +223,76 @@ def test_factory_keeps_nothing_across_index_types():
         IndexType.HNSW, current=FlatIndexConfig(), metric_type=MetricType.COSINE
     )
     assert hnsw == _hnsw()
+
+
+def test_partial_indexes_are_off_by_default():
+    config = HNSWIndexConfig(metric_type=MetricType.COSINE)
+    assert config.partial_domain_indexes is False
+    assert config.partial_valid_only is False
+
+
+def test_partial_index_settings_survive_a_dict_round_trip():
+    config = HNSWIndexConfig(
+        metric_type=MetricType.COSINE, partial_domain_indexes=True, partial_valid_only=True
+    )
+    assert index_config_from_dict(IndexType.HNSW, config.to_dict()) == config
+
+
+def test_hnsw_record_stored_before_partial_indexes_existed_still_loads():
+    stored = {
+        "index_type": "hnsw",
+        "metric_type": "cosine",
+        "num_neighbors": 16,
+        "ef_search": 40,
+        "ef_construction": 64,
+        "max_scan_tuples": None,
+    }
+    config = HNSWIndexConfig.from_dict(stored)
+    assert config.partial_domain_indexes is False
+    assert config.partial_valid_only is False
+
+
+def test_valid_only_partial_indexes_need_partial_indexes():
+    with pytest.raises(ValueError, match="partial_valid_only.*partial_domain_indexes"):
+        HNSWIndexConfig(metric_type=MetricType.COSINE, partial_valid_only=True)
+
+
+def _partial(**overrides):
+    return _hnsw(partial_domain_indexes=True, **overrides)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [_partial(), _hnsw(partial_domain_indexes=True, partial_valid_only=True)],
+)
+def test_same_build_sees_the_partial_index_settings(other):
+    assert not _hnsw().same_build(other, VectorPrecision.FLOAT32)
+
+
+def test_factory_keeps_the_partial_settings_of_the_current_index():
+    current = _hnsw(partial_domain_indexes=True, partial_valid_only=True)
+    config = index_config_from_index_type(
+        IndexType.HNSW, current=current, metric_type=MetricType.COSINE
+    )
+    assert config == current
+
+
+def test_factory_turns_partial_indexes_off_when_asked():
+    current = _hnsw(partial_domain_indexes=True, partial_valid_only=True)
+    config = index_config_from_index_type(
+        IndexType.HNSW,
+        current=current,
+        metric_type=MetricType.COSINE,
+        partial_domain_indexes=False,
+    )
+    assert config == _hnsw()
+
+
+def test_factory_turns_partial_indexes_on_for_a_global_only_index():
+    config = index_config_from_index_type(
+        IndexType.HNSW,
+        current=_hnsw(),
+        metric_type=MetricType.COSINE,
+        partial_domain_indexes=True,
+    )
+    assert config == _partial()

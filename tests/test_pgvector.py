@@ -7,9 +7,10 @@ Set TEST_DB_HOST and TEST_DB_PORT to enable these tests.
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import contextmanager
 from dataclasses import replace
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 import pytest
@@ -25,6 +26,7 @@ from sqlalchemy import event as sa_event
 
 from omop_emb.backends.base_backend import ConceptEmbeddingRecord, _open_writer
 from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig
+from omop_emb.backends.index_naming import IndexNames
 from omop_emb.backends.pgvector import PGVectorEmbeddingBackend
 from omop_emb.config import BackendType, IndexType, MetricType, VectorColumnType, VectorPrecision
 from omop_emb.model_registry import ModelRegistry, RegistryManager, registry_reader_engine
@@ -780,3 +782,362 @@ class TestPGVectorPrecision:
         record = registered_model(pg_backend, MODEL_NAME)
         assert record.storage_precision == VectorPrecision.FLOAT16
         assert self._column_type(pg_backend, MODEL_NAME) == f"halfvec({EMBEDDING_DIM})"
+
+
+@pytest.mark.pgvector
+@pytest.mark.integration
+class TestPGVectorPartialIndexes:
+    """Per-domain partial HNSW indexes built next to the global index."""
+
+    DOMAIN_ROWS: ClassVar[dict[str, int]] = {
+        "Condition": 4,
+        "Drug": 3,
+        "Measurement": 1,
+        "O'Neil:x%": 3,
+    }
+    ALL_INVALID: ClassVar[str] = "Measurement"
+
+    @classmethod
+    def _config(cls, **options: Any) -> HNSWIndexConfig:
+        return HNSWIndexConfig(
+            metric_type=MetricType.L2, num_neighbors=4, ef_construction=16, **options
+        )
+
+    @classmethod
+    def _fill(cls, backend: PGVectorEmbeddingBackend) -> None:
+        records = [
+            ConceptEmbeddingRecord(
+                concept_id=index,
+                domain_id=domain,
+                vocabulary_id="V",
+                is_standard=True,
+                is_valid=domain != cls.ALL_INVALID,
+            )
+            for index, domain in enumerate(
+                (d for d, rows in cls.DOMAIN_ROWS.items() for _ in range(rows)), start=1
+            )
+        ]
+        register_flat(backend)
+        backend.upsert_embeddings(
+            model_name=MODEL_NAME,
+            records=records,
+            embeddings=np.random.default_rng(0).random((len(records), EMBEDDING_DIM), np.float32),
+        )
+
+    @staticmethod
+    def _partials(backend: PGVectorEmbeddingBackend) -> dict[str, str]:
+        """Definition of every index with a WHERE clause, by name."""
+        record = registered_model(backend, MODEL_NAME)
+        with backend.emb_engine.connect() as conn:
+            rows = conn.execute(
+                sa.text(
+                    "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = :t "
+                    "AND indexdef LIKE '% WHERE %'"
+                ),
+                {"t": record.storage_identifier},
+            ).all()
+        return {name: definition for name, definition in rows}
+
+    def test_no_partials_are_built_by_default(self, pg_backend: PGVectorEmbeddingBackend):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self._config())
+
+        assert len(pg_backend.physical_indexes(MODEL_NAME)) == 1
+        assert self._partials(pg_backend) == {}
+
+    def test_every_domain_gets_a_partial_index(self, pg_backend: PGVectorEmbeddingBackend):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=self._config(partial_domain_indexes=True)
+        )
+
+        partials = self._partials(pg_backend)
+        assert sorted(name.split("_", 2)[2] for name in partials) == [
+            "condition",
+            "drug",
+            "measurement",
+            "o_neil_x",
+        ]
+        assert any("'O''Neil:x%'" in definition for definition in partials.values())
+        assert len(pg_backend.physical_indexes(MODEL_NAME)) == 5
+
+    def test_valid_only_leaves_out_a_domain_without_valid_rows(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME,
+            index_config=self._config(partial_domain_indexes=True, partial_valid_only=True),
+        )
+
+        partials = self._partials(pg_backend)
+        assert len(partials) == 3
+        assert all("is_valid" in definition for definition in partials.values())
+        assert not any(name.endswith("_measurement") for name in partials)
+
+    def test_rebuilding_without_partials_drops_the_existing_ones(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=self._config(partial_domain_indexes=True)
+        )
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=self._config())
+
+        assert len(pg_backend.physical_indexes(MODEL_NAME)) == 1
+        assert self._partials(pg_backend) == {}
+
+    @pytest.mark.parametrize("domain", ["Condition", "O'Neil:x%"])
+    def test_a_single_domain_query_returns_only_that_domain(
+        self, pg_backend: PGVectorEmbeddingBackend, domain
+    ):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=self._config(partial_domain_indexes=True)
+        )
+
+        (matches,) = pg_backend.get_nearest_concepts(
+            model_name=MODEL_NAME,
+            metric_type=MetricType.L2,
+            query_embeddings=np.full((1, EMBEDDING_DIM), 0.5, dtype=np.float32),
+            concept_filter=EmbeddingConceptFilter(domains=(domain,)),
+            k=10,
+        )
+
+        assert len(matches) == self.DOMAIN_ROWS[domain]
+        assert {match.domain_id for match in matches} == {domain}
+
+    def test_a_rebuild_keeps_an_index_someone_added_by_hand(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        self._fill(pg_backend)
+        record = registered_model(pg_backend, MODEL_NAME)
+        table = qualified(
+            pg_backend.emb_engine,
+            record.storage_identifier,
+            physical_schema=physical_schema_of(pg_backend.emb_engine),
+        )
+        with pg_backend.emb_engine.begin() as conn:
+            conn.execute(sa.text(f"CREATE INDEX idx_domain ON {table} (domain_id)"))
+
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=self._config(partial_domain_indexes=True)
+        )
+
+        with pg_backend.emb_engine.connect() as conn:
+            names = conn.execute(
+                sa.text("SELECT indexname FROM pg_indexes WHERE tablename = :t"),
+                {"t": record.storage_identifier},
+            ).scalars()
+            assert "idx_domain" in set(names)
+        assert "idx_domain" not in pg_backend.physical_indexes(MODEL_NAME)
+
+    def test_rebuilding_twice_with_partials_succeeds(self, pg_backend: PGVectorEmbeddingBackend):
+        self._fill(pg_backend)
+        config = self._config(partial_domain_indexes=True)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=config)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=config)
+
+        assert len(pg_backend.physical_indexes(MODEL_NAME)) == 5
+
+    def test_the_settings_are_stored_in_the_registry(self, pg_backend: PGVectorEmbeddingBackend):
+        self._fill(pg_backend)
+        config = self._config(partial_domain_indexes=True, partial_valid_only=True)
+        pg_backend.rebuild_index(model_name=MODEL_NAME, index_config=config)
+
+        assert registered_model(pg_backend, MODEL_NAME).index_config == config
+
+    def test_a_domain_that_cannot_be_named_fails_before_building_anything(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        register_flat(pg_backend)
+        pg_backend.upsert_embeddings(
+            model_name=MODEL_NAME,
+            records=[
+                ConceptEmbeddingRecord(
+                    concept_id=1,
+                    domain_id="***",
+                    vocabulary_id="V",
+                    is_standard=True,
+                    is_valid=True,
+                )
+            ],
+            embeddings=np.ones((1, EMBEDDING_DIM), dtype=np.float32),
+        )
+
+        with pytest.raises(ValueError, match="partial index"):
+            pg_backend.rebuild_index(
+                model_name=MODEL_NAME, index_config=self._config(partial_domain_indexes=True)
+            )
+        assert pg_backend.physical_indexes(MODEL_NAME) == ()
+
+    def test_deleting_the_model_drops_its_partials(self, pg_backend: PGVectorEmbeddingBackend):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME, index_config=self._config(partial_domain_indexes=True)
+        )
+        pg_backend.delete_model(model_name=MODEL_NAME)
+
+        register_flat(pg_backend)
+        assert pg_backend.physical_indexes(MODEL_NAME) == ()
+
+    def test_partials_follow_a_half_index_over_a_float32_column(
+        self, pg_backend: PGVectorEmbeddingBackend
+    ):
+        self._fill(pg_backend)
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME,
+            index_config=self._config(
+                partial_domain_indexes=True, index_precision=VectorPrecision.FLOAT16
+            ),
+        )
+
+        record = registered_model(pg_backend, MODEL_NAME)
+        with pg_backend.emb_engine.connect() as conn:
+            definitions = conn.execute(
+                sa.text("SELECT indexdef FROM pg_indexes WHERE tablename = :t"),
+                {"t": record.storage_identifier},
+            ).scalars()
+            hnsw = [d for d in definitions if "USING hnsw" in d]
+        assert len(hnsw) == 5
+        assert all("halfvec_l2_ops" in d for d in hnsw)
+
+
+@pytest.mark.pgvector
+@pytest.mark.integration
+class TestPGVectorPartialIndexRouting:
+    """The index the planner chooses for each kind of domain filter.
+
+    The statement is prepared with a generic plan, as the driver does for a
+    statement it runs repeatedly. Such a plan cannot use a partial index
+    through a bound parameter.
+    """
+
+    DIMENSIONS = 16
+    DOMAIN_ROWS: ClassVar[dict[str, int]] = {"Condition": 12000, "Drug": 6000, "Device": 2000}
+
+    @staticmethod
+    def _literal(value: Any) -> str:
+        """SQL literal for a bound parameter: a number, a string or a list of strings."""
+        if isinstance(value, list):
+            return "'{" + ",".join(f'"{item}"' for item in value) + "}'"
+        if isinstance(value, str):
+            return "'" + value.replace("'", "''") + "'"
+        return str(value)
+
+    @pytest.fixture
+    def routing(self, pg_backend: PGVectorEmbeddingBackend):
+        """Build the indexes, with valid-only partials or not, and return the table and ``choose``.
+
+        ``choose(concept_filter)`` is the name of the index the planner uses for
+        a query with that filter.
+        """
+
+        def build(valid_only: bool = False):
+            return self._build(pg_backend, valid_only)
+
+        return build
+
+    def _build(self, pg_backend: PGVectorEmbeddingBackend, valid_only: bool):
+        register_flat(pg_backend, dimensions=self.DIMENSIONS)
+        rng = np.random.default_rng(0)
+        records = [
+            ConceptEmbeddingRecord(
+                concept_id=index,
+                domain_id=domain,
+                vocabulary_id="V",
+                is_standard=True,
+                is_valid=index % 10 != 0,
+            )
+            for index, domain in enumerate(
+                (d for d, rows in self.DOMAIN_ROWS.items() for _ in range(rows)), start=1
+            )
+        ]
+        pg_backend.upsert_embeddings(
+            model_name=MODEL_NAME,
+            records=records,
+            embeddings=rng.random((len(records), self.DIMENSIONS), dtype=np.float32),
+        )
+        pg_backend.rebuild_index(
+            model_name=MODEL_NAME,
+            index_config=HNSWIndexConfig(
+                metric_type=MetricType.COSINE,
+                num_neighbors=8,
+                ef_construction=32,
+                partial_domain_indexes=True,
+                partial_valid_only=valid_only,
+            ),
+        )
+        record = registered_model(pg_backend, MODEL_NAME)
+
+        def choose(concept_filter: EmbeddingConceptFilter | None) -> str:
+            captured: list[tuple[str, Any]] = []
+
+            def capture(_connection, _cursor, statement, parameters, _context, _many):
+                if "order by" in statement.lower():
+                    captured.append((statement, parameters))
+
+            sa_event.listen(pg_backend.emb_engine, "before_cursor_execute", capture)
+            try:
+                pg_backend.get_nearest_concepts(
+                    model_name=MODEL_NAME,
+                    metric_type=MetricType.COSINE,
+                    query_embeddings=np.full((1, self.DIMENSIONS), 0.5, dtype=np.float32),
+                    concept_filter=concept_filter,
+                    k=10,
+                )
+            finally:
+                sa_event.remove(pg_backend.emb_engine, "before_cursor_execute", capture)
+            statement, parameters = captured[0]
+            names = list(dict.fromkeys(re.findall(r"%\((\w+)\)s", statement)))
+            prepared = re.sub(
+                r"%\((\w+)\)s", lambda m: f"${names.index(m.group(1)) + 1}", statement
+            )
+            call = ", ".join(self._literal(parameters[name]) for name in names)
+            with pg_backend.emb_engine.connect() as conn:
+                conn.exec_driver_sql("SET plan_cache_mode = force_generic_plan")
+                conn.exec_driver_sql(f"PREPARE generic_query AS {prepared}")
+                plan = "\n".join(
+                    row[0] for row in conn.exec_driver_sql(f"EXPLAIN EXECUTE generic_query({call})")
+                )
+            match = re.search(r"using (idx_\w+)", plan)
+            assert match, plan
+            return match.group(1)
+
+        return choose, record.storage_identifier
+
+    @pytest.mark.parametrize("domain", ["Condition", "Drug", "Device"])
+    def test_a_single_domain_uses_that_domains_partial_index(self, routing, domain):
+        choose, table = routing()
+        assert choose(EmbeddingConceptFilter(domains=(domain,))) == IndexNames.partial(
+            table, domain
+        )
+
+    def test_several_domains_use_the_global_index(self, routing):
+        choose, table = routing()
+        assert choose(EmbeddingConceptFilter(domains=("Drug", "Device"))) == IndexNames.hnsw(
+            table, MetricType.COSINE
+        )
+
+    def test_no_domain_uses_the_global_index(self, routing):
+        choose, table = routing()
+        assert choose(None) == IndexNames.hnsw(table, MetricType.COSINE)
+
+    def test_valid_only_partials_serve_a_single_domain_that_requires_active(self, routing):
+        choose, table = routing(valid_only=True)
+        concept_filter = EmbeddingConceptFilter(domains=("Drug",), require_active=True)
+
+        assert choose(concept_filter) == IndexNames.partial(table, "Drug")
+
+    def test_valid_only_partials_are_skipped_when_invalid_concepts_are_allowed(self, routing):
+        choose, table = routing(valid_only=True)
+
+        assert choose(EmbeddingConceptFilter(domains=("Drug",))) == IndexNames.hnsw(
+            table, MetricType.COSINE
+        )
+
+    def test_domain_only_partials_serve_a_query_that_requires_active(self, routing):
+        choose, table = routing()
+        concept_filter = EmbeddingConceptFilter(domains=("Drug",), require_active=True)
+
+        assert choose(concept_filter) == IndexNames.partial(table, "Drug")

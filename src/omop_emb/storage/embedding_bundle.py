@@ -43,6 +43,7 @@ from datetime import UTC, datetime
 from importlib.metadata import version as _pkg_version
 from itertools import batched
 from pathlib import Path
+from typing import Any
 
 import h5py
 import numpy as np
@@ -452,8 +453,9 @@ def _importable_index_config(
     """Index config to rebuild an imported model with.
 
     The bundle's own, without the options the backend cannot honour
-    (``index_precision`` and ``max_scan_tuples``), which are dropped with a
-    warning. Anything else the backend cannot build is an error.
+    (``index_precision``, ``max_scan_tuples`` and the partial index settings),
+    which are dropped with a warning. Anything else the backend cannot build
+    is an error.
 
     Parameters
     ----------
@@ -471,7 +473,7 @@ def _importable_index_config(
     """
     config = meta.index_config
     index = backend.capabilities.index(config.index_type)
-    dropped: dict[str, None] = {}
+    dropped: dict[str, Any] = {}
     if config.index_precision is not None and config.index_precision not in index.precisions:
         dropped["index_precision"] = None
     if (
@@ -480,6 +482,13 @@ def _importable_index_config(
         and not index.max_scan_tuples
     ):
         dropped["max_scan_tuples"] = None
+    if (
+        isinstance(config, HNSWIndexConfig)
+        and config.partial_domain_indexes
+        and not index.partial_domain_indexes
+    ):
+        dropped["partial_domain_indexes"] = False
+        dropped["partial_valid_only"] = False
     if dropped:
         logger.warning(
             "Backend '%s' does not support %s; rebuilding the index of '%s' without.",

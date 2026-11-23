@@ -548,6 +548,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#per-domain-partial-indexes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-domain partial indexes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#precision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Precision
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backend-capabilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backend capabilities
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#metrics" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -801,6 +834,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#per-domain-partial-indexes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-domain partial indexes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#precision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Precision
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backend-capabilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backend capabilities
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#metrics" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -953,13 +1019,18 @@
 </tr>
 <tr>
 <td><code>ef_construction</code></td>
-<td><code>64</code></td>
+<td><code>200</code></td>
 <td>Build quality. Higher = better recall at build time, slower build.</td>
 </tr>
 <tr>
 <td><code>ef_search</code></td>
-<td><code>16</code></td>
+<td><code>200</code></td>
 <td>Query recall. Higher = better recall at query time, slower query.</td>
+</tr>
+<tr>
+<td><code>max_scan_tuples</code></td>
+<td><code>None</code></td>
+<td>pgvector only. Rows a filtered query may read from the index. <code>None</code> keeps the server default of 20,000.</td>
 </tr>
 </tbody>
 </table>
@@ -969,21 +1040,21 @@
 <span class="n">HNSWIndexConfig</span><span class="p">(</span>
     <span class="n">metric_type</span><span class="o">=</span><span class="n">MetricType</span><span class="o">.</span><span class="n">COSINE</span><span class="p">,</span>  <span class="c1"># locked in at build time for HNSW</span>
     <span class="n">num_neighbors</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
-    <span class="n">ef_construction</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>
-    <span class="n">ef_search</span><span class="o">=</span><span class="mi">16</span><span class="p">,</span>
+    <span class="n">ef_construction</span><span class="o">=</span><span class="mi">200</span><span class="p">,</span>
+    <span class="n">ef_search</span><span class="o">=</span><span class="mi">200</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
 <p>The HNSW workflow is always: <strong>register (FLAT) → ingest → rebuild index</strong>:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># 1. Register with FLAT (always)</span>
-<span class="n">backend</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span><span class="n">model_name</span><span class="o">=...</span><span class="p">,</span> <span class="n">provider_type</span><span class="o">=...</span><span class="p">,</span>
-                        <span class="n">index_config</span><span class="o">=</span><span class="n">FlatIndexConfig</span><span class="p">(),</span> <span class="n">dimensions</span><span class="o">=</span><span class="mi">768</span><span class="p">)</span>
+<span class="n">backend</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span>
+    <span class="n">model_name</span><span class="o">=...</span><span class="p">,</span> <span class="n">provider_type</span><span class="o">=...</span><span class="p">,</span> <span class="n">index_config</span><span class="o">=</span><span class="n">FlatIndexConfig</span><span class="p">(),</span> <span class="n">dimensions</span><span class="o">=</span><span class="mi">768</span>
+<span class="p">)</span>
 
 <span class="c1"># 2. Ingest data</span>
 <span class="n">backend</span><span class="o">.</span><span class="n">upsert_embeddings</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
 
 <span class="c1"># 3. Build HNSW index</span>
-<span class="n">backend</span><span class="o">.</span><span class="n">rebuild_index</span><span class="p">(</span><span class="n">model_name</span><span class="o">=...</span><span class="p">,</span>
-                       <span class="n">index_config</span><span class="o">=</span><span class="n">HNSWIndexConfig</span><span class="p">(</span><span class="n">metric_type</span><span class="o">=</span><span class="n">MetricType</span><span class="o">.</span><span class="n">COSINE</span><span class="p">))</span>
+<span class="n">backend</span><span class="o">.</span><span class="n">rebuild_index</span><span class="p">(</span><span class="n">model_name</span><span class="o">=...</span><span class="p">,</span> <span class="n">index_config</span><span class="o">=</span><span class="n">HNSWIndexConfig</span><span class="p">(</span><span class="n">metric_type</span><span class="o">=</span><span class="n">MetricType</span><span class="o">.</span><span class="n">COSINE</span><span class="p">))</span>
 </code></pre></div>
 <p>Or via the CLI:</p>
 <div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>add-embeddings
@@ -996,19 +1067,138 @@ omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index
 <div class="admonition info">
 <p class="admonition-title">pgvector HNSW and filtered queries</p>
 <p>HNSW applies a concept filter after the index returns its candidates, so a selective filter can leave fewer than <code>k</code> rows. With pgvector 0.8.0 or newer, <code>omop-emb</code> sets <code>hnsw.iterative_scan</code> for each query, which keeps scanning the index until <code>k</code> rows pass the filter. The scan runs in <code>relaxed_order</code> and the rows are sorted by distance afterwards, because <code>strict_order</code> skips every row closer than the last one it returned and so loses neighbours found in later batches. Older pgvector versions have no iterative scan: <code>ef_search</code> is raised to at least <code>k</code> (at most 1000, the pgvector limit) and a filtered query logs a one-time warning, since its results can still be incomplete. Upgrade the extension to fix this. For very selective filters at a low <code>ef_search</code>, the planner may choose an exact scan over the index.</p>
+<p>The iterative scan stops after <code>hnsw.max_scan_tuples</code> rows (Default: 20,000) so a filter that matches few of the nearest rows can still return fewer than <code>k</code> results, or none. Raise the cap per model with <code>omop-emb maintenance set-ef-search --model &lt;NAME&gt; --max-scan-tuples 100000</code>, or set <code>max_scan_tuples</code> on the <code>HNSWIndexConfig</code>. A higher cap makes those queries slower. Filtering by a single domain is the usual case: a rarer domain needs a larger cap.</p>
 </div>
 <div class="admonition warning">
 <p class="admonition-title">DuckDB VSS HNSW and filtered queries</p>
 <p>DuckDB's built-in <code>vss</code> extension applies a concept filter after the index returns its candidates, the same way pgvector does, but with no <code>iterative_scan</code>-equivalent at all: raising <code>ef_search</code> has no effect on a filtered query, confirmed empirically up to <code>ef_search=20000</code> on a 300k-row table (always short, never returning <code>k</code> rows). <code>omop-emb</code> works around this by materializing the filtered rows into a CTE before computing distance, which stops DuckDB's optimizer from using the index and forces an exact scan over just the filtered subset instead. This is always correct, but always pays the exact-scan cost for a filtered query; there is no faster, index-accelerated path today. See the <a href="../performance/">Performance Guide</a> for measured latency. A community fork, <a href="https://duckdb.org/community_extensions/extensions/hnsw_acorn"><code>hnsw_acorn</code></a>, adds predicate-aware index traversal; not adopted here, since it's a single-maintainer fork distributed outside DuckDB's own extension.</p>
 </div>
+<div class="admonition info">
+<p class="admonition-title">Changing HNSW settings on an existing index</p>
+<p><code>ef_search</code> and <code>max_scan_tuples</code> are read at query time, so <code>omop-emb maintenance set-ef-search</code> changes them without a rebuild. <code>ef_construction</code> and <code>num_neighbors</code> shape the graph, so changing them needs <code>rebuild-index</code>. A rebuild keeps the settings of the current index that it is not given, so stores indexed before the defaults changed to 200 keep their values until <code>--index-ef-construction</code> and <code>--index-hnsw-num-neighbors</code> are passed. The FAISS cache applies the <code>ef_search</code> of the config passed at search time, not the registry value.</p>
+</div>
+<div class="admonition info">
+<p class="admonition-title">DuckDB space after a rebuild</p>
+<p>A DuckDB file does not shrink when an index is dropped and rebuilt, so rebuilding with different settings can leave unused space in the file until it is compacted.</p>
+</div>
 <div class="admonition warning">
 <p class="admonition-title">HNSW builds in containers</p>
 <p>A parallel HNSW build can fail with <code>could not resize shared memory segment ... No space left on device</code> when the container's <code>/dev/shm</code> is small. Either enlarge <code>/dev/shm</code> (for example <code>shm_size</code> in Docker Compose) or set <code>max_parallel_maintenance_workers = 0</code> on the server, which builds serially and takes longer.</p>
 </div>
-<div class="admonition warning">
-<p class="admonition-title">pgvector dimension limit</p>
-<p>The pgvector <code>vector</code> column type supports <strong>at most 2,000 dimensions</strong>. Models with more than 2,000 dimensions automatically use the <code>halfvec</code> column type (up to 4,000 dimensions). Registering above 4,000 dimensions raises a <code>ValueError</code>.</p>
-</div>
+<h2 id="per-domain-partial-indexes">Per-domain partial indexes</h2>
+<p>pgvector HNSW applies a domain filter after the index returns its candidates, so a query for one domain on a large store can miss neighbours. Partial indexes address this by giving each domain its own HNSW index over only that domain's rows, next to the global index. They are off by default.</p>
+<p>Turn them on when the index is built, and off again with the <code>--no-</code> form. A build that names neither keeps the setting of the current index, so a top-up run of <code>add-embeddings-with-index</code> does not drop existing partial indexes:</p>
+<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index<span class="w"> </span>--model<span class="w"> </span>&lt;NAME&gt;<span class="w"> </span>--index-type<span class="w"> </span>hnsw<span class="w"> </span>--partial-domain-indexes
+omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index<span class="w"> </span>--model<span class="w"> </span>&lt;NAME&gt;<span class="w"> </span>--index-type<span class="w"> </span>hnsw<span class="w"> </span>--partial-domain-indexes<span class="w"> </span>--partial-valid-only
+omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index<span class="w"> </span>--model<span class="w"> </span>&lt;NAME&gt;<span class="w"> </span>--index-type<span class="w"> </span>hnsw<span class="w"> </span>--no-partial-domain-indexes
+</code></pre></div>
+<p>The same settings are <code>partial_domain_indexes</code> and <code>partial_valid_only</code> on <code>HNSWIndexConfig</code>. The options are also available on <code>create-index</code> and <code>add-embeddings-with-index</code>.</p>
+<ul>
+<li>One partial index is built for every domain present in the table, with the same <code>num_neighbors</code>, <code>ef_construction</code> and index precision as the global index.</li>
+<li>A query that names exactly one domain uses that domain's index. A query with no domain or several domains uses the global index, as does a domain without a partial index.</li>
+<li><code>--partial-valid-only</code> builds the partial indexes over valid concepts only. They serve a single-domain query that also requires active concepts, and a query that allows invalid concepts uses the global index.</li>
+<li>New rows go into the matching partial index when they are inserted, so only a domain that first appears after the build has no partial index until the next rebuild.</li>
+<li>Each row sits in one partial index, so their total size is close to the size of the global index. Plan the disk and <code>maintenance_work_mem</code> for both, and build with <code>--index-precision float16</code> to keep them smaller.</li>
+<li>The indexes are named <code>idx_&lt;table hash&gt;_&lt;domain&gt;</code>. <code>rebuild-index</code> drops every index it created for the model, including these, and leaves other indexes on the table alone.</li>
+<li>A filter with one domain is sent to the database with the domain written into the statement. This lets the planner match the partial index even when the driver reuses a prepared statement, which it cannot do for a bound parameter.</li>
+</ul>
+<p>The planner chooses between the global and a partial index by cost. The recall benchmark in <code>benchmarks/recall</code> shows which index it picks and the recall each gives on your store.</p>
+<h2 id="precision">Precision</h2>
+<p>Two separate options control half precision. Both are pgvector only. sqlite-vec and DuckDB VSS store float32 and reject <code>float16</code>, and DuckDB's HNSW index accepts only float32.</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Set</th>
+<th>Changed by</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Storage precision (<code>--storage-precision</code>, <code>storage_precision</code>)</td>
+<td>At registration</td>
+<td>Re-registering with another value is a conflict</td>
+<td><code>float16</code> stores the column as <code>halfvec</code>. Halves the table and the index, at some loss of accuracy in the stored vectors.</td>
+</tr>
+<tr>
+<td>Index precision (<code>--index-precision</code>, <code>index_precision</code>, on any index config)</td>
+<td>When the HNSW index is built</td>
+<td><code>rebuild-index</code></td>
+<td><code>float16</code> over a float32 column indexes a <code>halfvec</code> cast of it. Halves the index and keeps the full vectors in the table.</td>
+</tr>
+</tbody>
+</table>
+<p><code>None</code> is the default for the index precision and means the index follows the stored column. FLAT has no index, so it rejects an explicit value.</p>
+<p>Defaults follow the dimensions. Up to 2,000 dimensions the column is float32. Above that the column defaults to <code>float16</code>, because a float32 <code>vector</code> index supports at most 2,000 dimensions and <code>halfvec</code> supports 4,000. Registering above 4,000 dimensions raises an error.</p>
+<p>A wide model can keep float32 storage by choosing <code>--storage-precision float32</code> at registration and building its HNSW index with <code>--index-precision float16</code>. Without that, an HNSW index on a float32 column above 2,000 dimensions is rejected with a message naming the option.</p>
+<p>Models registered before the precision was recorded have none in the registry, so the backend derives it from the dimensions as before. The first writer to open an older registry adds the column. Readers work on an older registry in the meantime. Bundles record the stored precision. An import uses it when the target backend supports it and otherwise registers the model with the backend's default. An import that rebuilds the index also checks the bundle's index config before loading anything. It drops the index precision, <code>max_scan_tuples</code> or the partial index settings when the target does not support them, with a warning, and raises for anything else it cannot build.</p>
+<p>Queries on a half-precision index over a float32 column rank by the half-precision distance, so the returned similarities are those of the cast vectors. Stores registered before the option existed keep the precision they were created with. Recall at half precision has not been measured yet.</p>
+<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>embeddings<span class="w"> </span>add-embeddings<span class="w"> </span>--storage-precision<span class="w"> </span>float16
+omop-emb<span class="w"> </span>maintenance<span class="w"> </span>rebuild-index<span class="w"> </span>--model<span class="w"> </span>&lt;NAME&gt;<span class="w"> </span>--index-type<span class="w"> </span>hnsw<span class="w"> </span>--index-precision<span class="w"> </span>float16
+</code></pre></div>
+<h2 id="backend-capabilities">Backend capabilities</h2>
+<p>Each backend declares what it supports as <code>backend.capabilities</code>. Registration, <code>rebuild-index</code> and <code>set-ef-search</code> check it before changing anything and raise an error that names the backend and the option.</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>sqlite-vec</th>
+<th>pgvector</th>
+<th>DuckDB VSS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Index types</td>
+<td>FLAT</td>
+<td>FLAT, HNSW</td>
+<td>FLAT, HNSW</td>
+</tr>
+<tr>
+<td>Metrics</td>
+<td>L2, cosine, L1</td>
+<td>L2, cosine, L1</td>
+<td>L2, cosine</td>
+</tr>
+<tr>
+<td><code>max_scan_tuples</code></td>
+<td>no</td>
+<td>yes</td>
+<td>no</td>
+</tr>
+<tr>
+<td>Per-domain partial indexes</td>
+<td>no</td>
+<td>yes</td>
+<td>no</td>
+</tr>
+<tr>
+<td>Storage precision</td>
+<td>float32</td>
+<td>float32, float16</td>
+<td>float32</td>
+</tr>
+<tr>
+<td>Index precision (HNSW)</td>
+<td>none</td>
+<td>float32, float16</td>
+<td>float32</td>
+</tr>
+<tr>
+<td>Largest model</td>
+<td>no limit</td>
+<td>4,000 dimensions</td>
+<td>no limit</td>
+</tr>
+<tr>
+<td>Largest HNSW index</td>
+<td>none</td>
+<td>2,000 (float32), 4,000 (float16)</td>
+<td>no limit</td>
+</tr>
+</tbody>
+</table>
 <h2 id="metrics">Metrics</h2>
 <p>Each backend supports a subset of distance metrics:</p>
 <table>

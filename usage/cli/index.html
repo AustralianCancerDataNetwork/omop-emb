@@ -705,6 +705,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#set-ef-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        set-ef-search
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#delete-model" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -983,6 +994,17 @@
     <span class="md-ellipsis">
       
         rebuild-index
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set-ef-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        set-ef-search
       
     </span>
   </a>
@@ -1298,6 +1320,11 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 <td><code>cosine</code></td>
 <td>Metric of a new model's table. Locked in for <code>flat</code> on sqlite-vec; ignored for <code>flat</code> on pgvector and for a model that is already registered. See <a href="../backend-selection/#metrics">Metrics</a>.</td>
 </tr>
+<tr>
+<td><code>--storage-precision</code></td>
+<td><code>None</code></td>
+<td>Precision of a new model's stored vectors, <code>float32</code> or <code>float16</code> (pgvector only). Defaults to <code>float32</code>, or <code>float16</code> above 2,000 dimensions. An already registered model keeps its precision, and a different value is a conflict. See <a href="../backend-selection/#precision">Precision</a>.</td>
+</tr>
 </tbody>
 </table>
 <table>
@@ -1351,6 +1378,21 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 <td><code>--index-ef-construction</code></td>
 <td><code>None</code></td>
 <td>HNSW build quality parameter.</td>
+</tr>
+<tr>
+<td><code>--index-precision</code></td>
+<td><code>None</code></td>
+<td>HNSW index precision, <code>float32</code> or <code>float16</code> (pgvector only). Defaults to the precision of the current index, or the stored precision for a new one. See <a href="../backend-selection/#precision">Precision</a>.</td>
+</tr>
+<tr>
+<td><code>--partial-domain-indexes</code> / <code>--no-partial-domain-indexes</code></td>
+<td>current</td>
+<td>HNSW: also build one index per domain next to the global one (pgvector only). Not given keeps the setting of the current index. See <a href="../backend-selection/#per-domain-partial-indexes">Per-domain partial indexes</a>.</td>
+</tr>
+<tr>
+<td><code>--partial-valid-only</code> / <code>--no-partial-valid-only</code></td>
+<td>current</td>
+<td>HNSW: restrict the per-domain indexes to valid concepts. Requires <code>--partial-domain-indexes</code>. Not given keeps the setting of the current index.</td>
 </tr>
 </tbody>
 </table>
@@ -1412,6 +1454,21 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 <td><code>--index-ef-construction</code></td>
 <td><code>None</code></td>
 <td>HNSW build quality parameter.</td>
+</tr>
+<tr>
+<td><code>--index-precision</code></td>
+<td><code>None</code></td>
+<td>HNSW index precision, <code>float32</code> or <code>float16</code> (pgvector only). Defaults to the precision of the current index, or the stored precision for a new one. See <a href="../backend-selection/#precision">Precision</a>.</td>
+</tr>
+<tr>
+<td><code>--partial-domain-indexes</code> / <code>--no-partial-domain-indexes</code></td>
+<td>current</td>
+<td>HNSW: also build one index per domain next to the global one (pgvector only). Not given keeps the setting of the current index. See <a href="../backend-selection/#per-domain-partial-indexes">Per-domain partial indexes</a>.</td>
+</tr>
+<tr>
+<td><code>--partial-valid-only</code> / <code>--no-partial-valid-only</code></td>
+<td>current</td>
+<td>HNSW: restrict the per-domain indexes to valid concepts. Requires <code>--partial-domain-indexes</code>. Not given keeps the setting of the current index.</td>
 </tr>
 </tbody>
 </table>
@@ -1635,12 +1692,27 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 <tr>
 <td><code>--index-hnsw-ef-search</code></td>
 <td><code>None</code></td>
-<td>HNSW query recall parameter.</td>
+<td>HNSW query recall parameter. Keeps the current index's value, or 200 for a new index.</td>
 </tr>
 <tr>
 <td><code>--index-ef-construction</code></td>
 <td><code>None</code></td>
-<td>HNSW build quality parameter.</td>
+<td>HNSW build quality parameter. Keeps the current index's value, or 200 for a new index.</td>
+</tr>
+<tr>
+<td><code>--index-precision</code></td>
+<td><code>None</code></td>
+<td>HNSW index precision, <code>float32</code> or <code>float16</code> (pgvector only). Defaults to the precision of the current index, or the stored precision for a new one. See <a href="../backend-selection/#precision">Precision</a>.</td>
+</tr>
+<tr>
+<td><code>--partial-domain-indexes</code> / <code>--no-partial-domain-indexes</code></td>
+<td>current</td>
+<td>HNSW: also build one index per domain next to the global one (pgvector only). Not given keeps the setting of the current index. See <a href="../backend-selection/#per-domain-partial-indexes">Per-domain partial indexes</a>.</td>
+</tr>
+<tr>
+<td><code>--partial-valid-only</code> / <code>--no-partial-valid-only</code></td>
+<td>current</td>
+<td>HNSW: restrict the per-domain indexes to valid concepts. Requires <code>--partial-domain-indexes</code>. Not given keeps the setting of the current index.</td>
 </tr>
 <tr>
 <td><code>--vacuum</code> / <code>--no-vacuum</code></td>
@@ -1649,6 +1721,64 @@ omop-emb embeddings add-embeddings -v   # ✗ flag is ignored
 </tr>
 </tbody>
 </table>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Short</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--verbose</code></td>
+<td><code>-v</code></td>
+<td>Increase log verbosity.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="set-ef-search"><code>set-ef-search</code></h3>
+<p>Change the query-time HNSW settings of a registered model without rebuilding its index. pgvector and DuckDB VSS apply the new values to the next query. A model without an HNSW index is rejected.</p>
+<div class="highlight"><pre><span></span><code>omop-emb<span class="w"> </span>maintenance<span class="w"> </span>set-ef-search<span class="w"> </span>--model<span class="w"> </span>&lt;CANONICAL_NAME&gt;<span class="w"> </span><span class="o">[</span>--value<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--max-scan-tuples<span class="w"> </span>N<span class="o">]</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Short</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--model</code></td>
+<td><code>-m</code></td>
+<td><strong>required</strong></td>
+<td>Canonical model name.</td>
+</tr>
+<tr>
+<td><code>--value</code></td>
+<td></td>
+<td><code>None</code></td>
+<td>New <code>ef_search</code>. Higher is more accurate and slower.</td>
+</tr>
+<tr>
+<td><code>--max-scan-tuples</code></td>
+<td></td>
+<td><code>None</code></td>
+<td>New cap on the rows a filtered query reads from the index. pgvector only, rejected elsewhere. Server default is 20,000.</td>
+</tr>
+<tr>
+<td><code>--provider-type</code></td>
+<td></td>
+<td><code>None</code></td>
+<td>Provider used to canonicalize the model name when needed.</td>
+</tr>
+</tbody>
+</table>
+<p>Give at least one of <code>--value</code> and <code>--max-scan-tuples</code>. A later <code>rebuild-index</code> replaces both with the values it is given or the defaults.</p>
 <table>
 <thead>
 <tr>

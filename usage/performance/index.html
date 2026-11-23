@@ -904,7 +904,7 @@
 <p>* FLAT's filtered-query cell is left blank because a FLAT scan computes distance over every row regardless of a filter, so its filtered time is the same as its unfiltered one. DuckDB's filtered HNSW number is an exact scan over just the filtered rows, not an index lookup, so it scales with the size of the filtered set rather than staying flat like pgvector's; see <a href="../backend-selection/#hnsw">Embedding Storage</a> for why.</p>
 <ul>
 <li>sqlite-vec, pgvector and DuckDB VSS run one scan per query vector, so a batch costs the sum of its queries. FAISS shares the scan across a batch, which makes a flat query about three times cheaper and an HNSW query about two and a half times cheaper than running it alone.</li>
-<li>HNSW is approximate. On a 300k sample, recall at 5 is 0.84 at the default <code>ef_search</code> of 16, and 0.98 at <code>ef_search</code> 200 once duplicate vectors are removed, which the valid-only default does.</li>
+<li>HNSW is approximate. On a 300k sample, recall at 5 is 0.84 at <code>ef_search</code> 16 and 0.98 at <code>ef_search</code> 200, the default, once duplicate vectors are removed, which the valid-only default does.</li>
 <li>FAISS holds the whole index in memory, about 4.1 KB per vector for flat and 4.4 KB for HNSW (1.2 and 1.3 GB at 300k). The cache is a snapshot: rebuild it after the store changes (see <code>check-faiss-cache</code>).</li>
 <li>A cache build or export peaks at about 12 KB per vector of one batch, so the default 100,000-row batch needs about 1.5 GB. <code>--batch-size</code> lowers it.</li>
 <li>sqlite-vec files take about 4.2 KB per vector. pgvector tables take about 5.3 KB per vector, and an HNSW index adds 6 to 8 KB. DuckDB VSS files take about 6.0 KB per vector, and an HNSW index adds about 3.6 KB (measured at 1024 dimensions, file-backed, after <code>CHECKPOINT</code>).</li>
@@ -946,9 +946,24 @@
 <td>Enough for the index to fit.</td>
 </tr>
 <tr>
-<td><code>hnsw.ef_search</code> (per model, <code>--index-hnsw-ef-search</code>)</td>
+<td><code>hnsw.ef_search</code> (per model, <code>--index-hnsw-ef-search</code>, or <code>maintenance set-ef-search</code> on an existing index)</td>
 <td>Recall against latency. At 300k a query took 2.5 to 5 ms at 16 and about 16 ms at 200.</td>
-<td>The default of 16. Raise it to 64 to 200 only when recall matters.</td>
+<td>The default of 200. Lower it only when latency matters more than recall.</td>
+</tr>
+<tr>
+<td><code>hnsw.max_scan_tuples</code> (per model, pgvector only, <code>maintenance set-ef-search --max-scan-tuples</code>)</td>
+<td>How many rows a filtered query reads from the index before it stops, 20,000 by default. A selective filter that cannot find <code>k</code> matches within that many rows returns fewer than <code>k</code>, sometimes none.</td>
+<td>The server default. Raise it (for example to 100,000) when selective filters return too few rows, at the cost of a slower query for those filters.</td>
+</tr>
+<tr>
+<td>Per-domain partial indexes (<code>--partial-domain-indexes</code>, needs a rebuild, pgvector only)</td>
+<td>A domain filter is applied after the index scan, so a single-domain query on one large graph is the weak case for HNSW. A partial index per domain gives each domain its own graph. It adds an index about the size of the global one and a longer build.</td>
+<td>Off by default. Try it when single-domain queries miss neighbours at a high <code>ef_search</code>, and compare with the recall benchmark in <code>benchmarks/recall</code>.</td>
+</tr>
+<tr>
+<td><code>ef_construction</code> (per model, <code>--index-ef-construction</code>, needs a rebuild)</td>
+<td>Graph quality. At 1.8M rows, 200 against 64 raised recall at 10 from 0.981 to 0.987 at <code>ef_search</code> 200, lowered query latency and did not grow the index. A serial build takes about twice as long.</td>
+<td>The default of 200.</td>
 </tr>
 </tbody>
 </table>

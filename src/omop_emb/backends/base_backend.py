@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import wraps
 from typing import (
@@ -26,7 +26,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from omop_emb.backends.embedding_table import ConceptEmbeddingRecord
-from omop_emb.backends.index_config import FlatIndexConfig, IndexConfig
+from omop_emb.backends.index_config import FlatIndexConfig, HNSWIndexConfig, IndexConfig
 from omop_emb.config import (
     BackendType,
     IndexType,
@@ -254,6 +254,11 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
         table.
         """
         ...
+
+    @property
+    def supports_max_scan_tuples(self) -> bool:
+        """Whether ``HNSWIndexConfig.max_scan_tuples`` has an effect on this backend."""
+        return False
 
     @property
     def emb_engine(self) -> Engine:
@@ -539,6 +544,65 @@ class EmbeddingBackend[TEmbeddingTable](EmbeddingStoreReader, ABC):
             model_name=model_name,
             index_config=index_config,
         )
+
+    @writes
+    def set_hnsw_search_params(
+        self,
+        *,
+        model_name: str,
+        ef_search: int | None = None,
+        max_scan_tuples: int | None = None,
+    ) -> EmbeddingModelRecord:
+        """Change the query-time HNSW settings of a model without rebuilding its index.
+
+        Parameters
+        ----------
+        model_name : str
+            Canonical model name including tag.
+        ef_search : int, optional
+            New candidate list size. Unchanged when ``None``.
+        max_scan_tuples : int, optional
+            New cap on the rows one filtered query reads from the index.
+            Unchanged when ``None``. pgvector only.
+
+        Returns
+        -------
+        EmbeddingModelRecord
+            Updated registry record.
+
+        Raises
+        ------
+        ValueError
+            If the model is not registered or no setting is given.
+        UnsupportedIndexConfigError
+            If the model has no HNSW index, or ``max_scan_tuples`` is given on
+            a backend that does not support it.
+
+        Notes
+        -----
+        pgvector and DuckDB VSS apply the new values to the next query. The
+        FAISS cache takes its settings from the config passed at search time.
+        """
+        if ef_search is None and max_scan_tuples is None:
+            raise ValueError("Give ef_search, max_scan_tuples or both.")
+        record = self._registered_record(model_name)
+        current = record.index_config
+        if not isinstance(current, HNSWIndexConfig):
+            raise UnsupportedIndexConfigError(
+                f"Model '{model_name}' has no HNSW index. Build one with rebuild_index first."
+            )
+        if max_scan_tuples is not None and not self.supports_max_scan_tuples:
+            raise UnsupportedIndexConfigError(
+                f"max_scan_tuples is not supported by backend '{self.backend_name}'."
+            )
+        updated = replace(
+            current,
+            ef_search=current.ef_search if ef_search is None else ef_search,
+            max_scan_tuples=(
+                current.max_scan_tuples if max_scan_tuples is None else max_scan_tuples
+            ),
+        )
+        return self._registry.update_index_config(model_name=model_name, index_config=updated)
 
     def _normalized_flat_metric(self, index_config: IndexConfig) -> IndexConfig:
         """Return a FLAT config with the metric its backend calls for.

@@ -52,6 +52,7 @@ _NEITHER = frozenset(
         "dialect",
         "emb_engine",
         "emb_session_factory",
+        "supports_max_scan_tuples",
     }
 )
 

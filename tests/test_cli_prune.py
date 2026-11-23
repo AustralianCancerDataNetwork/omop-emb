@@ -212,7 +212,7 @@ def test_add_embeddings_skips_invalid_concepts_unless_asked(
         def __init__(self, **_kwargs):
             pass
 
-        def register_model(self, index_config=None):
+        def register_model(self, index_config=None, storage_precision=None):
             registered.append(index_config)
 
         def count_concepts_requiring_embedding(self, *, concept_filter):
@@ -249,7 +249,7 @@ def test_add_embeddings_registers_the_requested_metric(monkeypatch) -> None:
         def __init__(self, **_kwargs):
             pass
 
-        def register_model(self, index_config=None):
+        def register_model(self, index_config=None, storage_precision=None):
             registered.append(index_config)
 
         def count_concepts_requiring_embedding(self, *, concept_filter):
@@ -466,6 +466,53 @@ def test_combined_population_reuses_only_a_matching_existing_index(indexed_popul
             metric_type=MetricType.COSINE, num_neighbors=neighbors, ef_search=32, ef_construction=32
         )
         assert state.backend.physical_indexes(MODEL)
+
+
+@pytest.mark.duckdbvss
+@pytest.mark.db_dialect
+@pytest.mark.parametrize("indexed_population", ["nothing_pending"], indirect=True)
+@pytest.mark.parametrize("passed, expected", [(None, 64), (96, 96)])
+def test_combined_population_keeps_the_stored_index_when_only_ef_search_is_given(
+    indexed_population, passed, expected
+):
+    state = indexed_population
+    state.backend.set_hnsw_search_params(model_name=MODEL, ef_search=64)
+    cli_embeddings.add_embeddings_with_index(
+        model_name=MODEL,
+        batch_size=2,
+        standard_only=False,
+        include_invalid=False,
+        vocabularies=None,
+        domains=None,
+        num_embeddings=None,
+        metric_type=MetricType.COSINE,
+        index_type=IndexType.HNSW,
+        index_hnsw_num_neighbors=None,
+        index_hnsw_ef_search=passed,
+        index_hnsw_ef_construction=None,
+    )
+    assert state.rebuild.call_count == 0
+    config = state.backend.get_registered_model(model_name=MODEL).index_config
+    assert config.ef_search == expected
+
+
+@pytest.mark.duckdbvss
+@pytest.mark.db_dialect
+@pytest.mark.parametrize("indexed_population", ["nothing_pending"], indirect=True)
+def test_create_index_keeps_the_stored_hnsw_settings_that_are_not_given(indexed_population):
+    state = indexed_population
+    state.backend.set_hnsw_search_params(model_name=MODEL, ef_search=64)
+    cli_embeddings.create_index(
+        model_name=MODEL,
+        metric_type=MetricType.COSINE,
+        index_type=IndexType.HNSW,
+        index_hnsw_num_neighbors=None,
+        index_hnsw_ef_search=None,
+        index_hnsw_ef_construction=None,
+    )
+    assert state.rebuild.call_count == 1
+    config = state.backend.get_registered_model(model_name=MODEL).index_config
+    assert (config.num_neighbors, config.ef_search, config.ef_construction) == (4, 64, 32)
 
 
 @pytest.mark.duckdbvss

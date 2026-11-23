@@ -13,6 +13,7 @@ import dataclasses
 import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import ClassVar
 
 import duckdb
 from numpy import ndarray
@@ -32,6 +33,7 @@ from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
     EmbeddingBackend,
 )
+from omop_emb.backends.capabilities import BackendCapabilities, IndexCapabilities
 from omop_emb.backends.duckdbvss.duckdbvss_sql import (
     create_duckdbvss_embedding_table,
     database_block_bytes,
@@ -50,7 +52,7 @@ from omop_emb.backends.duckdbvss.duckdbvss_sql import (
 )
 from omop_emb.backends.embedding_table import DuckDBVSSEmbeddingTable
 from omop_emb.backends.index_config import HNSWIndexConfig, IndexConfig
-from omop_emb.config import BackendType, MetricType
+from omop_emb.config import BackendType, IndexType, MetricType, VectorPrecision
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
     EmbeddingArray,
@@ -135,9 +137,25 @@ class DuckDBVSSEmbeddingBackend(EmbeddingBackend[type[DuckDBVSSEmbeddingTable]])
     write, undercounting later searches, unless rebuilt.
     """
 
+    # https://duckdb.org/docs/stable/core_extensions/vss.html
+    CAPABILITIES: ClassVar[BackendCapabilities] = BackendCapabilities(
+        backend_type=BackendType.DUCKDBVSS,
+        indices={
+            IndexType.FLAT: IndexCapabilities(metrics=(MetricType.L2, MetricType.COSINE)),
+            IndexType.HNSW: IndexCapabilities(
+                metrics=(MetricType.L2, MetricType.COSINE),
+                precisions=(VectorPrecision.FLOAT32,),
+            ),
+        },
+    )
+
     @property
     def backend_type(self) -> BackendType:
         return BackendType.DUCKDBVSS
+
+    @property
+    def capabilities(self) -> BackendCapabilities:
+        return self.CAPABILITIES
 
     @property
     def dialect(self) -> str:

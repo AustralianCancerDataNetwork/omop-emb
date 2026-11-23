@@ -64,6 +64,7 @@ omop-emb embeddings add-embeddings [OPTIONS]
 | Option | Default | Description |
 |---|---|---|
 | `--metric-type` | `cosine` | Metric of a new model's table. Locked in for `flat` on sqlite-vec; ignored for `flat` on pgvector and for a model that is already registered. See [Metrics](backend-selection.md#metrics). |
+| `--storage-precision` | `None` | Precision of a new model's stored vectors, `float32` or `float16` (pgvector only). Defaults to `float32`, or `float16` above 2,000 dimensions. An already registered model keeps its precision, and a different value is a conflict. See [Precision](backend-selection.md#precision). |
 
 | Option | Short | Description |
 |---|---|---|
@@ -89,6 +90,7 @@ Accepts all options from `add-embeddings` (its `--metric-type` also applies to t
 | `--index-hnsw-num-neighbors` | `None` | HNSW graph connectivity (`M`). |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
+| `--index-precision` | `None` | HNSW index precision, `float32` or `float16` (pgvector only). Defaults to the precision of the current index, or the stored precision for a new one. See [Precision](backend-selection.md#precision). |
 
 ---
 
@@ -115,6 +117,7 @@ omop-emb embeddings create-index [OPTIONS]
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
 | `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. |
 | `--index-ef-construction` | `None` | HNSW build quality parameter. |
+| `--index-precision` | `None` | HNSW index precision, `float32` or `float16` (pgvector only). Defaults to the precision of the current index, or the stored precision for a new one. See [Precision](backend-selection.md#precision). |
 
 | Option | Short | Description |
 |---|---|---|
@@ -201,8 +204,9 @@ omop-emb maintenance rebuild-index --model <CANONICAL_NAME> [OPTIONS]
 | `--index-type` | `flat` | `flat` or `hnsw`. |
 | `--metric-type` | `cosine` | Distance metric. Locked in for `hnsw` and for `flat` on sqlite-vec, where another metric recreates the table from the stored vectors. Ignored for `flat` on pgvector. See [Metrics](backend-selection.md#metrics). |
 | `--index-hnsw-num-neighbors` | `None` | HNSW `M` parameter. |
-| `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. The default is 200. |
-| `--index-ef-construction` | `None` | HNSW build quality parameter. The default is 200. |
+| `--index-hnsw-ef-search` | `None` | HNSW query recall parameter. Keeps the current index's value, or 200 for a new index. |
+| `--index-ef-construction` | `None` | HNSW build quality parameter. Keeps the current index's value, or 200 for a new index. |
+| `--index-precision` | `None` | HNSW index precision, `float32` or `float16` (pgvector only). Defaults to the precision of the current index, or the stored precision for a new one. See [Precision](backend-selection.md#precision). |
 | `--vacuum` / `--no-vacuum` | `--vacuum` | Maintenance after the rebuild. pgvector runs `VACUUM (ANALYZE)` on the table to refresh planner statistics. sqlite-vec runs `VACUUM` on the database file after a metric change, which needs free disk space for a second copy of the data. Neither returns the space deleted rows left behind, see [`prune-embeddings --compact`](#prune-embeddings). Use `--no-vacuum` to skip it. |
 
 | Option | Short | Description |

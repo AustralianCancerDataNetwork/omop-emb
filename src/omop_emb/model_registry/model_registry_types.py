@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from omop_emb.backends.index_config import IndexConfig
-from omop_emb.config import IndexType, MetricType
+from omop_emb.config import IndexType, MetricType, VectorPrecision
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,10 @@ class EmbeddingModelRecord:
     storage_identifier : str
         Physical table name stored at registration. New names are store-scoped;
         existing rows keep the identifier already recorded here.
+    storage_precision : VectorPrecision or None
+        Precision of the stored embedding column. ``None`` for a model
+        registered before the precision was recorded, which the backend
+        resolves from ``dimensions``.
     metadata : Mapping[str, object]
         Free-form operational data.
     created_at : datetime, optional
@@ -50,6 +54,7 @@ class EmbeddingModelRecord:
     index_config: IndexConfig
     dimensions: int
     storage_identifier: str
+    storage_precision: VectorPrecision | None = None
     metadata: Mapping[str, object] = field(default_factory=dict)
     created_at: datetime | None = None
     updated_at: datetime | None = None

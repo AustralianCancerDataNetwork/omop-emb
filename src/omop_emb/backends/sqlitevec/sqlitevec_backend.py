@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
+from typing import ClassVar
 
 from numpy import ndarray
 from oa_configurator import Dialect
@@ -26,6 +27,7 @@ from omop_emb.backends.base_backend import (
     ConceptEmbeddingRecord,
     EmbeddingBackend,
 )
+from omop_emb.backends.capabilities import BackendCapabilities, IndexCapabilities
 from omop_emb.backends.index_config import FlatIndexConfig, IndexConfig
 from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     database_size,
@@ -48,7 +50,7 @@ from omop_emb.backends.sqlitevec.sqlitevec_sql import (
     table_exists,
     vacuum_database,
 )
-from omop_emb.config import BackendType, MetricType
+from omop_emb.config import BackendType, IndexType, MetricType
 from omop_emb.model_registry import EmbeddingModelRecord
 from omop_emb.utils.embedding_utils import (
     EmbeddingArray,
@@ -105,6 +107,17 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
       ``CREATE VIRTUAL TABLE``.
     """
 
+    # https://alexgarcia.xyz/sqlite-vec/features/vec0.html
+    # The metric is declared on the vec0 column, so each table is locked to one of them.
+    CAPABILITIES: ClassVar[BackendCapabilities] = BackendCapabilities(
+        backend_type=BackendType.SQLITEVEC,
+        indices={
+            IndexType.FLAT: IndexCapabilities(
+                metrics=(MetricType.L2, MetricType.COSINE, MetricType.L1)
+            )
+        },
+    )
+
     def __init__(
         self,
         emb_engine: Engine,
@@ -129,6 +142,10 @@ class SQLiteVecEmbeddingBackend(EmbeddingBackend[Table]):
     @property
     def default_flat_metric(self) -> MetricType:
         return MetricType.COSINE
+
+    @property
+    def capabilities(self) -> BackendCapabilities:
+        return self.CAPABILITIES
 
     # ------------------------------------------------------------------
     # Storage table management

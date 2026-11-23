@@ -137,7 +137,7 @@ class TestDuckDBVSSHNSWBackend:
         self._register_and_upsert(duckdbvss_backend)
         duckdbvss_backend.rebuild_index(model_name=MODEL_NAME, index_config=self.HNSW_CONFIG)
         before = duckdbvss_backend.physical_indexes(MODEL_NAME)
-        with pytest.raises(ValueError, match="l1"):
+        with pytest.raises(ValueError, match=MetricType.L1.value):
             duckdbvss_backend.rebuild_index(
                 model_name=MODEL_NAME, index_config=HNSWIndexConfig(metric_type=MetricType.L1)
             )

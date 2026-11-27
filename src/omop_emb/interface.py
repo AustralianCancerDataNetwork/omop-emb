@@ -523,7 +523,15 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
             concept_filter=concept_filter,
             cdm_session_factory=self._require_cdm(),
         )
-        embedded_ids = self._backend.get_stored_concept_ids(model_name=self.canonical_model_name)
+        if not all_concepts:
+            return {}
+
+        stored_filter = None
+        if concept_filter is not None and concept_filter.concept_ids is not None:
+            stored_filter = EmbeddingConceptFilter(concept_ids=tuple(all_concepts))
+        embedded_ids = self._backend.get_stored_concept_ids(
+            model_name=self.canonical_model_name, concept_filter=stored_filter
+        )
         return {cid: row for cid, row in all_concepts.items() if cid not in embedded_ids}
 
     def count_concepts_without_embedding(
@@ -532,7 +540,12 @@ class EmbeddingReaderInterface[S: EmbeddingStoreReader]:
         concept_filter: CDMConceptFilter | None = None,
     ) -> int:
         """Return how many CDM concepts match *concept_filter* but lack an embedding."""
-        embedded_ids = self._backend.get_stored_concept_ids(model_name=self.canonical_model_name)
+        stored_filter = None
+        if concept_filter is not None and concept_filter.concept_ids is not None:
+            stored_filter = EmbeddingConceptFilter(concept_ids=concept_filter.concept_ids)
+        embedded_ids = self._backend.get_stored_concept_ids(
+            model_name=self.canonical_model_name, concept_filter=stored_filter
+        )
         return count_missing_concepts(concept_filter, self._require_cdm(), embedded_ids)
 
     def get_concepts_without_embedding_batched(
